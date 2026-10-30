@@ -5,6 +5,7 @@
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
 pub use flui_native::journal::codec;
+mod families;
 
 use std::fmt::Write as _;
 
@@ -289,7 +290,11 @@ fn browser_sessions_hold_against_their_goldens() {
 
 /// `text` replays to `expected`, one event per line.
 fn assert_replays(text: &str, expected: &[&str]) {
-    let replayed = transcript(&recording(text).replay());
+    let replayed = transcript(
+        &recording(text)
+            .replay()
+            .expect("a registry's recording replays"),
+    );
     assert_eq!(replayed, expected, "replayed transcript");
 }
 
@@ -465,7 +470,11 @@ fn android_recordings_decode_to_their_host_input() {
 /// once: the order of who entered, pressed, moved, pinched or scrolled.
 fn outline(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    for line in transcript(&recording(text).replay()) {
+    for line in transcript(
+        &recording(text)
+            .replay()
+            .expect("a registry's recording replays"),
+    ) {
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let head = tokens.iter().take(3).copied().collect::<Vec<_>>().join(" ");
         // A scroll's or pan-zoom's phase follows its device, when it has one.
@@ -745,7 +754,7 @@ const RECORDINGS: [(&str, &str); 15] = [
 /// are in the written form, every field read is written, and the header's
 /// device list is the one the rows imply.
 fn native_recordings_write_back_byte_for_byte() {
-    for (name, text) in RECORDINGS {
+    for (name, text) in RECORDINGS.into_iter().chain(families::FAMILY_RECORDINGS) {
         let mut written = Vec::new();
         recording(text)
             .write(&mut written)
@@ -763,7 +772,7 @@ fn native_recordings_write_back_byte_for_byte() {
 /// reads it: the schema, not the core codec, is the format.
 fn native_recordings_read_through_the_protocol_schema() {
     use flui_protocol::native_recording::{FORMAT_VERSION, Header, Row};
-    for (name, text) in RECORDINGS {
+    for (name, text) in RECORDINGS.into_iter().chain(families::FAMILY_RECORDINGS) {
         let text = text.replace("\r\n", "\n");
         let mut lines = text.lines();
         let header: Header = serde_json::from_str(lines.next().expect("a header line"))
@@ -951,6 +960,7 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
             a_native_recording_outside_its_format_is_refused,
         ),
     ];
+    let cases = [cases, families::CASES.to_vec()].concat();
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     let cases = [
         cases,
@@ -959,6 +969,7 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
             browser_sessions_hold_against_their_goldens as fn(),
         )],
         capture::CASES.to_vec(),
+        families::CAPTURE_CASES.to_vec(),
     ]
     .concat();
     cases

@@ -108,6 +108,9 @@ pub(crate) struct AppDelivery {
     /// Asks the owner for a turn that delivers what another thread reported
     /// ([`Self::resume_through`]).
     owner_turn: Mutex<Option<WindowWake>>,
+    /// The native capture this delivery reports to, in builds that have one.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    journal: crate::journal::capture::Journal,
 }
 
 /// The bound handler as a call-point slot: a call takes a clone, so the
@@ -162,7 +165,13 @@ impl Drop for Walk<'_> {
 impl AppDelivery {
     /// A delivery with no handler bound: what is reported waits for one.
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: crate::journal::capture::Journal::open_stream(
+                flui_protocol::native_recording::Stream::App,
+            ),
+            ..Self::default()
+        }
     }
 
     /// Bind the run's `handler` on the calling thread, which becomes the one
@@ -252,18 +261,27 @@ impl AppDelivery {
 
     /// The user reopened the application ([`AppHandler::reopen`]).
     pub(crate) fn reopen(&self) -> Called<()> {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        self.journal
+            .record(crate::journal::capture::Captured::Reopen);
         self.report(Report::Reopen)
     }
 
     /// A system notice ([`AppHandler::host_notice`]). The lifecycle feature's
     /// notice channel marks what a wake makes stale before it reports one.
     pub(crate) fn host_notice(&self, notice: SystemNotice) -> Called<()> {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        self.journal
+            .record(crate::journal::capture::Captured::Notice(notice));
         self.report(Report::Notice(notice))
     }
 
     /// Ask the handler about a phase of the session ending
     /// ([`AppHandler::session_end`]); vacant with no handler to ask.
     pub(crate) fn session_end(&self, phase: SessionEndPhase) -> Called<SessionEndAnswer> {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        self.journal
+            .record(crate::journal::capture::Captured::SessionEnd(phase));
         self.question(|handler, owner| handler.session_end(owner, phase))
     }
 

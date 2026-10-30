@@ -84,6 +84,8 @@ tokio-util = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
+# `flui_platform::testing::FakeHaptics`, the actuator the preference tests record.
+flui-platform = { workspace = true, features = ["testing"] }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }

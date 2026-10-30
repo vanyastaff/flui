@@ -19,12 +19,12 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::time::Duration;
 
 use flui_platform::EventTime;
-use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
+use flui_platform::{ImeEvent, MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice};
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
 
@@ -37,7 +37,7 @@ use crate::input::assembly::{
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
-pub use wire::{Backend, FORMAT_VERSION};
+pub use wire::{Backend, FORMAT_VERSION, Stream};
 
 /// Why a native recording could not be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -104,12 +104,15 @@ pub enum CodecError {
 #[error(transparent)]
 pub struct MalformedJson(serde_json::Error);
 
-/// The clock and setup a registry started with.
+/// What a recording journals and, for a registry's, the clock and setup it
+/// started with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     /// The backend.
     pub backend: Backend,
-    /// The epoch instant.
+    /// What the recording journals.
+    pub stream: Stream,
+    /// The epoch instant; a registry's alone, zero for another stream.
     pub epoch: EventTime,
     /// System uptime at the epoch.
     pub uptime: Duration,
@@ -139,6 +142,7 @@ impl Header {
     ) -> Self {
         Self {
             backend,
+            stream: Stream::Registry,
             epoch,
             uptime,
             counter,
@@ -147,6 +151,15 @@ impl Header {
             first_device: None,
             click_settings: None,
             provenance: None,
+        }
+    }
+
+    /// A header for `backend`'s `stream` other than a registry's, which has
+    /// no clock of its own.
+    pub fn for_stream(backend: Backend, stream: Stream) -> Self {
+        Self {
+            stream,
+            ..Self::new(backend, EventTime::from_nanos(0), Duration::ZERO, None)
         }
     }
 
@@ -242,6 +255,114 @@ pub enum Row {
         /// Why.
         reason: NativeCancel,
     },
+    /// The host reported a system notice (an `app` stream).
+    Notice(SystemNotice),
+    /// The host asked about a phase of the session ending (an `app` stream).
+    SessionEnd(SessionEndPhase),
+    /// The user reopened the application (an `app` stream).
+    Reopen,
+    /// The window's input method delivered an event (a `window` stream).
+    Ime {
+        /// The event.
+        event: ImeEvent,
+        /// Its text was replaced before writing (ADR-0215 §5): replay
+        /// refuses the row.
+        redacted: bool,
+    },
+}
+
+impl Row {
+    /// The row's name in the schema, as a replay error names it.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Reading(_) => "reading",
+            Self::Batch { .. } => "batch",
+            Self::ClickSettings(_) => "click_settings",
+            Self::Viewport { .. } => "viewport",
+            Self::ViewportAbandoned { .. } => "viewport_abandoned",
+            Self::Wheel(_) => "wheel",
+            Self::Scroll(_) => "scroll",
+            Self::AddDevice { .. } => "add_device",
+            Self::RemoveDevice { .. } => "remove_device",
+            Self::CancelSurface { .. } => "cancel_surface",
+            Self::CancelContact { .. } => "cancel_contact",
+            Self::Notice(_) => "notice",
+            Self::SessionEnd(_) => "session_end",
+            Self::Reopen => "reopen",
+            Self::Ime { .. } => "ime",
+        }
+    }
+}
+
+/// Why a recording could not be replayed: a row the target does not take, or
+/// one whose text was redacted. Replay stops there, never skipping a row.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReplayError {
+    /// Line `line` is a row of a kind this replay does not reproduce.
+    #[error("line {line} is a `{row}` row, which this replay does not reproduce")]
+    Unsupported {
+        /// The 1-based line, the header being line 1.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
+    /// Line `line` lost its text to redaction: replaying other text would
+    /// claim to reproduce what the recording does not hold.
+    #[error("line {line} is a redacted `{row}` row, which cannot be replayed")]
+    Redacted {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
+}
+
+/// A target's refusal of a kind of row it does not reproduce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unsupported;
+
+/// What a recording replays into. A registry's rows reach it as the input
+/// the registry assembles; each other row as itself. A target takes the rows
+/// it reproduces and refuses the rest, which is the default.
+pub trait ReplayTarget {
+    /// Input a registry's rows assembled.
+    fn input(&mut self, input: PlatformInput) -> Result<(), Unsupported> {
+        let _ = input;
+        Err(Unsupported)
+    }
+
+    /// A system notice.
+    fn notice(&mut self, notice: SystemNotice) -> Result<(), Unsupported> {
+        let _ = notice;
+        Err(Unsupported)
+    }
+
+    /// A phase of the session ending.
+    fn session_end(&mut self, phase: SessionEndPhase) -> Result<(), Unsupported> {
+        let _ = phase;
+        Err(Unsupported)
+    }
+
+    /// A reopen.
+    fn reopen(&mut self) -> Result<(), Unsupported> {
+        Err(Unsupported)
+    }
+
+    /// An input method's event.
+    fn ime(&mut self, event: &ImeEvent) -> Result<(), Unsupported> {
+        let _ = event;
+        Err(Unsupported)
+    }
+}
+
+/// The target [`NativeRecording::replay`] collects a registry's input into.
+struct Collect(Vec<PlatformInput>);
+
+impl ReplayTarget for Collect {
+    fn input(&mut self, input: PlatformInput) -> Result<(), Unsupported> {
+        self.0.push(input);
+        Ok(())
+    }
 }
 
 /// A header and its rows.
@@ -353,13 +474,36 @@ impl NativeRecording {
 
     /// The input the backend's registry assembles from these rows, as the
     /// backends deliver it: a reading that fails delivers its cancel.
-    pub fn replay(&self) -> Vec<PlatformInput> {
+    ///
+    /// # Errors
+    ///
+    /// [`ReplayError::Unsupported`] for the first row that is not a
+    /// registry's.
+    pub fn replay(&self) -> Result<Vec<PlatformInput>, ReplayError> {
+        let mut collect = Collect(Vec::new());
+        self.replay_into(&mut collect)?;
+        Ok(collect.0)
+    }
+
+    /// Replay every row into `target`, in order: a registry's rows as the
+    /// input the registry assembles from them, each other row as itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ReplayError`] for the first row `target` refuses or whose text was
+    /// redacted; the rows after it are not replayed.
+    pub fn replay_into(&self, target: &mut dyn ReplayTarget) -> Result<(), ReplayError> {
         let mut registry = self.header.registry();
         let mut batch = MoveBatch::new();
         let mut touchpad = TouchpadAssembler::new(NativeSurface(0));
-        let mut out = Vec::new();
         let pointer = |event| PlatformInput::Pointer(event);
-        for row in &self.rows {
+        for (index, row) in self.rows.iter().enumerate() {
+            let line = index as u64 + 2;
+            let unsupported = |Unsupported| ReplayError::Unsupported {
+                line,
+                row: row.name(),
+            };
+            let mut out: Vec<PlatformInput> = Vec::new();
             match row {
                 Row::Reading(reading) => out.extend(
                     decode(&mut registry, reading).unwrap_or_else(DecodeError::into_inputs),
@@ -411,9 +555,22 @@ impl NativeRecording {
                     time,
                     reason,
                 } => out.extend(registry.cancel_contact(*surface, *contact, *time, *reason)),
+                Row::Notice(notice) => target.notice(*notice).map_err(unsupported)?,
+                Row::SessionEnd(phase) => target.session_end(*phase).map_err(unsupported)?,
+                Row::Reopen => target.reopen().map_err(unsupported)?,
+                Row::Ime { redacted: true, .. } => {
+                    return Err(ReplayError::Redacted {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::Ime { event, .. } => target.ime(event).map_err(unsupported)?,
+            }
+            for input in out {
+                target.input(input).map_err(unsupported)?;
             }
         }
-        out
+        Ok(())
     }
 }
 
@@ -438,7 +595,11 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Wheel(_)
         | Row::Scroll(_)
         | Row::CancelSurface { .. }
-        | Row::CancelContact { .. } => Vec::new(),
+        | Row::CancelContact { .. }
+        | Row::Notice(_)
+        | Row::SessionEnd(_)
+        | Row::Reopen
+        | Row::Ime { .. } => Vec::new(),
     };
     readings
         .into_iter()
@@ -536,8 +697,11 @@ fn header_to_wire(header: &Header, devices: Vec<wire::Device>) -> DtoResult<wire
     Ok(wire::Header {
         flui_native_recording: FORMAT_VERSION,
         backend: header.backend,
-        epoch_ns: nanos(header.epoch),
-        uptime_ns: duration_nanos(header.uptime)?,
+        stream: header.stream,
+        epoch_ns: (header.stream == Stream::Registry).then(|| nanos(header.epoch)),
+        uptime_ns: (header.stream == Stream::Registry)
+            .then(|| duration_nanos(header.uptime))
+            .transpose()?,
         counter: header.counter.map(|anchor| wire::Counter {
             count: anchor.count.0,
             frequency: anchor.frequency.get(),
@@ -578,12 +742,26 @@ fn header_from_wire(header: wire::Header) -> DtoResult<Header> {
             .transpose()?,
         click_settings: header.click_settings.map(click_settings_from_wire),
         provenance: header.provenance,
-        ..Header::new(
-            header.backend,
-            EventTime::from_nanos(header.epoch_ns),
-            Duration::from_nanos(header.uptime_ns),
-            counter,
-        )
+        ..match (header.stream, header.epoch_ns, header.uptime_ns) {
+            (Stream::Registry, Some(epoch), Some(uptime)) => Header::new(
+                header.backend,
+                EventTime::from_nanos(epoch),
+                Duration::from_nanos(uptime),
+                counter,
+            ),
+            (Stream::Registry, _, _) => {
+                return Err(invalid(
+                    "a registry's recording without its epoch and uptime",
+                ));
+            }
+            (Stream::App | Stream::Window, None, None) if counter.is_none() => {
+                Header::for_stream(header.backend, header.stream)
+            }
+            (Stream::App | Stream::Window, _, _) => {
+                return Err(invalid("a clock on a recording that is not a registry's"));
+            }
+            (other, _, _) => return Err(unread(other.name())),
+        }
     })
 }
 
@@ -1105,6 +1283,94 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             time_ns: nanos(*time),
             reason: cancel_to_wire(*reason),
         },
+        Row::Notice(notice) => wire::Row::Notice {
+            notice: notice_to_wire(*notice)?,
+        },
+        Row::SessionEnd(phase) => wire::Row::SessionEnd {
+            phase: phase_to_wire(*phase)?,
+        },
+        Row::Reopen => wire::Row::Reopen,
+        Row::Ime { event, redacted } => wire::Row::Ime {
+            ime: wire::Ime::Event(ime_to_wire(event)?),
+            redacted: *redacted,
+        },
+    })
+}
+
+fn notice_to_wire(notice: SystemNotice) -> DtoResult<wire::Notice> {
+    Ok(match notice {
+        SystemNotice::Sleep => wire::Notice::Sleep,
+        SystemNotice::Wake => wire::Notice::Wake,
+        SystemNotice::SessionLocked => wire::Notice::SessionLocked,
+        SystemNotice::SessionUnlocked => wire::Notice::SessionUnlocked,
+        SystemNotice::MemoryPressure(level) => wire::Notice::MemoryPressure(match level {
+            MemoryPressureLevel::Moderate => wire::MemoryPressureLevel::Moderate,
+            MemoryPressureLevel::Critical => wire::MemoryPressureLevel::Critical,
+            _ => return Err(DtoError::Unmirrored("MemoryPressureLevel")),
+        }),
+        _ => return Err(DtoError::Unmirrored("SystemNotice")),
+    })
+}
+
+fn notice_from_wire(notice: wire::Notice) -> DtoResult<SystemNotice> {
+    Ok(match notice {
+        wire::Notice::Sleep => SystemNotice::Sleep,
+        wire::Notice::Wake => SystemNotice::Wake,
+        wire::Notice::SessionLocked => SystemNotice::SessionLocked,
+        wire::Notice::SessionUnlocked => SystemNotice::SessionUnlocked,
+        wire::Notice::MemoryPressure(level) => SystemNotice::MemoryPressure(match level {
+            wire::MemoryPressureLevel::Moderate => MemoryPressureLevel::Moderate,
+            wire::MemoryPressureLevel::Critical => MemoryPressureLevel::Critical,
+            other => return Err(unread(other.name())),
+        }),
+        _ => return Err(unread("Notice")),
+    })
+}
+
+fn phase_to_wire(phase: SessionEndPhase) -> DtoResult<wire::SessionEndPhase> {
+    Ok(match phase {
+        SessionEndPhase::Query => wire::SessionEndPhase::Query,
+        SessionEndPhase::Cancelled => wire::SessionEndPhase::Cancelled,
+        SessionEndPhase::Ending => wire::SessionEndPhase::Ending,
+        _ => return Err(DtoError::Unmirrored("SessionEndPhase")),
+    })
+}
+
+fn phase_from_wire(phase: wire::SessionEndPhase) -> DtoResult<SessionEndPhase> {
+    Ok(match phase {
+        wire::SessionEndPhase::Query => SessionEndPhase::Query,
+        wire::SessionEndPhase::Cancelled => SessionEndPhase::Cancelled,
+        wire::SessionEndPhase::Ending => SessionEndPhase::Ending,
+        other => return Err(unread(other.name())),
+    })
+}
+
+fn ime_to_wire(event: &ImeEvent) -> DtoResult<wire::ImeEvent> {
+    Ok(match event {
+        ImeEvent::Enabled => wire::ImeEvent::Enabled,
+        ImeEvent::Preedit { text, cursor } => wire::ImeEvent::Preedit {
+            text: text.clone(),
+            cursor: cursor.map(|(start, end)| [start, end]),
+        },
+        ImeEvent::Commit(text) => wire::ImeEvent::Commit(text.clone()),
+        ImeEvent::Disabled => wire::ImeEvent::Disabled,
+        _ => return Err(DtoError::Unmirrored("ImeEvent")),
+    })
+}
+
+fn ime_from_wire(ime: wire::Ime) -> DtoResult<ImeEvent> {
+    let wire::Ime::Event(event) = ime else {
+        return Err(unread("Ime"));
+    };
+    Ok(match event {
+        wire::ImeEvent::Enabled => ImeEvent::Enabled,
+        wire::ImeEvent::Preedit { text, cursor } => ImeEvent::Preedit {
+            text,
+            cursor: cursor.map(|[start, end]| (start, end)),
+        },
+        wire::ImeEvent::Commit(text) => ImeEvent::Commit(text),
+        wire::ImeEvent::Disabled => ImeEvent::Disabled,
+        _ => return Err(unread("ImeEvent")),
     })
 }
 
@@ -1170,6 +1436,13 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             contact: NativeContact(contact),
             time: EventTime::from_nanos(time_ns),
             reason: cancel_from_wire(reason)?,
+        },
+        wire::Row::Notice { notice } => Row::Notice(notice_from_wire(notice)?),
+        wire::Row::SessionEnd { phase } => Row::SessionEnd(phase_from_wire(phase)?),
+        wire::Row::Reopen => Row::Reopen,
+        wire::Row::Ime { ime, redacted } => Row::Ime {
+            event: ime_from_wire(ime)?,
+            redacted,
         },
         _ => return Err(unread("Row")),
     })

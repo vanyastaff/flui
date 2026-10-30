@@ -69,11 +69,17 @@ pub(crate) struct OwnerEnv {
 /// Hears an owner move its offset `from` one value `to` another, for `cause`.
 pub(crate) type MotionHook = Rc<dyn Fn(f64, f64, ScrollCause)>;
 
-/// Where `snap` rests a release from `metrics` at `velocity`, within the
+/// Where `snap` rests a release from `metrics` at `velocity` of a scroll that
+/// began at `origin`, within the
 /// extents: a target that is not finite is replaced by the extent it points
 /// past, with a diagnostic.
-pub(crate) fn snap_target(snap: &dyn SnapPolicy, metrics: &ScrollMetrics, velocity: f64) -> f64 {
-    let target = snap.target(metrics, velocity);
+pub(crate) fn snap_target(
+    snap: &dyn SnapPolicy,
+    metrics: &ScrollMetrics,
+    velocity: f64,
+    origin: f64,
+) -> f64 {
+    let target = snap.target_from(metrics, velocity, origin);
     if target.is_finite() {
         target.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
     } else {
@@ -252,6 +258,9 @@ pub(crate) struct ScrollOwner {
     /// The live contact sequence: from a hold or a drag start until the
     /// contact lifts.
     contact: RefCell<Option<Rc<ScrollSequence>>>,
+    /// Where the offset stood when the contact sequence began, for the snap
+    /// policy at its release.
+    contact_origin: Cell<Option<(InputSequenceId, f64)>>,
     driving: RefCell<Option<Driving>>,
     /// The key that holds the keyboard sequence open.
     keyboard: RefCell<Option<KeyHold>>,
@@ -299,6 +308,7 @@ impl ScrollOwner {
             servicing: Cell::new(false),
             rebuilding: Cell::new(false),
             contact: RefCell::new(None),
+            contact_origin: Cell::new(None),
             driving: RefCell::new(None),
             keyboard: RefCell::new(None),
             autoscroll: RefCell::new(None),
@@ -702,6 +712,8 @@ impl ScrollOwner {
         let id = id.or_else(|| self.mint())?;
         self.preempt_handoff(Some(id), recovery);
         let sequence = ScrollSequence::new(self, id, device, true, self.remainder_rule(device));
+        self.contact_origin
+            .set(Some((id, self.controller.pixels())));
         let outgoing = self.contact.replace(Some(Rc::clone(&sequence)));
         let was_running = self
             .driving
@@ -1246,7 +1258,14 @@ impl ScrollOwner {
                 && self.controller.pixels() == metrics.pixels
         };
         let mode = mode.unwrap_or_else(|| match self.snap() {
-            Some(snap) => ReleaseMode::Snap(snap_target(&*snap, &metrics, velocity)),
+            Some(snap) => {
+                let origin = self
+                    .contact_origin
+                    .get()
+                    .filter(|&(id, _)| id == sequence.id())
+                    .map_or(metrics.pixels, |(_, origin)| origin);
+                ReleaseMode::Snap(snap_target(&*snap, &metrics, velocity, origin))
+            }
             None => ReleaseMode::Physics(self.physics()),
         });
         // Determine transfer policy before owning a returned simulation. A
