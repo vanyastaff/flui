@@ -501,6 +501,11 @@ where
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
+    // A bootstrap that found no GPU backend leaves its refusal here, typed,
+    // for the launch's result (ADR-0244 §3).
+    let refused: std::rc::Rc<std::cell::Cell<Option<crate::app::UnsupportedSystem>>> =
+        std::rc::Rc::default();
+    let refusal = std::rc::Rc::clone(&refused);
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
@@ -510,7 +515,13 @@ where
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.
-        bootstrap_android(root, config, hot_reload)?;
+        bootstrap_android(root, config, hot_reload).inspect_err(|error| {
+            refusal.set(
+                error
+                    .downcast_ref::<flui_engine::EngineError>()
+                    .and_then(|error| crate::app::UnsupportedSystem::from_renderer(error)),
+            );
+        })?;
         Ok(())
     }));
     // The exit is bounded end to end, as on the desktop (ADR-0258 §7).
@@ -527,6 +538,10 @@ where
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has
     // exited.
+    if let Some(unsupported) = refused.take() {
+        tracing::error!(%unsupported, "FLUI cannot run on this system");
+        return Err(crate::app::LaunchError::UnsupportedSystem(unsupported));
+    }
     if let Err(err) = result {
         panic!("android bootstrap failed: {err:?}");
     }

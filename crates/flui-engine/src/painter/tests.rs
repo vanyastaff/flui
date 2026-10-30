@@ -2894,7 +2894,8 @@ fn featureless_direct_aa_refusal_recovers() {
 /// lazy mask layout creation; refusal leaves the reusable public painter valid.
 fn limited_fragment_uniforms_clip_refusal_recovers() {
     use flui_painting::{Paint, paint::Clip, styling::Color};
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,
@@ -3020,7 +3021,8 @@ fn view_only_hard_group_blends() {
 
 fn limited_mrt_coverage_refusal_recovers() {
     use flui_painting::{BlendMode, Paint, paint::Clip, styling::Color};
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,

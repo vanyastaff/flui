@@ -122,20 +122,20 @@ impl super::GpuReplay {
         let stop_binding = if stops.is_empty() {
             None
         } else {
-            let limit = device.limits().max_storage_buffer_binding_size as usize;
-            if stops.len() > limit {
+            let max_rows = device.limits().max_texture_dimension_2d;
+            let Some(rows) = crate::pipeline_set::gradient_stop_rows(stops.len(), max_rows) else {
                 return Err(crate::error::EngineError::PreparedResourceLimit {
-                    resource: "gradient storage bytes",
+                    resource: "gradient stop bytes",
                     requested: stops.len(),
-                    limit,
+                    limit: max_rows as usize * crate::pipeline_set::GRADIENT_STOP_ROW_BYTES,
                 });
-            }
+            };
             resources.reserve_prepared(crate::device_domain::PreparedCost {
-                gpu_bytes: stops.len(),
+                gpu_bytes: rows as usize * crate::pipeline_set::GRADIENT_STOP_ROW_BYTES,
                 cpu_bytes: stops.len(),
                 objects: 2,
             })?;
-            Some(pipelines.prepare_gradient_bind_group(device, stops))
+            Some(pipelines.prepare_gradient_bind_group(device, queue, stops))
         };
         // Upload each typed arena once. Runs address the complete arena, so
         // alternating pipeline families neither copy nor re-upload instances.

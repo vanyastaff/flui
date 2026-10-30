@@ -173,30 +173,12 @@ mod gpu_tests {
 
         // ±2: absorbs premul→u8→unpremul quantization at the GPU texture boundary.
         let quantization_tolerance = 2u8;
-        // Skip the last row and last column of the surface.
-        //
-        // The source rect drawn inside the saveLayer has the exact same bounds as
-        // the layer (full viewport). The `rect_instanced.wgsl` SDF shader uses
-        // `fwidth()` for adaptive antialiasing. At the LAST row/column of a
-        // primitive, the GPU evaluates `fwidth()` with helper fragments that lie
-        // outside the primitive, yielding an inflated edge_width → `sdfToAlpha < 1`
-        // → partial alpha in the foreground offscreen at those boundary texels.
-        // The advanced-blend shader then receives a non-unit foreground alpha and
-        // produces a correct intermediate value between fully-blended and backdrop
-        // that does not match the all-opaque oracle.
-        //
-        // In production this does not occur: rects are drawn at widget-interior
-        // coordinates and never coincide exactly with the viewport/offscreen edge.
-        // Skipping the two outermost rows/columns preserves 99.9 % coverage of the
-        // blend-formula path while avoiding the SDF boundary artefact.
+        // Every pixel, the last row and column included: the source rect fills
+        // the layer exactly, and its edge pixels are fully covered.
         let width = SURFACE_WIDTH as usize;
-        let height = SURFACE_HEIGHT as usize;
         for (pixel_index, &actual_pixel) in readback.iter().enumerate() {
             let row = pixel_index / width;
             let col = pixel_index % width;
-            if row >= height - 1 || col >= width - 1 {
-                continue;
-            }
             assert_pixel_within_tolerance(
                 &format!("Multiply pixel {pixel_index} (row={row} col={col})"),
                 actual_pixel,

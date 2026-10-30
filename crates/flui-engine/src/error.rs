@@ -374,6 +374,18 @@ pub enum EngineError {
     #[error("GPU adapter request failed: {0}")]
     AdapterRequest(#[source] Box<dyn Error + Send + Sync>),
 
+    /// No backend this target tries gave the renderer a device: neither the
+    /// preferred one nor its fallback (ADR-0244 §1). The system is below
+    /// FLUI's floor, which needs a GPU through one of them.
+    #[error(
+        "no supported GPU: {}",
+        tried.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")
+    )]
+    NoSupportedGpu {
+        /// Each backend tried, in order, with why it failed.
+        tried: Vec<crate::gpu_backend::BackendFailure>,
+    },
+
     /// Failed to create GPU device
     ///
     /// The GPU adapter was found but device creation failed.
@@ -478,6 +490,7 @@ impl EngineError {
             | Self::GpuUnavailable
             | Self::SurfaceCreation(_)
             | Self::AdapterRequest(_)
+            | Self::NoSupportedGpu { .. }
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }

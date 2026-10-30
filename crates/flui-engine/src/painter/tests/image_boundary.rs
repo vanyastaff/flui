@@ -8,7 +8,8 @@ use flui_painting::{
 
 pub(super) fn filtered_image_device_limits_refuse_and_recover() {
     use flui_painting::paint::ColorFilter;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,
