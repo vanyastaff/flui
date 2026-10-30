@@ -52,6 +52,22 @@ impl Document for Note {
     }
 }
 
+thread_local! {
+    /// What a dropped `Note` runs: a destructor that reaches back into its
+    /// document, set by the test that needs one.
+    static ON_NOTE_DROP: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+}
+
+impl Drop for Note {
+    fn drop(&mut self) {
+        ON_NOTE_DROP.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+    }
+}
+
 /// A decode that panics, out of line so the codec's return type stays its own.
 fn fail_the_decode() {
     panic!("the codec broke");
@@ -426,4 +442,38 @@ fn unavailable_storage_runs_in_memory_with_status() {
         other => panic!("expected a refusal as not registered, got {other:?}"),
     }
     assert_eq!(notes.status(), SaveStatus::Unavailable, "the status stays");
+}
+
+/// A load that replaces or clears the loaded value drops it with no borrow
+/// of the document held, so a destructor that reads the document finds it
+/// settled.
+#[test]
+fn a_value_a_load_replaces_is_dropped_after_the_document_settles() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "one"));
+    let (mut laid, notes) = mount(&storage);
+    drop(drive(&mut laid, notes.load()));
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (reader, record) = (notes.clone(), Rc::clone(&seen));
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || record.borrow_mut().push(reader.status())));
+    });
+    storage.put(&Note::NAME, stored(2, "two"));
+    drop(drive(&mut laid, notes.load()));
+    storage.put(&Note::NAME, b"no header".to_vec());
+    let failed = drive(&mut laid, notes.load());
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+
+    assert!(failed.is_err());
+    assert_eq!(
+        seen.borrow()[..2],
+        [
+            SaveStatus::Clean,
+            SaveStatus::NotLoaded(Some(PersistError::Corrupt {
+                detail: "no header line".into(),
+            })),
+        ],
+        "each replaced value saw the status its load left"
+    );
 }

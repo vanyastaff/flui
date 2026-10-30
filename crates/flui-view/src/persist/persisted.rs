@@ -206,17 +206,19 @@ impl<D: Document> OpenDocument<D> {
     ) -> Result<Rc<D>, PersistError> {
         let mut state = self.state.borrow_mut();
         let latest = state.generation == generation;
-        match outcome {
+        let (result, replaced) = match outcome {
             Ok(loaded) => {
                 let value = Rc::clone(&loaded.value);
-                if latest {
+                let replaced = if latest {
                     state.status = SaveStatus::Clean;
-                    state.loaded = Some(loaded);
-                }
-                Ok(value)
+                    state.loaded.replace(loaded)
+                } else {
+                    Some(loaded)
+                };
+                (Ok(value), replaced)
             }
             Err(error) => {
-                if latest {
+                let replaced = if latest {
                     state.status = match &error {
                         PersistError::NewerVersion { found, supported } => {
                             SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion {
@@ -226,11 +228,17 @@ impl<D: Document> OpenDocument<D> {
                         }
                         other => SaveStatus::NotLoaded(Some(other.clone())),
                     };
-                    state.loaded = None;
-                }
-                Err(error)
+                    state.loaded.take()
+                } else {
+                    None
+                };
+                (Err(error), replaced)
             }
-        }
+        };
+        drop(state);
+        // A replaced value's drop is application code: no borrow is held.
+        drop(replaced);
+        result
     }
 }
 
