@@ -4,10 +4,10 @@
 //! canvas, a placeholder button only a screen reader finds; the browser
 //! tells a page nothing of a screen reader otherwise. Activating it puts the
 //! semantics host in its place, `position: fixed` over the canvas with
-//! `pointer-events: none`, so the pointer still reaches the canvas and FLUI
-//! keeps hit-testing it, and tells the composition root, which publishes the
-//! whole tree. Nothing deactivates it: the browser does not say when a screen
-//! reader leaves.
+//! `pointer-events: none` and `opacity: 0`, so the pointer still reaches the
+//! canvas, FLUI keeps hit-testing it and nothing paints over it, and tells
+//! the composition root, which publishes the whole tree. Nothing deactivates
+//! it: the browser does not say when a screen reader leaves.
 //!
 //! Every update runs through [`Mirror::apply`] and then on the DOM; the work
 //! is queued, so a DOM event that a change fires synchronously (a removed
@@ -266,6 +266,10 @@ impl Page {
             ("padding", "0"),
             ("border", "0"),
             ("pointer-events", "none"),
+            // Painted by the canvas only: the elements keep their boxes and
+            // their place in the accessibility tree, and paint nothing over
+            // it, focus rings included.
+            ("opacity", "0"),
         ] {
             style.set_property(property, value)?;
         }
@@ -650,13 +654,28 @@ fn write(
             element.set_attribute(name, value)?;
         }
     }
-    match old {
-        None if new.text.is_none() => {}
-        Some(old) if old.text == new.text => {}
-        _ => element.set_text_content(new.text.as_deref()),
+    if old.map(|old| &old.text) != Some(&new.text) {
+        write_text(element, new.text.as_deref())?;
     }
     if old.map(|old| old.placement) != Some(new.placement) {
         place(element, &new.placement)?;
+    }
+    Ok(())
+}
+
+/// Make `text` the text node that leads `element`'s children, or remove it;
+/// the children's elements after it are left where they are.
+fn write_text(element: &HtmlElement, text: Option<&str>) -> Result<(), JsValue> {
+    let leading = element
+        .first_child()
+        .filter(|node| node.node_type() == web_sys::Node::TEXT_NODE);
+    match (leading, text) {
+        (Some(node), Some(text)) => node.set_node_value(Some(text)),
+        (Some(node), None) => {
+            element.remove_child(&node)?;
+        }
+        (None, Some(text)) => element.prepend_with_str_1(text)?,
+        (None, None) => {}
     }
     Ok(())
 }

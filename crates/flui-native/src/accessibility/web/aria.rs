@@ -41,7 +41,8 @@ pub(crate) struct ElementSpec {
     pub(crate) tag: Tag,
     /// Attribute names and values, sorted by name.
     pub(crate) attributes: Vec<(&'static str, String)>,
-    /// The element's own text, for a node whose name is its content.
+    /// The element's own text, for a node whose name is its content: a text
+    /// node before its children's elements.
     pub(crate) text: Option<String>,
     pub(crate) placement: Placement,
 }
@@ -78,8 +79,17 @@ pub(crate) fn describe(node: &Node, parent: ParentFrame, root: bool) -> ElementS
     if let Some(role) = role {
         attributes.push(("role", role.to_owned()));
     }
-    let name_is_content = names_from_content(node.role()) && node.children().is_empty();
-    let text = if name_is_content {
+    // Static text is its content, children or not (a labelled `Semantics`
+    // wrapper is a `Label` too, and a generic element can carry no
+    // `aria-label`), and its whole text is its value: the semantics
+    // translation joins a label and a value there. Other roles named by their
+    // content are when they are leaves.
+    let static_text = node.role() == Role::Label;
+    let name_is_content =
+        static_text || (names_from_content(node.role()) && node.children().is_empty());
+    let text = if static_text {
+        node.value().or_else(|| node.label()).map(str::to_owned)
+    } else if name_is_content {
         node.label().or_else(|| node.value()).map(str::to_owned)
     } else {
         None
@@ -178,14 +188,16 @@ fn states(node: &Node, role: Option<&str>, attributes: &mut Vec<(&'static str, S
     if let Some(selected) = node.is_selected() {
         attributes.push(("aria-selected", flag(selected)));
     }
+    // AccessKit counts levels and positions from zero (the semantics
+    // translation subtracts one), ARIA from one.
     if let Some(level) = node.level() {
-        attributes.push(("aria-level", level.to_string()));
+        attributes.push(("aria-level", level.saturating_add(1).to_string()));
     }
     if let Some(size) = node.size_of_set() {
         attributes.push(("aria-setsize", size.to_string()));
     }
     if let Some(position) = node.position_in_set() {
-        attributes.push(("aria-posinset", position.to_string()));
+        attributes.push(("aria-posinset", position.saturating_add(1).to_string()));
     }
     if let Some(popup) = node.has_popup() {
         let value = match popup {
@@ -462,6 +474,19 @@ mod tests {
             node.set_value("Count 0");
             node
         };
+        let labelled_value = {
+            let mut node = Node::new(Role::Label);
+            node.set_label("Total");
+            node.set_value("Total\n42");
+            node
+        };
+        let labelled_wrapper = {
+            let mut node = Node::new(Role::Label);
+            node.set_label("Shipping");
+            node.set_value("Shipping");
+            node.push_child(accesskit::NodeId(9));
+            node
+        };
         let container = {
             let mut node = Node::new(Role::GenericContainer);
             node.set_label("dropped");
@@ -470,7 +495,7 @@ mod tests {
         let heading = {
             let mut node = Node::new(Role::Heading);
             node.set_label("Settings");
-            node.set_level(2);
+            node.set_level(1);
             node
         };
         let slider = {
@@ -486,7 +511,7 @@ mod tests {
             let mut node = Node::new(Role::ListItem);
             node.set_label("Second");
             node.set_size_of_set(3);
-            node.set_position_in_set(2);
+            node.set_position_in_set(1);
             node.set_selected(true);
             node
         };
@@ -533,13 +558,25 @@ mod tests {
                 text: Some("Count 0"),
             },
             Case {
+                name: "static text reads its whole published value, label included",
+                node: labelled_value,
+                expect: &[("role", None), ("aria-label", None)],
+                text: Some("Total\n42"),
+            },
+            Case {
+                name: "a labelled wrapper keeps its text beside its children",
+                node: labelled_wrapper,
+                expect: &[("role", None), ("aria-label", None)],
+                text: Some("Shipping"),
+            },
+            Case {
                 name: "a generic container takes no prohibited name",
                 node: container,
                 expect: &[("role", None), ("aria-label", None)],
                 text: None,
             },
             Case {
-                name: "a heading keeps its level",
+                name: "a heading's zero-based level is one-based in ARIA",
                 node: heading,
                 expect: &[("role", Some("heading")), ("aria-level", Some("2"))],
                 text: Some("Settings"),
@@ -556,7 +593,7 @@ mod tests {
                 text: None,
             },
             Case {
-                name: "a list item says where it is in its set",
+                name: "a list item says where it is in its set, counted from one",
                 node: item,
                 expect: &[
                     ("aria-setsize", Some("3")),

@@ -1714,8 +1714,8 @@ and writes only what changed between two specs.
   Enter or Space on it, puts the host in its place and tells the activation
   listener, after mirroring the tree retained from before. Nothing
   deactivates it.
-- **The host is `position: fixed` over the canvas, with `pointer-events:
-  none`.** The pointer keeps reaching the canvas and FLUI keeps hit-testing it.
+- **The host is `position: fixed` over the canvas, with `opacity: 0` and `pointer-events:
+  none`.** The canvas alone paints, the pointer keeps reaching it and FLUI keeps hit-testing it.
   The host is placed again on each publish and on scroll (captured on the
   window), window resize and visual-viewport changes, the listeners the text
   input's editor uses (`owner::web::listener::viewport_listeners`). A

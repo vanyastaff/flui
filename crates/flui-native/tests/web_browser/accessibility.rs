@@ -29,13 +29,16 @@ export function semanticsTree() {
             const value = element.getAttribute(name);
             if (value !== null) node[key] = value;
         }
+        const text = [...element.childNodes].filter(child => child.nodeType === Node.TEXT_NODE)
+            .map(child => child.data).join('');
+        if (text) node.text = text;
         if (children.length) node.children = children;
-        else if (element.textContent) node.text = element.textContent;
         return node;
     };
     const root = host()?.firstElementChild;
     return JSON.stringify(root ? read(root) : null);
 }
+export function hostOpacity() { return getComputedStyle(host()).opacity; }
 export function clickNode(id) { document.querySelector(`[data-flui-id="${id}"]`).click(); }
 export function clickText(text) {
     [...host().querySelectorAll('flui-node')].find(element => element.textContent === text).click();
@@ -77,6 +80,8 @@ extern "C" {
     fn activate_placeholder();
     #[wasm_bindgen(js_name = semanticsTree)]
     fn semantics_tree() -> String;
+    #[wasm_bindgen(js_name = hostOpacity)]
+    fn host_opacity() -> String;
     #[wasm_bindgen(js_name = clickNode)]
     fn click_node(id: &str);
     #[wasm_bindgen(js_name = clickText)]
@@ -181,9 +186,32 @@ fn the_tree_reaches_the_dom_once_the_placeholder_is_activated() {
         counter_in_dom(0),
         "the tree published before activation"
     );
+    assert_eq!(host_opacity(), "0", "the canvas alone paints");
 
     accessibility.publish(counter(1));
     assert_eq!(tree(), counter_in_dom(1));
+
+    // Static text that gains a child keeps its own text before it.
+    let mut count = Node::new(Role::Label);
+    count.set_value("Count 1");
+    count.set_children(vec![NodeId(4)]);
+    count.set_bounds(Rect::new(20.0, 80.0, 220.0, 100.0));
+    let mut unit = Node::new(Role::Label);
+    unit.set_value("taps");
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(COUNT, count), (NodeId(4), unit)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(
+        tree()["children"][1],
+        serde_json::json!({
+            "role": null,
+            "text": "Count 1",
+            "children": [{ "role": null, "text": "taps" }],
+        })
+    );
     window.close_now();
 }
 
