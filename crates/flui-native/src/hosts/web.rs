@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use flui_platform::Clipboard;
 
+use crate::accessibility::web::WebAccessibility;
 use crate::clipboard::web::WebClipboard;
 use crate::display::web::WebDisplays;
 use crate::drag::web::WebTransfer;
@@ -34,7 +35,7 @@ impl Host for Web {
     type Displays = WebLoop;
     type Input = WebLoop;
     type Text = WebTextInput;
-    type Accessibility = Absent<position::Accessibility>;
+    type Accessibility = WebAccessibility;
     type Clipboard = WebLoop;
     type Drag = WebLoop;
     type Haptics = WebHaptics;

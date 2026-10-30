@@ -1,0 +1,700 @@
+//! What one AccessKit node becomes in the semantics host: its element, ARIA
+//! attributes, text and box, and the action a DOM event on it asks for.
+//!
+//! Pure Rust over [`accesskit::Node`], so the mapping is tested on the Linux
+//! host; the DOM side (`dom`) only writes the difference between two
+//! [`ElementSpec`]s.
+
+use accesskit::{Action, AriaCurrent, HasPopup, Live, Node, Orientation, Rect, Role, Toggled};
+
+/// The element a node is mirrored as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tag {
+    /// `<flui-node>`: an unknown tag, with no style or meaning of its own, so
+    /// `role` alone says what it is.
+    Node,
+}
+
+impl Tag {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Node => "flui-node",
+        }
+    }
+}
+
+/// Where an element sits inside its parent's element, in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Placement {
+    pub(crate) left: f64,
+    pub(crate) top: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    /// The linear part of the node's transform, as CSS `matrix(a, b, c, d,
+    /// 0, 0)` with `transform-origin: 0 0`; `None` when it is the identity.
+    pub(crate) linear: Option<[f64; 4]>,
+}
+
+/// What a node's element must look like.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ElementSpec {
+    pub(crate) tag: Tag,
+    /// Attribute names and values, sorted by name.
+    pub(crate) attributes: Vec<(&'static str, String)>,
+    /// The element's own text, for a node whose name is its content.
+    pub(crate) text: Option<String>,
+    pub(crate) placement: Placement,
+}
+
+/// The frame a node is placed in: its parent's bounds in the parent's own
+/// coordinates, which the parent's element box starts at.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ParentFrame {
+    pub(crate) origin: (f64, f64),
+}
+
+impl ParentFrame {
+    /// The frame a node's children are placed in.
+    pub(crate) fn of(node: &Node) -> Self {
+        let origin = node
+            .bounds()
+            .map_or((0.0, 0.0), |bounds| (bounds.x0, bounds.y0));
+        Self { origin }
+    }
+}
+
+/// Whether a node is mirrored at all. A `TextRun` is the text of its parent's
+/// element, never an element of its own.
+pub(crate) fn is_mirrored(node: &Node) -> bool {
+    node.role() != Role::TextRun
+}
+
+/// The element for `node` placed in `parent`. `root` drops the node's own
+/// transform: the root carries the device pixel ratio (`Affine::scale`),
+/// and CSS pixels are already logical.
+pub(crate) fn describe(node: &Node, parent: ParentFrame, root: bool) -> ElementSpec {
+    let role = aria_role(node.role());
+    let mut attributes = Vec::new();
+    if let Some(role) = role {
+        attributes.push(("role", role.to_owned()));
+    }
+    let name_is_content = names_from_content(node.role()) && node.children().is_empty();
+    let text = if name_is_content {
+        node.label().or_else(|| node.value()).map(str::to_owned)
+    } else {
+        None
+    };
+    if !name_is_content
+        && role.is_some()
+        && let Some(label) = node.label()
+    {
+        attributes.push(("aria-label", label.to_owned()));
+    }
+    if let Some(description) = node.description() {
+        attributes.push(("aria-description", description.to_owned()));
+    }
+    if let Some(role_description) = node.role_description() {
+        attributes.push(("aria-roledescription", role_description.to_owned()));
+    }
+    if let Some(author_id) = node.author_id() {
+        attributes.push(("data-flui-id", author_id.to_owned()));
+    }
+    states(node, role, &mut attributes);
+    range(node, &mut attributes);
+    live(node, &mut attributes);
+    if node.supports_action(Action::Focus) {
+        // Focusable by script and by assistive technology, never by the
+        // browser's Tab order: FLUI's focus traversal moves it.
+        attributes.push(("tabindex", "-1".to_owned()));
+    }
+    attributes.sort_by_key(|&(name, _)| name);
+    ElementSpec {
+        tag: Tag::Node,
+        attributes,
+        text,
+        placement: placement(node, parent, root),
+    }
+}
+
+/// The action a DOM event of `kind` on `node`'s element asks for: `click`,
+/// `focusin` or `contextmenu`.
+pub(crate) fn event_action(kind: &str, node: &Node) -> Option<Action> {
+    let supported = |action| node.supports_action(action).then_some(action);
+    match kind {
+        "click" => click_action(node),
+        "focusin" => supported(Action::Focus),
+        "contextmenu" => supported(Action::ShowContextMenu),
+        _ => None,
+    }
+}
+
+/// The action a `click` on `node`'s element asks for.
+fn click_action(node: &Node) -> Option<Action> {
+    if node.supports_action(Action::Click) {
+        Some(Action::Click)
+    } else if node.supports_action(Action::Expand) && node.is_expanded() != Some(true) {
+        Some(Action::Expand)
+    } else if node.supports_action(Action::Collapse) {
+        Some(Action::Collapse)
+    } else {
+        None
+    }
+}
+
+fn states(node: &Node, role: Option<&str>, attributes: &mut Vec<(&'static str, String)>) {
+    let flag = |value: bool| if value { "true" } else { "false" }.to_owned();
+    if node.is_disabled() {
+        attributes.push(("aria-disabled", flag(true)));
+    }
+    if node.is_hidden() {
+        attributes.push(("aria-hidden", flag(true)));
+    }
+    if node.is_required() {
+        attributes.push(("aria-required", flag(true)));
+    }
+    if node.is_read_only() {
+        attributes.push(("aria-readonly", flag(true)));
+    }
+    if node.is_modal() {
+        attributes.push(("aria-modal", flag(true)));
+    }
+    if let Some(toggled) = node.toggled() {
+        let value = match toggled {
+            Toggled::False => "false",
+            Toggled::True => "true",
+            Toggled::Mixed => "mixed",
+        };
+        // A toggled button is a toggle button; the others check.
+        let name = if role == Some("button") {
+            "aria-pressed"
+        } else {
+            "aria-checked"
+        };
+        attributes.push((name, value.to_owned()));
+    }
+    if let Some(expanded) = node.is_expanded() {
+        attributes.push(("aria-expanded", flag(expanded)));
+    }
+    if let Some(selected) = node.is_selected() {
+        attributes.push(("aria-selected", flag(selected)));
+    }
+    if let Some(level) = node.level() {
+        attributes.push(("aria-level", level.to_string()));
+    }
+    if let Some(size) = node.size_of_set() {
+        attributes.push(("aria-setsize", size.to_string()));
+    }
+    if let Some(position) = node.position_in_set() {
+        attributes.push(("aria-posinset", position.to_string()));
+    }
+    if let Some(popup) = node.has_popup() {
+        let value = match popup {
+            HasPopup::Menu => "menu",
+            HasPopup::Listbox => "listbox",
+            HasPopup::Tree => "tree",
+            HasPopup::Grid => "grid",
+            HasPopup::Dialog => "dialog",
+        };
+        attributes.push(("aria-haspopup", value.to_owned()));
+    }
+    if let Some(current) = node.aria_current() {
+        let value = match current {
+            AriaCurrent::False => "false",
+            AriaCurrent::True => "true",
+            AriaCurrent::Page => "page",
+            AriaCurrent::Step => "step",
+            AriaCurrent::Location => "location",
+            AriaCurrent::Date => "date",
+            AriaCurrent::Time => "time",
+        };
+        attributes.push(("aria-current", value.to_owned()));
+    }
+    if let Some(orientation) = node.orientation() {
+        let value = match orientation {
+            Orientation::Horizontal => "horizontal",
+            Orientation::Vertical => "vertical",
+        };
+        attributes.push(("aria-orientation", value.to_owned()));
+    }
+}
+
+fn range(node: &Node, attributes: &mut Vec<(&'static str, String)>) {
+    if !matches!(
+        node.role(),
+        Role::Slider | Role::ProgressIndicator | Role::Meter | Role::ScrollBar | Role::SpinButton
+    ) {
+        return;
+    }
+    for (name, value) in [
+        ("aria-valuenow", node.numeric_value()),
+        ("aria-valuemin", node.min_numeric_value()),
+        ("aria-valuemax", node.max_numeric_value()),
+    ] {
+        if let Some(value) = value.filter(|value| value.is_finite()) {
+            attributes.push((name, value.to_string()));
+        }
+    }
+    if let Some(text) = node.value() {
+        attributes.push(("aria-valuetext", text.to_owned()));
+    }
+}
+
+fn live(node: &Node, attributes: &mut Vec<(&'static str, String)>) {
+    if let Some(live) = node.live() {
+        let value = match live {
+            Live::Off => "off",
+            Live::Polite => "polite",
+            Live::Assertive => "assertive",
+        };
+        attributes.push(("aria-live", value.to_owned()));
+        if node.is_live_atomic() {
+            attributes.push(("aria-atomic", "true".to_owned()));
+        }
+    }
+    if node.is_busy() {
+        attributes.push(("aria-busy", "true".to_owned()));
+    }
+}
+
+/// The node's box in its parent element. A node's transform maps its own
+/// coordinates into its parent's, `D(x) = A·x + t`; the element's box starts
+/// at the node's bounds origin `b`, the parent's at `p`. With
+/// `transform-origin: 0 0` the element is at `A·b + t − p`, transformed by
+/// `A` alone.
+fn placement(node: &Node, parent: ParentFrame, root: bool) -> Placement {
+    let bounds = node.bounds().unwrap_or(Rect::ZERO);
+    let coefficients = if root {
+        None
+    } else {
+        node.transform().map(|transform| transform.as_coeffs())
+    };
+    let [xx, yx, xy, yy, dx, dy] = coefficients.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let (x0, y0) = (bounds.x0, bounds.y0);
+    let left = xx * x0 + xy * y0 + dx - parent.origin.0;
+    let top = yx * x0 + yy * y0 + dy - parent.origin.1;
+    let linear = [xx, yx, xy, yy];
+    Placement {
+        left: finite_or_zero(left),
+        top: finite_or_zero(top),
+        width: finite_or_zero(bounds.width()).max(0.0),
+        height: finite_or_zero(bounds.height()).max(0.0),
+        linear: (linear != [1.0, 0.0, 0.0, 1.0] && linear.iter().all(|value| value.is_finite()))
+            .then_some(linear),
+    }
+}
+
+/// A non-finite coordinate is never written into a style: the element stays
+/// at its parent's origin instead.
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+/// Roles whose accessible name is their text content when they have no
+/// children of their own.
+fn names_from_content(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Label
+            | Role::Paragraph
+            | Role::Heading
+            | Role::Button
+            | Role::DefaultButton
+            | Role::Link
+            | Role::Cell
+            | Role::GridCell
+            | Role::ColumnHeader
+            | Role::RowHeader
+            | Role::ListItem
+            | Role::ListBoxOption
+            | Role::MenuItem
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+            | Role::Tab
+            | Role::TreeItem
+            | Role::Tooltip
+            | Role::Caption
+            | Role::Strong
+            | Role::Emphasis
+            | Role::Code
+            | Role::Time
+    )
+}
+
+/// The ARIA role for an AccessKit role; `None` where the element needs no
+/// role (text, generic containers) or ARIA has none.
+pub(crate) const fn aria_role(role: Role) -> Option<&'static str> {
+    Some(match role {
+        Role::Button | Role::DefaultButton => "button",
+        Role::CheckBox => "checkbox",
+        Role::RadioButton => "radio",
+        Role::Switch => "switch",
+        Role::Link => "link",
+        Role::Heading => "heading",
+        Role::Paragraph => "paragraph",
+        Role::Image => "img",
+        Role::List => "list",
+        Role::ListItem => "listitem",
+        Role::ListBox => "listbox",
+        Role::ListBoxOption | Role::MenuListOption => "option",
+        Role::Menu | Role::MenuListPopup => "menu",
+        Role::MenuBar => "menubar",
+        Role::MenuItem => "menuitem",
+        Role::MenuItemCheckBox => "menuitemcheckbox",
+        Role::MenuItemRadio => "menuitemradio",
+        Role::Tab => "tab",
+        Role::TabList => "tablist",
+        Role::TabPanel => "tabpanel",
+        Role::Dialog => "dialog",
+        Role::AlertDialog => "alertdialog",
+        Role::Alert => "alert",
+        Role::Status => "status",
+        Role::Log => "log",
+        Role::Marquee => "marquee",
+        Role::Timer => "timer",
+        Role::Slider => "slider",
+        Role::ProgressIndicator => "progressbar",
+        Role::Meter => "meter",
+        Role::ScrollBar => "scrollbar",
+        Role::SpinButton => "spinbutton",
+        Role::ComboBox | Role::EditableComboBox => "combobox",
+        Role::TextInput
+        | Role::MultilineTextInput
+        | Role::DateInput
+        | Role::DateTimeInput
+        | Role::WeekInput
+        | Role::MonthInput
+        | Role::TimeInput
+        | Role::EmailInput
+        | Role::NumberInput
+        | Role::PasswordInput
+        | Role::PhoneNumberInput
+        | Role::UrlInput => "textbox",
+        Role::SearchInput => "searchbox",
+        Role::Table | Role::ListGrid => "table",
+        Role::Row => "row",
+        Role::RowGroup => "rowgroup",
+        Role::Cell => "cell",
+        Role::GridCell => "gridcell",
+        Role::ColumnHeader => "columnheader",
+        Role::RowHeader => "rowheader",
+        Role::Grid => "grid",
+        Role::TreeGrid => "treegrid",
+        Role::Tree => "tree",
+        Role::TreeItem => "treeitem",
+        Role::Group | Role::Pane | Role::Details => "group",
+        Role::RadioGroup => "radiogroup",
+        Role::Toolbar => "toolbar",
+        Role::Tooltip => "tooltip",
+        Role::Navigation => "navigation",
+        Role::Main => "main",
+        Role::Banner | Role::Header => "banner",
+        Role::ContentInfo | Role::Footer => "contentinfo",
+        Role::Complementary => "complementary",
+        Role::Region | Role::Section => "region",
+        Role::Form => "form",
+        Role::Search => "search",
+        Role::Article => "article",
+        Role::Document | Role::Terminal => "document",
+        Role::Application => "application",
+        Role::Feed => "feed",
+        Role::Figure => "figure",
+        Role::Note => "note",
+        Role::Definition => "definition",
+        Role::Term => "term",
+        Role::Math => "math",
+        Role::Splitter => "separator",
+        Role::Blockquote => "blockquote",
+        Role::Caption | Role::FigureCaption => "caption",
+        Role::Code => "code",
+        Role::Strong => "strong",
+        Role::Emphasis => "emphasis",
+        Role::Time => "time",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use accesskit::{Action, Affine, Node, Rect, Role, Toggled};
+
+    use super::{ParentFrame, describe};
+
+    fn attribute<'a>(spec: &'a super::ElementSpec, name: &str) -> Option<&'a str> {
+        spec.attributes
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Each node shape against the element, attributes and text it is
+    /// mirrored as.
+    #[test]
+    fn a_node_is_described_as_its_element() {
+        struct Case {
+            name: &'static str,
+            node: Node,
+            expect: &'static [(&'static str, Option<&'static str>)],
+            text: Option<&'static str>,
+        }
+        let button = {
+            let mut node = Node::new(Role::Button);
+            node.set_label("Increment");
+            node.set_author_id("increment");
+            node.add_action(Action::Click);
+            node.add_action(Action::Focus);
+            node
+        };
+        let toggle_button = {
+            let mut node = Node::new(Role::Button);
+            node.set_label("Bold");
+            node.set_toggled(Toggled::True);
+            node
+        };
+        let checkbox = {
+            let mut node = Node::new(Role::CheckBox);
+            node.set_label("Agree");
+            node.set_toggled(Toggled::Mixed);
+            node.set_disabled();
+            node
+        };
+        let static_text = {
+            let mut node = Node::new(Role::Label);
+            node.set_value("Count 0");
+            node
+        };
+        let container = {
+            let mut node = Node::new(Role::GenericContainer);
+            node.set_label("dropped");
+            node
+        };
+        let heading = {
+            let mut node = Node::new(Role::Heading);
+            node.set_label("Settings");
+            node.set_level(2);
+            node
+        };
+        let slider = {
+            let mut node = Node::new(Role::Slider);
+            node.set_label("Volume");
+            node.set_numeric_value(30.0);
+            node.set_min_numeric_value(0.0);
+            node.set_max_numeric_value(f64::NAN);
+            node.set_value("30%");
+            node
+        };
+        let item = {
+            let mut node = Node::new(Role::ListItem);
+            node.set_label("Second");
+            node.set_size_of_set(3);
+            node.set_position_in_set(2);
+            node.set_selected(true);
+            node
+        };
+        let group_with_child = {
+            let mut node = Node::new(Role::Group);
+            node.set_label("Options");
+            node.push_child(accesskit::NodeId(9));
+            node
+        };
+        let cases = [
+            Case {
+                name: "a button is named by its text and found by its identifier",
+                node: button,
+                expect: &[
+                    ("role", Some("button")),
+                    ("data-flui-id", Some("increment")),
+                    ("tabindex", Some("-1")),
+                    ("aria-label", None),
+                ],
+                text: Some("Increment"),
+            },
+            Case {
+                name: "a toggled button is pressed, not checked",
+                node: toggle_button,
+                expect: &[("aria-pressed", Some("true")), ("aria-checked", None)],
+                text: Some("Bold"),
+            },
+            Case {
+                name: "a mixed, disabled checkbox",
+                node: checkbox,
+                expect: &[
+                    ("role", Some("checkbox")),
+                    ("aria-label", Some("Agree")),
+                    ("aria-checked", Some("mixed")),
+                    ("aria-disabled", Some("true")),
+                    ("tabindex", None),
+                ],
+                text: None,
+            },
+            Case {
+                name: "static text is its own content, with no role",
+                node: static_text,
+                expect: &[("role", None), ("aria-label", None)],
+                text: Some("Count 0"),
+            },
+            Case {
+                name: "a generic container takes no prohibited name",
+                node: container,
+                expect: &[("role", None), ("aria-label", None)],
+                text: None,
+            },
+            Case {
+                name: "a heading keeps its level",
+                node: heading,
+                expect: &[("role", Some("heading")), ("aria-level", Some("2"))],
+                text: Some("Settings"),
+            },
+            Case {
+                name: "a slider publishes its finite range values and value text",
+                node: slider,
+                expect: &[
+                    ("aria-valuenow", Some("30")),
+                    ("aria-valuemin", Some("0")),
+                    ("aria-valuemax", None),
+                    ("aria-valuetext", Some("30%")),
+                ],
+                text: None,
+            },
+            Case {
+                name: "a list item says where it is in its set",
+                node: item,
+                expect: &[
+                    ("aria-setsize", Some("3")),
+                    ("aria-posinset", Some("2")),
+                    ("aria-selected", Some("true")),
+                ],
+                text: Some("Second"),
+            },
+            Case {
+                name: "a node with children is named by its label, not its content",
+                node: group_with_child,
+                expect: &[("role", Some("group")), ("aria-label", Some("Options"))],
+                text: None,
+            },
+        ];
+        for case in cases {
+            let spec = describe(&case.node, ParentFrame::default(), false);
+            for &(name, value) in case.expect {
+                assert_eq!(attribute(&spec, name), value, "{}: {name}", case.name);
+            }
+            assert_eq!(spec.text.as_deref(), case.text, "{}: text", case.name);
+            assert_eq!(spec.tag.name(), "flui-node", "{}: tag", case.name);
+            assert!(
+                spec.attributes.windows(2).all(|pair| pair[0].0 < pair[1].0),
+                "{}: attributes are sorted and unique: {:?}",
+                case.name,
+                spec.attributes
+            );
+        }
+    }
+
+    /// The box an element gets inside its parent's, for the transforms a tree
+    /// carries.
+    #[test]
+    fn an_element_is_placed_in_its_parent_s_box() {
+        struct Case {
+            name: &'static str,
+            bounds: Rect,
+            transform: Option<Affine>,
+            parent: (f64, f64),
+            root: bool,
+            expect: (f64, f64, f64, f64, Option<[f64; 4]>),
+        }
+        let cases = [
+            Case {
+                name: "bounds in the parent's space, offset by the parent's origin",
+                bounds: Rect::new(30.0, 40.0, 130.0, 60.0),
+                transform: None,
+                parent: (10.0, 10.0),
+                root: false,
+                expect: (20.0, 30.0, 100.0, 20.0, None),
+            },
+            Case {
+                name: "a translation moves the box and leaves no CSS transform",
+                bounds: Rect::new(0.0, 0.0, 50.0, 50.0),
+                transform: Some(Affine::translate((5.0, -7.0))),
+                parent: (0.0, 0.0),
+                root: false,
+                expect: (5.0, -7.0, 50.0, 50.0, None),
+            },
+            Case {
+                name: "the root's device-pixel scale is dropped",
+                bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+                transform: Some(Affine::scale(2.0)),
+                parent: (0.0, 0.0),
+                root: true,
+                expect: (0.0, 0.0, 800.0, 600.0, None),
+            },
+            Case {
+                name: "a scale below the root becomes a CSS matrix at the scaled origin",
+                bounds: Rect::new(10.0, 0.0, 20.0, 10.0),
+                transform: Some(Affine::scale(2.0)),
+                parent: (0.0, 0.0),
+                root: false,
+                expect: (20.0, 0.0, 10.0, 10.0, Some([2.0, 0.0, 0.0, 2.0])),
+            },
+            Case {
+                name: "non-finite geometry is never published",
+                bounds: Rect::new(f64::NAN, 0.0, f64::INFINITY, 10.0),
+                transform: None,
+                parent: (0.0, 0.0),
+                root: false,
+                expect: (0.0, 0.0, 0.0, 10.0, None),
+            },
+        ];
+        for case in cases {
+            let mut node = Node::new(Role::GenericContainer);
+            node.set_bounds(case.bounds);
+            if let Some(transform) = case.transform {
+                node.set_transform(transform);
+            }
+            let spec = describe(
+                &node,
+                ParentFrame {
+                    origin: case.parent,
+                },
+                case.root,
+            );
+            let placement = spec.placement;
+            assert_eq!(
+                (
+                    placement.left,
+                    placement.top,
+                    placement.width,
+                    placement.height,
+                    placement.linear
+                ),
+                case.expect,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_dom_event_asks_for_what_the_node_supports() {
+        use super::event_action;
+
+        let mut expandable = Node::new(Role::Button);
+        expandable.add_action(Action::Expand);
+        expandable.add_action(Action::Collapse);
+        assert_eq!(event_action("click", &expandable), Some(Action::Expand));
+        expandable.set_expanded(true);
+        assert_eq!(event_action("click", &expandable), Some(Action::Collapse));
+        expandable.add_action(Action::Click);
+        assert_eq!(event_action("click", &expandable), Some(Action::Click));
+        assert_eq!(event_action("focusin", &expandable), None);
+        assert_eq!(event_action("contextmenu", &expandable), None);
+
+        let mut field = Node::new(Role::TextInput);
+        field.add_action(Action::Focus);
+        field.add_action(Action::ShowContextMenu);
+        assert_eq!(event_action("focusin", &field), Some(Action::Focus));
+        assert_eq!(
+            event_action("contextmenu", &field),
+            Some(Action::ShowContextMenu)
+        );
+        assert_eq!(event_action("click", &field), None);
+        assert_eq!(event_action("click", &Node::new(Role::Label)), None);
+    }
+}

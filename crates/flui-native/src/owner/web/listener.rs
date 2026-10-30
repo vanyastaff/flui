@@ -180,3 +180,44 @@ impl Drop for CanvasListener {
         }
     }
 }
+
+/// Listeners that run `moved` while `accepting` holds, when the page or one
+/// of the canvas's ancestors scrolls, or the viewport resizes or pans under a
+/// pinch zoom: each moves the canvas in the viewport without its own layout
+/// changing, so what is placed over it in viewport coordinates (the text
+/// input's editor, the semantics host) is placed again. `scroll` does not
+/// bubble, so it is caught on the window in the capture phase; the browser
+/// fires each at most once per frame.
+///
+/// # Errors
+/// What the browser reports when a listener cannot be added, or that the
+/// page has no window.
+pub(crate) fn viewport_listeners(
+    accepting: &Accepting,
+    moved: impl Fn() + Clone + 'static,
+) -> Result<Vec<CanvasListener>, OpenWindowError> {
+    let window = web_sys::window().ok_or_else(|| OpenWindowError::Backend {
+        message: "there is no window".to_owned(),
+    })?;
+    let mut targets: Vec<(EventTarget, bool)> = vec![(window.clone().into(), true)];
+    // Not every browser has a visual viewport.
+    if let Ok(viewport) = js_sys::Reflect::get(&window, &JsValue::from_str("visualViewport"))
+        && let Ok(viewport) = viewport.dyn_into::<EventTarget>()
+    {
+        targets.push((viewport, false));
+    }
+    let mut listeners = Vec::new();
+    for (target, capture) in &targets {
+        for kind in ["scroll", "resize"] {
+            let moved = moved.clone();
+            listeners.push(CanvasListener::install_in_phase(
+                target,
+                kind,
+                accepting,
+                *capture,
+                move |_| moved(),
+            )?);
+        }
+    }
+    Ok(listeners)
+}

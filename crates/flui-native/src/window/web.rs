@@ -785,6 +785,10 @@ impl CanvasEditor for FocusSync {
         self.editor.set(editor);
     }
 
+    fn set_semantics(&self, host: Option<&web_sys::HtmlElement>) {
+        self.editor.set_semantics(host);
+    }
+
     fn has_focus(&self) -> bool {
         effective_focus(&self.canvas)
     }
@@ -1306,14 +1310,19 @@ export function effectiveCanvasFocus(canvas) {
     if (!canvas.ownerDocument?.hasFocus()) return false;
     return isOwnedFocus(canvas, canvas.getRootNode().activeElement);
 }
-// The canvas, or the text editor its owner registered beside it.
+// The canvas, the text editor its owner registered beside it, or an element
+// of its semantics host.
 export function isOwnedFocus(canvas, node) {
     if (node === canvas) return true;
-    const editor = canvas[ownerKey]?.editor;
-    return !!node && node === editor;
+    const owner = canvas[ownerKey];
+    if (!node || !owner) return false;
+    return node === owner.editor || !!owner.semantics?.contains(node);
 }
 export function setCanvasEditor(canvas, token, editor) {
     if (canvas[ownerKey] === token) token.editor = editor;
+}
+export function setCanvasSemantics(canvas, token, host) {
+    if (canvas[ownerKey] === token) token.semantics = host;
 }
 // Observe the device-pixel content box where the browser has it (Chrome,
 // Firefox); Safari rejects the box, and its content box is observed instead.
@@ -1376,6 +1385,8 @@ extern "C" {
     pub(crate) fn is_owned_focus(canvas: &web_sys::HtmlCanvasElement, node: &JsValue) -> bool;
     #[wasm_bindgen(js_name = setCanvasEditor)]
     fn set_canvas_editor(canvas: &web_sys::HtmlCanvasElement, token: &JsValue, editor: &JsValue);
+    #[wasm_bindgen(js_name = setCanvasSemantics)]
+    fn set_canvas_semantics(canvas: &web_sys::HtmlCanvasElement, token: &JsValue, host: &JsValue);
     #[wasm_bindgen(catch, js_name = observeCanvas)]
     fn observe_canvas(
         observer: &web_sys::ResizeObserver,
@@ -1403,14 +1414,14 @@ extern "C" {
     fn retire_capture(token: &JsValue, id: i32);
 }
 
-/// Whether `event` only moves focus within the canvas's focus area (between
-/// the canvas and its text editor), which the window does not see as a focus
-/// change.
+/// Whether `event` (a `blur` or `focusout`) only moves focus within the
+/// canvas's focus area (between the canvas, its text editor and its semantics
+/// host), which the window does not see as a focus change.
 pub(crate) fn is_focus_handoff(
     canvas: &web_sys::HtmlCanvasElement,
     event: &web_sys::Event,
 ) -> bool {
-    event.type_() == "blur"
+    matches!(event.type_().as_str(), "blur" | "focusout")
         && event
             .dyn_ref::<web_sys::FocusEvent>()
             .and_then(web_sys::FocusEvent::related_target)
@@ -1767,6 +1778,13 @@ impl EditorSlot {
     pub(crate) fn set(&self, editor: Option<&web_sys::HtmlElement>) {
         let editor = editor.map_or(JsValue::NULL, |editor| JsValue::from(editor.clone()));
         set_canvas_editor(&self.canvas, &self.token, &editor);
+    }
+
+    /// `host` and what it holds are now part of the canvas's focus area;
+    /// `None` when no semantics host is.
+    pub(crate) fn set_semantics(&self, host: Option<&web_sys::HtmlElement>) {
+        let host = host.map_or(JsValue::NULL, |host| JsValue::from(host.clone()));
+        set_canvas_semantics(&self.canvas, &self.token, &host);
     }
 }
 
