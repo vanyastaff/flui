@@ -441,3 +441,65 @@ pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
         "{selected:?}"
     );
 }
+
+/// An area in an app whose frame request fails while `armed` is set. An
+/// element keeps the hook of its mount, so the hook is installed before
+/// the app mounts.
+fn with_failing_wake() -> (Scene, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let arm = Arc::clone(&armed);
+    laid.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            assert!(!arm.load(Ordering::SeqCst), "the frame request failed");
+        });
+    });
+    let heard: Heard = Rc::default();
+    laid.pump_widget(WidgetsApp::new(Scene::area(
+        &heard,
+        Some(Marked::default()),
+    )));
+    laid.pump();
+    (Scene { laid, heard }, armed)
+}
+
+/// A frame request that fails while the handles follow a change still
+/// lets the change commit and be heard: a handle drag moves its end (the
+/// failure stops the drag after its first move), and
+/// a tap clears.
+///
+/// Red-check: let a failing wake escape the handle update (the drag
+/// leaves "beta"; the tap leaves the selection).
+pub(crate) fn a_failing_wake_while_the_handles_follow_still_commits() {
+    use std::sync::atomic::Ordering;
+
+    let (mut scene, armed) = with_failing_wake();
+    let beta = scene.along(width_of("alpha be"));
+    scene.long_press(beta);
+    assert_eq!(scene.handles(), 2);
+
+    let end = width_of("alpha beta");
+    let past = width_of(WORDS) + 10.0;
+    let (from, to) = (
+        scene.handle_at(end),
+        scene.handle_at(end) + Offset::new(past - end, 0.0),
+    );
+    armed.store(true, Ordering::SeqCst);
+    let _contained =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.touch_drag(from, to)));
+    armed.store(false, Ordering::SeqCst);
+    scene.settle();
+    let dragged = scene.selected().expect("still selected");
+    assert!(dragged.starts_with("beta g"), "the drag: {dragged:?}");
+
+    armed.store(true, Ordering::SeqCst);
+    let _contained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene.laid.replay(&PointerScript::tap(beta));
+    }));
+    armed.store(false, Ordering::SeqCst);
+    scene.settle();
+    assert_eq!((scene.selected(), scene.handles()), (None, 0), "the tap");
+}

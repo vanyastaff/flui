@@ -279,8 +279,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             _ => true,
         };
         if moved {
-            self.model.hide_handles();
+            let mut failure = FirstPanic::new();
+            self.model.hide_handles(&mut failure);
             *self.model.handles.overlay.borrow_mut() = overlay;
+            failure.resume();
         }
     }
 
@@ -368,7 +370,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // A selection that is gone is no longer offered to other clients.
         let primary = self.model.primary.borrow().clone();
         primary.release();
-        self.model.handles.hide();
+        let mut failure = FirstPanic::new();
+        self.model.handles.hide(&mut failure);
+        failure.resume();
     }
 }
 
@@ -460,18 +464,20 @@ impl SelectionModel {
         let covered = coverage.map(|(parts, _)| parts);
         let selected = covered.as_ref().map(|covered| self.joined(covered));
         let take_focus = from_user && selection.is_some();
-        // Nothing selected has nothing to hold; otherwise the handles follow
-        // the new ends, whose lines may differ in height.
-        if selection.is_none() {
-            self.handles.hide();
-        } else {
-            self.handles.refresh();
-        }
+        let selected_any = selection.is_some();
         *self.selection.borrow_mut() = selection;
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
         let primary = self.primary.borrow().clone();
         let mut failure = FirstPanic::new();
+        // Nothing selected has nothing to hold; otherwise the handles follow
+        // the new ends, whose lines may differ in height. Hidden before the
+        // highlight, which then publishes no ends.
+        if selected_any {
+            self.handles.refresh(&mut failure);
+        } else {
+            self.handles.hide(&mut failure);
+        }
         failure.contain(|| {
             if let Some(rebuild) = rebuild {
                 rebuild.schedule(RebuildReason::StateChange);
@@ -500,30 +506,30 @@ impl SelectionModel {
     }
 
     /// Shows the handles under the selection's ends, when an overlay can
-    /// hold them.
-    fn show_handles(self: &Rc<Self>) {
-        if !self.handles.shown.get() && self.handles.show(self) {
-            self.republish_ends();
+    /// hold them. A wake that fails is held in `failure`, after the ends
+    /// are published.
+    fn show_handles(self: &Rc<Self>, failure: &mut FirstPanic) {
+        if !self.handles.shown.get() && self.handles.show(self, failure) {
+            self.republish_ends(failure);
         }
     }
 
-    /// Hides the handles, if they are shown.
-    fn hide_handles(&self) {
-        if self.handles.hide() {
-            self.republish_ends();
+    /// Hides the handles, if they are shown. A wake that fails is held in
+    /// `failure`, after the ends are withdrawn.
+    fn hide_handles(&self, failure: &mut FirstPanic) {
+        if self.handles.hide(failure) {
+            self.republish_ends(failure);
         }
     }
 
     /// Hands the texts the links of the ends they hold, or none, after the
     /// handles were shown or hidden; the selection itself is unchanged.
-    fn republish_ends(&self) {
+    fn republish_ends(&self, failure: &mut FirstPanic) {
         let selection = self.selection.borrow().clone();
         let covered = selection
             .and_then(|selection| self.covered(&selection))
             .map(|(parts, _)| parts);
-        let mut failure = FirstPanic::new();
-        self.highlight(covered.as_deref().unwrap_or_default(), &mut failure);
-        failure.resume();
+        self.highlight(covered.as_deref().unwrap_or_default(), failure);
     }
 
     /// The direction the area reads in.

@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::panic::FirstPanic;
 use flui_objects::RenderFollowerLayer;
 use flui_painting::BoxShape;
 use flui_painting::paint::Alignment;
@@ -220,8 +221,9 @@ impl HandleState {
 
     /// Puts the handles in the overlay, once; without an overlay there are
     /// none, which a debug build reports once. Returns whether they are
-    /// shown.
-    pub(super) fn show(&self, model: &Rc<SelectionModel>) -> bool {
+    /// shown. The entry is held before the overlay is told, so a wake that
+    /// fails there (held in `failure`) leaves an entry `hide` removes.
+    pub(super) fn show(&self, model: &Rc<SelectionModel>, failure: &mut FirstPanic) -> bool {
         let overlay = self.overlay.borrow().clone();
         let Some(overlay) = overlay else {
             if cfg!(debug_assertions) && !self.warned.replace(true) {
@@ -238,21 +240,23 @@ impl HandleState {
                 }
                 .boxed()
             });
-            overlay.insert(&entry, &InsertPosition::Top);
-            *self.entry.borrow_mut() = Some(entry);
+            *self.entry.borrow_mut() = Some(entry.clone());
+            failure.contain(|| overlay.insert(&entry, &InsertPosition::Top));
         }
         true
     }
 
     /// Takes the handles out of the overlay. Returns whether they were
-    /// shown.
-    pub(super) fn hide(&self) -> bool {
+    /// shown. They are hidden before the overlay is told, so a wake that
+    /// fails there (held in `failure`) leaves nothing shown.
+    pub(super) fn hide(&self, failure: &mut FirstPanic) -> bool {
         self.grip.set(None);
+        let was_shown = self.shown.replace(false);
         let entry = self.entry.borrow_mut().take();
         if let Some(entry) = entry {
-            entry.remove();
+            failure.contain(|| entry.remove());
         }
-        self.shown.replace(false)
+        was_shown
     }
 
     /// Sets what the handles look like, rebuilding shown handles when it
@@ -260,15 +264,18 @@ impl HandleState {
     pub(super) fn set_look(&self, look: Look) {
         let old = self.look.borrow_mut().replace(look.clone());
         if !old.is_some_and(|old| old.same(&look)) {
-            self.refresh();
+            let mut failure = FirstPanic::new();
+            self.refresh(&mut failure);
+            failure.resume();
         }
     }
 
-    /// Rebuilds the handles, whose line height may have changed.
-    pub(super) fn refresh(&self) {
+    /// Rebuilds the handles, whose line height may have changed; a wake
+    /// that fails is held in `failure`.
+    pub(super) fn refresh(&self, failure: &mut FirstPanic) {
         let entry = self.entry.borrow().clone();
         if let Some(entry) = entry {
-            entry.mark_needs_build();
+            failure.contain(|| entry.mark_needs_build());
         }
     }
 }

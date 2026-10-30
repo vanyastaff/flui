@@ -263,7 +263,7 @@ impl SelectionModel {
             &mut failure,
         );
         if self.selection.borrow().is_some() {
-            self.show_handles();
+            self.show_handles(&mut failure);
         }
         failure.resume();
     }
@@ -388,8 +388,15 @@ impl SelectionModel {
     /// extend from it. With Shift held, the drag extends the current
     /// selection from its anchor instead.
     fn drag_started(&self, pressed: Offset<f64>, unit: Unit) {
-        // A mouse, pen or trackpad selection shows no handles.
-        self.hide_handles();
+        // A mouse, pen or trackpad selection shows no handles; a wake that
+        // fails while they are taken away still lets the press select.
+        let mut failure = FirstPanic::new();
+        self.hide_handles(&mut failure);
+        failure.contain(|| self.drag_selects(pressed, unit));
+        failure.resume();
+    }
+
+    fn drag_selects(&self, pressed: Offset<f64>, unit: Unit) {
         let ordered = self.ordered();
         let anchor = self
             .selection
@@ -470,8 +477,15 @@ impl SelectionModel {
     /// it and a triple one the text. With Shift held, it extends the
     /// selection from its anchor.
     fn tapped(&self, global: Offset<f64>, count: u32) {
-        // A tap, by touch or not, hides the handles.
-        self.hide_handles();
+        // A tap, by touch or not, hides the handles; a wake that fails while
+        // they are taken away still lets the tap select.
+        let mut failure = FirstPanic::new();
+        self.hide_handles(&mut failure);
+        failure.contain(|| self.tap_selects(global, count));
+        failure.resume();
+    }
+
+    fn tap_selects(&self, global: Offset<f64>, count: u32) {
         let ordered = self.ordered();
         let anchor = self
             .selection

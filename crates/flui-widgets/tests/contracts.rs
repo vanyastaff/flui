@@ -598,6 +598,7 @@ fn selection_area_handles() {
             ("selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles", crate::selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles),
             ("selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay", crate::selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay),
             ("selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is", crate::selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is),
+            ("selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits", crate::selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits),
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
         ],
