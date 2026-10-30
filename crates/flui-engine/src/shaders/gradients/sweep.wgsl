@@ -154,7 +154,10 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // the paint's alpha — see `common/coverage.wgsl`.
     // (`sdfToAlpha` takes derivatives, so it must be reached from uniform
     // control flow.)
-    let edge_alpha = gradientEdgeCoverage(in.stop_count, sdfToAlpha(dist));
+    let edge_alpha = gradientEdgeCoverage(
+        in.stop_count,
+        sdfToAlpha(dist, centered_pos, sdRoundedBoxNormal(centered_pos, in.rect_size * 0.5, in.corner_radii)),
+    );
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
         in.clip_position.xy,

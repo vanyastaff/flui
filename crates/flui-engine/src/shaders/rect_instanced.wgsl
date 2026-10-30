@@ -15,10 +15,10 @@
 //   device    = M * local_pos + transform_translate.xy
 //
 // The SDF fragment evaluates distance in LOCAL space (via `uv` / `rect_size`);
-// the L2 screen-space gradient `length(vec2(dpdx(dist), dpdy(dist)))` measures the
-// derivative of that local distance, yielding ~1-device-px AA under ANY affine
-// (rotation/skew/anisotropic scale) with no fragment-shader change; L1/fwidth
-// would overestimate diagonal edges by up to √2.
+// `sdfToAlpha` carries the local normal through `dpdx(p)`/`dpdy(p)` to measure
+// how fast that local distance moves per device pixel, yielding ~1-device-px AA
+// under ANY affine (rotation/skew/anisotropic scale); L1/fwidth would
+// overestimate diagonal edges by up to √2.
 //
 // For the baked-AABB fast path (axis-aligned SrcOver):
 //   transform           = [1, 0, 0, 1]   (identity 2×2)
@@ -145,8 +145,7 @@ fn vs_main(
     // the SDF distance measured to the true rect regardless of quad expansion.
     out.uv = exp_pos;
     // rect_size = local width × height; the SDF evaluates distance in this space.
-    // Under any affine, the L2 gradient length(dpdx(dist), dpdy(dist)) correctly
-    // measures the screen-space derivative of the LOCAL distance → ~1 device-px AA band.
+    // `sdfToAlpha` scales the local distance to device pixels → ~1 device-px AA band.
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
     // world_pos is the device-pixel position, used by the SDF clip test.
@@ -182,7 +181,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // including its corner radii, so a hard-edged rounded rect is still
     // rounded — just not smoothed. The clip's own coverage below keeps its
     // smoothing either way; that is the clip's contract, not the paint's.
-    let alpha = select(sdfToAlpha(dist), step(dist, 0.0), in.aliased == 1u);
+    let normal = sdRoundedBoxNormal(p, in.rect_size * 0.5, in.corner_radii);
+    let alpha = select(sdfToAlpha(dist, p, normal), step(dist, 0.0), in.aliased == 1u);
 
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(

@@ -12,3 +12,4 @@
 ### Fixed
 
 - On GL drivers that offer dual-source blending (Mesa's llvmpipe among them), a gradient or image drawn with `Plus` or another destination-reading blend after a coverage-correct draw no longer draws nothing: the isolation pass's targets now set their blend function instead of leaving the dual-source one Mesa refuses with two draw buffers.
+- A rect, gradient or clip edge on pixel boundaries covers its corner pixels fully on drivers with fine derivatives (lavapipe, llvmpipe), where it left them at 94 %: the antialiasing band is measured through the local position's derivatives and the field's normal instead of differentiating the distance, which creases inside each corner.

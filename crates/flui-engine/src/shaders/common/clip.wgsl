@@ -92,12 +92,39 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return distance;
 }
 
-/// Convert an SDF distance to coverage with adaptive antialiasing.
+/// Outward unit normal of `sdRoundedBox` at `p`, in the same local space.
 ///
-/// Uses the L2 (Euclidean) gradient magnitude so a diagonal or rotated edge
-/// receives ~1 device pixel of AA exactly, not ~1.41× as with L1/fwidth.
-fn sdfToAlpha(dist: f32) -> f32 {
-    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
+/// Past a corner's centre the field is the distance to that centre, so the
+/// normal points away from it; elsewhere it is the axis of the nearer side.
+fn sdRoundedBoxNormal(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> vec2<f32> {
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
+    let q = abs(p) - b + vec2<f32>(r3);
+    let outer = max(q, vec2<f32>(0.0));
+    let side = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), q.x > q.y);
+    let unsigned = select(side, outer / max(length(outer), 1e-20), max(q.x, q.y) > 0.0);
+    return unsigned * select(vec2<f32>(-1.0), vec2<f32>(1.0), p >= vec2<f32>(0.0));
+}
+
+/// Convert an SDF distance to coverage with ~1 device pixel of antialiasing.
+///
+/// `p` is the local point `dist` was measured at and `normal` the field's
+/// local unit gradient there. The band's half-width is how far the distance
+/// moves per device pixel: the normal carried through `dpdx(p)`/`dpdy(p)`,
+/// which are exact on every driver because `p` is affine in the fragment
+/// position. The L2 length gives a rotated or sheared edge one device pixel,
+/// not the ~1.41× of L1/fwidth.
+///
+/// Differentiating `dist` itself instead breaks where the field creases: a
+/// box's interior distance is `max(q.x, q.y)`, which switches axis inside
+/// each corner, so the fragments of one 2×2 quad straddle the crease and a
+/// driver with fine derivatives (lavapipe, llvmpipe) reads a √2 slope there
+/// and takes ~6 % off a corner pixel the rect covers fully.
+fn sdfToAlpha(dist: f32, p: vec2<f32>, normal: vec2<f32>) -> f32 {
+    let slope = vec2<f32>(dot(normal, dpdx(p)), dot(normal, dpdy(p)));
+    // The floor keeps `smoothstep`'s edges apart where `p` is constant (an
+    // inactive clip evaluates a fixed point), which WGSL leaves undefined.
+    let edge_width = max(length(slope) * 0.5, 1e-6);
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
 
@@ -180,7 +207,10 @@ fn clipAlpha(
     // rule matches the SDF's own sign convention — a fragment exactly on
     // the boundary is inside. `Clip::AntiAlias` feathers the boundary.
     let hard_alpha = select(0.0, 1.0, clip_dist <= 0.0);
-    let soft_alpha = sdfToAlpha(clip_dist);
+    // The superellipse takes the rounded box's normal: the two corner curves
+    // differ by a few degrees, which moves the band's width only under an
+    // anisotropic transform and only by the cosine of that angle.
+    let soft_alpha = sdfToAlpha(clip_dist, clip_p, sdRoundedBoxNormal(clip_p, clip_half, radii));
     let alpha = select(1.0, select(soft_alpha, hard_alpha, clip_hard), clip_active);
     var coverage = alpha;
     var clipped_out = clip_active && alpha <= 0.0;
