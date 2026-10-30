@@ -53,7 +53,10 @@
 use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_objects::{Placement, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
+use flui_objects::{
+    CarouselConfig, CarouselItemFrames, Placement, RenderSliverCarousel,
+    RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList,
+};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     semantics::SetSize, traits::RenderSliver,
@@ -1631,6 +1634,58 @@ impl SliverFixedExtentList {
     }
 }
 
+// ============================================================================
+// SLIVER CAROUSEL — RenderSliverCarousel as a LazyMultiBoxRender
+// ============================================================================
+
+/// A carousel sliver's configuration and the record it writes each item's mask into.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct CarouselSliverConfig {
+    /// The layout and item spacing.
+    pub config: CarouselConfig,
+    /// Where each laid-out item's mask is recorded.
+    pub frames: CarouselItemFrames,
+}
+
+impl CarouselSliverConfig {
+    /// `config`, recording the items' masks in `frames`.
+    #[must_use]
+    pub fn new(config: CarouselConfig, frames: CarouselItemFrames) -> Self {
+        Self { config, frames }
+    }
+}
+
+impl LazyMultiBoxRender for RenderSliverCarousel {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_semantic_set_size(self, count)
+    }
+    type Config = CarouselSliverConfig;
+
+    const KIND: &'static str = "SliverCarousel";
+
+    fn create(config: &Self::Config, item_count: usize) -> Self {
+        RenderSliverCarousel::new(config.config.clone(), item_count, config.frames.clone())
+    }
+
+    fn update(&mut self, config: &Self::Config) -> flui_rendering::RenderUpdateImpact {
+        self.set_config(config.config.clone()) | self.set_frames(config.frames.clone())
+    }
+
+    fn item_count(&self) -> usize {
+        RenderSliverCarousel::item_count(self)
+    }
+
+    fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_item_count(self, item_count)
+    }
+}
+
+/// A lazily built carousel: items at one large extent, each masked to the keyline it passes.
+pub type SliverCarousel = SliverMultiBoxAdaptor<RenderSliverCarousel>;
 // ============================================================================
 // UNIT TESTS
 // ============================================================================

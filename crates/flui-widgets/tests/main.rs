@@ -41,6 +41,8 @@ mod animated_size;
 mod back_gesture;
 #[path = "binding_animation.rs"]
 mod binding_animation;
+#[path = "carousel.rs"]
+mod carousel;
 #[path = "child_type_swap.rs"]
 mod child_type_swap;
 #[path = "collection_semantics.rs"]

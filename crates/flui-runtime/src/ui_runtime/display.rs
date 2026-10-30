@@ -38,7 +38,7 @@ use crate::presentation::PresentationState;
 pub const DEFAULT_REFRESH_PERIOD: Duration = Duration::from_micros(16_667);
 
 /// The period a presentation on `display` paces by.
-fn interval_of(display: Option<WindowDisplay>) -> Duration {
+pub(super) fn interval_of(display: Option<WindowDisplay>) -> Duration {
     display
         .and_then(|display| display.refresh_period)
         .map_or(DEFAULT_REFRESH_PERIOD, flui_platform::RefreshPeriod::get)

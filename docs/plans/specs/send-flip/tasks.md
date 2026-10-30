@@ -152,7 +152,7 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
       `nested_write_panics_inside_an_event_cx`;
     - trybuild `flui-view` (`signal_write_through_build_context` + `ctx.reactive()`, новая
       `signal_write_through_the_graph`) прогнан локально, `.stderr` пересняты.
-- [ ] T10 — остаток flip: PR #1962.
+- [x] T10 — остаток flip (#1962).
   Сняты все позиции строки T10. Отличия от строки: `ArcCurve` держит кривую в `Rc` и
   переименован в `SharedCurve`; `SnapPolicy` остаётся `Send + Sync` (ADR-0209 §9, §10);
   `PhysicalClipShape`/`PhysicalClipSource` снаружи крейта не видны (модуль `proxy` их не
@@ -165,6 +165,11 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   `flui-widgets`, `flui-interaction`, `flui-animation`; trybuild
   `owner_values_stay_on_their_thread`.
 - [ ] T11 — отказ мутации контроллеров во время `build`
+  T11a (PR T11a): `Navigator` и `ScaffoldMessenger` больше не трогают контроллеры из `build`.
+  Навигатор разбирает очередь команд маршрутов из завершения анимации push, в том же кадре, что
+  раньше (`a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`); мессенджер сверяется
+  из слушателей статуса своих контроллеров и из прямых `show`/`hide`, `on_closed` после тика
+  уходит в post-frame. Остаток T11 — отдельным PR.
 - [ ] T9 — `TextEditingController`
 - [ ] T2 — gate
 - [ ] T7 — закрытие

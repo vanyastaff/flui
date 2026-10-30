@@ -77,6 +77,7 @@
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
+//! | `RenderSliverCarousel` | `harness_sliver_carousel_*` | yes | — | — | yes | frames |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
@@ -240,6 +241,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderIgnoreBaseline",
     "RenderListener",
     "RenderMouseRegion",
+    "RenderSliverCarousel",
     "RenderSliverFixedExtentList",
     "RenderSliverGrid",
     "RenderSliverPadding",
@@ -7940,6 +7942,54 @@ fn harness_sliver_fixed_extent_list_geometry() {
 // healthy viewport host; the finite-domain contract and empty-band fallback
 // are proven on `window` / the index helpers in that same unit-test module.
 
+// ── RenderSliverCarousel ─────────────────────────────────────────────────────
+
+/// Five 100 px uncontained items over a 300 px horizontal viewport: the strip
+/// scrolls 200 px, the shown items are laid out tight at the item extent and
+/// published to the frames.
+fn harness_sliver_carousel_geometry_and_frames() {
+    let frames = CarouselItemFrames::new();
+    let layout = CarouselLayout::uncontained(100.0).unwrap();
+    let mut sliver = sliver_node(RenderSliverCarousel::new(
+        CarouselConfig::new(layout, 0.0),
+        5,
+        frames.clone(),
+    ))
+    .label("carousel");
+    for index in 0..5 {
+        sliver = sliver.child(
+            box_node(RenderColoredBox::red(10.0, 10.0))
+                .label(["item0", "item1", "item2", "item3", "item4"][index])
+                .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                    SliverMultiBoxAdaptorParentData::new(index),
+                )),
+        );
+    }
+    let run = RenderTester::mount(
+        box_node(RenderViewport::new(AxisDirection::LeftToRight))
+            .label("viewport")
+            .child(sliver),
+    )
+    .with_size(Size::new(300.0, 100.0))
+    .run_layout();
+
+    let geometry = run.sliver_geometry(run.id("carousel"));
+    assert_eq!(
+        geometry.scroll_extent, 500.0,
+        "the 200 px range plus the viewport"
+    );
+    assert_eq!(geometry.paint_extent, 300.0);
+    assert_eq!(run.box_geometry(run.id("item0")).width, 100.0);
+    assert_eq!(
+        frames.mask(0).map(|mask| mask.width()),
+        Some(100.0),
+        "an uncontained item shows whole"
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderSliverCarousel", &["item_count"]);
+    let tree = run.diagnostics();
+    assert_has_committed_geometry(tree.find_descendant("RenderSliverCarousel").unwrap());
+}
+
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
 
 // The two former stale-out-of-band `hit_test`/`paint` pins
@@ -13238,6 +13288,7 @@ fn family_animation() {
 #[test]
 fn family_sliver_lists() {
     run_family("sliver_lists", &[
+        ("sliver_carousel_geometry_and_frames", harness_sliver_carousel_geometry_and_frames),
         ("sliver_fixed_extent_list_geometry", harness_sliver_fixed_extent_list_geometry),
         ("sliver_list_seeded_residents_laid_out_at_expected_offsets", harness_sliver_list_seeded_residents_laid_out_at_expected_offsets),
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),

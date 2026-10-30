@@ -404,6 +404,20 @@ impl UiRuntime {
         self.deliver_failure_report(self.frame_failure_report(presentation, kind));
     }
 
+    /// Make `presentation`, whose frame was just dropped and reported, wait
+    /// before its next attempt: its display's refresh period doubled once per
+    /// earlier failure in the streak, up to
+    /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP).
+    pub(super) fn arm_failure_retry(presentation: &PresentationState) {
+        let period = super::display::interval_of(presentation.window_display.get());
+        let delay =
+            crate::frame_failure::failure_retry_delay(period, presentation.frame_failure_streak());
+        let now = presentation.clock().now();
+        if let Some(at) = now.checked_add(delay) {
+            presentation.arm_failure_retry(at);
+        }
+    }
+
     fn frame_failure_report(
         &self,
         presentation: &PresentationState,

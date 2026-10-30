@@ -51,7 +51,6 @@ use flui_foundation::ChangeNotifier;
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
 use super::binding::{
@@ -180,6 +179,10 @@ fn register_command_target_with_id(
     target
 }
 
+/// What a push-completion continuation runs to settle the history: a pump of
+/// the route-command queue through a `Weak` navigator.
+type SettlePump = Rc<dyn Fn()>;
+
 /// Everything a [`NavigatorHandle`] and the mounted [`NavigatorState`] share.
 ///
 /// The route stack lives behind a private `Mutex` because `ViewState::build` takes
@@ -281,19 +284,21 @@ struct NavigatorShared {
 
     /// What a push's
     /// [`PushCompletion::Animating`](super::route::PushCompletion::Animating)
-    /// continuation schedules the Navigator's rebuild through, once its
-    /// future resolves. The continuation holds only this `Arc` (and a clone of
-    /// the route-command queue), so it structurally cannot touch the history or
-    /// anything else `NavigatorShared` owns.
+    /// continuation settles the history through, once its future resolves: a
+    /// pump of the route-command queue, run in the animation tick that resolved
+    /// the future, so the next route's `did_add` and entrance start in that same
+    /// frame and never inside `build`, where a controller refuses mutation
+    /// (ADR-0086 §7). The continuation holds only this `Arc` (and a clone of the
+    /// route-command queue); the pump reaches the navigator through a `Weak`.
     ///
-    /// Resolved from `LifecycleContext::rebuild_handle` in
-    /// [`NavigatorState::init_state`](struct@NavigatorState), cleared in
-    /// `dispose`, and — this is the part that matters — **read at the moment
-    /// the continuation fires**, not captured when it is registered:
-    /// `push_with_id` flushes before the Navigator ever mounts (`history.rs`),
-    /// so a route pushed pre-mount registers its continuation while this slot
-    /// is still `None`, and only a later mount fills it.
-    settle_wake: super::lifecycle::Terminal<Arc<Mutex<Option<RebuildHandle>>>>,
+    /// Installed by [`NavigatorState::init_state`](struct@NavigatorState),
+    /// cleared in `dispose`, and — this is the part that matters — **read at
+    /// the moment the continuation fires**, not captured when it is
+    /// registered: `push_with_id` flushes before the Navigator ever mounts
+    /// (`history.rs`), so a route pushed pre-mount registers its continuation
+    /// while this slot is still `None`, and the mount's own flush drains the
+    /// command it queued.
+    settle_wake: super::lifecycle::Terminal<Arc<Mutex<Option<SettlePump>>>>,
 
     /// `Some` when a `Router` drives this navigator; fixed at construction.
     /// See `addressing.rs` for what it refuses.
@@ -581,9 +586,9 @@ impl NavigatorShared {
     /// released; see that call site's comment for why the placement itself is
     /// load-bearing. The registered closure captures nothing but a clone of
     /// the route-command queue and this `settle_wake` slot's `Arc` — never
-    /// `self` — so it is structurally incapable of touching the history or
-    /// any other field, no matter which thread resolves `future` or how long
-    /// from now.
+    /// `self` — so it reaches the history only through the pump a mounted
+    /// navigator installed, which takes the history lock with `try_lock` and
+    /// leaves the command to a flush already running.
     fn await_push(&self, route: RouteId, future: AnimationRunFuture) {
         let queue = self.history.lock().command_queue();
         let settle_wake = Arc::clone(&self.settle_wake);
@@ -599,13 +604,12 @@ impl NavigatorShared {
             // Read now, not at registration: a route pushed before this
             // navigator mounted registers this closure while the slot is
             // still `None`, and only a later mount fills it. Cloned out and
-            // dropped before `schedule` runs — an if-let-scrutinee guard held
-            // across `schedule` is the shape #1177 eliminated elsewhere in
-            // the workspace; `RebuildHandle::schedule` is documented
-            // non-reentrant today, but nothing here should depend on that.
-            let handle = settle_wake.lock().clone();
-            if let Some(handle) = handle {
-                handle.schedule(RebuildReason::AsyncCompletion);
+            // dropped before the pump runs: the pump re-enters the navigator,
+            // and an if-let-scrutinee guard held across it is the shape #1177
+            // eliminated elsewhere in the workspace.
+            let pump = settle_wake.lock().clone();
+            if let Some(pump) = pump {
+                pump();
             }
         });
     }
@@ -2939,10 +2943,9 @@ impl ViewState<Navigator> for NavigatorState {
     /// the rearrange only fills the overlay's entry list; its first `build` reads
     /// it. Mutating an unmounted `OverlayHandle` is defined behavior.
     ///
-    /// Acquires the rebuild capability a push's entrance-transition
-    /// continuation later schedules through (`settle_wake`, ADR-0064) —
-    /// lifecycle-only — alongside the other three
-    /// lifecycle-only captures below.
+    /// Installs the pump a push's entrance-transition continuation settles
+    /// the history through (`settle_wake`), alongside the three lifecycle-only
+    /// captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
 
@@ -2950,7 +2953,13 @@ impl ViewState<Navigator> for NavigatorState {
         // fires them from a post-frame callback, never from a frame phase.
         *self.shared.post_frame.lock() = ctx.post_frame_handle();
         let _prev = std::mem::replace(&mut *self.shared.render_tree.lock(), ctx.pipeline_owner());
-        let _prev = self.shared.settle_wake.lock().replace(ctx.rebuild_handle());
+        let weak: Weak<NavigatorShared> = Arc::downgrade(&self.shared);
+        let pump: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(shared) = weak.upgrade() {
+                shared.pump_route_commands();
+            }
+        });
+        let _prev = self.shared.settle_wake.lock().replace(pump);
 
         // Resolve the ambient `HeroControllerScope` and settle which
         // controller (if any) observes this navigator — before `attach_observers`, so
@@ -3003,16 +3012,10 @@ impl ViewState<Navigator> for NavigatorState {
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
     /// `FocusTraversalGroup` all belong to features deferred for now.
     ///
-    /// Drains any queued `RouteCommand`s first: this build is frequently the
-    /// very rebuild a push-completion continuation scheduled (ADR-0064), and
-    /// the settled state must be what the rest of this build (and anything it
-    /// reads through the handle) sees. The only command that can reach a
-    /// build is a settle of an already-parked entry, so the flush walk here
-    /// runs no user code; an already-resolved future's immediate settle
-    /// costs exactly one extra rebuild, not a loop.
+    /// Drains no `RouteCommand`: a flush mutates route controllers, which
+    /// refuse mutation during `build` (ADR-0086 §7). A push-completion
+    /// continuation pumps the queue itself, in the tick that settled it.
     fn build(&self, _view: &Navigator, ctx: &dyn BuildContext) -> impl IntoView {
-        self.shared.pump_route_commands();
-
         // Re-resolved every build, not just once at mount — see
         // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
         self.sync_nested_hero_registration(ctx);
