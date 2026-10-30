@@ -234,8 +234,8 @@ pub(crate) trait X11Host: 'static {
 }
 
 /// What the loop asks of the clipboard, the clipboard feature's: what
-/// [`Platform::clipboard`](crate::Platform::clipboard) and
-/// [`Platform::primary_selection`](crate::Platform::primary_selection) hand
+/// [`Platform::clipboard`] and
+/// [`Platform::primary_selection`] hand
 /// out, and the turn's answer for the application's primary selection,
 /// which the application offers as a closure only the owner thread may
 /// call.
