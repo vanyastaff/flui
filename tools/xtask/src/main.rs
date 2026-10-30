@@ -38,6 +38,7 @@ mod send_impls;
 mod send_positions;
 mod testing;
 mod toolchain;
+mod try_new;
 mod wasm;
 mod wgsl;
 mod workspace;
@@ -121,6 +122,9 @@ enum Command {
     /// Check that every place the public API names `Send` or `Sync` is listed and the list
     /// only shrinks (ADR-0136).
     SendPositions(send_positions::SendPositionsArgs),
+    /// Check that every `new` returning `Result` or `Option` is listed and the list only
+    /// shrinks: such a constructor is `try_new` (AGENTS.md).
+    TryNew(try_new::TryNewArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -204,6 +208,7 @@ fn main() -> ExitCode {
         Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
+        Command::TryNew(args) => try_new::try_new(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
