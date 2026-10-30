@@ -87,7 +87,7 @@ enum Unresolved {
 /// - under [`LeaderClip::Hide`], the leader's anchor point lies outside a clip
 ///   layer on the leader's chain;
 /// - a nested follower on a chain resolves to `None`, or more than
-///   [`MAX_FOLLOWER_NESTING`] followers stand on the chains (a debug build
+///   16 followers stand on the chains (a debug build
 ///   warns once per resolution).
 ///
 /// A leader nested *inside* the follower's subtree violates the
