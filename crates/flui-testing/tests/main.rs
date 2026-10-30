@@ -252,6 +252,10 @@ fn capability_seam() {
                 capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner
                     as fn(),
             ),
+            (
+                "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
+                capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
+            ),
         ],
     );
 }

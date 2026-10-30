@@ -523,16 +523,21 @@ impl Drop for UiRuntime {
             "ui_runtime command inbox close",
         );
         let handler = self.frame_failure_handler.borrow_mut().take();
+        // The capability providers are application values too: the last
+        // registry clone is usually this one.
+        let capabilities = std::mem::take(&mut self.capabilities);
         let preserving = first.is_some() || std::thread::panicking();
         if preserving {
             std::mem::forget(commands);
             std::mem::forget(handler);
+            std::mem::forget(capabilities);
         } else {
             let mut retired = flui_foundation::panic::FirstPanic::new();
             for command in commands {
                 retired.contain(|| drop(command));
             }
             retired.contain(|| drop(handler));
+            retired.contain(|| drop(capabilities));
             crate::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first,
                 retired.into_payload(),

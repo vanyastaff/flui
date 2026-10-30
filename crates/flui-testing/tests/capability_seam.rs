@@ -358,3 +358,42 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
         Poll::Ready(Err(Abandoned::OwnerRetired))
     );
 }
+
+/// A provider whose own `Drop` panics, wrapping the scripted clipboard.
+struct ExplodingProvider(ScriptedClipboard);
+
+impl Drop for ExplodingProvider {
+    fn drop(&mut self) {
+        panic!("provider dropped at teardown");
+    }
+}
+
+impl CapabilityProvider<ClipboardCapability> for ExplodingProvider {
+    fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
+        self.0.provide(cx)
+    }
+}
+
+pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
+    let scripted = ScriptedClipboard::new();
+    scripted.hold_reads();
+    let provider = ExplodingProvider(scripted.clone());
+    let mut host = HeadlessHost::with_capabilities(
+        window(),
+        registry_of(move |registrar| registrar.provide::<ClipboardCapability>(provider)),
+    );
+    let clipboard = acquire(&mut host).expect("provided");
+    let capture = PanicOnDrop;
+    clipboard.read_text().on_complete(move |_| {
+        let _ = &capture;
+    });
+    drop(clipboard);
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host)))
+        .expect_err("the first teardown failure reaches whoever drops the runtime");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"capture dropped at teardown"),
+        "the completion's failure comes first; the provider is kept, not dropped into a second panic"
+    );
+}
