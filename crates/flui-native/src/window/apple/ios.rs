@@ -374,7 +374,13 @@ define_class!(
                     self.observe_link_cadence(link);
                     let demand = &self.ivars().frame_demand;
                     if demand.take() {
-                        self.delivery().dispatch_request_frame();
+                        let (age, until_present) = super::link_timing::tick(
+                            objc2_quartz_core::CACurrentMediaTime(),
+                            link.timestamp(),
+                            link.targetTimestamp(),
+                        );
+                        self.delivery()
+                            .dispatch_frame(crate::frame_request_timed(age, until_present));
                     }
                     if !demand.pending() {
                         link.setPaused(true);

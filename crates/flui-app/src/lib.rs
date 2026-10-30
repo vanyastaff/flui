@@ -97,7 +97,7 @@ mod table_test;
 // Primary exports
 pub use app::{
     AppCapabilities, AppConfig, AppLaunch, DiagnosticsProfile, LaunchError, MotionOverride,
-    PointerResampling, RootRenderElement, RootRenderView, run_app,
+    PointerResampling, RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
 };
 pub use flui_engine::FrameLatency;
 // The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap

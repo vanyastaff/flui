@@ -6,5 +6,6 @@
 //! become text and back. A Wayland selection names them as MIME types, an X11
 //! selection as targets, and both carry the same few.
 
+pub(crate) mod owners;
 pub(crate) mod text;
 pub(crate) mod wayland;

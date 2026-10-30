@@ -59,7 +59,7 @@ pub use flui_runtime::{
     DecisionRow, HostInput, InputRecord, InputRow, InputTap, InputTapFactory, PreferencesRow,
     RecordingStart, RecordingWindow,
 };
-pub use launch::{AppLaunch, LaunchError};
+pub use launch::{AppLaunch, LaunchError, UnsupportedSystem};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,

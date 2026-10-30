@@ -103,7 +103,8 @@ impl X11Connection {
     ///
     /// # Errors
     /// [`PlatformError::Init`] when libxcb cannot be loaded, no server answers
-    /// or the server lists no screen of the display's number.
+    /// or the server lists no screen of the display's number;
+    /// [`PlatformError::MissingRequirement`] when it has no RandR 1.5.
     pub(crate) fn connect() -> Result<Arc<Self>, PlatformError> {
         let (xcb, screen) = XCBConnection::connect(None).map_err(|error| PlatformError::Init {
             message: format!("cannot connect to the X server: {error}"),
@@ -113,6 +114,14 @@ impl X11Connection {
                 message: format!("the X server lists no screen {screen}"),
             });
         }
+        // RandR 1.5 is part of Linux's floor: the monitor list is read with it
+        // (ADR-0244 §3).
+        crate::version::requirement::randr_version(
+            x11rb::protocol::randr::query_version(&xcb, 1, 5)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|version| (version.major_version, version.minor_version)),
+        )?;
         Ok(Arc::new(Self { xcb, screen }))
     }
 

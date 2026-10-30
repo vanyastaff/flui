@@ -119,6 +119,123 @@ pub(crate) mod main_release {
     }
 }
 
+/// What a `CADisplayLink` tick says about the frame it asks for, on the
+/// `CACurrentMediaTime` clock the link stamps.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod link_timing {
+    #![forbid(unsafe_code)]
+
+    use std::time::Duration;
+
+    /// The frame a tick read at `media_now_secs` stands for, as
+    /// `(age, until_present)`: its vsync is the link's `timestamp_secs`, `age`
+    /// before the reading, and it reaches the screen at the link's
+    /// `target_secs`, `until_present` after the reading (ADR-0257). A vsync the
+    /// reading can't place (ahead of it, or no finite time) is the reading
+    /// itself, and a target that isn't after both the vsync and the reading is
+    /// unknown.
+    #[must_use]
+    pub(crate) fn tick(
+        media_now_secs: f64,
+        timestamp_secs: f64,
+        target_secs: f64,
+    ) -> (Duration, Option<Duration>) {
+        let age = Duration::try_from_secs_f64(media_now_secs - timestamp_secs).unwrap_or_default();
+        let until_present = (target_secs > timestamp_secs)
+            .then(|| Duration::try_from_secs_f64(target_secs - media_now_secs).ok())
+            .flatten()
+            .filter(|until| !until.is_zero());
+        (age, until_present)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::time::Duration;
+
+        use super::tick;
+
+        #[test]
+        fn a_tick_places_its_vsync_and_target_around_the_reading() {
+            let ms = Duration::from_millis;
+            // (case, now, timestamp, target, age, until_present)
+            type Row = (&'static str, f64, f64, f64, Duration, Option<Duration>);
+            let rows: &[Row] = &[
+                (
+                    "a tick read after its vsync",
+                    10.002,
+                    10.0,
+                    10.016,
+                    ms(2),
+                    Some(ms(14)),
+                ),
+                (
+                    "a tick read at its vsync",
+                    10.0,
+                    10.0,
+                    10.008,
+                    ms(0),
+                    Some(ms(8)),
+                ),
+                (
+                    "a vsync ahead of the reading",
+                    9.999,
+                    10.0,
+                    10.016,
+                    ms(0),
+                    Some(ms(17)),
+                ),
+                (
+                    "a target already passed",
+                    10.020,
+                    10.0,
+                    10.016,
+                    ms(20),
+                    None,
+                ),
+                (
+                    "a target not after the vsync",
+                    10.002,
+                    10.0,
+                    10.0,
+                    ms(2),
+                    None,
+                ),
+                (
+                    "a vsync that is no time",
+                    10.0,
+                    f64::NAN,
+                    10.016,
+                    ms(0),
+                    None,
+                ),
+                (
+                    "a reading that is no time",
+                    f64::INFINITY,
+                    10.0,
+                    10.016,
+                    ms(0),
+                    None,
+                ),
+            ];
+            for &(case, now, timestamp, target, age, until_present) in rows {
+                let (got_age, got_until) = tick(now, timestamp, target);
+                let near = |a: Duration, b: Duration| a.abs_diff(b) < Duration::from_micros(10);
+                assert!(
+                    near(got_age, age),
+                    "{case}: age {got_age:?}, wanted {age:?}"
+                );
+                match (got_until, until_present) {
+                    (Some(got), Some(want)) => {
+                        assert!(near(got, want), "{case}: until {got:?}, wanted {want:?}");
+                    }
+                    (None, None) => {}
+                    (got, want) => panic!("{case}: until {got:?}, wanted {want:?}"),
+                }
+            }
+        }
+    }
+}
+
 /// How a window is taken apart around the view it owns: each part hooked to
 /// the view is detached, then the window is released, then the view goes,
 /// each a cleanup boundary of its own. A view a detach failed on is kept for

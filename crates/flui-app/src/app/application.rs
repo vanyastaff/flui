@@ -24,6 +24,10 @@ pub enum AppRunError {
     /// A configuration setting cannot be honored by the host.
     #[error("application configuration failed: {0}")]
     Configuration(#[source] AppWindowError),
+    /// The system is below FLUI's floor (ADR-0244 §3), found when the platform
+    /// is built, before any window opens.
+    #[error("this system cannot run FLUI: {0}")]
+    UnsupportedSystem(#[source] crate::app::UnsupportedSystem),
     /// Native platform initialization or event-loop failure.
     #[error("platform startup or event loop failed: {source}")]
     Platform {
@@ -49,6 +53,19 @@ pub enum AppRunError {
     /// sharing a name. Found before the platform starts, so no window opens.
     #[error("capability registration failed: {0}")]
     CapabilityConflict(#[source] flui_runtime::capability::CapabilityConflict),
+}
+
+impl AppRunError {
+    /// A platform failure: the refusal of a system below FLUI's floor, or
+    /// any other failure as [`Platform`](Self::Platform).
+    pub(crate) fn from_platform(error: flui_native::PlatformError) -> Self {
+        match crate::app::UnsupportedSystem::from_platform(error) {
+            Ok(unsupported) => Self::UnsupportedSystem(unsupported),
+            Err(error) => Self::Platform {
+                source: std::sync::Arc::new(error),
+            },
+        }
+    }
 }
 
 pub(crate) type ReadyObserver = Box<dyn FnOnce(&AppHandle)>;

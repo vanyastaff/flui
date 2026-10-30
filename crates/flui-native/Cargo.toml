@@ -233,6 +233,7 @@ core-graphics = { workspace = true }
 # whose drawables report when they reached the screen. Both the versions
 # `wgpu-hal` 30 already pins.
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    # `CACurrentMediaTime`, the clock the link stamps its ticks on.
     "CABase",
     "CALayer",
     "CAMetalLayer",
@@ -469,6 +470,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "NSText",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    # `CACurrentMediaTime`, the clock the link stamps its ticks on.
+    "CABase",
     "CADisplayLink",
     # `CAFrameRateRange` is the type of `preferredFrameRateRange`; the
     # `objc2-core-foundation` feature gates the link's `timestamp` and

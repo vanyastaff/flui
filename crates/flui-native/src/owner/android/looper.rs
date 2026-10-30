@@ -79,7 +79,6 @@ use crate::{
     owner::android::activity_callbacks::ActivityEvent,
     owner::android::activity_callbacks::ActivityTarget,
     owner::android::activity_callbacks::Reaction,
-    owner::android::ndk::LoadedLibraries,
     owner::android::ndk::SymbolSource,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
@@ -279,23 +278,19 @@ impl AndroidLoop {
     /// The loop of host `H`, whose table makes the displays, the preference
     /// source, the notice channel, the meaning of the Activity's callbacks, the
     /// input, the clipboard and the drag-and-drop transport, and names what
-    /// `FluiView` reports to.
-    pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
+    /// `FluiView` reports to. `library` is the NDK the level `api` was read
+    /// from, kept for the platform's life: every function pointer looked up in
+    /// it is valid until the last handle to it is gone.
+    pub(crate) fn new<H: AndroidHost>(
+        app: AndroidApp,
+        library: Arc<dyn SymbolSource>,
+        api: AndroidApi,
+    ) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
             Ok(())
         }));
-        // Opened once and kept for the platform's life: every function pointer
-        // looked up in it is valid until the last handle to it is gone.
-        let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
-        let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
-            tracing::warn!(
-                "Android: the API level could not be read; nothing above the floor is attempted"
-            );
-            AndroidApi::UNKNOWN
-        });
-        tracing::info!(api = %api, "Android API level");
         let java_view = java_view::JavaView::start(
             app.clone(),
             Arc::downgrade(&owner_signal),

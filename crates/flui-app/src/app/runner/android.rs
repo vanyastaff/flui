@@ -67,12 +67,18 @@ where
         "Starting FLUI application on Android"
     );
 
-    run_android(root, config, app);
-    Ok(())
+    run_android(root, config, app).inspect_err(|error| {
+        super::discard_capabilities();
+        tracing::error!(%error, "FLUI could not start");
+    })
 }
 
 #[cfg(target_os = "android")]
-fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
+fn run_android<V>(
+    root: V,
+    config: AppConfig,
+    app: android_activity::AndroidApp,
+) -> Result<(), crate::app::LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -97,7 +103,8 @@ where
         .as_ref()
         .and_then(crate::app::dev_agent::DevAgent::attach);
 
-    let platform: Box<dyn Platform> = flui_native::android_platform(app);
+    let platform: Box<dyn Platform> =
+        flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
@@ -523,6 +530,7 @@ where
     if let Err(err) = result {
         panic!("android bootstrap failed: {err:?}");
     }
+    Ok(())
 }
 
 pub(super) struct AndroidFrameDriver {
