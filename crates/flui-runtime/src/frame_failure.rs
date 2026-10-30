@@ -424,7 +424,7 @@ pub enum FrameFailureKind {
 }
 
 /// How far the rebuild of a lost GPU device stands, as a
-/// [`FrameFailureKind::DeviceLost`] report carries it (ADR-0266).
+/// [`FrameFailureKind::DeviceLost`] report carries it (ADR-0267).
 ///
 /// The renderer's owner rebuilds the device on a backoff that grows to about
 /// a second, and gives up after a bounded run of failed rebuilds at that

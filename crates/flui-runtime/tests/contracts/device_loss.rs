@@ -1,6 +1,6 @@
 //! A frame dropped on a lost GPU device waits out the dropped-frame backoff,
 //! and a given-up device rebuild holds the presentation's frames until the
-//! application asks for a new one (ADR-0266).
+//! application asks for a new one (ADR-0267).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

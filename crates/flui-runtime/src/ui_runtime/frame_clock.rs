@@ -281,22 +281,24 @@ impl UiRuntime {
     }
 
     /// Record where the rebuild of the primary presentation's lost GPU device
-    /// stands, as its renderer's owner learns it (ADR-0266): `None` once the
+    /// stands, as its renderer's owner learns it (ADR-0267): `None` once the
     /// device is healthy again.
     ///
     /// Giving the rebuild up reports one
     /// [`FrameFailureKind::DeviceLost`](crate::frame_failure::FrameFailureKind::DeviceLost)
     /// with [`DeviceRecovery::Abandoned`](crate::frame_failure::DeviceRecovery::Abandoned)
     /// and holds the presentation's frames: it asks for none and waits out no
-    /// retry. Leaving a given-up state, or recovering, marks the whole tree
-    /// for repaint and asks for a frame, since nothing was shown meanwhile.
+    /// retry. Leaving a given-up state marks the whole tree for repaint and
+    /// asks for a frame, since nothing was shown meanwhile; a rebuild that
+    /// succeeds is repainted by the renderer's owner, which knows whether the
+    /// frame it runs next still needs one.
     pub fn note_primary_device_recovery(
         &self,
         recovery: Option<crate::frame_failure::DeviceRecovery>,
     ) {
         let presentation = self.presentations.primary();
         let was_abandoned = presentation.device_abandoned();
-        let previous = presentation.replace_device_recovery(recovery);
+        presentation.replace_device_recovery(recovery);
         let abandons = recovery.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
         if abandons && !was_abandoned {
             presentation.disarm_failure_retry();
@@ -306,14 +308,14 @@ impl UiRuntime {
                     recovery: recovery.unwrap_or_default(),
                 },
             );
-        } else if (was_abandoned && !abandons) || (previous.is_some() && recovery.is_none()) {
+        } else if was_abandoned && !abandons {
             self.mark_needs_full_repaint_for(presentation);
             self.wake_frame();
         }
     }
 
     /// Ask again for the rebuild of every lost GPU device whose rebuild was
-    /// given up (ADR-0266): each such presentation returns to
+    /// given up (ADR-0267): each such presentation returns to
     /// [`DeviceRecovery::Pending`](crate::frame_failure::DeviceRecovery::Pending)
     /// and asks for a frame, before which its renderer's owner rebuilds the
     /// device again with a fresh backoff. Returns whether any rebuild was

@@ -1023,7 +1023,7 @@ impl UiRuntime {
                     // rebuilt device shows needs a full repaint whenever it
                     // comes.
                     self.mark_needs_full_repaint_for(producer);
-                    // Paced like any dropped frame (ADR-0266): a frame asked
+                    // Paced like any dropped frame (ADR-0267): a frame asked
                     // for at once would run again before the renderer's owner
                     // next rebuilds the device, and fail the same way. A
                     // given-up rebuild was reported when it was given up and

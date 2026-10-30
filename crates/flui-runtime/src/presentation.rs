@@ -581,7 +581,7 @@ pub struct PresentationState {
     /// Where the rebuild of this presentation's lost GPU device stands, as its
     /// renderer's owner last said; `None` while the device is healthy. A given-up
     /// rebuild holds this presentation's frames until a new rebuild is asked
-    /// for (ADR-0266).
+    /// for (ADR-0267).
     device_recovery: Cell<Option<crate::frame_failure::DeviceRecovery>>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.

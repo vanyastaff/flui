@@ -34,25 +34,128 @@ impl DeviceRecovery for flui_engine::Renderer {
     }
 }
 
-/// Alias for the shared [`super::retry_backoff::RetryBackoff`], carrying the
-/// subject label device-loss recovery's log lines use. The policy lives in one
-/// place (`retry_backoff.rs`); this alias is what keeps every call site in this
-/// module reading `DeviceRecoveryBackoff` while the implementation is shared
-/// with surface-recreation retry.
+/// How many consecutive rebuilds of a lost device may fail at the backoff's
+/// ceiling ([`RetryBackoff::CAP`](super::retry_backoff::RetryBackoff::CAP),
+/// about a second) before the rebuild is given up (ADR-0267).
+///
+/// The backoff reaches its ceiling after seven failures, about two seconds
+/// after the loss, so ten more give the driver about twelve seconds in all:
+/// longer than a Windows driver reset (TDR, two seconds by default) or a GPU
+/// switch takes. A rebuild that still fails then is not coming back by
+/// itself; the presentation reports
+/// [`DeviceRecovery::Abandoned`](flui_runtime::frame_failure::DeviceRecovery::Abandoned),
+/// attempts no more frames and waits for
+/// [`AppHandle::retry_render_device`](crate::AppHandle::retry_render_device).
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) type DeviceRecoveryBackoff = super::retry_backoff::RetryBackoff;
+pub(super) const DEVICE_RECOVERY_ATTEMPTS_AT_CAP: u32 = 10;
 
 /// The label this recovery's backoff logs under.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const DEVICE_RECOVERY_LABEL: &str = "GPU device recovery";
 
-/// Construct this module's backoff: the shared [`super::retry_backoff::RetryBackoff`]
-/// with device recovery's own label already bound. A free function rather than
-/// an inherent `new` because the type is an alias for the shared one, and this
-/// is the one place the label is chosen.
+/// The pacing of one presentation's device rebuilds: the shared
+/// [`RetryBackoff`](super::retry_backoff::RetryBackoff), which never gives up
+/// on its own, plus the count that gives a rebuild up after
+/// [`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`] failures at the backoff's ceiling.
+///
+/// `Send + Sync` for the same reason as the backoff it wraps: a platform's
+/// wake-deadline hook captures it behind an `Arc`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct DeviceRecoveryBackoff {
+    backoff: super::retry_backoff::RetryBackoff,
+    streak: parking_lot::Mutex<RecoveryStreak>,
+}
+
+/// The failed rebuilds of one losing streak.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct RecoveryStreak {
+    /// Consecutive failed rebuilds.
+    attempts: u32,
+    /// How many of them failed with the backoff at its ceiling.
+    at_cap: u32,
+    /// Whether the rebuild was given up.
+    abandoned: bool,
+}
+
+/// What one failed rebuild left the streak at.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct FailedRebuild {
+    /// Consecutive failed rebuilds, this one included.
+    attempts: u32,
+    /// When the next rebuild may be tried; `None` once the rebuild is given up.
+    next_attempt_at: Option<web_time::Instant>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DeviceRecoveryBackoff {
+    /// The first retry interval; see
+    /// [`RetryBackoff::BASE`](super::retry_backoff::RetryBackoff::BASE).
+    #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+    pub(super) const BASE: std::time::Duration = super::retry_backoff::RetryBackoff::BASE;
+
+    /// The earliest instant the next rebuild is allowed, if a failure armed
+    /// one. `None` when a rebuild may run now, and once the rebuild was given
+    /// up: a given-up rebuild needs no wake.
+    pub(super) fn next_attempt_at(&self) -> Option<web_time::Instant> {
+        if self.streak.lock().abandoned {
+            return None;
+        }
+        self.backoff.next_attempt_at()
+    }
+
+    /// Whether the rebuild was given up.
+    fn is_abandoned(&self) -> bool {
+        self.streak.lock().abandoned
+    }
+
+    /// Record a failed rebuild at `now`: arm the next one, or give the rebuild
+    /// up once [`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`] failures ran at the ceiling.
+    fn record_failure(&self, error: &flui_engine::EngineError, now: web_time::Instant) -> FailedRebuild {
+        let deadline = self.backoff.record_failure(error, now);
+        let at_cap = deadline.saturating_duration_since(now)
+            >= super::retry_backoff::RetryBackoff::CAP;
+        let (attempts, abandoned) = {
+            let mut streak = self.streak.lock();
+            streak.attempts = streak.attempts.saturating_add(1);
+            if at_cap {
+                streak.at_cap = streak.at_cap.saturating_add(1);
+            }
+            streak.abandoned = streak.at_cap >= DEVICE_RECOVERY_ATTEMPTS_AT_CAP;
+            (streak.attempts, streak.abandoned)
+        };
+        if abandoned {
+            tracing::error!(
+                attempts,
+                error = ?error,
+                "GPU device recovery given up; the window renders again once the \
+                 application asks for a rebuild"
+            );
+        }
+        FailedRebuild {
+            attempts,
+            next_attempt_at: (!abandoned).then_some(deadline),
+        }
+    }
+
+    /// Reset the streak after a successful rebuild, or when the application
+    /// asks for a rebuild of a given-up device: the next rebuild runs at once.
+    fn record_success(&self) {
+        self.backoff.record_success();
+        *self.streak.lock() = RecoveryStreak::default();
+    }
+}
+
+/// Construct this module's backoff: the shared
+/// [`RetryBackoff`](super::retry_backoff::RetryBackoff) with device recovery's
+/// own label bound, and an empty streak.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn new_device_recovery_backoff() -> DeviceRecoveryBackoff {
-    DeviceRecoveryBackoff::new(DEVICE_RECOVERY_LABEL)
+    DeviceRecoveryBackoff {
+        backoff: super::retry_backoff::RetryBackoff::new(DEVICE_RECOVERY_LABEL),
+        streak: parking_lot::Mutex::new(RecoveryStreak::default()),
+    }
 }
 
 /// Outcome of one call to [`attempt_device_recovery`].
@@ -65,6 +168,9 @@ enum RecoveryAttempt {
     Failed(flui_engine::EngineError),
     /// A fresh attempt was made and succeeded.
     Recovered,
+    /// The rebuild was given up; no attempt runs until the application asks
+    /// for one.
+    GivenUp,
 }
 
 /// Attempt one synchronous device rebuild — but only if `backoff`'s deadline
@@ -79,6 +185,9 @@ fn attempt_device_recovery<R: DeviceRecovery>(
     backoff: &DeviceRecoveryBackoff,
     now: web_time::Instant,
 ) -> RecoveryAttempt {
+    if backoff.is_abandoned() {
+        return RecoveryAttempt::GivenUp;
+    }
     if let Some(deadline) = backoff.next_attempt_at()
         && now < deadline
     {
@@ -87,6 +196,61 @@ fn attempt_device_recovery<R: DeviceRecovery>(
     match renderer.try_recover_device() {
         Ok(()) => RecoveryAttempt::Recovered,
         Err(error) => RecoveryAttempt::Failed(error),
+    }
+}
+
+/// What one settled recovery attempt left the frame driver owing.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct SettledAttempt {
+    /// A fresh rebuild failed and another one is due: the caller wakes.
+    just_failed: bool,
+    /// When the next rebuild may run, if one is armed.
+    next_attempt_at: Option<web_time::Instant>,
+}
+
+/// Record `attempt` on `backoff` and tell `ui_runtime` where its primary
+/// presentation's device rebuild stands, so the frames it drops carry it
+/// (ADR-0267). A rebuild given up just now arms no wake: the presentation
+/// holds its frames until the application asks for a rebuild.
+#[cfg(not(target_arch = "wasm32"))]
+fn settle_attempt(
+    ui_runtime: &crate::app::ui_runtime::UiRuntime,
+    backoff: &DeviceRecoveryBackoff,
+    attempt: RecoveryAttempt,
+    now: web_time::Instant,
+) -> SettledAttempt {
+    use flui_runtime::frame_failure::DeviceRecovery;
+
+    match attempt {
+        RecoveryAttempt::Recovered => {
+            backoff.record_success();
+            ui_runtime.note_primary_device_recovery(None);
+            tracing::warn!("GPU device lost — recovered successfully");
+            SettledAttempt::default()
+        }
+        RecoveryAttempt::Failed(error) => {
+            let failed = backoff.record_failure(&error, now);
+            let recovery = if failed.next_attempt_at.is_some() {
+                DeviceRecovery::Failed {
+                    attempts: failed.attempts,
+                }
+            } else {
+                DeviceRecovery::Abandoned {
+                    attempts: failed.attempts,
+                }
+            };
+            ui_runtime.note_primary_device_recovery(Some(recovery));
+            SettledAttempt {
+                just_failed: failed.next_attempt_at.is_some(),
+                next_attempt_at: failed.next_attempt_at,
+            }
+        }
+        RecoveryAttempt::Deferred(deadline) => SettledAttempt {
+            just_failed: false,
+            next_attempt_at: Some(deadline),
+        },
+        RecoveryAttempt::GivenUp => SettledAttempt::default(),
     }
 }
 
@@ -215,8 +379,16 @@ where
 {
     use flui_runtime::pump::SampledClock;
 
-    let mut just_failed = false;
-    let mut next_attempt_at = None;
+    // A given-up rebuild runs again once the application asked for one
+    // (`UiRuntime::retry_render_device` took the presentation out of its
+    // given-up state): the streak starts over and the rebuild runs now.
+    if backoff.is_abandoned()
+        && !ui_runtime
+            .primary_device_recovery()
+            .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned)
+    {
+        backoff.record_success();
+    }
     let Some((mut sink, mut guard)) = crate::app::raster_lane::RasterFrame::try_new(lane) else {
         ui_runtime.wake_frame();
         return None;
@@ -234,28 +406,19 @@ where
     };
     drop(guard);
 
+    let mut settled = SettledAttempt::default();
     if let Some(attempt) = pre_attempt {
-        match attempt {
-            RecoveryAttempt::Recovered => {
-                // Recovery rebuilt the surface, so the lane re-mints its
-                // `SurfaceGeneration` through the mailbox's one counter
-                // (ADR-0045 decision 4 names recovery's surface recreation
-                // as a mint site) — without this, the recovered lane's
-                // next frame would still stamp the pre-loss generation.
-                backoff.record_success();
-                tracing::warn!("GPU device lost — recovered successfully");
-                // Pre-frame only: nothing has presented since the device
-                // died, so the recovered backing store needs a genuinely
-                // fresh submit — see `UiRuntime::mark_primary_needs_full_
-                // repaint`'s own doc for why `request_redraw` alone does
-                // not get one.
-                ui_runtime.mark_primary_needs_full_repaint();
-            }
-            RecoveryAttempt::Failed(error) => {
-                just_failed = true;
-                next_attempt_at = Some(backoff.record_failure(&error, now));
-            }
-            RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
+        let recovered = matches!(attempt, RecoveryAttempt::Recovered);
+        settled = settle_attempt(ui_runtime, backoff, attempt, now);
+        if recovered {
+            // Pre-frame only: nothing has presented since the device
+            // died, so the recovered backing store needs a genuinely
+            // fresh submit — see `UiRuntime::mark_primary_needs_full_
+            // repaint`'s own doc for why `request_redraw` alone does
+            // not get one. (The lane re-minted its `SurfaceGeneration`
+            // above: ADR-0045 decision 4 names recovery's surface
+            // recreation as a mint site.)
+            ui_runtime.mark_primary_needs_full_repaint();
         }
     }
 
@@ -264,7 +427,7 @@ where
         .presented();
 
     let mut recovery_check_pending = false;
-    let post_attempt = if next_attempt_at.is_none() {
+    let post_attempt = if settled.next_attempt_at.is_none() {
         if let Some(mut guard) = lane.try_lock() {
             if guard.is_device_lost() {
                 let attempt =
@@ -284,29 +447,22 @@ where
         None
     };
 
+    // Post-frame (mid-frame loss) success arms NO repaint, unlike the
+    // pre-frame case above: the frame that just ran already had its own
+    // chance to present before the loss was noticed, so there is no
+    // known-blank backing store to force a fresh submit for. The generation
+    // re-mint above is NOT skippable the same way: the recovery rebuilt the
+    // surface either way, and the next frame must stamp the post-recovery
+    // generation.
     if let Some(attempt) = post_attempt {
-        match attempt {
-            // Post-frame (mid-frame loss) success arms NO repaint, unlike
-            // the pre-frame case above: the frame that just ran already had
-            // its own chance to present before the loss was noticed, so
-            // there is no known-blank backing store to force a fresh
-            // submit for here — forcing one anyway would just be a
-            // spurious extra repaint with no correctness reason behind it.
-            // The generation re-mint is NOT skippable the same way: the
-            // recovery rebuilt the surface either way, and the next frame
-            // (whenever something else dirties the tree) must stamp the
-            // post-recovery generation.
-            RecoveryAttempt::Recovered => {
-                backoff.record_success();
-                tracing::warn!("GPU device lost — recovered successfully");
-            }
-            RecoveryAttempt::Failed(error) => {
-                just_failed = true;
-                next_attempt_at = Some(backoff.record_failure(&error, now));
-            }
-            RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
-        }
+        let post = settle_attempt(ui_runtime, backoff, attempt, now);
+        settled.just_failed |= post.just_failed;
+        settled.next_attempt_at = post.next_attempt_at;
     }
+    let SettledAttempt {
+        just_failed,
+        next_attempt_at,
+    } = settled;
 
     if just_failed || recovery_check_pending {
         // Raised AFTER `render_frame`, never before: that method's
@@ -341,8 +497,9 @@ where
 /// never a merely-deferred attempt), lane contention retains unfinished work,
 /// a successful recovery marks the
 /// presentation dirty so it actually paints again, and a persistently
-/// failing device is retried on a bounded, non-blocking, growing deadline —
-/// never abandoned, never slept on.
+/// failing device is retried on a bounded, non-blocking, growing deadline that
+/// is never slept on, and given up after [`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`]
+/// failures at its ceiling until the application asks for a rebuild again.
 #[cfg(all(
     test,
     not(target_os = "android"),
@@ -869,6 +1026,96 @@ mod device_recovery_tests {
         });
     }
 
+    fn a_rebuild_failing_at_the_ceiling_is_given_up_until_the_application_asks() {
+        use flui_runtime::frame_failure::{DeviceRecovery as Recovery, FrameFailureKind};
+        use std::sync::Arc;
+
+        let mut ui_runtime = mount_root();
+        let given_up = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = Arc::clone(&given_up);
+        ui_runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
+            move |report| {
+                if let FrameFailureKind::DeviceLost {
+                    recovery: Recovery::Abandoned { .. },
+                    ..
+                } = report.kind
+                {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        )));
+        let lane = lane_over(ScriptedDeviceBackend {
+            lost: true,
+            recover_clears_lost: false,
+            ..ScriptedDeviceBackend::healthy()
+        });
+        let backoff = new_device_recovery_backoff();
+        let mut now = Instant::now();
+        let frame = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime, now| {
+            lane.lock().with_backend(|backend| {
+                backend.scene_outcome = Some(Err(EngineError::DeviceLost));
+                backend.recover_outcome = Some(Err(EngineError::DeviceLost));
+            });
+            pump_with_device_recovery(ui_runtime, &lane, &backoff, now)
+                .expect("idle lane admits the frame")
+        };
+
+        // Each frame runs past the previous rebuild's deadline, so each one
+        // is a fresh failed rebuild until the driver gives up.
+        let mut failed = 0;
+        while !matches!(ui_runtime.primary_device_recovery(), Some(Recovery::Abandoned { .. })) {
+            failed += 1;
+            assert!(failed <= 64, "a rebuild failing at the ceiling is given up");
+            let outcome = frame(&mut ui_runtime, now);
+            assert!(!outcome.presented);
+            now += Duration::from_secs(2);
+        }
+        let attempts = lane.lock().with_backend(|backend| backend.recover_attempts);
+        assert_eq!(attempts, failed);
+        assert!(
+            attempts > super::DEVICE_RECOVERY_ATTEMPTS_AT_CAP,
+            "the rebuild ran past the ceiling's count before it was given up"
+        );
+        assert_eq!(
+            ui_runtime.primary_device_recovery(),
+            Some(Recovery::Abandoned { attempts })
+        );
+        assert_eq!(given_up.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(backoff.next_attempt_at(), None, "no wake waits for a rebuild");
+        assert!(
+            !ui_runtime.needs_redraw() && !ui_runtime.has_pending_work(),
+            "a given-up device asks for no frame"
+        );
+
+        // A frame some other source asks for runs without a rebuild.
+        ui_runtime.wake_frame();
+        let outcome = frame(&mut ui_runtime, now);
+        assert!(!outcome.just_failed);
+        assert_eq!(
+            lane.lock().with_backend(|backend| backend.recover_attempts),
+            attempts,
+            "a given-up rebuild is not tried again"
+        );
+        assert_eq!(given_up.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!ui_runtime.needs_redraw() && !ui_runtime.has_pending_work());
+
+        // The application asks for a rebuild, and the driver recovers.
+        assert!(ui_runtime.retry_render_device());
+        lane.lock().with_backend(|backend| {
+            backend.scene_outcome = Some(Ok(PresentDisposition::Presented));
+            backend.recover_outcome = Some(Ok(()));
+            backend.recover_clears_lost = true;
+        });
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, now)
+            .expect("idle lane admits the frame");
+        assert!(outcome.presented, "the rebuilt device shows the tree again");
+        assert_eq!(
+            lane.lock().with_backend(|backend| backend.recover_attempts),
+            attempts + 1
+        );
+        assert_eq!(ui_runtime.primary_device_recovery(), None);
+    }
+
     #[test]
     fn device_recovery_matrix() {
         crate::table_test::run_table(
@@ -883,6 +1130,7 @@ mod device_recovery_tests {
                 ("a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off", a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off as fn()),
                 ("a_mid_frame_loss_with_a_failing_recovery_backs_off", a_mid_frame_loss_with_a_failing_recovery_backs_off as fn()),
                 ("needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device", needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device as fn()),
+                ("a_rebuild_failing_at_the_ceiling_is_given_up_until_the_application_asks", a_rebuild_failing_at_the_ceiling_is_given_up_until_the_application_asks as fn()),
             ],
         );
     }
