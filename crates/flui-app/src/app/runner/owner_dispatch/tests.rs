@@ -648,6 +648,73 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     teardown_platform_ui_runtime();
 }
 
+/// A session end whose service shutdown panics (here a subscriber failing on
+/// the shutdown's per-service diagnostic) still shuts the execution services
+/// down before the platform may end the process, and holds the panic as the
+/// exit's terminal failure.
+///
+/// If reverted: run both steps under one containment and the execution slot
+/// is still filled after the session end.
+#[cfg(not(target_arch = "wasm32"))]
+fn a_failed_session_end_service_shutdown_still_shuts_execution_down() {
+    use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+    use flui_runtime::execution::DeterministicExecutors;
+
+    const SUBSCRIBER_PANIC: &str = "the subscriber fails";
+
+    struct PanicsOnEvent;
+    impl tracing::Subscriber for PanicsOnEvent {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            panic!("{SUBSCRIBER_PANIC}");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let deterministic = DeterministicExecutors::new();
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .install_host_executors(deterministic.host_executors());
+    });
+    install_test_ui_runtime();
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .start_service(&ServiceDefinition::new(
+                "parked",
+                ServiceLifetime::StopsWithLastWindow,
+                |context| {
+                    let signal = context.cancellation().clone();
+                    Box::pin(async move { signal.cancelled().await })
+                },
+            ))
+            .expect("the service starts");
+    });
+
+    tracing::subscriber::with_default(PanicsOnEvent, || end_session_teardown(false));
+
+    APP_RUNTIME.with(|slot| {
+        assert!(
+            slot.borrow().execution().is_none(),
+            "the failed service shutdown skipped the execution shutdown"
+        );
+    });
+    let held = crate::app::runner::terminal::take_terminal()
+        .expect("the service shutdown's panic is held as the exit's failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(held.as_ref()),
+        Some(SUBSCRIBER_PANIC)
+    );
+    teardown_platform_ui_runtime();
+}
+
 /// The input wiring every runner installs answers the platform with the
 /// UI runtime's own decision: an Alt+F4 nothing handled keeps the platform
 /// default (the native backend then closes the window), and one a shortcut
@@ -3092,6 +3159,11 @@ fn owner_dispatch_matrix() {
             (
                 "install_resolves_execution_services_and_teardown_shuts_them_down",
                 install_resolves_execution_services_and_teardown_shuts_them_down as fn(),
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            (
+                "a_failed_session_end_service_shutdown_still_shuts_execution_down",
+                a_failed_session_end_service_shutdown_still_shuts_execution_down as fn(),
             ),
             (
                 "system_key_default_follows_the_ui_runtimes_decision",

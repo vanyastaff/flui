@@ -236,6 +236,10 @@ fn runner_teardown() {
                 a_window_closed_during_the_query_does_not_hold_the_session,
             ),
             (
+                "session_end_tears_down_only_with_time_left",
+                session_end_tears_down_only_with_time_left,
+            ),
+            (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
                 a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
@@ -1261,4 +1265,101 @@ pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
     run.end_session(SessionEndPhase::Cancelled);
     run.run_owner_turn();
     run.join().expect("the run returns Ok");
+}
+
+/// A window root whose state records, when it is dropped, whether the loop
+/// still ran, and whose session-ended subscriber blocks for `notice_delay`.
+#[derive(Clone)]
+struct TornDown {
+    turns: flui_native::HeadlessOwnerTurns,
+    dropped: Rc<std::cell::Cell<Option<bool>>>,
+    notice_delay: Duration,
+}
+
+struct TornDownState {
+    root: TornDown,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl Drop for TornDownState {
+    fn drop(&mut self) {
+        self.root.dropped.set(Some(self.root.turns.is_running()));
+    }
+}
+
+impl flui_view::StatefulView for TornDown {
+    type State = TornDownState;
+
+    fn create_state(&self) -> Self::State {
+        TornDownState {
+            root: self.clone(),
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<TornDown> for TornDownState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let delay = self.root.notice_delay;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                        std::thread::sleep(delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &TornDown,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for TornDown {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// The session's end tears the UI runtimes down before it returns while
+/// their destructors can start within the budget; once the margin is spent
+/// they are left for the system to end with the process (ADR-0260 §5).
+///
+/// Red-check: leave the teardown to the loop's exit — the window's state
+/// drops only after the loop stopped.
+pub(crate) fn session_end_tears_down_only_with_time_left() {
+    for (notice_delay, inline) in [(Duration::ZERO, true), (SPENT_MARGIN, false)] {
+        let platform = flui_native::HeadlessPlatform::new();
+        let dropped = Rc::new(std::cell::Cell::new(None));
+        let root = TornDown {
+            turns: platform.owner_turns(),
+            dropped: Rc::clone(&dropped),
+            notice_delay,
+        };
+        let application = Application::new(move |_| root.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+
+        run.end_session(SessionEndPhase::Ending);
+        assert_eq!(
+            dropped.get(),
+            Some(inline),
+            "the window's state dropped while the loop ran only when the session end tore \
+             it down itself (notice took {notice_delay:?})"
+        );
+        let report = run.join().expect("the session end returns Ok");
+        assert_eq!(report.teardown, TEARDOWN_ORDER, "the loop's exit still ran");
+        assert!(
+            dropped.get().is_some(),
+            "the window's state dropped by the exit"
+        );
+    }
 }
