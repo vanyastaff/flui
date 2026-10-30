@@ -2,7 +2,7 @@
 
 use flui_engine::FrameLatency;
 use flui_foundation::geometry::{Point, Size};
-use flui_log::AppIdentity;
+use flui_log::{AppId, AppIdentity};
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
@@ -73,10 +73,13 @@ impl Default for DiagnosticsProfile {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct AppConfig {
-    /// Process-level application identity used by native diagnostics sinks.
+    /// Process-level application identity used by native diagnostics sinks
+    /// and the storage host.
     ///
     /// This is deliberately independent from [`Self::title`]: a multi-window
     /// application has one identity and may give every window a different title.
+    /// The default carries the identifier `flui build` and `flui run` compile
+    /// the application with (`FLUI_APP_ID`, from `flui.toml`), if any.
     pub application_identity: AppIdentity,
 
     /// Diagnostics defaults for a managed application.
@@ -303,11 +306,27 @@ impl std::fmt::Debug for MemoryReceivers {
     }
 }
 
+/// The identity an application gets by default: the display name `FLUI App`
+/// and the identifier the build passed in `FLUI_APP_ID`, if it is one.
+fn build_identity() -> AppIdentity {
+    let identity =
+        AppIdentity::try_new("FLUI App").expect("BUG: the default application identity is valid");
+    let Some(declared) = option_env!("FLUI_APP_ID") else {
+        return identity;
+    };
+    match AppId::try_new(declared) {
+        Ok(app_id) => identity.with_app_id(app_id),
+        Err(error) => {
+            tracing::warn!(%error, "FLUI_APP_ID is not an application identifier; ignored");
+            identity
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            application_identity: AppIdentity::try_new("FLUI App")
-                .expect("BUG: the default application identity is valid"),
+            application_identity: build_identity(),
             diagnostics_profile: DiagnosticsProfile::default(),
             motion_override: MotionOverride::FollowSystem,
             title: "FLUI App".to_string(),

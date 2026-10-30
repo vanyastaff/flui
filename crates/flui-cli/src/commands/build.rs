@@ -134,8 +134,16 @@ fn human_size(bytes: u64) -> String {
 /// they all need is a `Cargo.toml` at the workspace root. Checking it up
 /// front turns "some tool 40 seconds in reported a confusing cargo error"
 /// into an immediate, exact diagnosis.
+///
+/// A project with a `flui.toml` also gets its `.cargo/config.toml` brought in
+/// line with the application identifier there, before anything compiles.
 fn ensure_flui_project(root: &Path) -> CliResult<()> {
     if root.join("Cargo.toml").is_file() {
+        let manifest = root.join("flui.toml");
+        if manifest.is_file() {
+            let config = crate::config::FluiConfig::load_from(&manifest)?;
+            crate::config::sync_app_id_env(root, &config)?;
+        }
         Ok(())
     } else {
         Err(CliError::NotFluiProject {

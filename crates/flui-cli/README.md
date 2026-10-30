@@ -361,7 +361,12 @@ types_watch = "types/src"
 ```
 
 `[app].name` and `[app].organization` become the macOS bundle name and
-identifier. Unknown keys are ignored. There is no global configuration file
+identifier. They also make the application's identifier (`com.example.my_app`),
+which names its data directory: `flui create` writes it into the project's
+`.cargo/config.toml` as `[env] FLUI_APP_ID`, so every cargo invocation builds
+the application with it, and `flui build` and `flui run` rewrite that one key
+when `flui.toml` changes, leaving the rest of the file alone. Unknown keys are
+ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends
 nothing anywhere.
 

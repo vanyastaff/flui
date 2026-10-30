@@ -48,6 +48,7 @@ pub(crate) fn execute(
     ui::info(format!("Mode: {}", style(mode).cyan()))?;
 
     let project = ensure_flui_project()?;
+    crate::config::sync_app_id_env_for_current_project()?;
 
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
@@ -2073,7 +2074,7 @@ fn worker_dylib_path(
 }
 
 fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>> {
-    let Some((config_dir, config)) = find_flui_config()? else {
+    let Some((config_dir, config)) = crate::config::find_flui_config()? else {
         return Ok(None);
     };
     let Some(hot_reload) = config.hot_reload else {
@@ -2088,21 +2089,6 @@ fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>>
         config_dir,
         workspace_root,
     }))
-}
-
-fn find_flui_config() -> CliResult<Option<(PathBuf, FluiConfig)>> {
-    let mut dir = std::env::current_dir().context("could not read current directory")?;
-    loop {
-        let path = dir.join("flui.toml");
-        if path.exists() {
-            let config = FluiConfig::load_from(&path)?;
-            return Ok(Some((dir, config)));
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    Ok(None)
 }
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {

@@ -487,3 +487,41 @@ fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
         "create.start"
     );
 }
+
+/// An application project names its identifier (organization plus name, the
+/// Android package form) in `.cargo/config.toml`, so every cargo invocation in
+/// it builds the application with it; a widget library has no application.
+#[test]
+fn created_application_builds_with_its_identifier() {
+    let tmp = TempDir::new().expect("temp dir");
+    for (name, args, expected) in [
+        (
+            "id-app",
+            &["--template", "basic"][..],
+            Some("com.test.id_app"),
+        ),
+        (
+            "id-reload",
+            &["--hot-reload"][..],
+            Some("com.test.id_reload"),
+        ),
+        ("id-widget", &["--template", "widget"][..], None),
+    ] {
+        flui()
+            .args(["create", name, "--org", "com.test", "--no-check"])
+            .args(args)
+            .arg("--path")
+            .arg(tmp.path())
+            .assert()
+            .success();
+        let config = tmp.path().join(name).join(".cargo").join("config.toml");
+        let declared = std::fs::read_to_string(&config).ok().map(|text| {
+            let table: toml::Table = toml::from_str(&text).expect("valid TOML");
+            table["env"]["FLUI_APP_ID"]
+                .as_str()
+                .expect("FLUI_APP_ID is a string")
+                .to_owned()
+        });
+        assert_eq!(declared.as_deref(), expected, "{name}");
+    }
+}

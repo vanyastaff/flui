@@ -119,6 +119,124 @@ pub(crate) struct BuildConfig {
     pub(crate) target_platforms: Vec<String>,
 }
 
+/// The environment variable the application's identifier reaches `flui-app`
+/// through when it compiles (`AppIdentity::app_id`, which names the
+/// application's data directory and its Apple log subsystem).
+pub(crate) const APP_ID_ENV: &str = "FLUI_APP_ID";
+
+/// Where cargo reads the project's `[env]`, relative to the project root.
+pub(crate) const CARGO_CONFIG: &str = ".cargo/config.toml";
+
+/// `existing` (a `.cargo/config.toml`, or `None` when there is none) with
+/// `[env] FLUI_APP_ID` set to `app_id`; `None` when it already says so.
+///
+/// Only that key changes: every other table, key, comment and its layout is
+/// kept as written. A key in the inline-table form (`{ value = "…" }`) keeps
+/// its form.
+///
+/// # Errors
+///
+/// [`CliError::InvalidConfig`] when `existing` is not TOML, or holds an `env`
+/// that is not a table.
+pub(crate) fn cargo_config_with_app_id(
+    existing: Option<&str>,
+    app_id: &str,
+) -> CliResult<Option<String>> {
+    let invalid = |reason: String| CliError::InvalidConfig {
+        file: CARGO_CONFIG.into(),
+        reason,
+    };
+    let mut document = existing
+        .unwrap_or_default()
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(error.to_string()))?;
+    let env = document
+        .entry("env")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .ok_or_else(|| invalid("`env` is not a table".into()))?;
+    let current = env.get(APP_ID_ENV).and_then(|item| {
+        item.as_str()
+            .or_else(|| item.as_table_like()?.get("value")?.as_str())
+    });
+    if current == Some(app_id) {
+        return Ok(None);
+    }
+    match env.get_mut(APP_ID_ENV) {
+        Some(item) if item.is_table_like() => {
+            let table = item.as_table_like_mut().expect("BUG: checked table-like");
+            table.insert("value", toml_edit::value(app_id));
+        }
+        _ => {
+            env.insert(APP_ID_ENV, toml_edit::value(app_id));
+        }
+    }
+    Ok(Some(document.to_string()))
+}
+
+/// Keep `<root>/.cargo/config.toml` naming `config`'s application identifier,
+/// so that every cargo invocation in the project, an editor's included, builds
+/// the application with it; written only when the value changed.
+///
+/// # Errors
+///
+/// The file cannot be read or written, or is not valid TOML.
+pub(crate) fn sync_app_id_env(root: &Path, config: &FluiConfig) -> CliResult<()> {
+    let path = root.join(CARGO_CONFIG);
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(CliError::context(
+                error,
+                format!("failed to read {}", path.display()),
+            ));
+        }
+    };
+    let Some(updated) = cargo_config_with_app_id(existing.as_deref(), &config.app.app_id())? else {
+        return Ok(());
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create {}", dir.display()))?;
+    }
+    std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// The nearest `flui.toml` at or above the current directory, with the
+/// directory it is in; `None` outside a FLUI project.
+///
+/// # Errors
+///
+/// The current directory cannot be read, or the file found is not valid.
+pub(crate) fn find_flui_config() -> CliResult<Option<(std::path::PathBuf, FluiConfig)>> {
+    let mut dir = std::env::current_dir().context("could not read current directory")?;
+    loop {
+        let path = dir.join("flui.toml");
+        if path.exists() {
+            let config = FluiConfig::load_from(&path)?;
+            return Ok(Some((dir, config)));
+        }
+        if !dir.pop() {
+            return Ok(None);
+        }
+    }
+}
+
+/// Before `flui build` or `flui run` compiles: bring the project's
+/// `.cargo/config.toml` in line with its `flui.toml` identifier. Nothing to do
+/// outside a FLUI project, such as an example in FLUI's own repository.
+///
+/// # Errors
+///
+/// As [`find_flui_config`] and [`sync_app_id_env`].
+pub(crate) fn sync_app_id_env_for_current_project() -> CliResult<()> {
+    match find_flui_config()? {
+        Some((root, config)) => sync_app_id_env(&root, &config),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +265,57 @@ mod tests {
             "an absent section is not written; got:\n{toml}"
         );
         assert_eq!(toml::from_str::<FluiConfig>(&toml).unwrap(), sample());
+    }
+
+    #[test]
+    fn the_cargo_env_key_is_rewritten_alone_and_only_when_it_changed() {
+        let id = "com.example.my_app";
+        let cases: [(&str, Option<&str>, Option<&str>); 6] = [
+            (
+                "no file",
+                None,
+                Some("[env]\nFLUI_APP_ID = \"com.example.my_app\"\n"),
+            ),
+            (
+                "another table only",
+                Some("[term]\nverbose = true\n"),
+                Some("[term]\nverbose = true\n\n[env]\nFLUI_APP_ID = \"com.example.my_app\"\n"),
+            ),
+            (
+                "a stale value beside another key",
+                Some("[env]\nOTHER = \"1\" # mine\nFLUI_APP_ID = \"com.old.app\"\n"),
+                Some("[env]\nOTHER = \"1\" # mine\nFLUI_APP_ID = \"com.example.my_app\"\n"),
+            ),
+            (
+                "a stale value in the inline-table form",
+                Some("[env]\nFLUI_APP_ID = { value = \"com.old.app\", force = true }\n"),
+                Some("[env]\nFLUI_APP_ID = { value = \"com.example.my_app\", force = true }\n"),
+            ),
+            (
+                "already in line",
+                Some("[env]\nFLUI_APP_ID = \"com.example.my_app\"\n"),
+                None,
+            ),
+            (
+                "already in line, inline-table form",
+                Some("[env]\nFLUI_APP_ID = { value = \"com.example.my_app\" }\n"),
+                None,
+            ),
+        ];
+        for (case, existing, expected) in cases {
+            let updated = cargo_config_with_app_id(existing, id).expect(case);
+            assert_eq!(updated.as_deref(), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_cargo_config_flui_cannot_edit_is_refused() {
+        for existing in ["env = \"x\"\n", "[env\n"] {
+            let refused = cargo_config_with_app_id(Some(existing), "com.example.app");
+            assert!(
+                matches!(refused, Err(CliError::InvalidConfig { .. })),
+                "{existing:?}: {refused:?}"
+            );
+        }
     }
 }

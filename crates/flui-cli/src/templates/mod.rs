@@ -201,7 +201,25 @@ impl TemplateBuilder {
 
         let plan = plan.file(".gitignore", GITIGNORE_TEMPLATE);
 
-        if self.hot_reload || self.template.is_library() {
+        if !self.hot_reload && self.template.is_library() {
+            return plan;
+        }
+
+        // Every cargo invocation in the project, an editor's included, builds
+        // the application with its identifier; `flui build` and `flui run`
+        // keep the key in line with `flui.toml`.
+        let app_id = crate::config::AppConfig {
+            name: name_str.to_owned(),
+            version: String::new(),
+            organization: org_str.to_owned(),
+        }
+        .app_id();
+        let cargo_config = crate::config::cargo_config_with_app_id(None, &app_id)
+            .expect("BUG: a new cargo configuration is valid TOML")
+            .expect("BUG: a new cargo configuration has no identifier yet");
+        let plan = plan.file(crate::config::CARGO_CONFIG, cargo_config);
+
+        if self.hot_reload {
             return plan;
         }
 
