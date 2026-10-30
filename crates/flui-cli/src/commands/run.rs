@@ -141,10 +141,13 @@ fn run_session(
                     style(&project.config.worker_package).cyan(),
                     style(&project.config.host_package).cyan()
                 ))?;
+                let floor_env =
+                    crate::config::project_floors(&project.config_dir)?.host_cargo_env();
                 let mut strategy = WorkerHost {
                     project,
                     profile,
                     verbose,
+                    floor_env,
                 };
                 dev_loop(&mut strategy)?;
             }
@@ -1680,6 +1683,9 @@ struct WorkerHost {
     project: WorkerHotReloadProject,
     profile: Option<String>,
     verbose: bool,
+    /// The application's floors (ADR-0244 §10), for both cargo invocations:
+    /// the same values keep the build script from rerunning between them.
+    floor_env: Vec<(&'static str, String)>,
 }
 
 impl WorkerHost {
@@ -1709,6 +1715,7 @@ impl WorkerHost {
                 ],
                 self.profile.as_deref(),
                 self.verbose,
+                &self.floor_env,
             )
         })
     }
@@ -1727,6 +1734,7 @@ impl WorkerHost {
             staged,
             self.profile.as_deref(),
             self.verbose,
+            &self.floor_env,
         )
     }
 }
@@ -1998,9 +2006,11 @@ fn spawn_host_package(
     worker_plugin: &Path,
     profile: Option<&str>,
     verbose: bool,
+    floor_env: &[(&'static str, String)],
 ) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "-p", package]);
+    cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -2035,9 +2045,15 @@ fn spawn_host_package(
 /// failure that made `flui run` unusable whenever host and worker were built
 /// separately. Passing every `-p` flag to one `cargo build` makes cargo unify
 /// once, so both binaries link one instance and the `TypeId`s agree.
-fn run_cargo_build_packages(packages: &[&str], profile: Option<&str>, verbose: bool) -> bool {
+fn run_cargo_build_packages(
+    packages: &[&str],
+    profile: Option<&str>,
+    verbose: bool,
+    floor_env: &[(&'static str, String)],
+) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
+    cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
     for package in packages {
         cmd.args(["-p", package]);
     }
@@ -2421,7 +2437,7 @@ mod tests {
         if let Some(root) = std::env::var_os(WORKER_FIXTURE) {
             let root = std::path::PathBuf::from(root);
             assert!(
-                super::run_cargo_build_packages(&["worker"], Some("dev"), false),
+                super::run_cargo_build_packages(&["worker"], Some("dev"), false, &[]),
                 "cargo build of the fixture failed"
             );
             let path = super::worker_dylib_path(&root, "worker", Some("dev")).expect("worker path");

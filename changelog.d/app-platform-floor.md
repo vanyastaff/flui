@@ -6,4 +6,4 @@
 
 ### Changed
 
-- The scaffolded Android `app/build.gradle.kts` reads `minSdk` from the `flui.minSdk` Gradle property, which `flui build` writes into `gradle.properties`. A literal `minSdk` that differs fails the build.
+- The scaffolded Android `app/build.gradle.kts` reads `minSdk` from the `flui.minSdk` Gradle property, which `flui build` writes into `gradle.properties`. A `minSdk` that states another number, or an expression the build cannot check, fails the build.

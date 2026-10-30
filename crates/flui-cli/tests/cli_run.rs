@@ -238,3 +238,54 @@ fn json_mode_streams_the_app_lifecycle_as_ndjson() {
         .expect("exit event");
     assert_eq!(exit["code"], 0);
 }
+
+/// A worker hot-reload project builds and starts its host under the
+/// application's floors, so a `[platforms]` table FLUI cannot honour stops
+/// `flui run` before anything is built (ADR-0244 §10).
+#[test]
+fn a_worker_project_refuses_a_floor_flui_cannot_honour() {
+    let tmp = TempDir::new().expect("fixture");
+    let root = tmp.path();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"host\", \"worker\"]\nresolver = \"3\"\n",
+    )
+    .expect("workspace manifest");
+    let facade = root.join("facade");
+    package(&facade, "flui", "");
+    std::fs::write(facade.join("src/lib.rs"), "").expect("facade identity");
+    package(
+        &root.join("host"),
+        "host",
+        "[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    package(&root.join("worker"), "worker", "");
+    std::fs::write(
+        root.join("flui.toml"),
+        "[app]\nname = \"host\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n\n\
+         [hot_reload]\nhost_package = \"host\"\nworker_package = \"worker\"\n\
+         worker_lib = \"worker\"\nlogic_watch = \"worker/src\"\n\n\
+         [platforms.ios]\nmin = \"12.0\"\n",
+    )
+    .expect("application config");
+    let output = cargo_bin_cmd!("flui")
+        .current_dir(root)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .args(["run", "--device", "desktop"])
+        .timeout(std::time::Duration::from_secs(60))
+        .output()
+        .expect("CLI");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && stderr
+                .contains("[platforms.ios] min = \"12.0\" is below FLUI's floor for ios, 13.0"),
+        "status {:?}: {stderr}",
+        output.status
+    );
+    assert!(
+        !root.join("target").exists(),
+        "nothing is built before the refusal"
+    );
+}
