@@ -70,7 +70,7 @@ pub(crate) fn system_fallback(locale: &str) -> SystemFallback {
     answer = answer.with_emoji(
         face_of(&pick(SystemFallback::EMOJI_SAMPLE))
             .into_iter()
-            .collect(),
+            .collect::<Vec<FaceRef>>(),
     );
 
     let languages = CFArray::from_objects(&[&*language]);
@@ -81,7 +81,7 @@ pub(crate) fn system_fallback(locale: &str) -> SystemFallback {
         // SAFETY: CoreText documents the cascade list as an array of
         // `CTFontDescriptorRef`.
         let descriptors = unsafe { cascade.cast_unchecked::<CTFontDescriptor>() };
-        let common = descriptors
+        let common: Vec<FaceRef> = descriptors
             .iter()
             .filter_map(|descriptor| descriptor_face(&descriptor))
             .collect();

@@ -61,7 +61,7 @@ fn ask(locale: &str) -> windows_core::Result<SystemFallback> {
         }
     }
     let emoji = map(&fallback, &collection, SystemFallback::EMOJI_SAMPLE, locale);
-    Ok(answer.with_emoji(emoji.into_iter().collect()))
+    Ok(answer.with_emoji(emoji.into_iter().collect::<Vec<FaceRef>>()))
 }
 
 /// The face the fallback maps the start of `sample` to in `locale`, if any
@@ -76,7 +76,7 @@ fn map(
     let length = u32::try_from(text.len()).ok()?;
     let source: IDWriteTextAnalysisSource = Sample {
         text,
-        locale: locale.encode_utf16().chain([0]).collect(),
+        locale: locale.encode_utf16().chain([0]).collect::<Vec<u16>>(),
     }
     .into();
     let mut mapped = 0;
