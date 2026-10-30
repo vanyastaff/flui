@@ -77,6 +77,20 @@ pub(crate) struct BuildHandle<'a> {
     pub(crate) dep_sink: &'a parking_lot::Mutex<Vec<crate::context::DependentRecord>>,
 }
 
+/// When [`ElementOwner::schedule_build_for`] requests the frame its fresh
+/// entry needs.
+#[derive(Clone, Copy)]
+pub(crate) enum FrameWake<'a> {
+    /// Outside a build pass: the owner's frame-request hook, if one is
+    /// installed, runs at once.
+    Now(Option<&'a (dyn Fn() + Send + Sync)>),
+    /// Inside a build pass: the wake is owed and the pass requests it once
+    /// every element is back in the tree. The hook is the binding's code, so
+    /// a failing wake must not unwind through the update of the element
+    /// whose change scheduled the entry and replace its healthy subtree.
+    AfterPass,
+}
+
 /// Split-borrow handle into `BuildOwner` for `Element` lifecycle paths.
 ///
 /// Carries `&mut` references to the subset of `BuildOwner` fields a
@@ -162,13 +176,10 @@ pub struct ElementOwner<'a> {
     /// registration and unmount-time release.
     pub(crate) reactive: &'a crate::reactive::Reactive,
 
-    /// Snapshot of `BuildOwner::on_build_scheduled` so
-    /// `schedule_build_for` can fire the visual-update callback
-    /// without re-borrowing the owner.
-    ///
-    /// Stored as a raw reference because `Box<dyn Fn>` is not `Copy`
-    /// and we never mutate it through this handle.
-    pub(crate) on_build_scheduled: Option<&'a (dyn Fn() + Send + Sync)>,
+    /// How `schedule_build_for` requests a frame without re-borrowing the
+    /// owner: through a snapshot of `BuildOwner::on_build_scheduled`, or,
+    /// inside a build pass, after it.
+    pub(crate) frame_wake: FrameWake<'a>,
 
     /// Reference to `BuildOwner::external_inbox`, so an element can capture a
     /// clone at mount (via [`Self::external_scheduler`]) for its mark-dirty
@@ -389,7 +400,8 @@ impl ElementOwner<'_> {
     /// Pushed onto the depth-sorted heap so parents rebuild before
     /// children. Reentrant scheduling accumulates the additional cause without
     /// adding a second heap entry. Fires `on_build_scheduled` for a fresh
-    /// entry, or retries a wake that panicked after an earlier commit.
+    /// entry, or retries a wake that panicked after an earlier commit;
+    /// inside a build pass the wake is owed to the end of the pass.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
         self.external_inbox.note_local_admission();
         let newly_queued = match self.dirty_reasons.entry(id) {
@@ -403,8 +415,12 @@ impl ElementOwner<'_> {
                 false
             }
         };
-        self.external_inbox
-            .request_frame_if_needed(newly_queued, self.on_build_scheduled);
+        match self.frame_wake {
+            FrameWake::Now(request_frame) => self
+                .external_inbox
+                .request_frame_if_needed(newly_queued, request_frame),
+            FrameWake::AfterPass => self.external_inbox.owe_frame(newly_queued),
+        }
     }
 
     /// Build an owned [`ExternalBuildScheduler`] for an element to capture at

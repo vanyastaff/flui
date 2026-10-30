@@ -671,3 +671,136 @@ mod did_change_dependencies_on_inherited_update {
 // restores the slot before re-raising. These tests pin that contract: without
 // the guard `element_opt()` returns `None` after the panic.
 // ============================================================================
+
+/// A frame request that fails while a rebuilt provider notifies its
+/// dependents is the wake's failure, not the provider's: the subtree under
+/// the provider keeps its state, the dependent rebuilds in the same pass,
+/// and the failure reaches the caller once the pass is over.
+///
+/// Red-check: request the frame while the provider notifies (the provider
+/// is replaced by an error view and the dependent mounts again).
+pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone)]
+    struct Shade {
+        color: u32,
+        child: Dependent,
+    }
+    impl InheritedView for Shade {
+        type Data = u32;
+        fn data(&self) -> &u32 {
+            &self.color
+        }
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.color != old.color
+        }
+    }
+    impl View for Shade {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::inherited(self)
+        }
+    }
+
+    /// Counts its mounts and notes the color it last built with.
+    #[derive(Clone)]
+    struct Dependent {
+        mounts: Rc<Cell<usize>>,
+        seen: Rc<Cell<u32>>,
+    }
+    struct DependentState(Rc<Cell<usize>>);
+    impl View for Dependent {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    impl flui_view::StatefulView for Dependent {
+        type State = DependentState;
+        fn create_state(&self) -> DependentState {
+            DependentState(Rc::clone(&self.mounts))
+        }
+    }
+    impl flui_view::ViewState<Dependent> for DependentState {
+        fn init_state(&mut self, _ctx: &dyn flui_view::LifecycleContext) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn build(&self, view: &Dependent, ctx: &dyn BuildContext) -> impl IntoView {
+            if let Some(color) = ctx.depend_on::<Shade, _>(|shade| shade.color) {
+                view.seen.set(color);
+            }
+            LeafView
+        }
+    }
+
+    /// Provides its color to the dependent.
+    #[derive(Clone)]
+    struct Host {
+        color: u32,
+        child: Dependent,
+    }
+    impl StatelessView for Host {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            Shade {
+                color: self.color,
+                child: self.child.clone(),
+            }
+        }
+    }
+    impl View for Host {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+    }
+
+    let (tree, owner) = create_tree_and_owner();
+    let armed = Arc::new(AtomicBool::new(false));
+    let arm = Arc::clone(&armed);
+    owner.write().set_on_build_scheduled(move || {
+        assert!(!arm.load(Ordering::SeqCst), "the frame request failed");
+    });
+    let dependent = Dependent {
+        mounts: Rc::new(Cell::new(0)),
+        seen: Rc::new(Cell::new(0)),
+    };
+    let host = |color| Host {
+        color,
+        child: dependent.clone(),
+    };
+    let root = tree
+        .write()
+        .mount_root(&host(1), &mut owner.write().element_owner_mut());
+    owner
+        .write()
+        .schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+    owner.write().build_scope(&mut tree.write());
+    assert_eq!(dependent.seen.get(), 1);
+
+    tree.write()
+        .update(root, &host(2), &mut owner.write().element_owner_mut());
+    owner
+        .write()
+        .schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
+    armed.store(true, Ordering::SeqCst);
+    let pass = catch_unwind(AssertUnwindSafe(|| {
+        owner.write().build_scope(&mut tree.write());
+    }));
+    armed.store(false, Ordering::SeqCst);
+
+    let failure = pass.expect_err("the failed frame request reaches the caller");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some("the frame request failed")
+    );
+    assert!(
+        owner.write().take_recovered_panics().is_empty(),
+        "no element was replaced"
+    );
+    assert_eq!(dependent.mounts.get(), 1, "the dependent kept its state");
+    assert_eq!(dependent.seen.get(), 2, "the dependent rebuilt in the pass");
+}
