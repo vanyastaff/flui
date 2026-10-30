@@ -95,7 +95,7 @@ impl Background {
 pub struct BackgroundTask<T: 'static> { /* Completion<Result<T, BackgroundError>>, cancel */ }
 impl<T> BackgroundTask<T> {
     pub fn cancel(&self);
-    pub fn on_complete(self, f: impl FnOnce(Result<T, BackgroundError>) + 'static);
+    pub fn on_complete(self, f: impl FnMut(Result<T, BackgroundError>) + 'static);
     pub fn poll(&mut self) -> Option<Result<T, BackgroundError>>;
     pub fn into_future(self) -> impl Future<Output = Result<T, BackgroundError>>;
 }
@@ -110,8 +110,10 @@ pub enum BackgroundError { Refused(SpawnError), Cancelled, Panicked, OwnerRetire
    `compute` or `io`, and a refused spawn settles the same way, as `Refused`.
 3. Dropping the task, or the future `into_future` returns, cancels the work: a job not yet
    started is skipped, and a future is woken and dropped at its next poll. A job already running
-   runs to its end and its value is dropped. `on_complete` hands the answer to its closure and
-   keeps the work alive; to cancel, keep the task instead.
+   runs to its end, its value is dropped on the worker and the task answers `Cancelled`: a
+   cancel wins over a value. `on_complete` hands the answer to its closure and keeps the work
+   alive; to cancel, keep the task instead. The closure is an `FnMut` called once, as the seam's
+   is, so a panic in it keeps its captures rather than dropping them mid-unwind.
 4. A panic in a job or a poll is caught where it ran, logged once with its message, its payload
    kept off the unwinding path (`retain_opaque_payload`), and answered as `Panicked`.
 5. Work the host discarded at shutdown answers `Cancelled`; a UI runtime that ended first

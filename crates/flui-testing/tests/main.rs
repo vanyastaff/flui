@@ -206,6 +206,32 @@ fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
 
+/// A capture of a panicking `on_complete` closure is kept through the
+/// unwind; dropped there, its own panicking `Drop` would abort the process,
+/// so the case runs in a child process.
+#[test]
+fn background_work_callback_keeps_its_captures() {
+    if std::env::var(background_work::CALLBACK_UNWIND_CHILD).is_ok() {
+        background_work::an_on_complete_panic_keeps_its_captures();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "background_work_callback_keeps_its_captures",
+            "--test-threads=1",
+        ])
+        .env(background_work::CALLBACK_UNWIND_CHILD, "1")
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .expect("child test process");
+    assert!(
+        output.status.success(),
+        "the child aborted: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Each case runs in a child process: without retention, a capture dropped
 /// while unwinding panics again and aborts the process.
 #[test]
@@ -345,6 +371,15 @@ fn background_work() {
             (
                 "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
                 background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_task_cancelled_while_its_job_runs_answers_cancelled",
+                background_work::a_task_cancelled_while_its_job_runs_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock",
+                background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
+                    as fn(),
             ),
         ],
     );

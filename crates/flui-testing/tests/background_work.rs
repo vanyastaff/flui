@@ -165,3 +165,164 @@ pub(crate) fn a_refused_spawn_answers_refused_at_the_next_pump() {
         Some(Err(BackgroundError::Refused(SpawnError::Saturated)))
     );
 }
+
+/// Hands each job and future to the test, so it chooses the thread and the
+/// waker they run with.
+#[derive(Clone, Default)]
+struct Handed {
+    jobs: Arc<std::sync::Mutex<Vec<ComputeJob>>>,
+    futures: Arc<std::sync::Mutex<Vec<IoFuture>>>,
+}
+
+impl Executor for Handed {
+    fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
+        self.jobs.lock().expect("BUG: test lock").push(job);
+        Ok(())
+    }
+
+    fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
+        self.futures.lock().expect("BUG: test lock").push(future);
+        Ok(())
+    }
+}
+
+fn host_over(executor: &Handed) -> HeadlessHost {
+    let executor = executor.clone();
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<BackgroundCapability>(move |cx: &ProviderContext<'_>| {
+        Ok(Background::new(
+            Arc::new(executor.clone()),
+            cx.completions().clone(),
+        ))
+    });
+    let registry = CapabilityRegistry::builder()
+        .overrides(registrar)
+        .build()
+        .expect("one provider");
+    HeadlessHost::with_capabilities(window(), registry)
+}
+
+pub(crate) fn a_task_cancelled_while_its_job_runs_answers_cancelled() {
+    let executor = Handed::default();
+    let mut host = host_over(&executor);
+    let background = background(&mut host);
+    let started = Arc::new(std::sync::Barrier::new(2));
+    let go = Arc::new(std::sync::Barrier::new(2));
+    let (job_started, job_go) = (Arc::clone(&started), Arc::clone(&go));
+    let mut task = background.compute(move || {
+        job_started.wait();
+        job_go.wait();
+        5
+    });
+    let job = executor
+        .jobs
+        .lock()
+        .expect("BUG: test lock")
+        .pop()
+        .expect("the job was spawned");
+    let worker = std::thread::spawn(job);
+    started.wait();
+    task.cancel();
+    go.wait();
+    worker.join().expect("the job runs to its end");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        task.poll(),
+        Some(Err(BackgroundError::Cancelled)),
+        "a cancel wins over the value of a job already running"
+    );
+}
+
+std::thread_local! {
+    /// The task a [`CancelsOnDrop`] waker cancels, as owner-local state a
+    /// waker's destructor reaches.
+    static CANCELLED_BY_WAKER: RefCell<Option<flui_view::background::BackgroundTask<()>>> =
+        const { RefCell::new(None) };
+}
+
+/// A waker whose last drop cancels the task in [`CANCELLED_BY_WAKER`].
+struct CancelsOnDrop;
+
+#[expect(
+    clippy::manual_noop_waker,
+    reason = "the waker exists for its `Drop`, which `Waker::noop` has none of"
+)]
+impl std::task::Wake for CancelsOnDrop {
+    fn wake(self: Arc<Self>) {}
+}
+
+impl Drop for CancelsOnDrop {
+    fn drop(&mut self) {
+        CANCELLED_BY_WAKER.with(|task| {
+            if let Some(task) = task.borrow().as_ref() {
+                task.cancel();
+            }
+        });
+    }
+}
+
+pub(crate) fn a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock() {
+    use std::task::{Context, Poll, Waker};
+
+    let executor = Handed::default();
+    let mut host = host_over(&executor);
+    let background = background(&mut host);
+    let task = background.io(std::future::pending::<()>());
+    CANCELLED_BY_WAKER.with(|slot| slot.replace(Some(task)));
+    let mut future = executor
+        .futures
+        .lock()
+        .expect("BUG: test lock")
+        .pop()
+        .expect("the future was spawned");
+
+    let first = Waker::from(Arc::new(CancelsOnDrop));
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&first)),
+        Poll::Pending
+    );
+    drop(first);
+    // The second poll's waker replaces the first, whose drop cancels.
+    let second = Waker::noop();
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(second)),
+        Poll::Ready(()),
+        "the cancel reached the future"
+    );
+    let mut task = CANCELLED_BY_WAKER
+        .with(RefCell::take)
+        .expect("the task is kept");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(task.poll(), Some(Err(BackgroundError::Cancelled)));
+}
+
+/// The variable under which `background_work_callback_keeps_its_captures`
+/// runs its child case.
+pub(crate) const CALLBACK_UNWIND_CHILD: &str = "FLUI_BACKGROUND_CALLBACK_UNWIND_CHILD";
+
+/// Panics when dropped, as a capture with a faulty `Drop` does.
+struct PanicOnDrop;
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        panic!("capture dropped");
+    }
+}
+
+/// An `on_complete` closure that panics while it holds a capture whose
+/// `Drop` panics too: the capture is kept through the unwind, so the
+/// process does not abort, and its own panic comes at the teardown.
+pub(crate) fn an_on_complete_panic_keeps_its_captures() {
+    let mut host = HeadlessHost::new(window());
+    let background = background(&mut host);
+    let capture = PanicOnDrop;
+    background.compute(|| 1).on_complete(move |_| {
+        let _ = &capture;
+        panic!("callback failed");
+    });
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = host.pump(Duration::ZERO);
+        let _ = host.pump(Duration::ZERO);
+    }));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host)));
+}

@@ -88,7 +88,7 @@ impl Background {
                 return;
             }
             let outcome = catch_unwind(AssertUnwindSafe(job)).map_err(panicked);
-            answer.resolve(outcome);
+            answer.resolve_unless_cancelled(outcome);
         });
         if let Err(error) = self.executor.spawn_compute(work) {
             Answer::refuse(&refused, error);
@@ -178,17 +178,17 @@ impl<T: 'static> BackgroundTask<T> {
     /// Run `f` once with the answer, at an owner turn boundary. The work is
     /// no longer cancelled by dropping the task; the closure owns its
     /// answer.
-    pub fn on_complete(mut self, f: impl FnOnce(Result<T, BackgroundError>) + 'static) {
+    ///
+    /// `f` is an `FnMut` called at most once, as `Completion::on_complete`'s
+    /// is: if it panics, its captures are kept rather than dropped during
+    /// the unwind, so a capture whose `Drop` also panics cannot abort the
+    /// process.
+    pub fn on_complete(mut self, mut f: impl FnMut(Result<T, BackgroundError>) + 'static) {
         let completion = self
             .completion
             .take()
             .expect("BUG: a BackgroundTask holds its completion until it is consumed");
-        let mut f = Some(f);
-        completion.on_complete(move |outcome| {
-            if let Some(f) = f.take() {
-                f(answer_of(outcome));
-            }
-        });
+        completion.on_complete(move |outcome| f(answer_of(outcome)));
     }
 
     /// Take the answer if it has settled: `None` while the work is pending,
@@ -305,6 +305,18 @@ impl<T: Send + 'static> Answer<T> {
         Self::settle(&self.resolver, answer);
     }
 
+    /// Answer with what the work produced, unless the task was cancelled
+    /// while it ran: a cancel wins over a value, and the value is dropped
+    /// here, off the owner thread.
+    fn resolve_unless_cancelled(&self, answer: Result<T, BackgroundError>) {
+        if self.cancel.is_cancelled() {
+            drop(answer);
+            self.resolve(Err(BackgroundError::Cancelled));
+        } else {
+            self.resolve(answer);
+        }
+    }
+
     /// The lane dropped the work, and with it this answer's other half.
     fn refuse(resolver: &ResolverSlot<T>, error: SpawnError) {
         Self::settle(resolver, Err(BackgroundError::Refused(error)));
@@ -334,7 +346,11 @@ impl<T: Send + 'static> Future for Cancellable<T> {
         let Some(answer) = this.answer.as_ref() else {
             return Poll::Ready(());
         };
-        *answer.cancel.waker.lock() = Some(cx.waker().clone());
+        let waker = cx.waker().clone();
+        // The waker this one replaces drops after the lock is released: its
+        // destructor may reach a `cancel`, which takes the same lock.
+        let replaced = answer.cancel.waker.lock().replace(waker);
+        drop(replaced);
         let outcome = if answer.cancel.is_cancelled() {
             Err(BackgroundError::Cancelled)
         } else {
@@ -345,7 +361,7 @@ impl<T: Send + 'static> Future for Cancellable<T> {
             }
         };
         if let Some(answer) = this.answer.take() {
-            answer.resolve(outcome);
+            answer.resolve_unless_cancelled(outcome);
         }
         Poll::Ready(())
     }
