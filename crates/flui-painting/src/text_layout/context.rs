@@ -36,6 +36,7 @@ use std::sync::{Arc, Weak};
 use flui_foundation::memory::MemoryPressureLevel;
 
 use super::host::{HostData, HostFaces, HostFonts};
+use super::system_fallback::{SystemFallback, ask_contained};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
 
@@ -111,29 +112,22 @@ impl FontCollection {
     ///
     /// Without `bundled-fonts` the collection would start with no face, and
     /// a first frame would draw no text at all; this then feeds the host's
-    /// faces before it returns, and the returned feed has nothing left to
-    /// do.
+    /// faces before it returns, and the returned feed only installs the
+    /// host's own fallback answer, when it is given one
+    /// ([`HostFontFeed::with_system_fallback`]).
     pub fn with_host_feed() -> (Self, HostFontFeed) {
         #[cfg(feature = "bundled-fonts")]
-        {
-            let fonts = Self::new();
-            let feed = HostFontFeed {
-                fonts: Some(fonts.clone()),
-                #[cfg(any(test, feature = "testing"))]
-                host: None,
-            };
-            (fonts, feed)
-        }
+        let (fonts, faces_fed) = (Self::new(), false);
         #[cfg(not(feature = "bundled-fonts"))]
-        {
-            let fonts = Self::with_host_fonts(&HostFonts::scan());
-            let feed = HostFontFeed {
-                fonts: None,
-                #[cfg(any(test, feature = "testing"))]
-                host: None,
-            };
-            (fonts, feed)
-        }
+        let (fonts, faces_fed) = (Self::with_host_fonts(&HostFonts::scan()), true);
+        let feed = HostFontFeed {
+            fonts: fonts.clone(),
+            faces_fed,
+            ask: None,
+            #[cfg(any(test, feature = "testing"))]
+            host: None,
+        };
+        (fonts, feed)
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -342,6 +336,9 @@ impl FontCollectionInner {
     }
 }
 
+/// What a feed asks the platform with: the host's locale in, its answer out.
+type AskSystemFallback = Box<dyn FnOnce(&str) -> SystemFallback + Send>;
+
 /// The host's faces, still to be added to a collection built by
 /// [`FontCollection::with_host_feed`].
 ///
@@ -349,8 +346,13 @@ impl FontCollectionInner {
 /// leaves the collection with the faces it had.
 #[must_use = "the host's faces reach the collection only when the feed runs"]
 pub struct HostFontFeed {
-    /// The collection to feed; `None` once nothing is left to do.
-    fonts: Option<FontCollection>,
+    /// The collection to feed.
+    fonts: FontCollection,
+    /// Whether the host's faces are in the collection already, so only the
+    /// host's fallback answer is left to install.
+    faces_fed: bool,
+    /// Asks the platform which faces fall back, given the host's locale.
+    ask: Option<AskSystemFallback>,
     /// The host the feed reads instead of scanning; set by
     /// `testing::feed_with_host`.
     #[cfg(any(test, feature = "testing"))]
@@ -374,17 +376,52 @@ impl HostFontFeed {
     /// the trial and the registration, which reads it again. If the feed
     /// itself unwinds, the generation still rises, so the faces already
     /// added are not left unannounced.
-    pub fn run(self) {
-        let Some(fonts) = self.fonts else {
-            return;
+    ///
+    /// With [`HostFontFeed::with_system_fallback`] the platform is asked
+    /// first, and its answer goes ahead of FLUI's tables in the order the
+    /// feed installs (ADR-0271). Returns the collection's one
+    /// [`FallbackOrder`], which installs a later answer, such as one for a
+    /// new locale.
+    pub fn run(self) -> FallbackOrder {
+        let mut order = FallbackOrder { fonts: self.fonts };
+        if self.faces_fed {
+            if let Some(ask) = self.ask {
+                let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
+                order.set_system_fallback(&ask_contained(ask, &locale));
+            }
+            return order;
+        }
+        let scan = |ask: Option<AskSystemFallback>| match ask {
+            Some(ask) => HostFonts::scan_with(ask),
+            None => HostFonts::scan(),
         };
         #[cfg(any(test, feature = "testing"))]
-        let host = self.host.unwrap_or_else(HostFonts::scan);
+        let host = match (self.host, self.ask) {
+            (Some(host), Some(ask)) => {
+                let system = ask_contained(ask, host.locale());
+                host.with_system_fallback(system)
+            }
+            (Some(host), None) => host,
+            (None, ask) => scan(ask),
+        };
         #[cfg(not(any(test, feature = "testing")))]
-        let host = HostFonts::scan();
+        let host = scan(self.ask);
         let faces = host.faces();
         drop(host);
-        fonts.feed_shared(&faces);
+        order.fonts.feed_shared(&faces);
+        order
+    }
+
+    /// This feed, asking `ask` which faces the host falls back to before it
+    /// installs the fallback order: `ask` is called once, on the thread the
+    /// feed runs on, with the host's locale. The platform layer passes its
+    /// query here (ADR-0271 §3).
+    pub fn with_system_fallback(
+        mut self,
+        ask: impl FnOnce(&str) -> SystemFallback + Send + 'static,
+    ) -> Self {
+        self.ask = Some(Box::new(ask));
+        self
     }
 
     /// The feed, reading `host` instead of scanning.
@@ -399,6 +436,8 @@ impl fmt::Debug for HostFontFeed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HostFontFeed")
             .field("fonts", &self.fonts)
+            .field("faces_fed", &self.faces_fed)
+            .field("asks", &self.ask.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -437,6 +476,75 @@ impl FontCollection {
     }
 }
 
+/// The one writer of a host-fed collection's fallback order, which its
+/// [`HostFontFeed`] hands on when it has run: the rescan entry point
+/// (ADR-0271 §4).
+///
+/// Not `Clone`, and its install takes `&mut self`: one collection has one
+/// feed and so one of these, so two installs never interleave their
+/// per-script writes, with no lock on the text path (ADR-0092 §3). `Send`:
+/// the platform layer keeps it on the thread it asks the host from.
+#[derive(Debug)]
+pub struct FallbackOrder {
+    fonts: FontCollection,
+}
+
+impl FallbackOrder {
+    /// The collection whose order this writes.
+    #[must_use]
+    pub fn fonts(&self) -> &FontCollection {
+        &self.fonts
+    }
+
+    /// Installs `system`, the host's own fallback answer for its locale,
+    /// ahead of FLUI's tables for that locale, replacing the fallback order
+    /// the collection had. The platform layer calls it, off the owner
+    /// thread, when the app's locale changes or the host's fonts do.
+    ///
+    /// The faces it names resolve against the faces the collection holds
+    /// now; a face it does not hold is left out. The collection's
+    /// [`generation`](FontCollection::generation) rises by one once every
+    /// list is written, and not at all when no list changed, so a paragraph
+    /// measured while the lists were being written measures again at its
+    /// pipeline's next frame, and one measured at the new generation saw the
+    /// whole new order. If it unwinds part way, the generation still rises,
+    /// so the lists already written are not left unannounced.
+    ///
+    /// Returns whether the order changed.
+    pub fn set_system_fallback(&mut self, system: &SystemFallback) -> bool {
+        use super::fallback_chain::{FallbackChain, install_into, resolve};
+
+        /// Raises the generation when dropped while `announce` is set.
+        struct Announce<'a> {
+            generation: &'a AtomicU64,
+            announce: bool,
+        }
+
+        impl Drop for Announce<'_> {
+            fn drop(&mut self) {
+                if self.announce {
+                    self.generation.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+        }
+
+        let inner = &self.fonts.0;
+        let mut announce = Announce {
+            generation: &inner.generation,
+            announce: true,
+        };
+        let mut collection = inner.collection.clone();
+        let order = resolve(system, &mut collection);
+        let changed = install_into(
+            &FallbackChain::platform(&system.locale),
+            &order,
+            &mut collection,
+        );
+        announce.announce = changed;
+        changed
+    }
+}
+
 /// How [`feed_host_faces`] registers each source.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Registration {
@@ -471,7 +579,7 @@ fn feed_host_faces(
 
     use parley::fontique::GenericFamily;
 
-    use super::fallback_chain::install_into;
+    use super::fallback_chain::{install_into, resolve};
 
     let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut fed = 0_usize;
@@ -507,7 +615,8 @@ fn feed_host_faces(
             bound = true;
         }
     }
-    let reordered = install_into(&host.chain, collection);
+    let order = resolve(&host.system, collection);
+    let reordered = install_into(&host.chain, &order, collection);
     // The span above records how long the feed took; no clock is read here,
     // since `std::time::Instant` panics on wasm32-unknown-unknown.
     tracing::debug!(
@@ -918,6 +1027,7 @@ mod tests {
             cursive: PROBE.to_owned(),
             fantasy: PROBE.to_owned(),
             chain: FallbackChain::from_lists(&[PROBE], &[]),
+            system: crate::SystemFallback::none("en-US"),
         };
         let mut collection = FontCollectionInner::build(Some(&host)).collection;
 
@@ -988,6 +1098,7 @@ mod tests {
             cursive: PROBE.to_owned(),
             fantasy: PROBE.to_owned(),
             chain: FallbackChain::from_lists(&[PROBE], &[]),
+            system: crate::SystemFallback::none("en-US"),
         };
         let (fonts, _unused) = FontCollection::with_host_feed();
         let before = fonts.generation();
@@ -1044,6 +1155,7 @@ mod tests {
             cursive: "Roboto".to_owned(),
             fantasy: "Roboto".to_owned(),
             chain: FallbackChain::from_lists(&["Roboto"], &[]),
+            system: crate::SystemFallback::none("en-US"),
         };
         let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
         let bundled = FontCollection::new();
@@ -1445,6 +1557,7 @@ mod tests {
                 cursive: "Roboto".to_owned(),
                 fantasy: "Roboto".to_owned(),
                 chain: FallbackChain::from_lists(&["FLUI Decoy Emoji"], &[]),
+                system: crate::SystemFallback::none("en-US"),
             };
             let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
             let style = TextStyle {

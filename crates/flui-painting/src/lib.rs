@@ -107,7 +107,8 @@ pub use glyphs::{
 pub use image_placement::ImagePlacement;
 pub use table_border::paint_table_border;
 pub use text_layout::{
-    FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutError, TextLayoutResult,
+    FaceRef, FallbackOrder, FontCollection, HostFontFeed, HostFonts, ScriptCode, SystemFallback,
+    TextContext, TextLayoutError, TextLayoutResult,
 };
 pub use text_painter::{
     Invalidation, TextBaseline, TextMeasurement, TextMeasurementError, TextPainter,
