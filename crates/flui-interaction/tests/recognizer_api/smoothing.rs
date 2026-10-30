@@ -37,7 +37,7 @@ fn pointer(raw: u64) -> PointerId {
 
 /// Strong fixed-cutoff smoothing, so a leak into decisions would show.
 fn tuning() -> OneEuroTuning {
-    OneEuroTuning::new(0.5, 0.0, 1.0).expect("valid tuning")
+    OneEuroTuning::try_new(0.5, 0.0, 1.0).expect("valid tuning")
 }
 
 fn settings(smoothing: Option<OneEuroTuning>) -> GestureSettings {
@@ -334,7 +334,7 @@ fn scale_smooths_the_focal_point_after_acceptance() {
     );
     // A cutoff too high to smooth publishes each frame's raw focal point:
     // the second contact's sample at a timestamp replaces the first's.
-    let transparent = OneEuroTuning::new(f64::MAX, 0.0, 1.0).expect("valid tuning");
+    let transparent = OneEuroTuning::try_new(f64::MAX, 0.0, 1.0).expect("valid tuning");
     let transparent = scale_trace(Some(transparent)).1;
     let differs = transparent
         .iter()

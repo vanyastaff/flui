@@ -77,7 +77,7 @@ impl PolynomialFit {
     /// initialised to zero.
     ///
     /// Returns `None` if `degree > MAX_DEGREE`.
-    pub fn new(degree: usize) -> Option<Self> {
+    pub fn try_new(degree: usize) -> Option<Self> {
         if degree > MAX_DEGREE {
             return None;
         }
@@ -204,7 +204,7 @@ fn solve_rhs(
     m: usize,
     n: usize,
 ) -> Option<PolynomialFit> {
-    let mut result = PolynomialFit::new(n - 1)?;
+    let mut result = PolynomialFit::try_new(n - 1)?;
 
     // Fit the samples mapped onto [-1, 1] (y' = (y - centre) / half_range),
     // then map the coefficients back. Positions near the top of the f64

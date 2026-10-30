@@ -10,6 +10,6 @@
 
 ### Changed
 
-- **One Euro tuning is a value** (`flui-interaction`): `OneEuroTuning::new(min_cutoff, beta,
+- **One Euro tuning is a value** (`flui-interaction`): `OneEuroTuning::try_new(min_cutoff, beta,
   d_cutoff)` validates parameters and returns `OneEuroFilterError`; `OneEuroFilter::new` and
   `OneEuroFilter2D::new` take a `OneEuroTuning` and no longer fail.

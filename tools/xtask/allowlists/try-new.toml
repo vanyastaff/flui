@@ -69,18 +69,6 @@ crate = "flui-foundation"
 type = "WindowMetrics"
 
 [[allow]]
-crate = "flui-interaction"
-type = "MultiTapCount"
-
-[[allow]]
-crate = "flui-interaction"
-type = "OneEuroTuning"
-
-[[allow]]
-crate = "flui-interaction"
-type = "PolynomialFit"
-
-[[allow]]
 crate = "flui-native"
 type = "ArboardClipboard"
 
@@ -175,26 +163,6 @@ type = "WindowsWindow"
 [[allow]]
 crate = "flui-native"
 type = "X11Loop"
-
-[[allow]]
-crate = "flui-objects"
-type = "AspectRatioFactor"
-
-[[allow]]
-crate = "flui-objects"
-type = "CarouselGeometry"
-
-[[allow]]
-crate = "flui-objects"
-type = "FractionFactor"
-
-[[allow]]
-crate = "flui-objects"
-type = "RenderSliverConstrainedCrossAxis"
-
-[[allow]]
-crate = "flui-objects"
-type = "Strategy"
 
 [[allow]]
 crate = "flui-platform"

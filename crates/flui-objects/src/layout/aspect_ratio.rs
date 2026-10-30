@@ -25,7 +25,7 @@ use flui_rendering::{
 
 /// A validated, positive, finite width-to-height ratio.
 ///
-/// `AspectRatioFactor::new` returns `None` for non-positive or non-finite values.
+/// `AspectRatioFactor::try_new` returns `None` for non-positive or non-finite values.
 /// Use [`AspectRatioFactor::new_unchecked`] in `const` contexts when the input is
 /// known to be valid (`assert!`-guarded panic on debug builds).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,7 +51,7 @@ impl AspectRatioFactor {
     ///
     /// Returns `None` if the value is `<= 0`, NaN, or infinite.
     #[must_use]
-    pub fn new(value: f64) -> Option<Self> {
+    pub fn try_new(value: f64) -> Option<Self> {
         if value.is_finite() && value > 0.0 {
             Some(Self(value))
         } else {
@@ -80,7 +80,7 @@ impl AspectRatioFactor {
         let w = size.width;
         let h = size.height;
         if w > 0.0 && h > 0.0 {
-            Self::new(w / h)
+            Self::try_new(w / h)
         } else {
             None
         }

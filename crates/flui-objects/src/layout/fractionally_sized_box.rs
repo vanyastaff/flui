@@ -56,7 +56,7 @@ impl FractionFactor {
     ///
     /// Returns `None` for negative, NaN, or infinite inputs.
     #[must_use]
-    pub fn new(value: f64) -> Option<Self> {
+    pub fn try_new(value: f64) -> Option<Self> {
         if value.is_finite() && value >= 0.0 {
             Some(Self(value))
         } else {
@@ -110,7 +110,7 @@ impl From<FractionFactor> for f64 {
 /// // Child takes 50% width × 75% height of the parent, top-centered.
 /// let node = RenderFractionallySizedBox::new()
 ///     .with_width_factor(FractionFactor::HALF)
-///     .with_height_factor(FractionFactor::new(0.75).unwrap())
+///     .with_height_factor(FractionFactor::try_new(0.75).unwrap())
 ///     .with_alignment(Alignment::TOP_CENTER);
 /// ```
 #[derive(Debug, Clone)]
