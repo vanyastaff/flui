@@ -813,6 +813,7 @@ fn router_and_widgets_app() {
             ("router::router_push_commits_before_a_reentrant_observer_pop", crate::router::router_push_commits_before_a_reentrant_observer_pop),
             ("router::router_replace_commits_before_a_reentrant_observer_pop", crate::router::router_replace_commits_before_a_reentrant_observer_pop),
             ("router::router_go_commits_before_a_reentrant_observer_pop", crate::router::router_go_commits_before_a_reentrant_observer_pop),
+            ("router::a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles", crate::router::a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles),
             ("router::router_go_recomputes_its_prefix_after_popup_observer_navigation", crate::router::router_go_recomputes_its_prefix_after_popup_observer_navigation),
             ("router::router_push_preserves_its_commit_after_an_observer_panic", crate::router::router_push_preserves_its_commit_after_an_observer_panic),
             ("router::router_go_preserves_its_commit_after_an_observer_panic", crate::router::router_go_preserves_its_commit_after_an_observer_panic),
