@@ -829,7 +829,7 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     let view = |text| {
         CustomPaint::new()
             .size(Size::new(100.0, 20.0))
-            .painter(Rc::new(Field(text)))
+            .painter(Field(text))
     };
     let mut laid = lay_out(view("ab\ncd"), loose(200.0));
     laid.enable_semantics();
