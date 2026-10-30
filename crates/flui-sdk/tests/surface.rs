@@ -25,6 +25,8 @@
 mod behavioural_widget;
 #[path = "surface/custom_recognizer.rs"]
 mod custom_recognizer;
+#[path = "surface/package_capability.rs"]
+mod package_capability;
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -120,6 +122,16 @@ mod measured {
         PathClipConfiguration as _, RenderPhysicalShape as _, ScrollDirection as _,
         TranslationFraction as _,
     };
+    // The capability seam a package declares, provides and acquires with
+    // (ADR-0152), and the clipboard, its first capability.
+    use flui_sdk::interaction::{
+        ClipboardBackend as _, ClipboardCapability as _, ClipboardHandle as _,
+    };
+    use flui_sdk::platform::capability::{
+        Abandoned as _, Capability as _, CapabilityProvider as _, CapabilityRegistrar as _,
+        Completion as _, CompletionSource as _, OwnerPoster as _, OwnerRetired as _, Plugin as _,
+        ProviderContext as _, Resolver as _, WindowRef as _,
+    };
     use flui_sdk::platform::{
         AdmissionError as _, Brightness as _, DurationScale as _, GesturePreferences as _,
         HapticFeedback as _, HostNotice as _, InvalidLocale as _, InvalidPreference as _,
@@ -132,6 +144,7 @@ mod measured {
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
         RenderResult as _, RenderUpdateImpact as _,
     };
+    use flui_sdk::view::LifecycleContextExt as _;
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
     };
@@ -435,6 +448,7 @@ fn declared_surface() -> Vec<&'static str> {
 #[test]
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
+        "pub mod capability {",
         "pub mod drag {",
         "pub mod haptics {",
         "pub mod hooks {",
@@ -453,6 +467,9 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::AxisLock;",
         "pub use flui_interaction::BeginContactError;",
         "pub use flui_interaction::CancelOutcome;",
+        "pub use flui_interaction::ClipboardBackend;",
+        "pub use flui_interaction::ClipboardCapability;",
+        "pub use flui_interaction::ClipboardHandle;",
         "pub use flui_interaction::ContactEnd;",
         "pub use flui_interaction::ContactId;",
         "pub use flui_interaction::ContactSnapshot;",
@@ -575,6 +592,18 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::WheelStep;",
         "pub use flui_platform::WindowMode;",
         "pub use flui_platform::WindowState;",
+        "pub use flui_platform::capability::Abandoned;",
+        "pub use flui_platform::capability::Capability;",
+        "pub use flui_platform::capability::CapabilityProvider;",
+        "pub use flui_platform::capability::CapabilityRegistrar;",
+        "pub use flui_platform::capability::Completion;",
+        "pub use flui_platform::capability::CompletionSource;",
+        "pub use flui_platform::capability::OwnerPoster;",
+        "pub use flui_platform::capability::OwnerRetired;",
+        "pub use flui_platform::capability::Plugin;",
+        "pub use flui_platform::capability::ProviderContext;",
+        "pub use flui_platform::capability::Resolver;",
+        "pub use flui_platform::capability::WindowRef;",
         "pub use flui_platform::data_transfer::TransferActions;",
         "pub use flui_platform::haptics::ControlPoint;",
         "pub use flui_platform::haptics::HapticCapabilities;",

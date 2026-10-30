@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
+use flui_platform::Storage;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::drag::ProcessNonce;
-use flui_platform::{Clipboard, Storage};
 use flui_rendering::TextContextHandle;
 use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
 use flui_view::__runtime::{FlushRegistry, OwnerNotify};
@@ -26,7 +26,7 @@ use flui_view::CloseReason;
 pub struct RuntimeHostServices<'a> {
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     pub(crate) needs_redraw: Arc<AtomicBool>,
-    pub(crate) clipboard: Arc<dyn Clipboard>,
+    pub(crate) capabilities: crate::capability::CapabilityRegistry,
     pub(crate) storage: Option<Arc<dyn Storage>>,
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
@@ -53,9 +53,6 @@ impl<'a> RuntimeHostServices<'a> {
     /// `AppRuntime::frame_wake_callback()`. `needs_redraw` is a clone of
     /// that same runtime's flag (see `UiRuntime::needs_redraw`).
     ///
-    /// `clipboard` is the platform clipboard every presentation of the UI runtime
-    /// hands its widgets through `LifecycleContext::clipboard_handle`.
-    ///
     /// `fonts` is the app's shared font collection; the UI runtime owns a
     /// `TextContext` built from it (ADR-0092 §3), which lives exactly as long
     /// as the UI runtime.
@@ -68,14 +65,13 @@ impl<'a> RuntimeHostServices<'a> {
     pub fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
         needs_redraw: Arc<AtomicBool>,
-        clipboard: Arc<dyn Clipboard>,
         fonts: &'a FontCollection,
         clock: ClockSource,
     ) -> Self {
         Self {
             wake,
             needs_redraw,
-            clipboard,
+            capabilities: crate::capability::CapabilityRegistry::empty(),
             storage: None,
             fonts,
             clock,
@@ -85,6 +81,15 @@ impl<'a> RuntimeHostServices<'a> {
             flush_registry: None,
             close_vetoes: Vec::new(),
         }
+    }
+
+    /// The providers every presentation of the UI runtime acquires platform
+    /// capabilities from (`cx.capability::<C>()`, ADR-0152). Without it every
+    /// acquisition answers `NotRegistered`.
+    #[must_use]
+    pub fn with_capabilities(mut self, registry: crate::capability::CapabilityRegistry) -> Self {
+        self.capabilities = registry;
+        self
     }
 
     /// The platform's one data-transfer source, which this runtime's drag
@@ -162,9 +167,9 @@ pub(crate) struct RuntimeServices {
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     /// The host's redraw flag, which `wake` also sets.
     pub(crate) needs_redraw: Arc<AtomicBool>,
-    /// The platform clipboard every presentation of this UI runtime hands its
-    /// widgets (`LifecycleContext::clipboard_handle`).
-    pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The providers every presentation of this UI runtime acquires platform
+    /// capabilities from (ADR-0152).
+    pub(crate) capabilities: crate::capability::CapabilityRegistry,
     /// The byte storage every presentation of this UI runtime hands its widgets
     /// (`LifecycleContext::storage`); `None` when the host gave it none.
     pub(crate) storage: Option<Arc<dyn Storage>>,
@@ -196,7 +201,7 @@ impl RuntimeServices {
         let RuntimeHostServices {
             wake,
             needs_redraw,
-            clipboard,
+            capabilities,
             storage,
             fonts,
             clock,
@@ -217,7 +222,7 @@ impl RuntimeServices {
             scheduler,
             wake,
             needs_redraw,
-            clipboard,
+            capabilities,
             storage,
             clock,
             preferences,

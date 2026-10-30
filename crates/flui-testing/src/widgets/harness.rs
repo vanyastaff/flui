@@ -19,7 +19,6 @@
 
 use std::any::TypeId;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ElementId;
@@ -121,9 +120,9 @@ impl Harness {
             .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
 
-    /// The clipboard this tree's widgets reach through
-    /// `LifecycleContext::clipboard_handle`.
-    pub fn clipboard(&self) -> Arc<flui_platform::InMemoryClipboard> {
+    /// The clipboard this tree's widgets acquire through
+    /// `cx.capability::<ClipboardCapability>()`.
+    pub fn clipboard(&self) -> crate::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 

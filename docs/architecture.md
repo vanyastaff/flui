@@ -155,7 +155,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // Input
-    fn clipboard(&self) -> Arc<dyn Clipboard>;
+    fn clipboard(&self) -> Rc<dyn NativeClipboard>; // a read answers through a Resolver (ADR-0152)
 
     // Metadata
     fn name(&self) -> &'static str;

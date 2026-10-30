@@ -81,7 +81,7 @@ mod composition_ledger;
 mod generation;
 
 pub use arbiter::LockArbiter;
-pub use clipboard::ClipboardHandle;
+pub use clipboard::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 pub use composition_ledger::{CompositionLedger, committed_text};
 pub use generation::EditGeneration;
 

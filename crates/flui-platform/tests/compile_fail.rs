@@ -1,5 +1,5 @@
-//! Compiler contracts for the display identity, the admitted window command
-//! and the owner-local window.
+//! Compiler contracts for the display identity, the admitted window command,
+//! the owner-local window and the owner-local completion.
 
 #[test]
 fn trybuild_ui() {
@@ -12,4 +12,6 @@ fn trybuild_ui() {
     // `a_platform_window_cannot_cross_a_thread` (ADR-0254 §5): neither an
     // `Rc`, an `Arc` nor a borrow of a window reaches another thread.
     cases.compile_fail("tests/compile_fail/a_platform_window_cannot_cross_a_thread.rs");
+    // `a_completion_cannot_cross_a_thread` (ADR-0152 §3).
+    cases.compile_fail("tests/compile_fail/a_completion_cannot_cross_a_thread.rs");
 }

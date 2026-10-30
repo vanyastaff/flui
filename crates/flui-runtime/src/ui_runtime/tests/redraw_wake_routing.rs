@@ -31,7 +31,6 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -66,7 +65,6 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
         crate::runtime_services::RuntimeHostServices::new(
             wake,
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

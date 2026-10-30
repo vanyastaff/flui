@@ -247,7 +247,6 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                     RuntimeHostServices::new(
                         Arc::new(|| {}),
                         Arc::new(AtomicBool::new(false)),
-                        Arc::new(flui_platform::InMemoryClipboard::new()),
                         &flui_painting::FontCollection::new(),
                         flui_scheduler::ClockSource::Platform,
                     ),
@@ -1658,10 +1657,10 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
                         );
                     }),
                     woken,
-                    super::super::host::runtime_clipboard(),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
-                );
+                )
+                .with_capabilities(super::super::host::runtime_capabilities());
                 if let Some(accepted) =
                     APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?
                 {
@@ -2070,9 +2069,9 @@ fn platform_replacement_contains_reentrant_retirement() {
         scale: f64,
         failure: Option<&'static str>,
     }
-    impl flui_platform::Clipboard for RetiredProducer {
-        fn read_text(&self) -> Option<String> {
-            None
+    impl flui_native::NativeClipboard for RetiredProducer {
+        fn read_text(&self, answer: flui_platform::capability::Resolver<Option<String>>) {
+            drop(answer);
         }
         fn write_text(&self, _: String) {}
     }
@@ -2109,7 +2108,7 @@ fn platform_replacement_contains_reentrant_retirement() {
                     scale: 1.5,
                     failure: wake_fails.then_some("retired wake"),
                 };
-                let clipboard = Arc::new(RetiredProducer {
+                let clipboard = Rc::new(RetiredProducer {
                     retired: first_retired,
                     scale: 2.5,
                     failure: clipboard_fails.then_some("retired clipboard"),
