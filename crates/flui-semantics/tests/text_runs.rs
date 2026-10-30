@@ -227,7 +227,7 @@ fn a_selection_is_read_only_from_the_fields_own_runs() {
             c.set_text_content(first);
             c.add_action(
                 flui_semantics::SemanticsAction::SetTextSelection,
-                Arc::new(|_| {}),
+                std::rc::Rc::new(|_| {}),
             );
         },
         |c| {
