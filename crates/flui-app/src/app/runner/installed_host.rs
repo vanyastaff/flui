@@ -405,13 +405,9 @@ impl OwnerEffects for HostState {
         finish(first);
     }
 
-    /// Android (`ANativeWindow_setFrameRate`) and iOS (the display link's
-    /// frame-rate range) have a refresh-rate request to make. iOS holds a
-    /// ProMotion panel at its maximum only while the presentation is active,
-    /// and leaves a still screen to the system's adaptive rate. Elsewhere the
-    /// 250 ms hold would add a wake for nothing.
+    /// See [`requests_refresh_rate`].
     fn tracks_frame_rate_demand(&self) -> bool {
-        cfg!(any(target_os = "android", target_os = "ios"))
+        requests_refresh_rate(std::env::consts::OS)
     }
 
     fn frame_rate_demand_changed(
@@ -526,5 +522,34 @@ pub(super) fn finish(first: Failure) {
 impl Drop for HostState {
     fn drop(&mut self) {
         self.logical.shutdown(self);
+    }
+}
+
+/// Whether a host on `os` (a [`std::env::consts::OS`] value) has a
+/// refresh-rate request to make: Android (`ANativeWindow_setFrameRate`) and
+/// iOS (the display link's frame-rate range). iOS holds a ProMotion panel at
+/// its maximum only while the presentation is active, and leaves a still
+/// screen to the system's adaptive rate. Elsewhere the 250 ms hold would add a
+/// wake for nothing.
+fn requests_refresh_rate(os: &str) -> bool {
+    matches!(os, "android" | "ios")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requests_refresh_rate;
+
+    #[test]
+    fn only_android_and_ios_follow_the_frame_rate_demand() {
+        for (os, follows) in [
+            ("android", true),
+            ("ios", true),
+            ("macos", false),
+            ("windows", false),
+            ("linux", false),
+            ("unknown", false),
+        ] {
+            assert_eq!(requests_refresh_rate(os), follows, "{os}");
+        }
     }
 }
