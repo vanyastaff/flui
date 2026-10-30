@@ -34,8 +34,8 @@ mod cases;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+pub use flui_interaction::testing::InMemoryTextStore;
 use flui_platform::TextStore;
-use flui_platform::text_store::InMemoryTextStore;
 
 /// The newest kit version.
 ///

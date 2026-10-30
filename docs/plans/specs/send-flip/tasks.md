@@ -164,7 +164,7 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   `owner_local_values_fit_hit_metadata_and_semantics_actions` и закрепления `!Send` в
   `flui-widgets`, `flui-interaction`, `flui-animation`; trybuild
   `owner_values_stay_on_their_thread`.
-- [ ] T11 — отказ мутации контроллеров во время `build`
+- [x] T11 — отказ мутации контроллеров во время `build` (#1986, #1988).
   T11a (PR T11a): `Navigator` и `ScaffoldMessenger` больше не трогают контроллеры из `build`.
   Навигатор разбирает очередь команд маршрутов из завершения анимации push, в том же кадре, что
   раньше (`a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`); мессенджер сверяется
@@ -178,6 +178,12 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   `controller_mutation_during_build_is_refused` (четыре строки), строка диагностики
   `mutated_during_build`; R7 `tab_controller_listener_writes_from_an_event_callback` — в
   `flui-material/tests/tabs.rs` (`TabController` живёт выше `flui-testing`).
-- [ ] T9 — `TextEditingController`
+- [ ] T9 — `TextEditingController` owner-local.
+  Состояние в `Rc<RefCell>`; запись сессии — `TextEditingController::write_session` со значением
+  `SessionWrite`, собранным до borrow (замыкания под borrow нет), `with_inner` читает чистым кодом
+  крейта. `RetainOnFailure` по-прежнему забывает контроллер целиком: последний владелец списка
+  слушателей не виден из клона. Тест: `the_owner_reads_the_controller_from_its_callbacks`
+  (откат — уведомление под borrow, `on_changed` и слушатель ловят `BorrowError`);
+  `text_store_kit` и модуль `text_store` без изменений. Закрепление `!Send` — в T2.
 - [ ] T2 — gate
 - [ ] T7 — закрытие
