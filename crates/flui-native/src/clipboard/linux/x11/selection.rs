@@ -350,7 +350,7 @@ impl Selections {
                 .reply()?
                 .owner;
             if owner != self.window {
-                self.owned = None;
+                self.replace_owned(None)?;
             }
         }
         if let Some(owned) = &self.owned {
@@ -499,10 +499,10 @@ impl Selections {
             .reply()?
             .owner;
         if owner == self.window {
-            self.owned = Some(Owned::new(text, time));
+            self.replace_owned(Some(Owned::new(text, time)))?;
         } else {
             // A client took it at a later time than ours.
-            self.owned = None;
+            self.replace_owned(None)?;
             tracing::debug!("the X11 clipboard was taken before the write could own it");
         }
         // The reads that waited for the write.
@@ -525,7 +525,7 @@ impl Selections {
             .reply()?
             .owner;
         if owner != self.window {
-            self.owned = None;
+            self.replace_owned(None)?;
         }
         Ok(())
     }
@@ -781,6 +781,21 @@ impl Selections {
             transfer.kind,
             chunk,
         )?;
+        Ok(())
+    }
+
+    /// End the ownership the window had, if any, with `owned` in its place.
+    /// The transfers still writing the old text end with it, so what they
+    /// hold is freed rather than kept for every ownership a requestor holds
+    /// a transfer of.
+    fn replace_owned(&mut self, owned: Option<Owned>) -> Result<(), ReplyOrIdError> {
+        if self.owned.is_some() {
+            for transfer in std::mem::take(&mut self.transfers) {
+                tracing::debug!("an X11 clipboard transfer ended with its ownership");
+                self.forget(transfer.requestor)?;
+            }
+        }
+        self.owned = owned;
         Ok(())
     }
 
