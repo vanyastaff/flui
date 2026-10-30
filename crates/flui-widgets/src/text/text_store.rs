@@ -68,7 +68,7 @@ use flui_platform::text_store::{
 };
 use flui_rendering::pipeline::PipelineCell;
 
-use super::controller::{self, ComposingState, TextEditingController};
+use super::controller::{self, ComposingState, SessionWrite, TextEditingController};
 use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
@@ -516,24 +516,20 @@ impl EditableTextStore {
             || doc.composing != original.composing
             || doc.origin != original.origin)
             .then(|| doc.committed());
-        let applied = controller.with_inner_silent(|inner| {
-            if !inner.generation.admits(generation) {
-                return false;
-            }
-            inner.selection = controller::Selection {
+        let origin = doc.origin;
+        let write = SessionWrite {
+            text: doc.text,
+            selection: controller::Selection {
                 anchor: doc.anchor,
                 caret: doc.caret,
-            };
-            let origin = doc.origin;
-            inner.composing = doc.composing.map(|(range, caret_hidden)| ComposingState {
+            },
+            composing: doc.composing.map(|(range, caret_hidden)| ComposingState {
                 range,
                 caret_hidden,
                 origin,
-            });
-            inner.text = doc.text;
-            true
-        });
-        if !applied {
+            }),
+        };
+        if !controller.write_session(generation, write) {
             return;
         }
         *self.reported.borrow_mut() = reported;
