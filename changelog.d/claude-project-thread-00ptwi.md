@@ -4,6 +4,14 @@
   `CommitGate::holds_failure` is public: whether a failure owner code raised after a grant waits
   for its owner's next turn.
 
+### Changed
+
+- **`flui-platform`**: `FakeHaptics`, `HapticCall` and `HapticPlay` moved from
+  `flui_platform::haptics` to `flui_platform::testing`, behind the new `testing` feature
+  ([ADR-0264](/docs/adr/ADR-0264-platform-test-doubles-live-with-their-contract.md)): enable
+  `flui-platform/testing` in the dev-dependencies of a test that records haptics. A headless
+  window's actuator is no longer a `FakeHaptics`: it plays every request and keeps nothing.
+
 ### Fixed
 
 - **`flui-runtime`**: a press anywhere in a presentation commits the focused field's composition

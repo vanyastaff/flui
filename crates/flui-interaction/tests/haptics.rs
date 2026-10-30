@@ -18,8 +18,9 @@ use flui_interaction::{GestureBinding, HapticObserver, HapticsHandle, ManualCloc
 /// A registration an observer can reach from its own call.
 type Registration = Rc<std::cell::OnceCell<HapticObserver>>;
 use flui_platform::haptics::{
-    FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
+    HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
+use flui_platform::testing::FakeHaptics;
 use flui_platform::{HapticFeedback, PlatformHaptics};
 
 /// The refresh period every fixture's window reports: the deadline is two of

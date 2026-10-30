@@ -1312,8 +1312,9 @@ impl LaidOut {
     ///
     /// The harness root rebuilds with `new_root` under the same constraint
     /// wrappers, so a root of the same type updates in place (its state
-    /// kept) and one of another type replaces the old; one frame at the same
-    /// instant settles the tree.
+    /// kept) and one of another type replaces the old; the next frame settles
+    /// the tree, at the same instant unless a dropped frame waits for its
+    /// retry.
     pub fn pump_widget(&mut self, new_root: impl View) {
         self.logical_root_type = new_root.view_type_id();
         let wrapped = wrap_presentation(

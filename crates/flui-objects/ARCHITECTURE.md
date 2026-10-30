@@ -569,8 +569,23 @@ and that same stamp is why paint and hit testing skip it by slot explicitly: a
 viewport clip would hide it only under a clipping viewport, and `Clip::None`
 has none. Its extent feeds none of the geometry, the anchor correction or the
 measured extents, so the sliver reports the same result pinned or not
-(ADR-0264). `harness_lazy_slivers_keep_a_pinned_child_out_of_band` pins all
+(ADR-0265). `harness_lazy_slivers_keep_a_pinned_child_out_of_band` pins all
 three slivers under both clips.
+
+### A carousel sliver lays items out at the large extent and masks them
+
+`RenderSliverCarousel` lays every shown item out tight at the item extent (the layout's large
+keyline) and draws it at the centre the keylines give it, clipped to a mask of the extent its
+keyline has at that offset, so an item shrinks without its content reflowing. Paint clips each
+item to its mask, the largest in front; hit testing and the semantics clip use the same mask, so
+a tap or a touch exploration reaches only the item that shows there, though a neighbour's box
+reaches over it. The masks and parallax progress of the last layout go to `CarouselItemFrames`,
+which the widget reads in paint. The scroll extent is the strip's range plus the viewport, and a
+controller asking for an item before the first layout opens there through a scroll-offset
+correction. Under an unbounded viewport (a shrink-wrapping one) there is no keyline to measure
+against: the sliver publishes zero geometry and warns once.
+`harness_sliver_carousel_geometry_and_frames` and the widgets row
+`carousel::a_tap_lands_only_where_an_item_shows` pin it.
 
 ### Editable text scrolls its content within the allocated viewport
 

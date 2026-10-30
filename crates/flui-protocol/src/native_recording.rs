@@ -1,12 +1,13 @@
 //! The native recording schema (ADR-0215 §4): the journal of one backend's pointer registry,
-//! before FLUI translated it.
+//! loop delivery or window delivery, before the application heard it.
 //!
-//! A recording is JSON Lines: one [`Header`] object, then one [`Row`] object per registry
-//! call — a reading, a coalesced batch, a device hot-plug, a capture loss. Rows hold the plain
-//! fields a backend copies out of its native event, so a Win32 or Apple recording replays
-//! through the shared decoder on any host. The header names the format's major version under
-//! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
-//! skipped row.
+//! A recording is JSON Lines: one [`Header`] object, which names the [`Stream`] it journals,
+//! then one [`Row`] object per call — a reading, a coalesced batch, a device hot-plug, a
+//! capture loss; a system notice, a session end, a reopen; an input method's event. Rows hold
+//! the plain fields a backend copies out of its native event, so a Win32 or Apple recording
+//! replays through the shared decoder on any host. The header names the format's major version
+//! under [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal,
+//! never a skipped row.
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -273,7 +274,25 @@ pub struct Device {
     pub kinds: Vec<PointerKind>,
 }
 
-/// The first line: the backend, its clock anchors and the registry's setup.
+vocabulary! {
+    /// What a recording journals: one pointer registry, one loop's application delivery, or one
+    /// window's delivery.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Stream {
+        /// A pointer registry: readings, batches, devices, cancels, wheels and scrolls.
+        #[default]
+        Registry => "registry",
+        /// A loop's application delivery: system notices, session ends and reopens.
+        App => "app",
+        /// A window's delivery: its input method's events.
+        Window => "window",
+    }
+}
+
+/// The first line: the backend, what the recording journals, its clock anchors and the
+/// registry's setup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Header {
@@ -281,10 +300,16 @@ pub struct Header {
     pub flui_native_recording: u32,
     /// The backend.
     pub backend: Backend,
-    /// The epoch instant on the event timeline, in nanoseconds.
-    pub epoch_ns: u64,
-    /// System uptime at the epoch, in nanoseconds.
-    pub uptime_ns: u64,
+    /// What the recording journals.
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub stream: Stream,
+    /// The epoch instant on the event timeline, in nanoseconds; a registry's clock, so only a
+    /// registry's recording has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch_ns: Option<u64>,
+    /// System uptime at the epoch, in nanoseconds; with `epoch_ns`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_ns: Option<u64>,
     /// The performance counter at the epoch, when the host has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counter: Option<Counter>,
@@ -542,6 +567,85 @@ pub struct Scroll {
     pub modifiers: Vec<Modifier>,
 }
 
+vocabulary! {
+    /// How much memory the system wants back.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum MemoryPressureLevel {
+        /// Free what is easy to restore.
+        Moderate => "moderate",
+        /// Free everything the current frame does not need.
+        Critical => "critical",
+    }
+}
+
+vocabulary! {
+    /// A phase of the user's session ending.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum SessionEndPhase {
+        /// The session is about to end; the application is asked whether to wait.
+        Query => "query",
+        /// The session end was cancelled.
+        Cancelled => "cancelled",
+        /// The session is ending now.
+        Ending => "ending",
+    }
+}
+
+/// A one-off system event the host reported to the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Notice {
+    /// The machine is about to sleep.
+    Sleep,
+    /// The machine woke from sleep.
+    Wake,
+    /// The user's session was locked.
+    SessionLocked,
+    /// The user's session was unlocked.
+    SessionUnlocked,
+    /// The system wants memory back.
+    MemoryPressure(MemoryPressureLevel),
+}
+
+/// An input method's event, as the window delivered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ImeEvent {
+    /// Composition became available for the focused input.
+    Enabled,
+    /// The composition text changed.
+    Preedit {
+        /// The composition text.
+        text: String,
+        /// The cursor or selection, as byte offsets into `text`; none hides the caret.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<[usize; 2]>,
+    },
+    /// Composition finished with this text.
+    Commit(String),
+    /// Composition ended.
+    Disabled,
+}
+
+/// What a window's input method did. Input methods that edit the focused text store
+/// directly, with no event, will be recorded as a store edit beside `Event`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Ime {
+    /// An event the window delivered.
+    Event(ImeEvent),
+}
+
 /// One registry call, after the header.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "row", rename_all = "snake_case")]
@@ -632,6 +736,26 @@ pub enum Row {
         time_ns: u64,
         /// Why.
         reason: CancelReason,
+    },
+    /// The host reported a system notice (an `app` recording).
+    Notice {
+        /// The notice.
+        notice: Notice,
+    },
+    /// The host asked about a phase of the session ending (an `app` recording).
+    SessionEnd {
+        /// The phase.
+        phase: SessionEndPhase,
+    },
+    /// The user reopened the application (an `app` recording).
+    Reopen,
+    /// The window's input method acted (a `window` recording).
+    Ime {
+        /// What it did.
+        ime: Ime,
+        /// Its text was replaced before writing (ADR-0215 §5): replay refuses the row.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redacted: bool,
     },
 }
 

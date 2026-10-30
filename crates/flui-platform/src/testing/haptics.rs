@@ -1,11 +1,12 @@
-//! A recording [`PlatformHaptics`] for tests and headless hosts.
+//! A recording [`PlatformHaptics`] for scenarios: the double of the haptics
+//! contract (ADR-0210, ADR-0243 D4).
 
 use parking_lot::Mutex;
 
-use super::{HapticOutcome, HapticPattern, HapticRequest, PatternPlayback};
+use crate::haptics::{
+    HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
+};
 use crate::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
-
-use super::HapticCapabilities;
 
 /// What a request asked a [`FakeHaptics`] to play.
 #[derive(Debug, Clone, PartialEq)]
