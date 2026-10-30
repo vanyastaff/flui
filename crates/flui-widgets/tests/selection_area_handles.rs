@@ -503,3 +503,23 @@ pub(crate) fn a_failing_wake_while_the_handles_follow_still_commits() {
     scene.settle();
     assert_eq!((scene.selected(), scene.handles()), (None, 0), "the tap");
 }
+
+/// An area unmounted while it shows its handles takes them out of the
+/// overlay even when releasing its primary selection fails.
+///
+/// Red-check: release the primary selection outside the containment (the
+/// handles stay in the overlay).
+pub(crate) fn a_failing_primary_release_still_takes_the_handles_away() {
+    let mut scene = Scene::over(Some(Marked::default()));
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    let primary = scene.laid.primary_selection();
+    assert!(primary.is_claimed());
+
+    primary.fail_releases();
+    let _failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene.laid.pump_widget(WidgetsApp::new(Text::new(WORDS)));
+    }));
+    scene.settle();
+    assert_eq!(scene.handles(), 0);
+}

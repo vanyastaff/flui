@@ -367,10 +367,11 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // A handler a frame already captured finds no area to rebuild.
         self.model.rebuild.borrow_mut().take();
         self.model.mounted.set(false);
-        // A selection that is gone is no longer offered to other clients.
-        let primary = self.model.primary.borrow().clone();
-        primary.release();
+        // A selection that is gone is no longer offered to other clients,
+        // and its handles leave the overlay even when the backend fails.
         let mut failure = FirstPanic::new();
+        let primary = self.model.primary.borrow().clone();
+        failure.contain(|| primary.release());
         self.model.handles.hide(&mut failure);
         failure.resume();
     }
