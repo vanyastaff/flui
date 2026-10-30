@@ -2,7 +2,7 @@
 //! `EditableText` and `SelectionArea` share for when a selection is claimed
 //! and let go.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use flui_interaction::{
     PrimaryClaim, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
@@ -25,6 +25,10 @@ use flui_view::prelude::*;
 pub(crate) struct PrimarySelectionOwner {
     handle: Option<PrimarySelectionHandle>,
     claim: RefCell<Option<PrimaryClaim>>,
+    /// Counts the reconciliations, so a claim that finds a newer one made
+    /// while it ran yields to it; only compared for equality, so it may
+    /// wrap.
+    reconciled: Cell<u64>,
 }
 
 impl PrimarySelectionOwner {
@@ -33,6 +37,7 @@ impl PrimarySelectionOwner {
         Self {
             handle: ctx.capability::<PrimarySelectionCapability>().ok(),
             claim: RefCell::default(),
+            reconciled: Cell::default(),
         }
     }
 
@@ -66,17 +71,36 @@ impl PrimarySelectionOwner {
             drop(emptied);
             return;
         }
+        // A claim retires what it replaces, whose `Drop` may change the
+        // selection and so reconcile again inside `claim`: that newer
+        // reconciliation stands, and this claim yields to it.
+        let reconciled = self.reconcile();
         // Claimed before the stale claim drops, so its drop finds another
         // current claim and releases nothing.
         let claim = handle.claim(text());
+        if self.reconciled.get() != reconciled {
+            // Stale beside a newer claim, so its drop releases nothing; still
+            // current if the newer reconciliation let go, so it lets go too.
+            drop((claim, held));
+            return;
+        }
         let replaced = self.claim.replace(Some(claim));
         drop((replaced, held));
     }
 
     /// Let go of the selection, if this text still holds it.
     pub(crate) fn release(&self) {
+        self.reconcile();
         let released = self.claim.take();
         drop(released);
+    }
+
+    /// Count one more reconciliation of the claim with the selection, and
+    /// return its number.
+    fn reconcile(&self) -> u64 {
+        let reconciled = self.reconciled.get().wrapping_add(1);
+        self.reconciled.set(reconciled);
+        reconciled
     }
 
     /// Read the primary selection's text; `None` where the platform has

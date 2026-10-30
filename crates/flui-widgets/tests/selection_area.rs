@@ -1081,8 +1081,8 @@ pub(crate) fn selection_area_offers_its_selection_as_the_primary_selection() {
 /// which may now split a character: the primary selection answers with the
 /// ends snapped against the text as it is, as the highlight paints it.
 pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
-    let mut laid = mounted(SelectionArea::new(Column::new((Text::new("Alpha"),))));
-    let first = runs_of(&paragraph(consumer(&laid).state(), "Alpha"));
+    let mut laid = mounted(SelectionArea::new(Column::new((Text::new("Hello"),))));
+    let first = runs_of(&paragraph(consumer(&laid).state(), "Hello"));
     let primary = laid.primary_selection();
     laid.invoke_semantics_action(selection_request(
         first[0],
@@ -1091,7 +1091,7 @@ pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
     ))
     .expect("the selection is accepted");
     laid.tick();
-    assert_eq!(primary.text().as_deref(), Some("Alph"));
+    assert_eq!(primary.text().as_deref(), Some("Hell"));
 
     laid.pump_widget(SelectionArea::new(Column::new((Text::new("東京"),))));
     laid.tick();

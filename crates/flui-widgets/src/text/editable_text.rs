@@ -11,6 +11,7 @@ use std::{
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::{PointerButton, PointerId};
@@ -1315,8 +1316,12 @@ impl EditableTextState {
         let controller = Rc::downgrade(&self.controller);
         let obscure = Rc::clone(&self.obscure);
         Rc::new(move || {
-            rebuild_notifier.notify_listeners();
-            claim_primary(&primary, &controller, &obscure);
+            // Each runs though the other's owner code fails; the first
+            // failure is resumed after both.
+            let mut failure = FirstPanic::new();
+            failure.contain(|| rebuild_notifier.notify_listeners());
+            failure.contain(|| claim_primary(&primary, &controller, &obscure));
+            failure.resume();
         })
     }
 

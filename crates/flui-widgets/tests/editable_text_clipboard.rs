@@ -381,3 +381,98 @@ pub(crate) fn a_panicking_listener_keeps_the_middle_press_paste() {
     assert!(!armed.get(), "the paste notified the listener");
     assert_eq!(controller.text(), "XYabc", "the paste landed whole");
 }
+
+/// Acquires the primary selection in `init_state` and hands the handle out.
+#[derive(Clone)]
+struct PrimaryAcquirer {
+    handle: Rc<std::cell::RefCell<Option<flui_interaction::PrimarySelectionHandle>>>,
+}
+
+struct PrimaryAcquirerState {
+    handle: Rc<std::cell::RefCell<Option<flui_interaction::PrimarySelectionHandle>>>,
+}
+
+impl flui_view::StatefulView for PrimaryAcquirer {
+    type State = PrimaryAcquirerState;
+
+    fn create_state(&self) -> Self::State {
+        PrimaryAcquirerState {
+            handle: Rc::clone(&self.handle),
+        }
+    }
+}
+
+impl flui_view::View for PrimaryAcquirer {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl flui_view::ViewState<PrimaryAcquirer> for PrimaryAcquirerState {
+    fn init_state(&mut self, cx: &dyn flui_view::LifecycleContext) {
+        use flui_view::LifecycleContextExt as _;
+        self.handle.replace(
+            cx.capability::<flui_interaction::PrimarySelectionCapability>()
+                .ok(),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &PrimaryAcquirer,
+        _cx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// Collapses a field's selection as it drops: another selection's capture
+/// that changes the field while the field's own claim replaces it.
+struct CollapsesOnDrop(TextEditingController);
+
+impl Drop for CollapsesOnDrop {
+    fn drop(&mut self) {
+        self.0.set_caret_byte_offset(0);
+    }
+}
+
+/// The field's claim replaces a selection whose capture empties the field's
+/// selection as it drops, inside the claim: that newer change stands, and
+/// the field holds no claim for a selection it no longer has.
+pub(crate) fn a_selection_changed_while_the_field_claims_stands() {
+    let controller = TextEditingController::with_text("hello world");
+    let handle = Rc::new(std::cell::RefCell::new(None));
+    let harness = crate::common::harness::mount(flui_widgets::Column::new((
+        PrimaryAcquirer {
+            handle: Rc::clone(&handle),
+        },
+        EditableText::new(
+            controller.clone(),
+            FocusNode::with_debug_label("re-entered field"),
+        ),
+    )));
+    let primary = harness.primary_selection();
+    let other = handle
+        .borrow()
+        .clone()
+        .expect("the headless host provides a primary selection")
+        .claim({
+            let capture = CollapsesOnDrop(controller.clone());
+            move || {
+                let _ = &capture;
+                Some("elsewhere".to_owned())
+            }
+        });
+    assert!(other.is_current());
+
+    controller.set_selection(0, 5);
+    assert!(
+        !controller.has_selection(),
+        "the replaced capture collapsed it"
+    );
+    assert!(
+        !primary.is_claimed(),
+        "the field let go with the newer, empty selection"
+    );
+    drop(other);
+}
