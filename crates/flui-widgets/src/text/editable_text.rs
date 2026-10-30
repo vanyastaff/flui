@@ -1902,7 +1902,7 @@ impl ViewState<EditableText> for EditableTextState {
             // will say so: the old controller's notifications are gone and the
             // new one has not changed since it was handed over. Its selection
             // is the one the primary selection holds now.
-            self.rebuild_notifier.notify_listeners();
+            calls.run(|| self.rebuild_notifier.notify_listeners());
             reclaim = true;
             // The input method's document is the replacement's too.
             if let Some(store) = &self.text_store {
@@ -2003,7 +2003,7 @@ impl ViewState<EditableText> for EditableTextState {
                 }
 
                 if self.focus_node.has_primary_focus() {
-                    self.rebuild_notifier.notify_listeners();
+                    calls.run(|| self.rebuild_notifier.notify_listeners());
                     if let Some(transition) = &self.ime_focus_transition {
                         calls.run(|| transition(true));
                     }
