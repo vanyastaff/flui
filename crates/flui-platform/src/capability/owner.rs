@@ -1,7 +1,7 @@
 //! The way back to the owner thread.
 
 use std::any::Any;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 /// The owner has retired: it runs nothing more, and what was posted to it is
@@ -17,17 +17,33 @@ pub struct OwnerRetired;
 /// One piece of work posted to the owner thread.
 ///
 /// The owner [runs](Self::run) it at its next turn with its [`OwnerScope`].
-pub struct OwnerJob(Box<dyn FnOnce(&OwnerScope<'_>) + Send>);
+/// It is an `FnMut` called at most once, so a job that panics keeps its
+/// captures instead of dropping them during the unwind, where a capture whose
+/// `Drop` panics too would abort the process.
+pub struct OwnerJob(Box<dyn FnMut(&OwnerScope<'_>) + Send>);
 
 impl OwnerJob {
-    /// Work that needs the owner's scope.
+    /// Work that needs the owner's scope. The seam's own jobs capture only
+    /// its own values, whose drops run no user code, so they may be `FnOnce`.
     pub(crate) fn scoped(job: impl FnOnce(&OwnerScope<'_>) + Send + 'static) -> Self {
-        Self(Box::new(job))
+        let mut job = Some(job);
+        Self(Box::new(move |scope| {
+            if let Some(job) = job.take() {
+                job(scope);
+            }
+        }))
     }
 
     /// Run the job on the owner thread.
+    ///
+    /// A panic in the job resumes here with its captures kept, not dropped.
     pub fn run(self, scope: &OwnerScope<'_>) {
-        (self.0)(scope);
+        let mut job = self.0;
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job(scope))) {
+            std::mem::forget(job);
+            resume_unwind(payload);
+        }
+        drop(job);
     }
 }
 
@@ -61,14 +77,17 @@ impl OwnerPoster {
         }
     }
 
-    /// Runs `f` at the owner's next turn.
+    /// Runs `f` once, at the owner's next turn.
+    ///
+    /// `f` is an `FnMut` called at most once: if it panics, its captures are
+    /// kept rather than dropped during the unwind (see [`OwnerJob`]).
     ///
     /// # Errors
     ///
     /// [`OwnerRetired`] once the owner has retired; `f` is dropped unrun, so
     /// an operating-system subscription that posts here learns to end itself.
-    pub fn post(&self, f: impl FnOnce() + Send + 'static) -> Result<(), OwnerRetired> {
-        self.post_job(OwnerJob::scoped(move |_| f()))
+    pub fn post(&self, mut f: impl FnMut() + Send + 'static) -> Result<(), OwnerRetired> {
+        self.post_job(OwnerJob(Box::new(move |_| f())))
     }
 
     pub(crate) fn post_job(&self, job: OwnerJob) -> Result<(), OwnerRetired> {

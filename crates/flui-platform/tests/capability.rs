@@ -439,3 +439,21 @@ fn a_panicking_callback_keeps_a_panicking_capture_and_the_owner_goes_on() {
     owner.turn();
     assert_eq!(seen.get(), Some(Ok(2)), "the owner keeps settling");
 }
+
+#[test]
+fn a_panicking_posted_callback_keeps_a_panicking_capture() {
+    let owner = Owner::new();
+    let capture = PanicOnDrop("capture dropped during the posted callback's unwind");
+    owner
+        .source
+        .poster()
+        .post(move || {
+            let _ = &capture;
+            panic!("posted callback");
+        })
+        .expect("owner live");
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.turn()))
+        .expect_err("the callback's panic reaches the owner");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"posted callback"));
+}
