@@ -22,8 +22,8 @@ mod wheel_preferences;
 
 pub use crate::containment::RoutePanic;
 pub use hit_test::{
-    CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
-    TransformGuard,
+    CursorRequest, EventPropagation, HitMetadata, HitTestBehavior, HitTestEntry, HitTestResult,
+    RenderId, TransformGuard,
 };
 pub(crate) use hit_test::{PanZoomRoute, ScrollRoute, localize_point};
 pub(crate) use interaction_lane::OwnerLatch;

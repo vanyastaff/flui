@@ -263,8 +263,8 @@ pub use gesture::{
     RemainderHandoff,
 };
 pub use pointer::{
-    EventPropagation, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
-    HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
+    EventPropagation, GlobalPointerHandler, HitMetadata, HitTestBehavior, HitTestEntry,
+    HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, PathClipTarget, PointerCapture,
     PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
     RenderId, ResolvedRouteToken, RouteResolution, RouteResolutionMiss, ScrollTarget,
@@ -345,8 +345,5 @@ mod static_assertions {
     impl AssertSendSync for ShaderMaskTarget {}
     impl AssertSendSync for LocalPayloadTarget {}
 
-    // Data-path types should be Send + Sync
-    impl AssertSendSync for HitTestResult {}
-    impl AssertSendSync for HitTestEntry {}
     impl AssertSendSync for PointerEventResampler {}
 }

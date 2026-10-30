@@ -12,7 +12,8 @@ pub use flui_rendering::context::{
     PaintCx, SliverHitTestContext, SliverLayoutContext,
 };
 pub use flui_rendering::hit_testing::{
-    CursorIcon, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget, ScrollTarget,
+    CursorIcon, HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
+    ScrollTarget,
 };
 pub use flui_rendering::parent_data::{
     BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData,

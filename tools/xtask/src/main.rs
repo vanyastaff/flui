@@ -25,6 +25,7 @@ mod doctor;
 mod file_length;
 mod fonts;
 mod globals;
+mod icon_import;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
@@ -133,6 +134,8 @@ enum Command {
     Markers(markers::MarkersArgs),
     /// Check that test helpers live in a kit and test support is named `testing` (ADR-0243).
     Testing(testing::TestingArgs),
+    /// Import vector animations as `AnimatedIconData` constants, or check the bundled Material ones.
+    IconImport(icon_import::IconImportArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
     /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
@@ -202,6 +205,7 @@ fn main() -> ExitCode {
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
         Command::Testing(args) => testing::testing(&args),
+        Command::IconImport(args) => icon_import::icon_import(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
         Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
         Command::AndroidDex(args) => android_dex::android_dex(&args),

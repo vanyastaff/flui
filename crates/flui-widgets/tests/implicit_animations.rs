@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
-use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
+use flui_animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
@@ -32,13 +32,13 @@ const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
 
 fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N: usize>(
-    tree: impl Fn(Vsync, f64, ArcCurve) -> V,
+    tree: impl Fn(Vsync, f64, SharedCurve) -> V,
     sample: impl Fn(&mut LaidOut) -> [f64; N],
     [initial, target, replacement]: [f64; 3],
 ) {
     let registry = Vsync::new();
     let mut laid = lay_out_animated(
-        tree(registry.clone(), initial, ArcCurve::new(curves::LINEAR)),
+        tree(registry.clone(), initial, SharedCurve::new(curves::LINEAR)),
         loose(200.0),
         registry.clone(),
     );
@@ -46,7 +46,7 @@ fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N
     laid.pump_widget(tree(
         registry.clone(),
         target,
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     ));
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
@@ -59,7 +59,11 @@ fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N
         "the mounted property actually moved: {initial_sample:?} to {displayed:?}",
     );
 
-    laid.pump_widget(tree(registry, replacement, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(
+        registry,
+        replacement,
+        SharedCurve::new(curves::EASE_IN),
+    ));
     let retargeted = sample(&mut laid);
     for (before, after) in displayed.into_iter().zip(retargeted) {
         assert!(
@@ -86,7 +90,7 @@ pub(crate) fn opacity_retarget_with_a_new_curve_keeps_the_displayed_sample() {
 
 pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
     let registry = Vsync::new();
-    let tree = |target, curve: ArcCurve| {
+    let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
@@ -95,11 +99,11 @@ pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(0.0, ArcCurve::new(curves::LINEAR)),
+        tree(0.0, SharedCurve::new(curves::LINEAR)),
         tight(100.0, 50.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(1.0, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(1.0, SharedCurve::new(curves::LINEAR)));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
     let h = Duration::from_micros(100);
@@ -111,7 +115,7 @@ pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
         arriving > 0.1,
         "the rendered opacity was moving before retarget"
     );
-    laid.pump_widget(tree(0.0, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(0.0, SharedCurve::new(curves::EASE_IN)));
     assert!((laid.opacity(laid.current_root()) - seam).abs() < 1e-12);
     laid.pump_for(h);
     let departing = (laid.opacity(laid.current_root()) - seam) / h.as_secs_f64();
@@ -123,7 +127,7 @@ pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
 
 pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
     let registry = Vsync::new();
-    let tree = |padding, curve: ArcCurve| {
+    let tree = |padding, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedPadding::new(padding, SizedBox::new(20.0, 10.0))
@@ -132,14 +136,14 @@ pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(EdgeInsets::ZERO, ArcCurve::new(curves::LINEAR)),
+        tree(EdgeInsets::ZERO, SharedCurve::new(curves::LINEAR)),
         tight(100.0, 80.0),
         registry.clone(),
     );
     let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
     laid.pump_widget(tree(
         EdgeInsets::new(10.0, 0.0, 0.0, 20.0),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     ));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
@@ -157,7 +161,7 @@ pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
     );
     laid.pump_widget(tree(
         EdgeInsets::new(30.0, 0.0, 0.0, 5.0),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_IN),
     ));
     assert_eq!(position(&mut laid), seam);
     laid.pump_for(h);
@@ -214,7 +218,7 @@ pub(crate) fn container_retarget_with_a_new_curve_keeps_the_displayed_sample() {
 
 pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
     let registry = Vsync::new();
-    let tree = |width, height, curve: ArcCurve| {
+    let tree = |width, height, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedContainer::new(SizedBox::shrink())
@@ -225,11 +229,11 @@ pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(20.0, 30.0, ArcCurve::new(curves::LINEAR)),
+        tree(20.0, 30.0, SharedCurve::new(curves::LINEAR)),
         loose(200.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(100.0, 90.0, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(100.0, 90.0, SharedCurve::new(curves::LINEAR)));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
     // Layout rounds sizes to hundredths of a logical pixel. A 5 ms interval
@@ -246,7 +250,7 @@ pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
         arriving.iter().all(|v| *v > 1.0),
         "size must be moving: previous {previous:?}, seam {seam:?}, velocities {arriving:?}"
     );
-    laid.pump_widget(tree(40.0, 10.0, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(40.0, 10.0, SharedCurve::new(curves::EASE_IN)));
     assert_eq!(laid.size(laid.current_root()), seam);
     laid.pump_for(h);
     let after = laid.size(laid.current_root());
@@ -277,7 +281,7 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
             .unwrap_or(0.0)
     };
     let registry = Vsync::new();
-    let tree = |color, curve: ArcCurve| {
+    let tree = |color, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedContainer::new(SizedBox::square(20.0))
@@ -287,11 +291,11 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(Color::TRANSPARENT, ArcCurve::new(curves::LINEAR)),
+        tree(Color::TRANSPARENT, SharedCurve::new(curves::LINEAR)),
         loose(200.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(Color::WHITE, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(Color::WHITE, SharedCurve::new(curves::LINEAR)));
     laid.pump_for(Duration::from_millis(1));
     for (delta, t) in [(30, 0.03_f64), (10, 0.04)] {
         laid.pump_for(Duration::from_millis(delta));
@@ -312,7 +316,7 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
         arriving >= 3.0 / 255.0,
         "painted alpha must be moving: {arriving}"
     );
-    laid.pump_widget(tree(Color::BLACK, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(Color::BLACK, SharedCurve::new(curves::EASE_IN)));
     assert_eq!(alpha(&laid), seam);
     laid.pump_for(h);
     let departing = alpha(&laid) - seam;
@@ -325,7 +329,7 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
 pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
     for spring in [false, true] {
         let registry = Vsync::new();
-        let curve = ArcCurve::new(curves::LINEAR);
+        let curve = SharedCurve::new(curves::LINEAR);
         let tree = |size, scale, color| {
             let mut container = AnimatedContainer::new(SizedBox::shrink())
                 .width(size)
@@ -409,7 +413,7 @@ fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: u
                 .curve(curve),
         )
     };
-    let linear = || ArcCurve::new(curves::LINEAR);
+    let linear = || SharedCurve::new(curves::LINEAR);
     let mut laid = lay_out_animated(tree(20.0, 1.0, linear()), loose(300.0), registry.clone());
     laid.pump_widget(tree(100.0, 2.0, linear()));
     laid.pump_for(Duration::from_millis(1));
@@ -423,7 +427,7 @@ fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: u
     laid.pump_widget(tree(
         200.0,
         3.0,
-        ArcCurve::new(RefusingCurve {
+        SharedCurve::new(RefusingCurve {
             calls: AtomicUsize::new(0),
             accepted: accepted_slopes,
             refused: Arc::clone(&refused),
@@ -625,7 +629,7 @@ pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
 
 pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
     let registry = Vsync::new();
-    let tree = |target, curve: ArcCurve| {
+    let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedAlign::new(target, SizedBox::new(20.0, 10.0))
@@ -634,12 +638,15 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(Alignment::TOP_LEFT, ArcCurve::new(curves::LINEAR)),
+        tree(Alignment::TOP_LEFT, SharedCurve::new(curves::LINEAR)),
         tight(100.0, 80.0),
         registry.clone(),
     );
     let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
-    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(
+        Alignment::BOTTOM_RIGHT,
+        SharedCurve::new(curves::LINEAR),
+    ));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
     let h = Duration::from_micros(100);
@@ -651,7 +658,7 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
         (seam.dy - previous.dy) / h.as_secs_f64(),
     ];
     assert!(arriving.iter().all(|velocity| *velocity > 1.0));
-    laid.pump_widget(tree(Alignment::TOP_LEFT, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(Alignment::TOP_LEFT, SharedCurve::new(curves::EASE_IN)));
     assert_eq!(
         position(&mut laid),
         seam,
@@ -673,7 +680,7 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
 
 pub(crate) fn align_changes_leave_an_unchanged_factor_on_its_original_deadline() {
     let registry = Vsync::new();
-    let curve = ArcCurve::new(curves::LINEAR);
+    let curve = SharedCurve::new(curves::LINEAR);
     let tree = |alignment, factor| {
         VsyncScope::new(
             registry.clone(),
@@ -736,7 +743,7 @@ pub(crate) fn align_spring_settles_and_optional_factors_snap_independently() {
 
 pub(crate) fn invalid_align_targets_preserve_all_running_layout_properties() {
     let registry = Vsync::new();
-    let curve = ArcCurve::new(curves::LINEAR);
+    let curve = SharedCurve::new(curves::LINEAR);
     let tree = |alignment, factor| {
         VsyncScope::new(
             registry.clone(),
@@ -770,7 +777,7 @@ pub(crate) fn invalid_align_targets_preserve_all_running_layout_properties() {
 
 pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
     let registry = Vsync::new();
-    let tree = |target, curve: ArcCurve| {
+    let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
@@ -780,11 +787,11 @@ pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(0.0, ArcCurve::new(curves::LINEAR)),
+        tree(0.0, SharedCurve::new(curves::LINEAR)),
         tight(100.0, 80.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(0.25, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(0.25, SharedCurve::new(curves::LINEAR)));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
     let h = Duration::from_micros(100);
@@ -793,7 +800,7 @@ pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
     let seam = layer_turns(&mut laid);
     let arriving = (seam - previous) / h.as_secs_f64();
     assert!(arriving > 0.1, "the painted rotation was moving");
-    laid.pump_widget(tree(0.0, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(0.0, SharedCurve::new(curves::EASE_IN)));
     assert!((layer_turns(&mut laid) - seam).abs() < 1e-12);
     laid.pump_for(h);
     let departing = (layer_turns(&mut laid) - seam) / h.as_secs_f64();
@@ -821,7 +828,7 @@ pub(crate) fn rotation_retarget_with_a_new_curve_keeps_the_displayed_sample() {
 
 pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
     let registry = Vsync::new();
-    let tree = |target, curve: ArcCurve| {
+    let tree = |target, curve: SharedCurve| {
         VsyncScope::new(
             registry.clone(),
             AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
@@ -830,16 +837,16 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(0.0, ArcCurve::new(curves::LINEAR)),
+        tree(0.0, SharedCurve::new(curves::LINEAR)),
         tight(100.0, 50.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(1.0, ArcCurve::new(curves::LINEAR)));
+    laid.pump_widget(tree(1.0, SharedCurve::new(curves::LINEAR)));
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
     let linear = laid.opacity(laid.current_root());
     assert!(linear > 0.1 && linear < 0.3);
-    laid.pump_widget(tree(1.0, ArcCurve::new(curves::EASE_IN)));
+    laid.pump_widget(tree(1.0, SharedCurve::new(curves::EASE_IN)));
     laid.pump_for(RUN.checked_sub(FRAME).expect("run exceeds one frame"));
     assert_eq!(
         laid.opacity(laid.current_root()),
@@ -1970,7 +1977,7 @@ pub(crate) fn motion_replaces_the_configured_motion() {
                 .duration(Duration::from_secs(10))
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
         )
     };
@@ -2252,11 +2259,11 @@ pub(crate) fn animated_lerp_keeps_overshoot_and_applies_motion_changes() {
 
     let slow = MotionSpec::Curve {
         duration: Duration::from_secs(10),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     let fast = MotionSpec::Curve {
         duration: RUN,
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     laid.pump_widget(tree(0.0, slow));
     laid.pump_for(Duration::ZERO);
@@ -2292,7 +2299,7 @@ pub(crate) fn cross_fade_announces_only_the_shown_child() {
                 )
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
             ),
         )
@@ -2348,7 +2355,7 @@ pub(crate) fn cross_fade_focuses_only_the_shown_child() {
                 )
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
             ),
         )
@@ -2408,11 +2415,11 @@ pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {
     };
     let linear = MotionSpec::Curve {
         duration: RUN,
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     let refused = MotionSpec::Curve {
         duration: RUN,
-        curve: ArcCurve::new(NonFiniteSlope),
+        curve: SharedCurve::new(NonFiniteSlope),
     };
     let mut laid = lay_out_animated(
         tree(CrossFadeState::ShowFirst, linear),
@@ -2470,7 +2477,7 @@ pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
     }
     let linear = || MotionSpec::Curve {
         duration: RUN,
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     half_way(
         |registry, on| {
@@ -2539,7 +2546,7 @@ pub(crate) fn positioned_edges_and_size_move_half_way() {
                     .height(20.0)
                     .motion(MotionSpec::Curve {
                         duration: RUN,
-                        curve: ArcCurve::new(curves::LINEAR),
+                        curve: SharedCurve::new(curves::LINEAR),
                     })
                     .into_view()
                     .boxed(),
@@ -2578,7 +2585,7 @@ pub(crate) fn cross_fade_fades_resizes_and_routes_pointers_to_the_shown_child() 
                 )
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
             ),
         )
@@ -2663,7 +2670,7 @@ pub(crate) fn default_text_style_grows_between_sizes_and_restarts_from_the_shown
                 )
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
             ),
         )
@@ -2979,7 +2986,7 @@ pub(crate) fn default_text_style_keeps_a_traded_line_height_shapeable() {
                 )
                 .motion(MotionSpec::Curve {
                     duration: RUN,
-                    curve: ArcCurve::new(curves::LINEAR),
+                    curve: SharedCurve::new(curves::LINEAR),
                 }),
             ),
         )

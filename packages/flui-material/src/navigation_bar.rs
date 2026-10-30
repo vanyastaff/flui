@@ -713,10 +713,10 @@ impl ViewState<SelectionIndicator> for SelectionIndicatorState {
     }
 
     fn build(&self, view: &SelectionIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
-        CustomPaint::new().painter(Rc::new(IndicatorPainter {
+        CustomPaint::new().painter(IndicatorPainter {
             fraction: self.fraction.animation(),
             color: view.color,
-        }))
+        })
     }
 
     fn dispose(&mut self) {

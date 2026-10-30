@@ -1,10 +1,11 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
-- **Status:** Accepted (2026-10-06). Items 1–3, 7 and 8 are implemented; items 4–6 land with
-  the widget's composition handling and the runtime's anchor debt. Of those, the host contract,
-  the owner's `complete_composition` with the `Abandoned` path, the removal of `active_store`
-  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), and
-  the field's commit on blur, on a pointer-down on it and on a paste are in the code.
+- **Status:** Accepted (2026-10-06). Items 1–3 and 5–8 are implemented; item 4 lands with the
+  widget's composition handling. Of it, the host contract, the owner's `complete_composition`
+  with the `Abandoned` path, the removal of `active_store`
+  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), the
+  field's commit on blur, on a pointer-down on it and on a paste, and the runtime's commit on a
+  pointer-down anywhere in the presentation are in the code.
 - **Date:** 2026-10-06
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md), for the placement
   of `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate only (they move
@@ -117,8 +118,13 @@ framework does not control is contained.
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
    does not clear it.
 6. **The commit gate is open only while the UI runtime is in its slot and not driving a frame.** A
-   platform entry while the UI runtime is checked out (a frame, the end of a session) is refused a
-   synchronous lock and queues an asynchronous one; no user code runs. A presentation's close is
+   platform entry while the UI runtime is checked out (its owner's `RuntimeLease` for an owner
+   turn: input, a frame, the end of a session) is refused a synchronous lock and queues an
+   asynchronous one; no user code runs. The owner's own calls in that turn pass: the presentation's
+   `TextInputOwner` runs each of its entry points inside `CommitGate::owner_entry`, which a text
+   service the owner called (its composition ended for a press) shares, so only a platform entry
+   from elsewhere (a message loop nested in a handler) is held. What it queued runs at the anchor
+   that ends the turn, before the runtime returns to its slot. A presentation's close is
    its last turn and opens the gate for good: no anchor follows it, so a completion queued in a
    frame the close cuts short commits (item 4) before its store is retired. An accepted
    composition commit is completed and the rest of the queued tail is cancelled: a pull host's
@@ -218,10 +224,20 @@ In place:
   its failing `on_changed` is raised after it) and its `attach: replacing a composing client …`
   rows, `a_pointer_down_and_a_paste_commit_the_composition_first` and
   `moving_focus_off_a_composing_field_commits_it_in_either_mount_order`.
+- Item 4, the runtime's pointer-down: `flui-runtime`
+  `a_press_outside_the_field_commits_the_composition_before_its_handlers`.
+- Item 5, with item 2's report when no dispatch or anchor follows: `flui-runtime`
+  `a_grant_deferred_by_a_panicking_frame_runs_without_another_frame` (an inbox drain, a
+  background pump, and a pump before its frame each pay the debt),
+  `a_failed_anchor_stays_owed_and_asks_for_a_wake` and
+  `a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn`.
+- Item 6: `flui-platform` `a_checked_out_gate_admits_only_owner_calls` (the gate itself, owner
+  calls nested and unwound) and `flui-runtime`
+  `a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code` (a text store reached
+  from a press's handler during the owner turn: the synchronous lock refused, the asynchronous one
+  run at the turn's end, the press's own commit served).
 
 Outstanding:
 
-- Items 4–6, with their tests: undo (the field has none yet) and unmount committing a
-  composition (item 4), the runtime's pointer-down and close
-  hooks, anchor debt and the gate's UI runtime rule (items 4–6), and a failure the gate holds being
-  reported through the anchor debt when no dispatch or anchor follows (items 2 and 5).
+- Item 4, with its tests: undo (the field has none yet), unmount committing a composition and
+  the accepted-close hook.

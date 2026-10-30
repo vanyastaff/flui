@@ -376,9 +376,9 @@ impl ViewState<ParticleEmitter> for ParticleEmitterState {
     }
 
     fn build(&self, view: &ParticleEmitter, _ctx: &dyn BuildContext) -> impl IntoView {
-        let painter = Rc::new(ParticlePainter {
+        let painter = ParticlePainter {
             core: Rc::clone(&self.core),
-        });
+        };
         let paint = CustomPaint::new().foreground_painter(painter);
         let paint = match &view.child {
             Some(child) => paint.child(child.clone()),

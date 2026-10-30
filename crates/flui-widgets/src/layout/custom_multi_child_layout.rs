@@ -2,7 +2,7 @@
 //! to a [`MultiChildLayoutDelegate`].
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_objects::RenderCustomMultiChildLayoutBox;
 use flui_rendering::delegates::MultiChildLayoutDelegate;
@@ -75,14 +75,17 @@ impl_parent_data_view!(LayoutId);
 /// id. Backed by `RenderCustomMultiChildLayoutBox`.
 #[derive(Clone)]
 pub struct CustomMultiChildLayout<C = Vec<BoxedView>> {
-    delegate: Arc<dyn MultiChildLayoutDelegate>,
+    delegate: Rc<dyn MultiChildLayoutDelegate>,
     children: C,
 }
 
 impl<C> CustomMultiChildLayout<C> {
     /// Creates a custom multi-child layout.
-    pub fn new(delegate: Arc<dyn MultiChildLayoutDelegate>, children: C) -> Self {
-        Self { delegate, children }
+    pub fn new(delegate: impl MultiChildLayoutDelegate + 'static, children: C) -> Self {
+        Self {
+            delegate: Rc::new(delegate),
+            children,
+        }
     }
 }
 

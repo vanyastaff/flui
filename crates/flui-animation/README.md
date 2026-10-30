@@ -394,7 +394,7 @@ assert_eq!(track.value_at(duration), 100.0);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Both types are immutable and compare by canonical value through `ArcCurve`.
+Both types are immutable and compare by canonical value through `SharedCurve`.
 They are application-authoring surfaces; a stock widget consumer can be added
 when its visual contract calls for these curves.
 

@@ -253,7 +253,7 @@ pub(crate) fn requests_made_in_one_pass_keep_the_latest() {
                     reentrant.animate_to(
                         600.0,
                         Duration::from_millis(200),
-                        flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+                        flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
                     );
                 };
                 match requests {

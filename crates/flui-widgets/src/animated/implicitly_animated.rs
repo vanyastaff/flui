@@ -45,7 +45,7 @@ pub trait MotionBuilder: Sized {
 
     /// Curve motion eased by `curve`, keeping the configured duration.
     #[must_use]
-    fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
+    fn curve(mut self, curve: impl Curve + 'static) -> Self {
         let motion = self.motion_mut();
         *motion = std::mem::take(motion).with_curve(curve);
         self

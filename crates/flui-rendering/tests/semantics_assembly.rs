@@ -166,7 +166,7 @@ impl RenderBox for SemanticsLeaf {
             config.set_role(SemanticsRole::Button);
         }
         if self.tap_action {
-            config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
         }
         if self.block_user_actions {
             config.set_blocks_user_actions(true);

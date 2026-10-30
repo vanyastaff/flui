@@ -571,8 +571,7 @@ impl StatelessView for Chip {
         }
 
         let container = CustomPaint::new()
-            .foreground_painter(std::rc::Rc::new(ChipBorderPainter { side, shape })
-                as std::rc::Rc<dyn CustomPainter>)
+            .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
         crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
@@ -804,9 +803,9 @@ impl StatelessView for FilterChip {
             FilterChipLeading::Checkmark => Some(
                 CustomPaint::new()
                     .size(Size::new(CHIP_ICON_SIZE, CHIP_ICON_SIZE))
-                    .painter(std::rc::Rc::new(ChipCheckmarkPainter {
+                    .painter(ChipCheckmarkPainter {
                         color: checkmark_color,
-                    }) as std::rc::Rc<dyn CustomPainter>)
+                    })
                     .boxed(),
             ),
             FilterChipLeading::Avatar => self.avatar.clone().map(|avatar| {
@@ -863,8 +862,7 @@ impl StatelessView for FilterChip {
         }
 
         let container = CustomPaint::new()
-            .foreground_painter(std::rc::Rc::new(ChipBorderPainter { side, shape })
-                as std::rc::Rc<dyn CustomPainter>)
+            .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
         // A filter chip is a toggle button: ARIA carries its selection as the

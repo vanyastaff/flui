@@ -55,6 +55,7 @@
 
 #![deny(missing_docs)]
 
+pub mod animated_icons;
 pub mod app;
 pub mod app_bar;
 pub mod back_button;
@@ -104,6 +105,7 @@ pub mod theme_data;
 mod theme_lerp;
 pub mod typography;
 
+pub use animated_icons::AnimatedIcons;
 pub use app::{MaterialApp, ThemeMode};
 pub use app_bar::AppBar;
 pub use back_button::BackButton;

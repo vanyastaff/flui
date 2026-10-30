@@ -278,9 +278,7 @@ impl ViewState<Slider> for SliderState {
                 enabled,
                 focused: live.focus.has_focus(),
             };
-            let paint = CustomPaint::new()
-                .size(size)
-                .painter(std::rc::Rc::new(painter));
+            let paint = CustomPaint::new().size(size).painter(painter);
             if enabled {
                 let detector = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)

@@ -24,7 +24,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::geometry::Rect;
 use flui_foundation::{ValueKey, ViewKey};
@@ -661,7 +660,7 @@ impl LinkRouting {
         match (pointer, activation) {
             (Ok(pointer), Ok(target)) => {
                 let handler: SemanticsActionHandler =
-                    Arc::new(move |call| run_link_action(target, &call));
+                    Rc::new(move |call| run_link_action(target, &call));
                 Some(TextLinkRoute::new(
                     routed.key,
                     pointer,

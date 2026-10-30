@@ -181,12 +181,8 @@ impl RouteId {
 
 /// A [`RouteSettings::arguments`] payload, type-erased.
 ///
-/// `Arc`-shared for the same reason as `flui-objects`'
-/// `MetaDataPayload` (`interaction/meta_data.rs`): cloning a route's
-/// settings must not deep-copy the payload, and that boundary is the
-/// established precedent for a type-erased user value crossing FLUI's
-/// public surface. This is exactly the shape ADR-0024 named for this
-/// field.
+/// `Arc`-shared so cloning a route's settings does not deep-copy the
+/// payload. This is exactly the shape ADR-0024 named for this field.
 pub type RouteArguments = Arc<dyn Any + Send + Sync>;
 
 /// A route's name and arguments payload.

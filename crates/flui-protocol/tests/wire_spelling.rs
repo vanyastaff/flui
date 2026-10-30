@@ -75,6 +75,22 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Tier::ALL, Tier::name);
     spelled_as_named(UnsettledReason::ALL, UnsettledReason::name);
     spelled_as_named(Verdict::ALL, Verdict::name);
+    {
+        use flui_protocol::native_recording::{
+            Backend, CancelReason, GestureComponent, GesturePhase, Modifier, PointerKind,
+            ScrollPhase, ScrollUnit, ViewportStatus, WheelAxis,
+        };
+        spelled_as_named(Backend::ALL, Backend::name);
+        spelled_as_named(CancelReason::ALL, CancelReason::name);
+        spelled_as_named(GestureComponent::ALL, GestureComponent::name);
+        spelled_as_named(GesturePhase::ALL, GesturePhase::name);
+        spelled_as_named(Modifier::ALL, Modifier::name);
+        spelled_as_named(PointerKind::ALL, PointerKind::name);
+        spelled_as_named(ScrollPhase::ALL, ScrollPhase::name);
+        spelled_as_named(ScrollUnit::ALL, ScrollUnit::name);
+        spelled_as_named(ViewportStatus::ALL, ViewportStatus::name);
+        spelled_as_named(WheelAxis::ALL, WheelAxis::name);
+    }
 }
 
 #[test]

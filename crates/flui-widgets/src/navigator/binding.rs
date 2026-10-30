@@ -273,7 +273,7 @@ pub(crate) type RouteModals = Rc<super::lifecycle::TerminalMap<RouteId, ModalHan
 /// override, so the navigator publishes the override here, keyed by the one
 /// route it applies to, and [`RouteBinding::take_pop_pacing`] consumes it
 /// exactly once, from that route's own `did_pop`.
-/// A gesture-supplied easing curve is a value-only, `Send + Sync` transform
+/// A gesture-supplied easing curve is a value-only transform
 /// (no tree/element access) carried from `back_gesture.rs`'s controller
 /// through the pop command to `AnimationController::animate_back_curved` —
 /// the same erased-`Animatable`-transform shape ADR-0021 §8 already
@@ -283,7 +283,7 @@ pub(crate) enum PopPacing {
     /// Over a fixed duration along a curve.
     Curved {
         duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>, // see the type doc — erased easing-curve transform, ADR-0021 §8 shape
+        curve: Rc<dyn Curve>, // see the type doc — erased easing-curve transform, ADR-0021 §8 shape
     },
     /// A fling settle starting at `velocity` controller units per second.
     Fling { velocity: f64 },

@@ -10,7 +10,6 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
 - **Change Notification**: `ChangeNotifier`, `ValueNotifier`, and the generic `Notifier<Arg>`
 - **Diagnostics**: `DiagnosticsNode` trees and the `Diagnosticable` trait
-- **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
 - **Geometry**: `geometry` module — `Point`, `Offset`, `Size`, `Rect`, `RRect`, `EdgeInsets`, `Matrix4`, device-grid types and snapping (ADR-0098)
 - **Clocks and epochs**: `MonotonicClock` (`SystemClock`, `ManualClock`), `FrameEpoch`, `SurfaceGeneration`, `FrameStamp`
 - **WASM Support**: `WasmNotSendSync` trait for web compatibility

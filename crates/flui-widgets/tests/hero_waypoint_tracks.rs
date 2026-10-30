@@ -265,7 +265,7 @@ fn authored_eased_hero_page(
     height: f64,
     color: Color,
     duration: Duration,
-    curve: flui_animation::ArcCurve,
+    curve: flui_animation::SharedCurve,
     samples: &Rc<Cell<usize>>,
 ) -> PageRoute<i32> {
     let samples = Rc::clone(samples);
@@ -307,7 +307,7 @@ fn independent_eased_rect(begin: Rect, end: Rect, progress: f64) -> Rect {
 
 fn authored_easing_flight(spring: bool) {
     use flui_animation::{
-        ArcCurve, LinearStop, PiecewiseLinear, SpringCurve, SpringDescription, Tolerance,
+        LinearStop, PiecewiseLinear, SharedCurve, SpringCurve, SpringDescription, Tolerance,
     };
     let source = Rect::from_ltwh(385.0, 290.0, 30.0, 20.0);
     let destination = Rect::from_ltwh(370.0, 277.5, 60.0, 45.0);
@@ -318,7 +318,7 @@ fn authored_easing_flight(spring: bool) {
         )
         .unwrap();
         let duration = curve.duration();
-        (ArcCurve::new(curve), duration, [50, 100, 330])
+        (SharedCurve::new(curve), duration, [50, 100, 330])
     } else {
         let curve = PiecewiseLinear::new(&[
             LinearStop::new(0.0),
@@ -328,7 +328,7 @@ fn authored_easing_flight(spring: bool) {
         ])
         .unwrap();
         (
-            ArcCurve::new(curve),
+            SharedCurve::new(curve),
             Duration::from_secs(1),
             [125, 375, 875],
         )
@@ -357,7 +357,7 @@ fn authored_easing_flight(spring: bool) {
         20.0,
         Color::RED,
         duration,
-        ArcCurve::new(flui_animation::curves::LINEAR),
+        SharedCurve::new(flui_animation::curves::LINEAR),
         &source_samples,
     ));
     let mut laid = lay_out_animated(

@@ -365,12 +365,12 @@ impl ViewState<Switch> for SwitchState {
                 .or_else(|| switch_default_overlay_color(&colors, *live_states))
         });
 
-        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(SwitchPainter {
+        let painter = SwitchPainter {
             position: self.position.animation(),
             off,
             on,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
-        });
+        };
 
         let interactive = view.is_interactive();
         let next_value = !view.value;

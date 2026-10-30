@@ -6,7 +6,7 @@
 //! exactly the payload it takes.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::{Offset, Rect};
 use thiserror::Error;
@@ -204,7 +204,10 @@ pub struct TextSelection {
 // ============================================================================
 
 /// Handler for semantics actions: receives the request with its payload.
-pub type SemanticsActionHandler = Arc<dyn Fn(ActionCall) + Send + Sync>;
+///
+/// Invoked on the UI owner by the semantics-action drain; an accessibility
+/// adapter sends a [`SemanticsActionRequest`], never the handler.
+pub type SemanticsActionHandler = Rc<dyn Fn(ActionCall)>;
 
 // ============================================================================
 // SemanticsActionRequest
