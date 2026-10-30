@@ -326,3 +326,82 @@ pub(crate) fn an_on_complete_panic_keeps_its_captures() {
     }));
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host)));
 }
+
+/// A future whose poll panics while it holds a capture that panics as it
+/// drops.
+struct PanicsWhilePolled {
+    _capture: PanicOnDrop,
+}
+
+impl std::future::Future for PanicsWhilePolled {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        panic!("read failed");
+    }
+}
+
+pub(crate) fn a_future_whose_poll_panicked_is_kept_not_dropped() {
+    use std::task::{Context, Poll, Waker};
+
+    let executor = Handed::default();
+    let mut host = host_over(&executor);
+    let background = background(&mut host);
+    let mut task = background.io(PanicsWhilePolled {
+        _capture: PanicOnDrop,
+    });
+    let mut future = executor
+        .futures
+        .lock()
+        .expect("BUG: test lock")
+        .pop()
+        .expect("the future was spawned");
+    assert_eq!(
+        future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(())
+    );
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(future)));
+    assert!(
+        dropped.is_ok(),
+        "the failed future's captures are not dropped"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(task.poll(), Some(Err(BackgroundError::Panicked)));
+}
+
+pub(crate) fn work_handed_to_on_complete_is_cancelled_when_its_runtime_ends() {
+    use std::task::{Context, Poll, Waker};
+
+    let executor = Handed::default();
+    let mut host = host_over(&executor);
+    let background = background(&mut host);
+    background
+        .io(std::future::pending::<()>())
+        .on_complete(|_| {});
+    let mut future = executor
+        .futures
+        .lock()
+        .expect("BUG: test lock")
+        .pop()
+        .expect("the future was spawned");
+    assert_eq!(
+        future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    );
+    drop(background);
+    drop(host);
+    assert_eq!(
+        future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(()),
+        "the retired runtime's work is cancelled"
+    );
+}

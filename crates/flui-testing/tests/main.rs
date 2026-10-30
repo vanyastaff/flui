@@ -381,6 +381,15 @@ fn background_work() {
                 background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
                     as fn(),
             ),
+            (
+                "background_work::a_future_whose_poll_panicked_is_kept_not_dropped",
+                background_work::a_future_whose_poll_panicked_is_kept_not_dropped as fn(),
+            ),
+            (
+                "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
+                background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
+                    as fn(),
+            ),
         ],
     );
 }

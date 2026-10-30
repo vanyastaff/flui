@@ -106,7 +106,7 @@ impl Background {
         let (task, answer) = self.start::<T>();
         let refused = Arc::clone(&answer.resolver);
         let work: IoFuture = Box::pin(Cancellable {
-            future: Box::pin(future),
+            future: Some(Box::pin(future)),
             answer: Some(answer),
         });
         if let Err(error) = self.executor.spawn_io(work) {
@@ -177,7 +177,7 @@ impl<T: 'static> BackgroundTask<T> {
 
     /// Run `f` once with the answer, at an owner turn boundary. The work is
     /// no longer cancelled by dropping the task; the closure owns its
-    /// answer.
+    /// answer, and a UI runtime that ends before the answer cancels it.
     ///
     /// `f` runs exactly once per answer: it is an `FnMut` only so that, as
     /// with `Completion::on_complete`, a panic in it keeps its captures
@@ -189,7 +189,13 @@ impl<T: 'static> BackgroundTask<T> {
             .completion
             .take()
             .expect("BUG: a BackgroundTask holds its completion until it is consumed");
-        completion.on_complete(move |outcome| f(answer_of(outcome)));
+        // The closure holds the work's cancellation: a UI runtime that
+        // retires before the answer drops it unrun, which cancels the work.
+        let cancel = CancelOnDrop(Arc::clone(&self.cancel));
+        completion.on_complete(move |outcome| {
+            let _cancel_if_dropped_unrun = &cancel;
+            f(answer_of(outcome));
+        });
     }
 
     /// Take the answer if it has settled: `None` while the work is pending,
@@ -331,11 +337,12 @@ impl<T: Send + 'static> Answer<T> {
         }
     }
 }
-
 /// An IO future that stops at its next poll once cancelled, contains its
 /// panics, and answers its task.
 struct Cancellable<T: 'static> {
-    future: Pin<Box<dyn Future<Output = T> + Send>>,
+    /// `None` once a poll panicked: the failed future is kept, never
+    /// dropped, since its captures may panic as they drop.
+    future: Option<Pin<Box<dyn Future<Output = T> + Send>>>,
     answer: Option<Answer<T>>,
 }
 
@@ -355,10 +362,17 @@ impl<T: Send + 'static> Future for Cancellable<T> {
         let outcome = if answer.cancel.is_cancelled() {
             Err(BackgroundError::Cancelled)
         } else {
-            match catch_unwind(AssertUnwindSafe(|| this.future.as_mut().poll(cx))) {
+            let future = this
+                .future
+                .as_mut()
+                .expect("BUG: a Cancellable keeps its future until it answers");
+            match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
                 Ok(Poll::Pending) => return Poll::Pending,
                 Ok(Poll::Ready(value)) => Ok(value),
-                Err(payload) => Err(panicked(payload)),
+                Err(payload) => {
+                    std::mem::forget(this.future.take());
+                    Err(panicked(payload))
+                }
             }
         };
         if let Some(answer) = this.answer.take() {
