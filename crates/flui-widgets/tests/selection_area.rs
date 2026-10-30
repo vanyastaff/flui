@@ -738,3 +738,73 @@ pub(crate) fn blocked_text_refuses_assistive_selection() {
     laid.tick();
     assert!(seen.borrow().is_empty(), "the area saw no selection");
 }
+
+/// Sort keys that reverse two texts reverse them in the report too: the
+/// report follows the publication, not the render tree.
+///
+/// Red-check: order the texts by place in the render tree (the report is
+/// "\n").
+pub(crate) fn sort_keys_order_the_reported_text() {
+    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
+
+    let keyed = |text: &str, order: f64| {
+        let mut config = SemanticsConfiguration::new();
+        config.set_sort_key(SemanticsSortKey::new(order));
+        Semantics::from_configuration(config)
+            .container(true)
+            .child(Text::new(text.to_owned()))
+    };
+    let (area, seen) = recorded_area(Column::new((keyed("Alpha", 2.0), keyed("Beta", 1.0))));
+    let mut laid = mounted(area);
+    let (alpha, beta, text) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, "Beta")),
+            find_all(state, Role::Document)[0].document_range().text(),
+        )
+    };
+    assert_eq!(text, "BetaAlpha", "the document reads by sort key");
+    laid.invoke_semantics_action(selection_request(beta[0], at(beta[0], 0), at(alpha[0], 5)))
+        .expect("a selection across both texts is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("Beta\nAlpha".to_owned())],
+        "the report covers what the adapter selected"
+    );
+}
+
+/// A text whose semantics label is empty publishes nothing, so a selection
+/// across it does not report it.
+///
+/// Red-check: keep every mounted text in the order (the report holds
+/// "silent").
+pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let (area, seen) = recorded_area(Column::new((
+        Text::new("Alpha"),
+        RichText::new(TextSpan::new("silent").with_semantics_label("")),
+        Text::new("Omega"),
+    )));
+    let mut laid = mounted(area);
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 5)))
+        .expect("a selection across the published texts is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("Alpha\nOmega".to_owned())],
+        "the silenced text is not selected"
+    );
+}

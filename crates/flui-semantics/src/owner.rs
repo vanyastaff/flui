@@ -1094,6 +1094,34 @@ impl SemanticsOwner {
         })
     }
 
+    /// The texts of the document that holds the text `anchor` names, as their
+    /// anchors in the order the last publication reads them, sort keys and
+    /// all: what an adapter's range over the document covers. `None` when no
+    /// published text declares `anchor`, or no document holds it.
+    #[must_use]
+    pub fn document_texts(
+        &self,
+        anchor: &crate::SemanticsAnchor,
+    ) -> Option<Vec<crate::SemanticsAnchor>> {
+        let text = self.tree.rooted_nodes()?.into_iter().find_map(|sid| {
+            let node = self.tree.get(sid)?;
+            (node.config().anchors().contains(anchor)
+                && crate::accesskit_translation::published_text(node.config().attributes())
+                    .is_some())
+            .then(|| node.accessibility_id())
+            .flatten()
+        })?;
+        let document = self.document_of(text)?;
+        let (_, document) = self.locate(self.tree.root()?, document).ok()?;
+        Some(
+            self.tree
+                .texts_beneath(document)
+                .into_iter()
+                .filter_map(|node| node.config().anchors().first().cloned())
+                .collect(),
+        )
+    }
+
     /// Whether the node published as `at` blocks user actions (ADR-0216 §1).
     fn blocks_user_actions_at(&self, at: AccessibilityNodeId) -> bool {
         self.tree

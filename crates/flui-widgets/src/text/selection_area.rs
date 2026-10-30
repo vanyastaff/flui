@@ -279,45 +279,55 @@ impl SelectionModel {
 
     /// The presented texts in the order the published document reads them,
     /// each as its index and the byte where its laid-out text ends (`None`
-    /// when no layout says): by place in the render tree, as the semantics
-    /// assembly keeps it, so the text reported for a selection is the text
-    /// an adapter selected. A text beneath an ancestor that leaves its
-    /// subtree out of semantics (offstage, excluded) is not in the document
-    /// and is left out. Texts not yet in the render tree keep registration
-    /// order after the placed ones.
+    /// when no layout says), so the text reported for a selection is the
+    /// text an adapter selected. While semantics is on, that is the last
+    /// publication's order, sort keys included, and a text it does not
+    /// publish (offstage, excluded, silenced) is left out. Without it, the
+    /// order is place in the render tree, and texts beneath an ancestor that
+    /// leaves its subtree out of semantics are left out; texts not yet in
+    /// the render tree keep registration order after the placed ones.
     ///
-    /// Tree order holds until pointer selection lands: geometric reading
-    /// order then replaces it for the model and the assembly at once.
+    /// Geometric reading order replaces these when pointer selection lands,
+    /// for the model and the assembly at once.
     fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<(usize, Option<usize>)> {
         let pipeline = self.pipeline.borrow().clone();
-        let places: Vec<(Placement, Option<usize>)> = pipeline
+        pipeline
             .and_then(|pipeline| {
                 pipeline.try_with_layout(|owner| {
-                    entries
+                    let shown = |index: usize| shown_end(owner, &entries[index].subtree);
+                    if let Some(published) = owner.semantics_owner().and_then(|semantics| {
+                        entries
+                            .iter()
+                            .find_map(|entry| semantics.document_texts(&entry.anchor))
+                    }) {
+                        return published
+                            .iter()
+                            .filter_map(|anchor| {
+                                entries.iter().position(|entry| entry.anchor == *anchor)
+                            })
+                            .map(|index| (index, shown(index)))
+                            .collect();
+                    }
+                    let places: Vec<Placement> = entries
                         .iter()
-                        .map(|entry| {
-                            (
-                                Placement::of(owner, &entry.subtree),
-                                shown_end(owner, &entry.subtree),
-                            )
-                        })
+                        .map(|entry| Placement::of(owner, &entry.subtree))
+                        .collect();
+                    let mut order: Vec<usize> = (0..entries.len())
+                        .filter(|&index| places[index] != Placement::Hidden)
+                        .collect();
+                    order.sort_by(|&a, &b| match (&places[a], &places[b]) {
+                        (Placement::At(a), Placement::At(b)) => a.cmp(b),
+                        (Placement::At(_), _) => Ordering::Less,
+                        (_, Placement::At(_)) => Ordering::Greater,
+                        _ => Ordering::Equal,
+                    });
+                    order
+                        .into_iter()
+                        .map(|index| (index, shown(index)))
                         .collect()
                 })
             })
-            .unwrap_or_else(|| vec![(Placement::Unplaced, None); entries.len()]);
-        let mut order: Vec<usize> = (0..entries.len())
-            .filter(|&index| places[index].0 != Placement::Hidden)
-            .collect();
-        order.sort_by(|&a, &b| match (&places[a].0, &places[b].0) {
-            (Placement::At(a), Placement::At(b)) => a.cmp(b),
-            (Placement::At(_), _) => Ordering::Less,
-            (_, Placement::At(_)) => Ordering::Greater,
-            _ => Ordering::Equal,
-        });
-        order
-            .into_iter()
-            .map(|index| (index, places[index].1))
-            .collect()
+            .unwrap_or_else(|| (0..entries.len()).map(|index| (index, None)).collect())
     }
 }
 

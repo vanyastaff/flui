@@ -11,7 +11,8 @@
     merging ancestor without merging its descendants.
   - `DocumentSelection` and `DocumentPosition`: a selection across the texts beneath a
     document, published in their runs. A document receives it as
-    `ActionCall::SetDocumentSelection`.
+    `ActionCall::SetDocumentSelection`. `SemanticsOwner::document_texts` lists a document's texts in
+    published order.
   - `Semantics::merge_boundary`, `document_selection` and `on_set_document_selection` expose
     these on the widget.
 - **`flui-objects`**: `RenderParagraph::set_selectable` publishes the paragraph's runs under a

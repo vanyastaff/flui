@@ -648,6 +648,38 @@ impl SemanticsTree {
         None
     }
 
+    /// The texts beneath the document `root`, in the order publication reads
+    /// them: each addressable node that publishes text runs and declares an
+    /// anchor, never inside a document nested beneath `root` (ADR-0214 §4).
+    pub(crate) fn texts_beneath(&self, root: &SemanticsNode) -> Vec<&SemanticsNode> {
+        let mut texts = Vec::new();
+        let mut visited = FxHashSet::default();
+        let mut pending: Vec<SemanticsId> = root.children().iter().rev().copied().collect();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
+                continue;
+            };
+            if !node.config().anchors().is_empty()
+                && crate::accesskit_translation::published_text(node.config().attributes())
+                    .is_some()
+            {
+                texts.push(node);
+                continue;
+            }
+            if node.config().makes_document_selections() {
+                continue;
+            }
+            pending.extend(node.children().iter().rev().copied());
+        }
+        texts
+    }
+
     // ========== Dirty Tracking ==========
 
     /// Returns all dirty node ids in the tree.
