@@ -4,6 +4,8 @@ use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
+use flui_foundation::panic::FirstPanic;
+
 /// The owner has retired: it runs nothing more, and what was posted to it is
 /// dropped unrun.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
@@ -179,7 +181,9 @@ impl PendingCompletions {
                 continue;
             }
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.abandon_on_retire())) {
-                first.get_or_insert(payload);
+                // A later payload is retained, not dropped: its destructor
+                // may panic too.
+                FirstPanic::fold(&mut first, Some(payload));
             }
         }
         first

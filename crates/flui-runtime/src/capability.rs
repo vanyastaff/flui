@@ -20,9 +20,10 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     rc::Rc,
+    sync::Arc,
 };
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
 use flui_platform::{
     PlatformWindow, Unsupported, UnsupportedReason,
     capability::{
@@ -31,6 +32,7 @@ use flui_platform::{
     },
 };
 use flui_view::CapabilitySource;
+use parking_lot::Mutex;
 
 /// Which registration a provider came from, in precedence order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -213,22 +215,40 @@ impl CapabilityRegistryBuilder {
 /// A UI runtime's owner-job queue and the completions pending on it.
 pub(crate) struct OwnerJobs {
     rx: Receiver<OwnerJob>,
+    /// The poster's way in. Retirement takes it under the lock, so a post
+    /// either lands before the final drain or is refused with
+    /// [`OwnerRetired`]; none is accepted and then dropped unrun.
+    admission: Admission,
     pending: PendingCompletions,
     completions: CompletionSource,
 }
+
+type Admission = Arc<Mutex<Option<Sender<OwnerJob>>>>;
 
 impl OwnerJobs {
     /// A queue whose poster wakes the owner through `wake` after each post.
     pub(crate) fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
         let (tx, rx): (Sender<OwnerJob>, _) = unbounded();
+        let admission: Admission = Arc::new(Mutex::new(Some(tx)));
+        let sink = Arc::clone(&admission);
         let poster = OwnerPoster::new(move |job| {
-            tx.send(job).map_err(|_| OwnerRetired)?;
+            // A refused job is dropped after the lock is released: its
+            // captures may run user code.
+            let refused = match sink.lock().as_ref() {
+                Some(tx) => tx.send(job).err().map(SendError::into_inner),
+                None => Some(job),
+            };
+            if let Some(job) = refused {
+                drop(job);
+                return Err(OwnerRetired);
+            }
             wake();
             Ok(())
         });
         let pending = PendingCompletions::new();
         Self {
             rx,
+            admission,
             completions: CompletionSource::new(poster, pending.clone()),
             pending,
         }
@@ -270,6 +290,9 @@ impl OwnerJobs {
     /// leaked rather than dropped.
     #[must_use = "the first panic of a retirement belongs to the runtime's teardown"]
     pub(crate) fn retire(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        // Close admission first: a post that races this retirement is either
+        // queued before the drain below or refused, never accepted and lost.
+        drop(self.admission.lock().take());
         let mut first = self.pending.retire();
         while let Ok(job) = self.rx.try_recv() {
             if first.is_some() || std::thread::panicking() {
@@ -318,5 +341,20 @@ impl CapabilitySource for PresentationCapabilities {
         let poster = self.completions.poster();
         let cx = ProviderContext::new(poster, &self.completions, window);
         self.registry.acquire(capability, name, &cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_post_after_retirement_is_refused_not_queued() {
+        let jobs = OwnerJobs::new(|| {});
+        let poster = jobs.completions().poster().clone();
+        assert!(jobs.retire().is_none());
+
+        assert_eq!(poster.post(|| {}), Err(OwnerRetired));
+        assert!(!jobs.has_queued(), "a refused job is not left in the queue");
     }
 }
