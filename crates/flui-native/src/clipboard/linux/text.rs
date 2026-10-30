@@ -42,6 +42,7 @@ impl TextForm {
 
     /// The form `name` names; `None` for a form that is not text, or not one
     /// a reader asks for.
+    #[cfg(wayland_host)]
     pub(crate) fn named(name: &str) -> Option<Self> {
         Self::OFFERED.into_iter().find(|form| {
             // MIME type parameters are case-insensitive, and `utf-8` is
@@ -53,6 +54,7 @@ impl TextForm {
     /// The form a reader asks for among the `offered` names: the first of
     /// [`Self::OFFERED`] that the owner offers; `None` when it offers no
     /// text.
+    #[cfg(wayland_host)]
     pub(crate) fn preferred<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
         offered
             .into_iter()
@@ -96,6 +98,7 @@ mod tests {
     /// A reader asks for UTF-8 first, whichever order the owner offers its
     /// forms in, falls back to ISO 8859-1, and asks for nothing where no
     /// text is offered.
+    #[cfg(wayland_host)]
     #[test]
     fn a_reader_asks_for_utf8_first() {
         for (case, offered, expected) in [
