@@ -483,6 +483,32 @@ extern "C-unwind" fn make_backing_layer(_this: &AnyObject, _sel: Sel) -> *mut An
     })
 }
 
+/// Through a live resize the layer presents inside the Core Animation
+/// transaction that carries the new window frame, so the edge never shows a
+/// stretched old frame or a strip of background; otherwise it presents as
+/// soon as Metal is done.
+///
+/// The frame renders on this thread, inside this display pass (the raster
+/// lane is inline on macOS), and wgpu reads the flag when it takes the
+/// drawable: with it set, it waits until the command buffer is scheduled and
+/// presents the drawable in the current transaction. That wait holds the main
+/// thread, which is why the flag is set only while the user drags an edge.
+fn present_with_transaction_while_resizing(view: &AnyObject) {
+    // SAFETY: `view` is a live NSView on the main thread; `inLiveResize` takes
+    // no argument; `layer` answers its backing layer, a `FluiMetalLayer`
+    // (`makeBackingLayer`), so it answers `presentsWithTransaction`.
+    unsafe {
+        let resizing: bool = msg_send![view, inLiveResize];
+        let layer: Option<Retained<AnyObject>> = msg_send![view, layer];
+        if let Some(layer) = layer
+            .as_deref()
+            .filter(|layer| feedback_of(layer).is_some())
+        {
+            let _: () = msg_send![layer, setPresentsWithTransaction: resizing];
+        }
+    }
+}
+
 /// `updateLayer` — AppKit asks for content: the window's frame request.
 ///
 /// The view draws by updating its layer (`wantsUpdateLayer`), never through
@@ -498,6 +524,7 @@ extern "C-unwind" fn make_backing_layer(_this: &AnyObject, _sel: Sel) -> *mut An
 extern "C-unwind" fn update_layer(this: &AnyObject, _sel: Sel) {
     os_entry("updateLayer", (), AfterPanic::Answer(|()| ()), || {
         let _display_pass = super::display_pass::DisplayPassGuard::enter();
+        present_with_transaction_while_resizing(this);
         // SAFETY: `this` is a live FLUIContentView, the receiver of one of its
         // own methods.
         let delivery = unsafe { with_this(this, |view| view.context.delivery.upgrade()) }.flatten();
