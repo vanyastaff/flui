@@ -7,6 +7,8 @@
   latency is a setting whose default is 2.
 - **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 5 for Android
   only: its backgrounded pump is paced by a deadline, not a sleep.
+- **Superseded-by:** [ADR-0268](ADR-0268-the-ios-display-link-paces-the-backgrounded-pump.md), decision 5 for
+  iOS: the display link paces its backgrounded pump, and nothing sleeps.
 - **Amended-by:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) — decision 2 only: where the
   fallback period comes from. The deadline, its 0.95 factor and the rest are unchanged.
 - **Absorbs:** [retired ADR-0029](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md), the original FIFO pacing and fallback context.
