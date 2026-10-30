@@ -254,8 +254,9 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
 
 ## More information
 
-- fontique 0.11.1: `src/backend/dwrite.rs:115`, `src/backend/coretext.rs:68` and `:187`,
-  `src/backend/fontconfig.rs:735`, `src/backend/android.rs:197`, and `src/script.rs:37`
+- fontique 0.11.1: `fontique/src/backend/dwrite.rs:115`, `fontique/src/backend/coretext.rs:68`
+  and `:187`, `fontique/src/backend/fontconfig.rs:735`, `fontique/src/backend/android.rs:197`, and
+  `fontique/src/script.rs:37`
   (`SCRIPT_SAMPLES`, the per-script samples this record reuses), at the commit above.
 - DirectWrite `IDWriteFontFallback::MapCharacters`:
   <https://learn.microsoft.com/windows/win32/api/dwrite_2/nf-dwrite_2-idwritefontfallback-mapcharacters>.
