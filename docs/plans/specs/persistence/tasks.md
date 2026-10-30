@@ -88,6 +88,22 @@ graph LR
   (R33). `UnsavedChanges` проверяется в `start_load`, строка — с P5 (нужен `Saving`). Остаток:
   `a_loaded_document_round_trips_through_memory_storage` снимает `ignore` с P5 (нужен `set`);
   doctest с `FutureBuilder` — во `flui-widgets`, когда P11 подключит загрузчик.
+- **P5a** — запись (`persist/persisted.rs`): `set` берёт ревизию +1 (`u64::MAX` → `Exhausted`),
+  `encode` под `catch_unwind` без заимствования, заголовок и `FlushPublisher::publish` (данные —
+  `IfUnchanged(base)`, `machine_local` — `Replace`); без загрузки — `PersistError::NotLoaded`
+  (решение координатора 2026-10-30), без хранилища — `Storage(Unsupported)`. Статус и
+  `committed` следуют реестру; первая неудача держится до успешной записи; `retry` публикует
+  последние байты. Задача наблюдения на `AsyncDriver` держит `hold()` на `Saving` и
+  `require_decision()` на `Failed`. Строки (`tests/persist.rs`): сняты `ignore` с
+  `a_loaded_document_round_trips_through_memory_storage` и `saved_status_appears_only_after_commit`;
+  `no_write_without_a_writable_base` (R24, R31, `Exhausted`, без хранилища),
+  `retry_after_failure_publishes_the_latest_value` (R20, R30, `UnsavedChanges`),
+  `a_later_edit_supersedes_an_unstarted_one` (R28), `codec_panic_is_contained_first_failure_kept`
+  (R29), `a_saving_document_holds_user_close_only` (R12, R14),
+  `two_runtimes_keep_independent_documents` (R36). Остаток P5: P5b — повтор `Busy` по часам
+  UI-runtime (общий механизм дедлайнов runtime, дизайн — координатору), немедленная запись на
+  `Hidden`/`Paused` и запросе закрытия; P5c — `start_over` через `Storage::copy_aside` (форма —
+  координатору); R15 `drop_before_commit_loses_only_that_edit` и R17 — с ними.
 
 ## Устаревшие задачи
 

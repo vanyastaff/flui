@@ -305,9 +305,9 @@ need their own channel ([followups](https://github.com/vanyastaff/flui/blob/083b
    accepted — the contact, the run and the motion it drives, a held key, a drop autoscroll — to
    the successor under the sequences they began, each with the chain it snapshotted; nothing
    halts, and no participant is called. No global registry, no label comparison.
-9. **Snapping.** `SnapPolicy: Send + Sync + Debug` is one open trait shaped like `ScrollPhysics`
+9. **Snapping.** `SnapPolicy: Debug` is one open, owner-local trait shaped like `ScrollPhysics`
    (`target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap` and `AnchorSnap`), held as
-   `Arc<dyn SnapPolicy>` like `SharedScrollPhysics`; a non-finite target is clamped with a
+   `Rc<dyn SnapPolicy>` like `SharedScrollPhysics`; a non-finite target is clamped with a
    diagnostic. Unlike the physics, a new policy does not close the endpoint (§8): the owner takes
    it in place, it decides the next release, and a run in progress keeps the target it started
    for. `AnchorSnap` holds offsets, not keys: a target is an

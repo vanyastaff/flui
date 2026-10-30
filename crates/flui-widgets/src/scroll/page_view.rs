@@ -60,7 +60,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{SharedCurve, curves};
@@ -551,7 +550,7 @@ impl std::fmt::Debug for PageView {
 /// [`dispose`](ViewState::dispose).
 pub struct PageViewState {
     controller: PageController,
-    /// The page policy for `controller`'s fraction. One `Arc` for the life of
+    /// The page policy for `controller`'s fraction. One `Rc` for the life of
     /// the controller: the scroll owner compares policies by identity, so a
     /// fresh one per build would replace the owner (and end its run) on every
     /// rebuild.
@@ -732,7 +731,7 @@ impl PageViewState {
 
 /// The page policy for pages of `controller`'s fraction of the viewport.
 fn page_snap(controller: &PageController) -> SharedSnapPolicy {
-    Arc::new(PageSnap::new(controller.viewport_fraction))
+    Rc::new(PageSnap::new(controller.viewport_fraction))
 }
 
 impl StatefulView for PageView {
@@ -787,7 +786,7 @@ impl ViewState<PageView> for PageViewState {
         self.page_count.set(page_count);
         let mut scrollable = Scrollable::new()
             .controller(controller.scroll_controller())
-            .snap_policy(Arc::clone(&self.snap))
+            .snap_policy(Rc::clone(&self.snap))
             .allowed_devices(view.allowed_devices)
             .autofocus(view.autofocus)
             .scroll_direction(scroll_direction);

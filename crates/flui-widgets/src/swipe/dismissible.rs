@@ -25,7 +25,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::curve::{Curve, Interval};
@@ -432,7 +431,7 @@ impl DismissConfig {
         anchors
             .build()
             .expect("BUG: a dismissible's stops are finite, in range and apart")
-            .settled_by(Arc::new(snap))
+            .settled_by(Rc::new(snap))
     }
 }
 

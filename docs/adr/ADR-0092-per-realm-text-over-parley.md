@@ -6,6 +6,9 @@
   [ADR-0270](ADR-0270-the-emoji-generic-starts-with-the-platforms-colour-face.md) for §7's
   clause "The common list is the emoji generic": the emoji generic starts with the platform's
   colour emoji faces.
+  [ADR-0271](ADR-0271-the-host-feed-asks-the-platform-which-faces-fall-back.md) for §7's
+  clause that FLUI's tables are the whole fallback order: the host's own answer comes first,
+  and the tables follow it.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;

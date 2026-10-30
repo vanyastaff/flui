@@ -8,6 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(x11_host)]
+use std::borrow::Cow;
+
 /// A form of text a selection is offered in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextForm {
@@ -42,6 +45,7 @@ impl TextForm {
 
     /// The form `name` names; `None` for a form that is not text, or not one
     /// a reader asks for.
+    #[cfg(wayland_host)]
     pub(crate) fn named(name: &str) -> Option<Self> {
         Self::OFFERED.into_iter().find(|form| {
             // MIME type parameters are case-insensitive, and `utf-8` is
@@ -53,6 +57,7 @@ impl TextForm {
     /// The form a reader asks for among the `offered` names: the first of
     /// [`Self::OFFERED`] that the owner offers; `None` when it offers no
     /// text.
+    #[cfg(wayland_host)]
     pub(crate) fn preferred<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
         offered
             .into_iter()
@@ -76,8 +81,32 @@ impl TextForm {
         }
     }
 
+    /// How many bytes of text [`decode`](Self::decode) makes of `bytes`,
+    /// measured without making it: a reader refuses text past its limit
+    /// before ISO 8859-1 or ill-formed UTF-8 grows as it decodes.
+    #[cfg(x11_host)]
+    pub(crate) fn decoded_len(self, bytes: &[u8]) -> usize {
+        let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => bytes
+                .utf8_chunks()
+                .map(|chunk| {
+                    // Each ill-formed sequence becomes one U+FFFD.
+                    let replaced = if chunk.invalid().is_empty() {
+                        0
+                    } else {
+                        char::REPLACEMENT_CHARACTER.len_utf8()
+                    };
+                    chunk.valid().len() + replaced
+                })
+                .sum(),
+            Self::Latin1 => bytes.len() + bytes.iter().filter(|byte| **byte >= 0x80).count(),
+        }
+    }
+
     /// `text` in this form: UTF-8 as it is, ISO 8859-1 with each character
     /// past it written `?`.
+    #[cfg(any(wayland_host, test))]
     pub(crate) fn encode(self, text: &str) -> Vec<u8> {
         match self {
             Self::PlainUtf8 | Self::Utf8String | Self::Plain => text.as_bytes().to_vec(),
@@ -85,6 +114,47 @@ impl TextForm {
                 .chars()
                 .map(|character| u8::try_from(u32::from(character)).unwrap_or(b'?'))
                 .collect(),
+        }
+    }
+
+    /// How many bytes `text` takes in this form, counted without encoding
+    /// it: an owner says how much is coming before it writes any.
+    #[cfg(x11_host)]
+    pub(crate) fn encoded_len(self, text: &str) -> usize {
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => text.len(),
+            Self::Latin1 => text.chars().count(),
+        }
+    }
+
+    /// At most `limit` bytes of `text` in this form, starting at its byte
+    /// `from`, and the byte of `text` the next chunk starts at. A UTF-8
+    /// chunk borrows the text; an ISO 8859-1 one is the only copy made, so
+    /// the text is never held twice whole.
+    #[cfg(x11_host)]
+    pub(crate) fn encode_chunk(
+        self,
+        text: &str,
+        from: usize,
+        limit: usize,
+    ) -> (Cow<'_, [u8]>, usize) {
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => {
+                let end = from.saturating_add(limit).min(text.len());
+                (Cow::Borrowed(&text.as_bytes()[from..end]), end)
+            }
+            Self::Latin1 => {
+                let mut next = from;
+                let chunk: Vec<u8> = text[from..]
+                    .chars()
+                    .take(limit)
+                    .map(|character| {
+                        next += character.len_utf8();
+                        u8::try_from(u32::from(character)).unwrap_or(b'?')
+                    })
+                    .collect();
+                (Cow::Owned(chunk), next)
+            }
         }
     }
 }
@@ -96,6 +166,7 @@ mod tests {
     /// A reader asks for UTF-8 first, whichever order the owner offers its
     /// forms in, falls back to ISO 8859-1, and asks for nothing where no
     /// text is offered.
+    #[cfg(wayland_host)]
     #[test]
     fn a_reader_asks_for_utf8_first() {
         for (case, offered, expected) in [
@@ -151,5 +222,59 @@ mod tests {
             "a\u{fffd}b"
         );
         assert_eq!(TextForm::Utf8String.decode(b"text\0".to_vec()), "text");
+    }
+
+    /// The decoded length is measured without decoding and matches what
+    /// decoding makes, ill-formed UTF-8 and ISO 8859-1's high half included.
+    #[cfg(x11_host)]
+    #[test]
+    fn the_decoded_length_matches_the_decoded_text() {
+        let cases: [&[u8]; 6] = [
+            b"",
+            b"text\0",
+            b"a\xffb",
+            b"\xff\xfe\xfd",
+            b"\xe2\x82",
+            "\u{e9}t\u{e9}".as_bytes(),
+        ];
+        for bytes in cases {
+            for form in TextForm::OFFERED {
+                assert_eq!(
+                    form.decoded_len(bytes),
+                    form.decode(bytes.to_vec()).len(),
+                    "{form:?} {bytes:?}"
+                );
+            }
+        }
+    }
+
+    /// The chunks of a text, whatever their size, are its encoding cut in
+    /// order, and the length counted up front is the length they make.
+    #[cfg(x11_host)]
+    #[test]
+    fn chunks_make_the_whole_encoding() {
+        for text in ["", "text", "\u{e9}t\u{e9} \u{2014} \u{1f600}x"] {
+            for form in TextForm::OFFERED {
+                assert_eq!(
+                    form.encoded_len(text),
+                    form.encode(text).len(),
+                    "{form:?} {text:?}"
+                );
+                for limit in [1, 2, 3, 64] {
+                    let mut joined = Vec::new();
+                    let mut from = 0;
+                    loop {
+                        let (chunk, next) = form.encode_chunk(text, from, limit);
+                        assert!(chunk.len() <= limit, "{form:?} {text:?} {limit}");
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        joined.extend_from_slice(&chunk);
+                        from = next;
+                    }
+                    assert_eq!(joined, form.encode(text), "{form:?} {text:?} {limit}");
+                }
+            }
+        }
     }
 }
