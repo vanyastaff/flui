@@ -1,7 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** в работе. Влиты T1, T2, T3, T7, T9, T10, T13; T8 сделан (`CarouselView`,
-  `CarouselViewThemeData`, `KeylineSnap::for_layout`); дальше T12.
+- **Статус:** в работе. Влиты T1, T2, T3, T7, T8, T9, T10, T13; T11 сделан (`PageIndicator`,
+  `CupertinoPageControl`); дальше T4, T6 после T33 полноты ввода, затем T12.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -92,7 +92,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   свойства `CarouselGeometry` для всех раскладок); `harness_sliver_carousel_geometry_and_frames`.
   Пауза по фокусу вспомогательной технологии невозможна: сигнала нет (`docs/gaps.md`, пункт 36).
 
-### T8 — `CarouselView` (#1699) — сделано
+### T8 — `CarouselView` (#1699) — влито
 
 - **Что:** Material-карточки элементов, токены M3, рябь и тап; потребитель общего
   `Carousel`. Сам `CarouselView` — API приложения (Z2): экспорт из `flui-material` и его
@@ -122,12 +122,16 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   экспорт из `flui-material`.
 - **Требования:** P1, P2, P5, P6 (шов и Material-стиль), строка M1.
 
-### T11 — индикатор страниц (#1702)
+### T11 — индикатор страниц (#1702) — сделано
 
 - **Что:** `PageIndicator::controlled` и `PageIndicator::observed` (дробная позиция, тап и
   действия только у управляемого, окно, семантика); `CupertinoPageControl` — его
   потребитель.
 - **Требования:** P4, строка M1. **После:** T7.
+- **Отклонение:** модуль `scroll`, не `controls`: `controls` ниже `scroll` в графе модулей и
+  не видит `PageController`.
+- **Проверка:** `page_indicator::*` в `widgets_it` (`flui-widgets`), строка M1 —
+  `page_indicator::reduced_motion_turns_the_page_at_once`; `page_control::*` в `cupertino_it`.
 
 ### T13 — частицы (#1703) — влито
 
