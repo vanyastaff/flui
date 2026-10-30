@@ -436,7 +436,7 @@ trait depends on `flui-platform` instead.
   file is a module's tests, the mechanism of one OS object
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
-  iOS, accessibility on Android, iOS and the Web and under winit off Linux,
+  iOS, accessibility on the Web and under winit off Linux,
   haptics on winit. Android's clipboard is an in-process stand-in
   until the system clipboard is reached through JNI.
 
@@ -448,7 +448,12 @@ trait depends on `flui-platform` instead.
   `target_os = "linux"`. `UnixAccessibility` is the accessibility position of
   every Linux table for any window reference (it needs nothing of the window),
   so the Wayland and winit windows announce themselves on the AT-SPI bus
-  alike.
+  alike. Every Android Activity window builds `accesskit_android`'s low-level
+  adapter, which lives on the Java main thread: `FluiView`'s node provider
+  answers from it there, and a publish is posted there and applied in order
+  (`accessibility::android`). The view reaches it through a `BridgeSlot`
+  (`owner::android::bridge_slot`), which a closing window empties only of
+  its own bridge.
 
   The table's positions make the accessibility adapter and the actuator a
   window hands out (`host::Accessibility::for_window`,
