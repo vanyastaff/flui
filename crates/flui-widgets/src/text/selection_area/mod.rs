@@ -283,10 +283,15 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                     model.focus_changed(focused);
                 }
             });
-        let actions = Actions::new(focused)
+        let mut actions = Actions::new(focused)
             .action::<SelectAllTextIntent>(AreaAction(Rc::downgrade(&self.model)))
-            .action::<CopySelectionTextIntent>(AreaAction(Rc::downgrade(&self.model)))
-            .action::<DismissIntent>(AreaAction(Rc::downgrade(&self.model)));
+            .action::<CopySelectionTextIntent>(AreaAction(Rc::downgrade(&self.model)));
+        // Esc clears a selection; with nothing selected the area declares no
+        // dismiss, so Esc reaches the enclosing one (a modal route's pop).
+        // Every commit rebuilds the area, so this follows the selection.
+        if self.model.selection.borrow().is_some() {
+            actions = actions.action::<DismissIntent>(AreaAction(Rc::downgrade(&self.model)));
+        }
         let model = Rc::clone(&self.model);
         Semantics::new()
             .role(view.role)

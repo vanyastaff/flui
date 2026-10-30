@@ -672,3 +672,42 @@ pub(crate) fn the_nearest_text_is_nearest_on_screen() {
     scene.clicks(Offset::new(1.0, tiny_bottom + gap * 0.25), 2);
     assert_eq!(scene.selected().as_deref(), Some("Tiny"));
 }
+
+/// With a selection, Esc clears it; with none, Esc reaches the enclosing
+/// dismiss, as a modal route's pop would be.
+///
+/// Red-check: declare the area's dismiss unconditionally (the second Esc
+/// never reaches the enclosing action).
+pub(crate) fn esc_clears_then_reaches_the_enclosing_dismiss() {
+    use flui_widgets::{Actions, CallbackAction, DismissIntent};
+
+    let dismissed = Rc::new(std::cell::Cell::new(0_u32));
+    let counted = Rc::clone(&dismissed);
+    let heard: Heard = Rc::default();
+    let recorded = Rc::clone(&heard);
+    let area = SelectionArea::new(Column::new((Text::new(FIRST),)).boxed()).on_selection_changed(
+        move |_cx, selected| {
+            recorded
+                .borrow_mut()
+                .push(selected.map(|selected| selected.text.clone()));
+        },
+    );
+    let outer = Actions::new(area).action::<DismissIntent>(CallbackAction::new(
+        move |_cx, _: &DismissIntent| counted.set(counted.get() + 1),
+    ));
+    let mut laid = lay_out(WidgetsApp::new(outer), tight(400.0, 300.0));
+    laid.pump();
+    let mut scene = Scene { laid, heard };
+
+    scene.clicks(scene.at(0, 0.2), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Hello"));
+    let _ = scene.key(Key::Named(NamedKey::Escape), Code::Escape, Modifiers::NONE);
+    assert_eq!(
+        scene.heard.borrow().last(),
+        Some(&None),
+        "the first Esc clears"
+    );
+    assert_eq!(dismissed.get(), 0, "the clear does not dismiss");
+    let _ = scene.key(Key::Named(NamedKey::Escape), Code::Escape, Modifiers::NONE);
+    assert_eq!(dismissed.get(), 1, "the second Esc dismisses");
+}
