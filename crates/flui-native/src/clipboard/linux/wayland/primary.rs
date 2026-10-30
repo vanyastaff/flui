@@ -49,6 +49,10 @@ pub(super) struct Primary {
     devices: Vec<PrimaryDevice>,
     /// The application's selection.
     owned: Option<Owned>,
+    /// The application's closures the dispatch retired, dropped at the
+    /// next turn: their captures' destructors are user code, which must not
+    /// run inside the dispatch.
+    retired: Vec<SelectionText>,
     /// The `send`s recorded since the last turn.
     sends: Vec<Request>,
 }
@@ -180,6 +184,7 @@ impl Primary {
             devices: std::mem::take(&mut self.devices),
             owned: self.owned.take(),
             sends: std::mem::take(&mut self.sends),
+            retired: std::mem::take(&mut self.retired),
         }
     }
 
@@ -203,6 +208,7 @@ pub(super) struct Released {
     devices: Vec<PrimaryDevice>,
     owned: Option<Owned>,
     sends: Vec<Request>,
+    retired: Vec<SelectionText>,
 }
 
 impl Released {
@@ -212,6 +218,34 @@ impl Released {
             owned.release();
         }
         drop(self.sends);
+        drop_retired(self.retired);
+    }
+}
+
+/// Drop the closures the dispatch retired, in order. Once a destructor
+/// panics the rest are retained, not dropped during the unwind, and the
+/// first failure goes on (ADR-0127).
+fn drop_retired(retired: Vec<SelectionText>) {
+    let mut retired = retired.into_iter();
+    for text in retired.by_ref() {
+        if let Err(failure) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(text)))
+        {
+            retired.for_each(std::mem::forget);
+            std::panic::resume_unwind(failure);
+        }
+    }
+}
+
+/// Ask the application's closure for its text. A closure that panics is
+/// retained rather than dropped during the unwind, which may be its last
+/// owner: a capture's destructor that panicked then would abort (ADR-0127).
+fn ask(text: SelectionText) -> Option<String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| text())) {
+        Ok(answer) => answer,
+        Err(failure) => {
+            std::mem::forget(text);
+            std::panic::resume_unwind(failure)
+        }
     }
 }
 
@@ -306,7 +340,7 @@ impl super::SeatClipboard {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
-            Read::Ask(text) => drop(answer.resolve(text())),
+            Read::Ask(text) => drop(answer.resolve(ask(text))),
             Read::Pipe(reader, form) => {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-primary".to_owned())
@@ -325,7 +359,7 @@ impl super::SeatClipboard {
     /// Answer the `send`s recorded since the last turn: each still asking
     /// the application's current source gets the closure's text now.
     pub(super) fn deliver_primary(&self) {
-        let (sends, text) = self
+        let (sends, text, retired) = self
             .shared
             .primary
             .with(|primary| {
@@ -333,9 +367,11 @@ impl super::SeatClipboard {
                 let current = primary.owned.as_ref().and_then(|owned| {
                     Some((owned.source.as_ref()?.1.clone(), Rc::clone(&owned.text)))
                 });
-                (sends, current)
+                (sends, current, std::mem::take(&mut primary.retired))
             })
             .unwrap_or_default();
+        // The closures the dispatch retired drop here, with nothing held.
+        drop_retired(retired);
         if sends.is_empty() {
             return;
         }
@@ -352,7 +388,7 @@ impl super::SeatClipboard {
             return;
         }
         // Asked once for every send of this turn, with nothing held.
-        let Some(text) = text() else {
+        let Some(text) = ask(text) else {
             return;
         };
         let mut encoded: Vec<(TextForm, Arc<[u8]>)> = Vec::new();
@@ -425,7 +461,7 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
             return;
         };
         let foreign = id.is_some();
-        let (replaced, dropped) = shared
+        let replaced = shared
             .primary
             .with(|primary| {
                 let held = primary
@@ -435,25 +471,23 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
                 let replaced = std::mem::replace(&mut held.selection, id)
                     .filter(|offer| Some(offer) != held.selection.as_ref());
                 // A selection held in this process with no source is the
-                // selection until another client's arrives.
-                let dropped = if foreign
+                // selection until another client's arrives; its closure is
+                // dropped at the next turn, outside the dispatch.
+                if foreign
                     && primary
                         .owned
                         .as_ref()
                         .is_some_and(|owned| owned.source.is_none())
+                    && let Some(owned) = primary.owned.take()
                 {
-                    primary.owned.take()
-                } else {
-                    None
-                };
-                Some((replaced, dropped))
+                    primary.retired.push(owned.text);
+                }
+                replaced
             })
-            .flatten()
-            .unwrap_or((None, None));
+            .flatten();
         if let Some(offer) = replaced {
             offer.destroy();
         }
-        drop(dropped);
     }
 
     event_created_child!(WaylandState, ZwpPrimarySelectionDeviceV1, [
@@ -510,27 +544,118 @@ impl Dispatch<ZwpPrimarySelectionSourceV1, SourceData> for WaylandState {
                 });
             }
             zwp_primary_selection_source_v1::Event::Cancelled => {
-                let lost = shared
-                    .primary
-                    .with(|primary| {
-                        if primary.owned.as_ref().is_some_and(|owned| {
-                            owned
-                                .source
-                                .as_ref()
-                                .is_some_and(|(_, held)| held == source)
-                        }) {
-                            primary.owned.take()
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten();
-                // The closure is dropped with nothing held; the source is
-                // the protocol's to destroy, once.
-                drop(lost);
+                shared.primary.with(|primary| {
+                    if primary.owned.as_ref().is_some_and(|owned| {
+                        owned
+                            .source
+                            .as_ref()
+                            .is_some_and(|(_, held)| held == source)
+                    }) && let Some(owned) = primary.owned.take()
+                    {
+                        // Dropped at the next turn, outside the dispatch.
+                        primary.retired.push(owned.text);
+                    }
+                });
+                // The source is the protocol's to destroy, once.
                 source.destroy();
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
+
+    /// Set in the child process a retention case runs in.
+    const CHILD: &str = "FLUI_PRIMARY_RETENTION_CHILD";
+
+    /// A capture whose destructor fails.
+    struct FailsOnDrop;
+
+    impl Drop for FailsOnDrop {
+        fn drop(&mut self) {
+            panic!("a capture's destructor failed");
+        }
+    }
+
+    /// Run `case` in a child of this test binary: a value dropped during an
+    /// unwind whose destructor fails aborts the process, which only a child
+    /// can report.
+    fn in_child(test: &str, case: impl FnOnce()) {
+        if std::env::var_os(CHILD).is_some() {
+            case();
+            return;
+        }
+        let path = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, path)| path);
+        let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+            .args(["--exact", &format!("{path}::{test}"), "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .expect("the child runs");
+        assert!(
+            output.status.success(),
+            "the child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn failure_text(failure: &(dyn std::any::Any + Send)) -> Option<&str> {
+        flui_foundation::panic::payload_text(failure)
+    }
+
+    /// A selection that fails while it is asked is retained with its
+    /// captures, and its failure goes on.
+    #[test]
+    fn a_failing_selection_is_retained_with_its_captures() {
+        in_child("a_failing_selection_is_retained_with_its_captures", || {
+            let capture = FailsOnDrop;
+            let text: SelectionText = Rc::new(move || {
+                let _held = &capture;
+                panic!("the selection failed")
+            });
+            let failure = catch_unwind(AssertUnwindSafe(|| ask(text))).expect_err("it failed");
+            assert_eq!(failure_text(&*failure), Some("the selection failed"));
+        });
+    }
+
+    /// Retired closures after one whose capture fails to drop are retained,
+    /// and the first failure goes on.
+    #[test]
+    fn retired_closures_after_a_failed_drop_are_retained() {
+        /// Counts its drops, and fails each.
+        struct Counted(Rc<std::cell::Cell<u32>>);
+
+        impl Drop for Counted {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+                panic!("a capture's destructor failed");
+            }
+        }
+
+        in_child("retired_closures_after_a_failed_drop_are_retained", || {
+            let drops = Rc::new(std::cell::Cell::new(0));
+            let retired: Vec<SelectionText> = (0..2)
+                .map(|_| {
+                    let capture = Counted(Rc::clone(&drops));
+                    Rc::new(move || {
+                        let _held = &capture;
+                        None
+                    }) as SelectionText
+                })
+                .collect();
+            let failure =
+                catch_unwind(AssertUnwindSafe(|| drop_retired(retired))).expect_err("it failed");
+            assert_eq!(
+                failure_text(&*failure),
+                Some("a capture's destructor failed")
+            );
+            assert_eq!(drops.get(), 1, "the closure after the failure is retained");
+        });
     }
 }

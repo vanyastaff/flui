@@ -54,7 +54,7 @@ impl Answers {
 
 /// A client: a platform of its own on the calling thread, with one window.
 pub(crate) struct Client {
-    pub(crate) platform: WaylandPlatform,
+    pub(crate) platform: Rc<WaylandPlatform>,
     pub(crate) window: Rc<dyn HostWindow>,
     answers: Answers,
 }
@@ -63,7 +63,8 @@ impl Client {
     /// Connect and open a window, which the compositor shows over every
     /// other and gives the keyboard.
     pub(crate) fn open(title: &str) -> Self {
-        let platform = WaylandPlatform::try_new().expect("the harness's compositor answers");
+        let platform =
+            Rc::new(WaylandPlatform::try_new().expect("the harness's compositor answers"));
         let window = platform
             .open_window(
                 WindowOptions::default().with_title(title),
