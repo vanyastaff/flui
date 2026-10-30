@@ -68,7 +68,7 @@ fn nested_values_retarget_on_one_registered_motion() {
 
     let vsync = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut owner = AnimatedValue::new(
+    let mut owner = AnimatedValue::try_new(
         NestedAppearance(
             Appearance {
                 position: Offset::ZERO,
@@ -142,7 +142,7 @@ fn nested_springs_keep_each_fields_rest_units() {
     let motion = MotionSpec::Spring(
         SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
     );
-    let mut owner = AnimatedValue::new(
+    let mut owner = AnimatedValue::try_new(
         NestedAppearance(
             Appearance {
                 position: Offset::ZERO,
@@ -156,7 +156,7 @@ fn nested_springs_keep_each_fields_rest_units() {
     .expect("finite nested value");
     let goal = Offset::new(100.0, -100.0);
     let mut geometry =
-        AnimatedValue::new(Offset::ZERO, motion, Some(&registry)).expect("finite geometry");
+        AnimatedValue::try_new(Offset::ZERO, motion, Some(&registry)).expect("finite geometry");
     let geometry_run = geometry.animate_to(goal).expect("finite geometry goal");
     let run = owner
         .animate_to(NestedAppearance(

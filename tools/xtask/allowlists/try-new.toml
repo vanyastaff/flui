@@ -5,58 +5,6 @@
 reason = "written before the rule had a gate; each entry is renamed to `try_new`"
 
 [[allow]]
-crate = "flui-animation"
-type = "AnimatedValue"
-
-[[allow]]
-crate = "flui-animation"
-type = "BouncingScrollSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "BoundedFrictionSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "FrictionSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "PiecewiseLinear"
-
-[[allow]]
-crate = "flui-animation"
-type = "PlaybackRate"
-
-[[allow]]
-crate = "flui-animation"
-type = "SimulationBounds"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringCurve"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringDescription"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringRest"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "Tolerance"
-
-[[allow]]
-crate = "flui-animation"
-type = "ValueRange"
-
-[[allow]]
 crate = "flui-native"
 type = "ArboardClipboard"
 

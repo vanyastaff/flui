@@ -485,7 +485,8 @@ fn playback_and_motion_policy_changes_are_observable() {
     };
     tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
         let configured = AnimationController::builder(Duration::from_millis(100)).build();
-        configured.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("initial rate"));
+        configured
+            .set_playback_rate(flui_animation::PlaybackRate::try_new(2.0).expect("initial rate"));
         assert!(
             records.lock().expect("receipts").iter().any(|record| {
                 record.get("transition") == Some("playback")
@@ -507,7 +508,7 @@ fn playback_and_motion_policy_changes_are_observable() {
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
-        controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("rate"));
+        controller.set_playback_rate(flui_animation::PlaybackRate::try_new(2.0).expect("rate"));
         registry.tick_all(&clock.frame(Duration::from_millis(20)));
         clock.set_system_motion(flui_platform::MotionPreference::Reduce);
         registry.tick_all(&clock.frame(Duration::from_millis(40)));
@@ -1070,9 +1071,9 @@ fn a_rate_command_during_sampling_remains_pending() {
         fn transform(&self, t: f64) -> f64 {
             if self.0.replace(false) {
                 let controller = OBSERVED.with(|observed| observed.borrow().clone());
-                controller
-                    .expect("sampling controller")
-                    .set_playback_rate(flui_animation::PlaybackRate::new(3.0).expect("newer rate"));
+                controller.expect("sampling controller").set_playback_rate(
+                    flui_animation::PlaybackRate::try_new(3.0).expect("newer rate"),
+                );
             }
             t.clamp(0.0, 1.0)
         }
@@ -1082,7 +1083,8 @@ fn a_rate_command_during_sampling_remains_pending() {
     let original = controller
         .animate_to_curved(1.0, None, RateOnce(std::cell::Cell::new(true)))
         .expect("curved run");
-    controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("captured rate"));
+    controller
+        .set_playback_rate(flui_animation::PlaybackRate::try_new(2.0).expect("captured rate"));
     controller.tick_at(Duration::from_millis(100));
     assert!((controller.value() - 0.1).abs() < 1e-9);
     controller.tick_at(Duration::from_millis(200));
@@ -1090,7 +1092,7 @@ fn a_rate_command_during_sampling_remains_pending() {
     OBSERVED.with(|observed| *observed.borrow_mut() = None);
     assert_eq!(
         applied,
-        flui_animation::PlaybackRate::new(3.0).expect("newer rate"),
+        flui_animation::PlaybackRate::try_new(3.0).expect("newer rate"),
         "a captured rate must not erase a later command from the curve"
     );
     controller.tick_at(Duration::from_millis(300));
@@ -1348,7 +1350,7 @@ fn an_oscillating_fling_spring_is_refused() {
 }
 
 fn an_unrepresentable_fling_is_refused() {
-    let bounds = flui_animation::ValueRange::new(1e308, 1.1e308).expect("finite range");
+    let bounds = flui_animation::ValueRange::try_new(1e308, 1.1e308).expect("finite range");
     let owner = AnimationController::builder(Duration::from_secs(1))
         .bounds(bounds)
         .initial_value(1.1e308)
@@ -1440,13 +1442,13 @@ fn linear() -> MotionSpec {
 }
 
 fn a_non_finite_initial_value_is_refused() {
-    refuses("AnimatedValue::new", "non_finite_component", || {
-        assert!(AnimatedValue::new(f64::NAN, linear(), None).is_err());
+    refuses("AnimatedValue::try_new", "non_finite_component", || {
+        assert!(AnimatedValue::try_new(f64::NAN, linear(), None).is_err());
     });
 }
 
 fn an_invalid_rest_distance_is_refused() {
-    let mut value = AnimatedValue::new(NegativeThreshold(0.0), linear(), None).expect("value");
+    let mut value = AnimatedValue::try_new(NegativeThreshold(0.0), linear(), None).expect("value");
     let spring =
         MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("spring"));
     refuses("AnimatedValue::retarget", "component_simulation", || {
@@ -1459,11 +1461,11 @@ fn an_invalid_rest_distance_is_refused() {
 fn a_group_invalidated_while_preparing_is_refused() {
     let registry = Vsync::new();
     let mut clock = flui_animation::MotionClock::new();
-    let mut left = AnimatedValue::new(0.0, linear(), Some(&registry)).expect("left");
+    let mut left = AnimatedValue::try_new(0.0, linear(), Some(&registry)).expect("left");
     let _left = left.animate_to(1.0).expect("left run");
     registry.tick_all(&clock.frame(Duration::ZERO));
     let tick = clock.frame(Duration::from_millis(250));
-    let mut moved = AnimatedValue::new(
+    let mut moved = AnimatedValue::try_new(
         Hooked {
             position: 0.0,
             hook: Rc::new(|| {}),
@@ -1486,8 +1488,8 @@ fn a_group_invalidated_while_preparing_is_refused() {
 }
 
 fn a_group_whose_preparation_panicked_is_refused() {
-    let mut left = AnimatedValue::new(0.0, linear(), None).expect("left");
-    let mut right = AnimatedValue::new(
+    let mut left = AnimatedValue::try_new(0.0, linear(), None).expect("left");
+    let mut right = AnimatedValue::try_new(
         Hooked {
             position: 0.0,
             hook: Rc::new(|| {}),
@@ -1549,7 +1551,7 @@ fn a_panicking_refusal_subscriber_keeps_the_typed_error() {
             "the owning dispatcher's panic is contained"
         );
         let subjectless =
-            std::panic::catch_unwind(|| AnimatedValue::new(f64::NAN, linear(), None).is_err());
+            std::panic::catch_unwind(|| AnimatedValue::try_new(f64::NAN, linear(), None).is_err());
         assert!(
             matches!(subjectless, Ok(true)),
             "a refusal without a controller is contained"

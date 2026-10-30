@@ -1216,8 +1216,9 @@ mod tests {
                 duration: Duration::from_secs(1),
                 curve: crate::SharedCurve::new(crate::curves::LINEAR),
             };
-            let mut refused = crate::AnimatedValue::new(0.0, motion.clone(), Some(&old)).unwrap();
-            let mut accepted = crate::AnimatedValue::new(0.0, motion, Some(&old)).unwrap();
+            let mut refused =
+                crate::AnimatedValue::try_new(0.0, motion.clone(), Some(&old)).unwrap();
+            let mut accepted = crate::AnimatedValue::try_new(0.0, motion, Some(&old)).unwrap();
             let refused_run = refused.animate_to(1.0).unwrap();
             let accepted_run = accepted.animate_to(2.0).unwrap();
             refused_run.when_complete_or_cancel({

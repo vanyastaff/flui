@@ -154,7 +154,7 @@ fn a_steady_state_frame_allocates_nothing() {
         }))
         .detach();
     let _run = controller.forward().expect("forward on a live controller");
-    let mut vector = AnimatedValue::new(
+    let mut vector = AnimatedValue::try_new(
         EdgeInsets::ZERO,
         MotionSpec::Curve {
             duration: Duration::from_secs(3600),
@@ -175,7 +175,7 @@ fn a_steady_state_frame_allocates_nothing() {
 
     // Seven components exceed the component run's inline segment storage.
     // Admission may allocate; sampling and rebuilding this value may not.
-    let mut nested = AnimatedValue::new(
+    let mut nested = AnimatedValue::try_new(
         CardMotion(
             Appearance {
                 position: Offset::ZERO,
@@ -217,7 +217,7 @@ fn a_steady_state_frame_allocates_nothing() {
             .to(
                 1.0,
                 Duration::from_secs(3600),
-                PiecewiseLinear::new(&[
+                PiecewiseLinear::try_new(&[
                     LinearStop::new(0.0),
                     LinearStop::new(0.25),
                     LinearStop::new(1.0),
@@ -230,8 +230,8 @@ fn a_steady_state_frame_allocates_nothing() {
             .to(
                 1.0,
                 Duration::from_secs(3600),
-                SpringCurve::new(
-                    SpringDescription::new(1.0, 100.0, 20.0).expect("critical spring"),
+                SpringCurve::try_new(
+                    SpringDescription::try_new(1.0, 100.0, 20.0).expect("critical spring"),
                     Tolerance::DEFAULT,
                 )
                 .expect("finite spring duration"),

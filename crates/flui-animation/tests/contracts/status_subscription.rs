@@ -571,7 +571,7 @@ fn owners_deliver_through_both_subscription_forms() {
 
         let registry = Vsync::new();
         let mut clock = MotionClock::new();
-        let mut value = flui_animation::AnimatedValue::new(
+        let mut value = flui_animation::AnimatedValue::try_new(
             0.0_f64,
             flui_animation::MotionSpec::Curve {
                 duration: Duration::from_secs(1),

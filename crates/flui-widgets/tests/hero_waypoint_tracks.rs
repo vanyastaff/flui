@@ -312,15 +312,15 @@ fn authored_easing_flight(spring: bool) {
     let source = Rect::from_ltwh(385.0, 290.0, 30.0, 20.0);
     let destination = Rect::from_ltwh(370.0, 277.5, 60.0, 45.0);
     let (curve, duration, checkpoints) = if spring {
-        let curve = SpringCurve::new(
-            SpringDescription::new(1.0, 100.0, 6.0).unwrap(),
+        let curve = SpringCurve::try_new(
+            SpringDescription::try_new(1.0, 100.0, 6.0).unwrap(),
             Tolerance::DEFAULT,
         )
         .unwrap();
         let duration = curve.duration();
         (SharedCurve::new(curve), duration, [50, 100, 330])
     } else {
-        let curve = PiecewiseLinear::new(&[
+        let curve = PiecewiseLinear::try_new(&[
             LinearStop::new(0.0),
             LinearStop::new(0.5).at(0.25),
             LinearStop::new(0.5).at(0.75),

@@ -283,7 +283,7 @@ pub(crate) struct SpringRest {
 }
 
 impl SpringRest {
-    fn new(
+    fn try_new(
         simulation: &SpringSimulation,
         x0: f64,
         v0: f64,
@@ -448,8 +448,8 @@ impl Segment {
         }
         Ok(match motion {
             MotionSpec::Spring(spring) => {
-                let simulation = SpringSimulation::new(*spring, x0, target, v0, tolerance)?;
-                let rest = SpringRest::new(&simulation, x0, v0, target)?;
+                let simulation = SpringSimulation::try_new(*spring, x0, target, v0, tolerance)?;
+                let rest = SpringRest::try_new(&simulation, x0, v0, target)?;
                 Self::Spring {
                     simulation,
                     x0,

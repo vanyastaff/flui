@@ -106,7 +106,7 @@ pub(crate) fn settle_spring(
         return None;
     }
     let spring = SpringDescription::with_damping_ratio(0.5, 100.0, 1.1).ok()?;
-    SpringSimulation::new(
+    SpringSimulation::try_new(
         spring,
         metrics.pixels,
         target,

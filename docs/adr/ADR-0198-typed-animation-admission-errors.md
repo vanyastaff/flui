@@ -14,7 +14,7 @@ creating a value range also cannot meaningfully describe controller disposal.
 
 ## Decision
 
-`ValueRange::new` returns `RangeDefect`: non-finite endpoints, inverted or empty
+`ValueRange::try_new` returns `RangeDefect`: non-finite endpoints, inverted or empty
 endpoints, or an overflowing span. Its checks retain that order. A controller
 builder accepts only a validated `ValueRange`; no unused controller bounds-error
 variant duplicates the value constructor's error domain.
@@ -52,7 +52,7 @@ unavailable numeric endpoints or introduce an unused controller error variant.
 Applications can retain their own aggregate error at the configuration boundary.
 
 This intentionally changes pre-1.0 Rust and optional serde APIs. Migrate
-`ValueRange::new` callers to `RangeDefect` and match structured `AnimationError`
+`ValueRange::try_new` callers to `RangeDefect` and match structured `AnimationError`
 variants instead of the former three string variants. The SDK exposes the same
 types through `flui_sdk::animation`; it creates no copied error layer. Optional
 serde preserves finite diagnostic values as numbers. Human-readable formats use

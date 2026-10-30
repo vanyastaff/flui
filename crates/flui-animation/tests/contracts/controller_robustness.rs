@@ -570,7 +570,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             );
             assert!(run.is_pending());
             if paused {
-                controller.set_playback_rate(PlaybackRate::new(0.0).unwrap());
+                controller.set_playback_rate(PlaybackRate::try_new(0.0).unwrap());
             }
             let events = Rc::new(RefCell::new(Vec::new()));
             let value_events = Rc::clone(&events);
@@ -626,7 +626,7 @@ fn explicit_finish_completes_the_original_finite_run() {
 
 fn explicit_finish_uses_the_last_repeat_leg() {
     use flui_animation::{Iterations, RepeatMode, RepeatSpec, ValueRange};
-    let range = ValueRange::new(0.2, 0.8).expect("ordered range");
+    let range = ValueRange::try_new(0.2, 0.8).expect("ordered range");
     for mode in [RepeatMode::Restart, RepeatMode::Alternate] {
         for count in [1, 2, 3, 4] {
             let controller = controller();
@@ -1216,7 +1216,7 @@ fn overflowing_repeat_span_preserves_the_run() {
     assert_eq!(controller.value(), 2.5);
     // Finite endpoints whose span overflows never become a repeat range.
     assert_eq!(
-        flui_animation::ValueRange::new(-f64::MAX, f64::MAX),
+        flui_animation::ValueRange::try_new(-f64::MAX, f64::MAX),
         Err(flui_animation::RangeDefect::SpanOverflow),
         "finite endpoints must not admit an overflowing repeat span"
     );

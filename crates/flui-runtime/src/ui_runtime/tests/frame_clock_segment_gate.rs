@@ -257,8 +257,8 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
                     }),
             ),
             "spring" => controller.animate_with(
-                SpringSimulation::new(
-                    SpringDescription::new(1.0, 100.0, 20.0).expect("critical spring"),
+                SpringSimulation::try_new(
+                    SpringDescription::try_new(1.0, 100.0, 20.0).expect("critical spring"),
                     0.0,
                     1.0,
                     0.0,

@@ -9,7 +9,7 @@ use super::{Builtin, BuiltinCurve, Curve};
 ///
 /// Missing inputs are distributed evenly between their explicit neighbours.
 /// Build with [`Self::new`] and optionally [`Self::at`]; validation occurs when
-/// the stops are admitted by [`PiecewiseLinear::new`]. Two stops with the same
+/// the stops are admitted by [`PiecewiseLinear::try_new`]. Two stops with the same
 /// output describe a plateau; equal inputs describe an instantaneous jump.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -36,7 +36,7 @@ impl LinearStop {
     }
 }
 
-/// Why [`PiecewiseLinear::new`] refused its stops.
+/// Why [`PiecewiseLinear::try_new`] refused its stops.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PiecewiseLinearError {
@@ -95,7 +95,7 @@ struct Knot {
 ///
 /// ```
 /// use flui_animation::{Curve, LinearStop, PiecewiseLinear};
-/// let curve = PiecewiseLinear::new(&[
+/// let curve = PiecewiseLinear::try_new(&[
 ///     LinearStop::new(0.0),
 ///     LinearStop::new(0.25).at(0.25),
 ///     LinearStop::new(0.25).at(0.75),
@@ -122,7 +122,7 @@ impl PiecewiseLinear {
     /// Returns [`PiecewiseLinearError`] for fewer than two or more than
     /// `u32::MAX` stops, non-finite outputs, explicit inputs outside `[0, 1]`,
     /// or canonical endpoints other than `(0, 0)` and `(1, 1)`.
-    pub fn new(stops: &[LinearStop]) -> Result<Self, PiecewiseLinearError> {
+    pub fn try_new(stops: &[LinearStop]) -> Result<Self, PiecewiseLinearError> {
         if stops.len() < 2 {
             return Err(PiecewiseLinearError::TooFewStops);
         }

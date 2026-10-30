@@ -161,9 +161,9 @@ fn set_value_nan_is_canonicalized() {
 }
 
 fn bounded_ranges_refuse_infinity_and_unbounded_starts_at_zero() {
-    assert_eq!(ValueRange::new(20.0, 10.0), Err(RangeDefect::Inverted));
+    assert_eq!(ValueRange::try_new(20.0, 10.0), Err(RangeDefect::Inverted));
     assert_eq!(
-        ValueRange::new(f64::NEG_INFINITY, f64::INFINITY),
+        ValueRange::try_new(f64::NEG_INFINITY, f64::INFINITY),
         Err(RangeDefect::NonFinite)
     );
     let owner = AnimationController::builder(Duration::from_millis(1))
@@ -295,9 +295,9 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
 /// A repeat that could never change value is refused: equal endpoints by
 /// `ValueRange`, a range outside the bounds once clamped into them.
 fn repeat_rejects_an_empty_range() {
-    assert_eq!(ValueRange::new(0.5, 0.5), Err(RangeDefect::Inverted));
+    assert_eq!(ValueRange::try_new(0.5, 0.5), Err(RangeDefect::Inverted));
     let (_owner, c) = controller(100);
-    let outside = ValueRange::new(2.0, 3.0).expect("ordered range");
+    let outside = ValueRange::try_new(2.0, 3.0).expect("ordered range");
     assert!(matches!(
         c.repeat(RepeatSpec::new(RepeatMode::Restart).with_range(outside)),
         Err(AnimationError::InvalidRepeatRange {
@@ -317,7 +317,7 @@ fn zero_iterations_settle_at_the_call_without_landing() {
         let (_owner, c) = controller(100);
         c.set_value(0.1).expect("no build is running");
         let generation = c.run_generation();
-        let range = ValueRange::new(0.2, 0.8).expect("ordered range");
+        let range = ValueRange::try_new(0.2, 0.8).expect("ordered range");
         let run = c
             .repeat(
                 RepeatSpec::new(mode)
