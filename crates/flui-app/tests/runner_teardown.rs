@@ -219,6 +219,18 @@ fn runner_teardown() {
                 "session_end_skips_detached_once_the_notice_spent_the_margin",
                 session_end_skips_detached_once_the_notice_spent_the_margin,
             ),
+            (
+                "a_repeated_session_end_query_does_not_release_the_session",
+                a_repeated_session_end_query_does_not_release_the_session,
+            ),
+            (
+                "a_slow_detached_observer_stops_the_session_end_delivery",
+                a_slow_detached_observer_stops_the_session_end_delivery,
+            ),
+            (
+                "a_session_end_handler_panic_with_a_panicking_payload_refuses",
+                a_session_end_handler_panic_with_a_panicking_payload_refuses,
+            ),
         ],
     );
 }
@@ -961,4 +973,149 @@ pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
          session end's delivery"
     );
     run.join().expect("the session end returns Ok");
+}
+
+/// A second session-end query while a window still refuses the first one
+/// replaces it without telling the platform the session was released: the
+/// displaced request's blocks drop, but the platform waits on the new one
+/// (ADR-0260 §1).
+///
+/// Red-check: let the displaced request's release reach the platform — it
+/// counts one release while the window still refuses.
+pub(crate) fn a_repeated_session_end_query_does_not_release_the_session() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    for _ in 0..2 {
+        assert_eq!(
+            run.end_session(SessionEndPhase::Query),
+            SessionEndAnswer::Block
+        );
+        run.run_owner_turn();
+    }
+    assert_eq!(
+        events.session_end_releases(),
+        0,
+        "the window still refuses the session end"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window root whose Detached observer records whether the loop still ran
+/// and then blocks for `delay`, as a slow save does.
+#[derive(Clone)]
+struct SlowDetached {
+    turns: flui_native::HeadlessOwnerTurns,
+    running: Rc<std::cell::Cell<Option<bool>>>,
+    delay: Duration,
+}
+
+struct SlowDetachedState {
+    root: SlowDetached,
+    subscription: Option<flui_view::LifecycleSubscription>,
+}
+
+impl flui_view::StatefulView for SlowDetached {
+    type State = SlowDetachedState;
+
+    fn create_state(&self) -> Self::State {
+        SlowDetachedState {
+            root: self.clone(),
+            subscription: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<SlowDetached> for SlowDetachedState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let root = self.root.clone();
+        let (_, subscription) = ctx
+            .lifecycle_handle()
+            .expect("a bound lifecycle")
+            .subscribe(move |state| {
+                if state == flui_view::AppLifecycleState::Detached && root.running.get().is_none() {
+                    root.running.set(Some(root.turns.is_running()));
+                    std::thread::sleep(root.delay);
+                }
+            })
+            .expect("the lifecycle is open");
+        self.subscription = Some(subscription);
+    }
+
+    fn build(
+        &self,
+        _view: &SlowDetached,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for SlowDetached {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A slow Detached observer in one UI runtime keeps the next runtime's
+/// observers from starting once less than the margin is left: the flush
+/// keeps the rest of the budget (ADR-0260 §3).
+///
+/// Red-check: check the margin only once before the close delivery — both
+/// windows' observers run while the loop still runs.
+pub(crate) fn a_slow_detached_observer_stops_the_session_end_delivery() {
+    let platform = flui_native::HeadlessPlatform::new();
+    let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
+    let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
+        turns: platform.owner_turns(),
+        running: Rc::clone(running),
+        delay: SPENT_MARGIN,
+    };
+    let (first, second) = (root(&windows[0]), root(&windows[1]));
+    let application = Application::new(move |_| first.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+        .on_ready(move |_| {
+            drop(
+                flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, second)
+                    .expect("an isolated window opens on the headless platform"),
+            );
+        });
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    assert_eq!(run.open_windows().len(), 2, "both windows are open");
+
+    run.end_session(SessionEndPhase::Ending);
+    let delivered = windows
+        .iter()
+        .filter(|running| running.get() == Some(true))
+        .count();
+    assert_eq!(
+        delivered, 1,
+        "only the first window heard Detached from the session end's delivery"
+    );
+    run.join().expect("the session end returns Ok");
+}
+
+/// A close handler that panics on a session end refuses it, even when the
+/// panic's payload panics again as it is dropped: the payload is kept, so
+/// the answer stays `Block` (ADR-0260 §1).
+///
+/// Red-check: drop the payload where the panic is caught — the second panic
+/// escapes the query and no answer is given.
+pub(crate) fn a_session_end_handler_panic_with_a_panicking_payload_refuses() {
+    let handler = flui_app::app::CloseRequestHandler::new(|_| {
+        std::panic::panic_any(PanicsOnDrop("the handler's payload panicked on drop"))
+    });
+    let (run, _events, _shared) = guarded_run_with(
+        HoldOn::Nothing,
+        AppConfig::new().with_close_request_handler(handler),
+    );
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the panicking handler refused the session end"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.join().expect("the run returns Ok");
 }

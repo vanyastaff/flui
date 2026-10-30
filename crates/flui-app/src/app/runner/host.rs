@@ -365,7 +365,14 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
 
     match phase {
         SessionEndPhase::Query => {
-            let request = SessionEndRequest::new().on_release(|| {
+            let current = Rc::new(std::cell::Cell::new(true));
+            let live = Rc::clone(&current);
+            let request = SessionEndRequest::new().on_release(move || {
+                // A request a later query displaced answers nothing: the
+                // platform waits on the later one.
+                if !live.get() {
+                    return;
+                }
                 // The platform is told the application is done with the
                 // session end it asked to wait for: every window that refused
                 // carried its close out, and every subscriber let go.
@@ -375,6 +382,9 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
             let displaced = APP_RUNTIME.with(|slot| {
                 slot.try_borrow_mut().ok().map(|mut state| {
                     let request = state.session_end.replace(request.clone());
+                    if let Some(displaced) = state.session_end_current.replace(current) {
+                        displaced.set(false);
+                    }
                     let refusals = std::mem::replace(&mut state.session_end_refusals, refusals);
                     (request, refusals)
                 })
@@ -409,47 +419,8 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
             SessionEndAnswer::Proceed
         }
         SessionEndPhase::Ending => {
-            let deadline = std::time::Instant::now() + session_end_budget();
-            // A platform that only tells (Android's stop, the web's pagehide,
-            // iOS) reports that the process may be killed, not that the
-            // application is over: it may come back to the same UI. Only a
-            // platform that holds or delays the session ends the
-            // application here.
-            let ends_application =
-                session_end_platform(flui_native::OwnerPlatform::session_end_support)
-                    .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
             drop(take_session_end());
-            // What the host keeps itself is written first, within the same
-            // deadline as the documents.
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            super::placement::flush_all_by(deadline);
-            // Application code runs while the budget can absorb it: a
-            // subscriber or a Detached observer may still publish what the
-            // flush then writes. A UI runtime that is checked out queues the
-            // notice and runs none of its code before the process ends.
-            if deadline.saturating_duration_since(std::time::Instant::now())
-                >= SESSION_END_USER_CODE_THRESHOLD
-            {
-                deliver_contained(&HostNotice::SessionEnded);
-                // The notice's subscribers may have spent the margin: the
-                // close delivery runs application code too, so it asks again.
-                if ends_application
-                    && deadline.saturating_duration_since(std::time::Instant::now())
-                        >= SESSION_END_USER_CODE_THRESHOLD
-                {
-                    deliver_session_end_close();
-                }
-            }
-            flush_for_session_end(deadline);
-            // The loop is asked to quit whatever ends the session, an end
-            // that closes only this application included.
-            if ends_application {
-                let _ = session_end_platform(flui_native::OwnerPlatform::quit);
-            }
+            end_session_now();
             SessionEndAnswer::Proceed
         }
         // A phase this host does not know asks for nothing.
@@ -460,6 +431,7 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
 /// The least of the session end's budget that must be left for a step that
 /// runs application code to start, so the flush keeps time to write
 /// (ADR-0260, "the 1 s threshold").
+#[cfg(not(target_arch = "wasm32"))]
 const SESSION_END_USER_CODE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Whether a window still refuses the session end the host is answering.
@@ -503,11 +475,61 @@ pub(super) fn release_session_end_refusal(address: flui_foundation::Presentation
     drop(released);
 }
 
-/// Deliver the session's end to every UI runtime in its slot, containing and
+/// The session's end happens (ADR-0260 §3, §4, §6): what the documents
+/// published is written inline within the session end's budget, application
+/// code runs only while at least [`SESSION_END_USER_CODE_THRESHOLD`] of it is
+/// left, and the loop is asked to quit where the application ends with the
+/// session.
+#[cfg(not(target_arch = "wasm32"))]
+fn end_session_now() {
+    use flui_platform::HostNotice;
+
+    let deadline = std::time::Instant::now() + session_end_budget();
+    // A platform that only tells (Android's stop, iOS) reports that the
+    // process may be killed, not that the application is over: it may come
+    // back to the same UI. Only a platform that holds or delays the session
+    // ends the application here.
+    let ends_application = session_end_platform(flui_native::OwnerPlatform::session_end_support)
+        .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
+    // What the host keeps itself is written first, within the same deadline
+    // as the documents.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+    super::placement::flush_all_by(deadline);
+    // Application code runs while the budget can absorb it: a subscriber or a
+    // Detached observer may still publish what the flush then writes. A UI
+    // runtime that is checked out queues the notice and runs none of its code
+    // before the process ends.
+    if deadline.saturating_duration_since(std::time::Instant::now())
+        >= SESSION_END_USER_CODE_THRESHOLD
+    {
+        deliver_contained(&HostNotice::SessionEnded);
+        if ends_application {
+            deliver_session_end_close(deadline);
+        }
+    }
+    flush_for_session_end(deadline);
+    if ends_application {
+        let _ = session_end_platform(flui_native::OwnerPlatform::quit);
+    }
+}
+
+/// The web's `pagehide`: the browser grants no synchronous budget and the
+/// page may come back from its cache, so the notice is delivered and the
+/// flush registry keeps writing on its own; nothing waits, closes or quits.
+#[cfg(target_arch = "wasm32")]
+fn end_session_now() {
+    deliver_contained(&flui_platform::HostNotice::SessionEnded);
+}
+
+/// Deliver the session's end to every UI runtime in its slot while the
+/// margin for application code is left before `deadline`, containing and
 /// reporting a panic: the caller answers a native callback.
-fn deliver_session_end_close() {
+#[cfg(not(target_arch = "wasm32"))]
+fn deliver_session_end_close(deadline: std::time::Instant) {
     let mut failure = flui_foundation::panic::FirstPanic::new();
-    failure.contain(super::owner_dispatch::deliver_session_end_close);
+    failure.contain(|| {
+        super::owner_dispatch::deliver_session_end_close(deadline, SESSION_END_USER_CODE_THRESHOLD);
+    });
     if let Some(payload) = failure.into_payload() {
         tracing::error!(
             panic = flui_foundation::panic::payload_text(&*payload),
@@ -602,6 +624,7 @@ fn withdraw_session_end() {
 
 /// How long the framework's part of a session end may take: the budget, or
 /// less where the platform waits a shorter bounded time.
+#[cfg(not(target_arch = "wasm32"))]
 fn session_end_budget() -> std::time::Duration {
     use flui_view::__runtime::SESSION_END_BUDGET;
     match session_end_platform(flui_native::OwnerPlatform::session_end_support) {
@@ -613,6 +636,7 @@ fn session_end_budget() -> std::time::Duration {
 /// Write what the documents published, inline, by `deadline`: the process may
 /// be ended at any moment once the session-end handler returns. Runs no
 /// application code; a panic in the writer is contained and reported.
+#[cfg(not(target_arch = "wasm32"))]
 fn flush_for_session_end(deadline: std::time::Instant) {
     let flush = APP_RUNTIME.with(|slot| {
         slot.try_borrow()

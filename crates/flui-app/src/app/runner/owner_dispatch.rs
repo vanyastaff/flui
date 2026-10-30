@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -46,6 +47,7 @@ impl RuntimeDispatcher {
         ))
     }
 
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -688,9 +690,12 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
 /// delivery does (ADR-0259 §6, ADR-0260 §3): each presentation commits its
 /// composition and its observers hear `Detached`, so what they publish reaches
 /// the flush after it. A runtime that is checked out runs none of its code; its
-/// composition is lost, a documented limit. The first panic is contained and
+/// composition is lost, a documented limit. A runtime's observers start only
+/// while `margin` is left before `deadline`, whatever the runtimes before it
+/// spent, so the flush keeps the rest. The first panic is contained and
 /// reported by the caller.
-pub(super) fn deliver_session_end_close() {
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: std::time::Duration) {
     let dispatchers = APP_RUNTIME.with(|slot| {
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
@@ -714,6 +719,13 @@ pub(super) fn deliver_session_end_close() {
             .unwrap_or_default()
     });
     for dispatcher in dispatchers {
+        if deadline.saturating_duration_since(std::time::Instant::now()) < margin {
+            tracing::warn!(
+                ?dispatcher,
+                "the session end's budget is spent; the remaining windows hear no Detached"
+            );
+            break;
+        }
         if let Err(error) = dispatcher.lifecycle(AppLifecycleState::Detached) {
             tracing::debug!(?dispatcher, ?error, "session-end close not delivered");
         }
