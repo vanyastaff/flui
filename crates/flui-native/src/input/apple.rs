@@ -829,6 +829,126 @@ pub(crate) mod indirect {
     }
 }
 
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod samples {
+    //! A UIKit move with the touches UIKit coalesced into it and the ones it
+    //! predicts, assembled as one batch.
+
+    #![forbid(unsafe_code)]
+
+    use crate::input::assembly::{
+        Assembled, ContactRegistry, DecodeError, MoveBatch, NativeReading,
+    };
+
+    /// Assemble `current` with `coalesced`, UIKit's samples oldest first and
+    /// ending with the touch itself, which is `current` and so is not attached
+    /// again, and the samples UIKit `predicted` after it.
+    pub(crate) fn assemble_move(
+        contacts: &mut ContactRegistry,
+        batch: &mut MoveBatch,
+        current: &NativeReading,
+        coalesced: impl IntoIterator<Item = NativeReading>,
+        predicted: impl IntoIterator<Item = NativeReading>,
+    ) -> Assembled {
+        let mut coalesced = coalesced.into_iter().peekable();
+        while let Some(sample) = coalesced.next() {
+            if coalesced.peek().is_some() {
+                batch.push_coalesced(sample);
+            }
+        }
+        for sample in predicted {
+            batch.push_predicted(sample);
+        }
+        batch
+            .decode(contacts, current)
+            .unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::assemble_move;
+        use crate::input::assembly::{
+            ContactRegistry, MoveBatch, NativeClock, NativeContact, NativeReading, ReadingAction,
+            ReadingTime, decode,
+        };
+        use flui_platform::EventTime;
+        use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, PointerSample};
+
+        fn pencil(action: ReadingAction, ms: u64, x: f64) -> NativeReading {
+            NativeReading::new(
+                NativeContact(0),
+                PointerKind::Pen {
+                    tool: flui_platform::pointer::PenTool::Tip,
+                },
+                action,
+                ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
+            )
+            .at(x, 20.0, 1.0)
+        }
+
+        #[test]
+        fn a_uikit_move_attaches_its_coalesced_history_once_and_its_predictions() {
+            let xs = |samples: &[PointerSample]| {
+                samples
+                    .iter()
+                    .map(|sample| sample.position.get().x)
+                    .collect::<Vec<_>>()
+            };
+            let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
+            let mut batch = MoveBatch::new();
+            decode(
+                &mut contacts,
+                &pencil(ReadingAction::Press(PointerButton::PRIMARY), 10, 10.0),
+            )
+            .expect("valid");
+            let current = pencil(ReadingAction::Move, 13, 13.0);
+            let assembled = assemble_move(
+                &mut contacts,
+                &mut batch,
+                &current,
+                [11.0, 12.0, 13.0]
+                    .into_iter()
+                    .zip(11..)
+                    .map(|(x, ms)| pencil(ReadingAction::Move, ms, x)),
+                [pencil(ReadingAction::Move, 15, 15.0)],
+            )
+            .into_vec();
+            let [input] = assembled.as_slice() else {
+                panic!("one move, got {assembled:?}")
+            };
+            let Some(PointerEvent::Move(movement)) = input.as_pointer() else {
+                panic!("a move")
+            };
+            assert_eq!(
+                xs(movement.coalesced()),
+                [11.0, 12.0],
+                "the history without the touch itself"
+            );
+            assert_eq!(movement.current().position.get().x, 13.0);
+            assert_eq!(xs(movement.predicted()), [15.0]);
+
+            let alone = assemble_move(
+                &mut contacts,
+                &mut batch,
+                &pencil(ReadingAction::Move, 16, 16.0),
+                [pencil(ReadingAction::Move, 16, 16.0)],
+                [],
+            )
+            .into_vec();
+            let [input] = alone.as_slice() else {
+                panic!("one move")
+            };
+            let Some(PointerEvent::Move(movement)) = input.as_pointer() else {
+                panic!("a move")
+            };
+            assert!(
+                movement.coalesced().is_empty() && movement.predicted().is_empty(),
+                "a move UIKit coalesced nothing into carries only itself"
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) mod macos {
     //! The macOS input: the mouse, trackpad and keyboard events each window's
@@ -1861,20 +1981,18 @@ pub(crate) mod ios {
                     .predictedTouchesForTouch(touch)
                     .map(|samples| samples.to_vec())
                     .unwrap_or_default();
-                let older = coalesced.split_last().map_or(&[][..], |(_, older)| older);
-                if !older.is_empty() || !predicted.is_empty() {
-                    for sample in older {
-                        self.batch.push_coalesced(read(sample, ReadingAction::Move));
-                    }
-                    for sample in &predicted {
-                        self.batch.push_predicted(read(sample, ReadingAction::Move));
-                    }
-                    return self
-                        .batch
-                        .decode(&mut self.contacts, &reading)
-                        .unwrap_or_else(DecodeError::into_inputs)
-                        .into_vec();
-                }
+                return crate::input::apple::samples::assemble_move(
+                    &mut self.contacts,
+                    &mut self.batch,
+                    &reading,
+                    coalesced
+                        .iter()
+                        .map(|sample| read(sample, ReadingAction::Move)),
+                    predicted
+                        .iter()
+                        .map(|sample| read(sample, ReadingAction::Move)),
+                )
+                .into_vec();
             }
             self.assemble(&reading)
         }
