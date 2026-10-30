@@ -14,6 +14,9 @@ mod execution_public_paths;
 #[path = "runner_frame_ordering.rs"]
 mod runner_frame_ordering;
 
+// The runner and its test kit run a headless desktop loop, which the web has
+// no counterpart for.
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "runner_teardown.rs"]
 mod runner_teardown;
 

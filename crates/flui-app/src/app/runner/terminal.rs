@@ -26,7 +26,7 @@ pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) 
         Ok(_) | Err(_) => Some(held),
     });
     if let Some(later) = refused {
-        crate::app::lifecycle::contain_lifecycle_diagnostic(|| {
+        contain_diagnostic(|| {
             tracing::error!(
                 during,
                 panic = flui_foundation::panic::payload_text(later.as_ref()),
@@ -38,6 +38,13 @@ pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) 
 }
 
 /// Take the loop's terminal failure, to resume once the exit order ran.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the web loop never returns, so no exit order runs after it"
+    )
+)]
 pub(super) fn take_terminal() -> Option<Box<dyn Any + Send>> {
     APP_RUNTIME.with(|slot| {
         slot.try_borrow_mut()
@@ -49,6 +56,13 @@ pub(super) fn take_terminal() -> Option<Box<dyn Any + Send>> {
 /// Run `body`, a step of the loop's exit that drops application values: a
 /// panic in it is the loop's terminal failure (ADR-0258 §2), held for the
 /// exit's end while the rest of the exit runs.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the web loop never returns, so no exit order runs after it"
+    )
+)]
 pub(super) fn contain_terminal(during: &'static str, body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         hold_terminal(payload, during);
@@ -76,6 +90,15 @@ fn request_terminal_quit() {
         let _ = super::host::with_owner_platform(flui_native::OwnerPlatform::quit);
     });
     if let Err(payload) = quit {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+/// Run `report`, a log of a failure already contained: a subscriber that
+/// panics while it reports cannot replace the failure, so its payload is
+/// retained.
+pub(super) fn contain_diagnostic(report: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(report)) {
         flui_foundation::panic::retain_opaque_payload(payload);
     }
 }

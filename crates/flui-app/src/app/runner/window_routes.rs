@@ -285,7 +285,7 @@ impl WindowHandler for WindowRoutes {
             FrameOutcome::Declined
         }));
         ran.unwrap_or_else(|payload| {
-            crate::app::lifecycle::contain_lifecycle_diagnostic(|| {
+            super::terminal::contain_diagnostic(|| {
                 tracing::error!(
                     panic = flui_foundation::panic::payload_text(payload.as_ref()),
                     "a window's frame failed; the platform asks for it again"
