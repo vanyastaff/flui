@@ -570,6 +570,7 @@ fn selection_area_text_runs() {
             ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
             ("selection_area::the_highlight_colour_follows_the_area_style", crate::selection_area::the_highlight_colour_follows_the_area_style),
             ("selection_area::a_selection_highlights_the_parts_it_covers", crate::selection_area::a_selection_highlights_the_parts_it_covers),
+            ("selection_area::an_edited_text_keeps_its_highlight_current", crate::selection_area::an_edited_text_keeps_its_highlight_current),
             ("selection_area::sort_keys_order_the_reported_text", crate::selection_area::sort_keys_order_the_reported_text),
             ("selection_area::a_line_limit_bounds_what_a_paragraph_reports", crate::selection_area::a_line_limit_bounds_what_a_paragraph_reports),
         ],

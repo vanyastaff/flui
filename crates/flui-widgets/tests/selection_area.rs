@@ -891,6 +891,46 @@ pub(crate) fn a_selection_highlights_the_parts_it_covers() {
     );
 }
 
+/// A text edited while selected highlights what it holds now: a text between
+/// the selection's ends stays covered whole, and the text the selection
+/// starts in stays covered to its end.
+///
+/// Red-check: hand the paragraphs parts bounded by their text at selection
+/// time (the edited texts keep `0..11` and `6..10`).
+pub(crate) fn an_edited_text_keeps_its_highlight_current() {
+    let view = |first: &str, middle: &str| {
+        SelectionArea::new(Column::new((
+            Text::new(first.to_owned()),
+            Text::new(middle.to_owned()),
+            Text::new("Omega"),
+        )))
+    };
+    let mut laid = mounted(view("Alpha beta", "Gamma delta"));
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 6), at(last[0], 2)))
+        .expect("a selection across three texts is accepted");
+    laid.tick();
+    laid.pump_widget(view("Alpha beta gamma", "Gamma delta epsilon"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["Some(0..19)", "Some(0..2)", "Some(6..16)"],
+        "the edited texts highlight their new text"
+    );
+    laid.pump_widget(view("Alpha", "Gamma"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["None", "Some(0..2)", "Some(0..5)"],
+        "a text shrunk under the selection's start highlights nothing"
+    );
+}
+
 /// The highlight takes the area's own style, else the nearest
 /// `DefaultSelectionStyle`'s, else the default.
 ///

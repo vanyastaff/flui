@@ -274,7 +274,7 @@ impl SelectionModel {
     /// none. Each text contributes only what its layout shows: the lines a
     /// line limit cuts are not in its runs, so they are neither reported nor
     /// highlighted.
-    fn covered(&self, selection: &DocumentSelection) -> Option<Vec<(usize, Range<usize>)>> {
+    fn covered(&self, selection: &DocumentSelection) -> Option<Vec<Covered>> {
         let entries = self.registry.entries.borrow();
         let order = self.reading_order(&entries);
         let place = |at: &DocumentPosition| {
@@ -301,18 +301,22 @@ impl SelectionModel {
                     let shown = shown.unwrap_or(length).min(length);
                     let start = if rank == from.0 { from.1 } else { 0 }.min(shown);
                     let end = if rank == to.0 { to.1 } else { shown }.min(shown);
-                    (index, start..end.max(start))
+                    Covered {
+                        index,
+                        range: start..end.max(start),
+                        to_end: rank != to.0,
+                    }
                 })
                 .collect(),
         )
     }
 
     /// The covered parts' text, joined by `'\n'`.
-    fn joined(&self, covered: &[(usize, Range<usize>)]) -> SelectedText {
+    fn joined(&self, covered: &[Covered]) -> SelectedText {
         let entries = self.registry.entries.borrow();
         let text = covered
             .iter()
-            .map(|(index, range)| {
+            .map(|Covered { index, range, .. }| {
                 entries[*index]
                     .text
                     .borrow()
@@ -326,10 +330,13 @@ impl SelectionModel {
     }
 
     /// Gives each registered text its part of `covered` to highlight, and
-    /// rebuilds only the texts whose part changed. A rebuild that panics
+    /// rebuilds only the texts whose part changed. A part that runs to its
+    /// text's end is kept open-ended, so a text edited while selected
+    /// highlights what it holds now; the paragraph bounds it when it builds,
+    /// and its layout paints only the lines it shows. A rebuild that panics
     /// stops neither the others nor the caller's listener: its failure is
     /// held in `failure`.
-    fn highlight(&self, covered: &[(usize, Range<usize>)], failure: &mut FirstPanic) {
+    fn highlight(&self, covered: &[Covered], failure: &mut FirstPanic) {
         let changed: Vec<Rc<SelectableEntry>> = {
             let entries = self.registry.entries.borrow();
             entries
@@ -338,8 +345,15 @@ impl SelectionModel {
                 .filter_map(|(index, entry)| {
                     let part = covered
                         .iter()
-                        .find(|(covered, range)| *covered == index && !range.is_empty())
-                        .map(|(_, range)| range.clone());
+                        .find(|part| part.index == index && !part.range.is_empty())
+                        .map(|part| {
+                            let end = if part.to_end {
+                                usize::MAX
+                            } else {
+                                part.range.end
+                            };
+                            part.range.start..end
+                        });
                     (entry.highlight.replace(part.clone()) != part).then(|| Rc::clone(entry))
                 })
                 .collect()
@@ -530,6 +544,15 @@ struct SelectableEntry {
     subtree: SubtreeAnchor,
     highlight: RefCell<Option<Range<usize>>>,
     rebuild: RefCell<Option<RebuildHandle>>,
+}
+
+/// One text's part of a selection: its entry's index, the bytes its layout
+/// shows of that part, and whether the part runs on to the text's end
+/// rather than stopping at the selection's later end.
+struct Covered {
+    index: usize,
+    range: Range<usize>,
+    to_end: bool,
 }
 
 /// The selected bytes of one text and the colour that highlights them.
@@ -728,15 +751,14 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     fn build(&self, view: &SelectableParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
         let paragraph = ResolvedParagraph {
             selectable: Some(self.entry.anchor.clone()),
-            highlight: self
-                .entry
-                .highlight
-                .borrow()
-                .clone()
-                .map(|range| Highlight {
+            highlight: self.entry.highlight.borrow().clone().and_then(|range| {
+                let length = self.entry.text.borrow().len();
+                let range = range.start.min(length)..range.end.min(length);
+                (!range.is_empty()).then_some(Highlight {
                     range,
                     color: view.color,
-                }),
+                })
+            }),
             ..view.paragraph.clone()
         };
         AnchoredBox::new(
