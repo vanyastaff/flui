@@ -128,6 +128,7 @@ impl UiRuntime {
             text,
             data_transfer,
             process_nonce,
+            close,
         } = services;
 
         // The ui_runtime's scheduler fires the SAME platform wake its presentation
@@ -176,6 +177,7 @@ impl UiRuntime {
                 },
                 clipboard: Arc::clone(&clipboard),
                 storage: storage.clone(),
+                close: close.clone(),
                 clock: &clock,
                 text: text.clone(),
                 drag: drag.handle(),
@@ -222,6 +224,7 @@ impl UiRuntime {
             wake: Arc::clone(&wake),
             clipboard,
             storage,
+            close,
             text,
             #[cfg(any(test, feature = "testing"))]
             now_secs_override: AtomicU64::new(0),

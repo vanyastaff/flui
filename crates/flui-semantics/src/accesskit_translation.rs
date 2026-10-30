@@ -512,19 +512,34 @@ fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
 ///
 /// The payload must fit the action: a text for `SetValue` and
 /// `ReplaceSelectedText`, a number for a numeric `SetValue`, a point for
-/// `SetScrollOffset`, a selection within the target node for
-/// `SetTextSelection` (FLUI publishes no text runs yet, so a selection whose
-/// ends lie on another node has no meaning here), an id for `CustomAction`.
-/// A directional scroll carries its `ScrollUnit` (`Page` when the request has none);
-/// a reveal's `ScrollHint` is a preference and is not passed on. Any other payload on an action
-/// that takes none is refused. Validity against the current node (a number
-/// inside the range) is the owner's check at dispatch.
+/// `SetScrollOffset`, an id for `CustomAction`. A directional scroll carries
+/// its `ScrollUnit` (`Page` when the request has none); a reveal's
+/// `ScrollHint` is a preference and is not passed on. Any other payload on an
+/// action that takes none is refused. Validity against the current node (a
+/// number inside the range) is the owner's check at dispatch.
+///
+/// A `SetTextSelection` names positions in the field's text runs, which only
+/// the owner that published them can read: decode it with
+/// [`SemanticsOwner::semantics_action_request_for`](crate::SemanticsOwner::semantics_action_request_for).
+/// Here it is refused with [`ActionDecodeError::InvalidTextPosition`].
 ///
 /// # Errors
 ///
 /// [`ActionDecodeError`] names the target, tree, action or payload that did not fit.
 pub fn semantics_action_request_for(
     request: &accesskit::ActionRequest,
+) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
+    decode_request(request, |_, _| None)
+}
+
+/// [`semantics_action_request_for`], with `text_selection` reading a
+/// selection's run positions into bytes of the target's value.
+pub(crate) fn decode_request(
+    request: &accesskit::ActionRequest,
+    text_selection: impl FnOnce(
+        crate::AccessibilityNodeId,
+        &accesskit::TextSelection,
+    ) -> Option<TextSelection>,
 ) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
     use accesskit::ActionData;
 
@@ -553,15 +568,10 @@ pub fn semantics_action_request_for(
             ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
         }
         (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
-            if selection.anchor.node != request.target_node
-                || selection.focus.node != request.target_node
-            {
-                return Err(mismatched);
-            }
-            ActionCall::SetTextSelection(TextSelection {
-                anchor: selection.anchor.character_index,
-                focus: selection.focus.character_index,
-            })
+            ActionCall::SetTextSelection(
+                text_selection(node_id, selection)
+                    .ok_or(ActionDecodeError::InvalidTextPosition { node_id })?,
+            )
         }
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
             ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
@@ -660,13 +670,15 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         scroll_index: _,
         // Published with the `CustomAction` bit below.
         custom_actions,
-        // Unpublished: AccessKit has no adjacent-value or platform-view
-        // property, and FLUI publishes no text runs that text lengths describe.
+        // Unpublished: AccessKit has no adjacent-value, platform-view or
+        // text-length property.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
+        // Published as the `TextRun` children `text_run_nodes` builds.
+        text: _,
     } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
@@ -831,9 +843,87 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             .collect::<Vec<_>>(),
     );
 
+    if let Some((content, identities)) = published_text(data.attrs) {
+        let mut children = node.children().to_vec();
+        children.extend(identities.iter().map(|id| NodeId(id.as_u64())));
+        node.set_children(children);
+        if let Some(selection) = content.selection() {
+            let position = |at: crate::TextRunPosition| accesskit::TextPosition {
+                node: NodeId(identities[at.run].as_u64()),
+                character_index: at.character,
+            };
+            node.set_text_selection(accesskit::TextSelection {
+                anchor: position(selection.anchor),
+                focus: position(selection.focus),
+            });
+        }
+    }
+
     node
 }
 
+/// The text runs a node publishes, with their identities: only a text field
+/// publishes runs, and only once the pipeline has given them identities.
+pub(crate) fn published_text(
+    attrs: &SemanticsAttributes,
+) -> Option<(&crate::TextContent, &[AccessibilityNodeId])> {
+    let content = attrs.text.as_deref()?;
+    if !attrs.effective_role().is_text_input() {
+        return None;
+    }
+    Some((content, content.run_identities()?))
+}
+
+/// Whether a text field declares runs it cannot publish for want of
+/// identities: the runs and the selection are withheld together.
+pub(crate) fn withholds_text(attrs: &SemanticsAttributes) -> bool {
+    attrs
+        .text
+        .as_deref()
+        .is_some_and(|content| content.run_identities().is_none())
+        && attrs.effective_role().is_text_input()
+}
+
+/// The `TextRun` nodes of a field, in order. Runs of one visual line link to
+/// each other, so a line boundary is read only where the line ends.
+pub(crate) fn text_run_nodes(attrs: &SemanticsAttributes) -> Vec<(NodeId, Node)> {
+    let Some((content, identities)) = published_text(attrs) else {
+        return Vec::new();
+    };
+    let runs = content.runs();
+    runs.iter()
+        .enumerate()
+        .map(|(index, run)| {
+            let mut node = Node::new(Role::TextRun);
+            node.set_value(run.text());
+            node.set_character_lengths(run.character_lengths());
+            node.set_character_positions(run.character_positions());
+            node.set_character_widths(run.character_widths());
+            node.set_word_starts(run.word_starts());
+            node.set_text_direction(match run.direction() {
+                crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
+                crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+            });
+            let rect = run.rect();
+            node.set_bounds(Rect {
+                x0: rect.left(),
+                y0: rect.top(),
+                x1: rect.right(),
+                y1: rect.bottom(),
+            });
+            if index > 0 && runs[index - 1].line() == run.line() {
+                node.set_previous_on_line(NodeId(identities[index - 1].as_u64()));
+            }
+            if runs
+                .get(index + 1)
+                .is_some_and(|next| next.line() == run.line())
+            {
+                node.set_next_on_line(NodeId(identities[index + 1].as_u64()));
+            }
+            (NodeId(identities[index].as_u64()), node)
+        })
+        .collect()
+}
 /// A node as the adapter is handed it: [`to_node`], except that the root of a
 /// window's tree is a [`Role::Window`] when nothing gave it a role — no
 /// explicit role, and no flag or label that resolves one.
@@ -1229,11 +1319,11 @@ pub(crate) fn tree_to_scaled_update(
             // hand — no second arena lookup per node on the publish path.
             let data = tree.publish_view(node)?;
             let node_id = NodeId(data.id.as_u64());
-            Some((
-                node_id,
-                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),
-            ))
+            let published =
+                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors);
+            Some(std::iter::once((node_id, published)).chain(text_run_nodes(data.attrs)))
         })
+        .flatten()
         .collect();
 
     let focus = focus
@@ -1345,7 +1435,15 @@ mod tests {
                 data,
             };
             assert_eq!(
-                semantics_action_request_for(&request).map(|request| request.action()),
+                // A selection's run positions are read by the owner; any reading
+                // routes the action.
+                decode_request(&request, |_, _| {
+                    Some(TextSelection {
+                        anchor: 0,
+                        focus: 0,
+                    })
+                })
+                .map(|request| request.action()),
                 Ok(action),
                 "{action} publishes {published:?}, which does not route back to it"
             );
@@ -1469,12 +1567,12 @@ mod tests {
                 Ak::SetTextSelection,
                 Some(Data::SetTextSelection(accesskit::TextSelection {
                     anchor: position(here, 2),
-                    focus: position(here, 5),
+                    focus: position(elsewhere, 5),
                 })),
-                Ok(ActionCall::SetTextSelection(crate::TextSelection {
-                    anchor: 2,
-                    focus: 5,
-                })),
+                // Run positions need the owner that published the runs.
+                Err(ActionDecodeError::InvalidTextPosition {
+                    node_id: AccessibilityNodeId::from(render_id(1)),
+                }),
             ),
             (
                 Ak::CustomAction,
@@ -1507,16 +1605,6 @@ mod tests {
                 Some(Data::Value("x".into())),
                 Err(ActionDecodeError::MismatchedPayload {
                     action: SemanticsAction::Click,
-                }),
-            ),
-            (
-                Ak::SetTextSelection,
-                Some(Data::SetTextSelection(accesskit::TextSelection {
-                    anchor: position(here, 0),
-                    focus: position(elsewhere, 1),
-                })),
-                Err(ActionDecodeError::MismatchedPayload {
-                    action: SemanticsAction::SetTextSelection,
                 }),
             ),
             (

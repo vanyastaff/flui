@@ -474,6 +474,38 @@ delivery would be lost to an adapter that panicked.
 `tests/announce.rs`; `an_idle_presentation_speaks_an_announcement` in
 `crates/flui-runtime/tests/contracts/announce.rs`.
 
+### A text field's text is published as runs under pipeline identities
+
+**Rule.** [ADR-0204](../../docs/adr/ADR-0204-synthetic-semantics-nodes.md). The render object that
+lays out a field's text declares it as a `TextContent`: `TextRun`s, each one stretch of one line
+in one direction of at most 256 AccessKit characters (`u8` byte lengths on `char` boundaries),
+covering the value from its first byte, on lines that never go back, and a `TextRunSelection` in
+`(run, character)` positions. `TextRun::try_new` and `TextContent::try_new` check that model. The
+pipeline moves the runs' geometry into the window's space and gives each run a synthetic
+identity keyed by its whole identity: the node, its place, its start and its text. An unchanged
+run keeps its identity, a changed one takes a new one, and a rebuilt field forgets the runs it
+no longer has. A text field publishes its runs as `TextRun` children after its own, linked
+`next_on_line`/`previous_on_line` within a line, and its selection as `text_selection`; other
+roles publish none. Content without identities, as when the identity space is exhausted, is
+withheld whole, runs and selection together, and reported as `TextRunsWithheld`; the value
+still reads. A platform `SetTextSelection` names run positions, so the owner decodes it
+(`SemanticsOwner::semantics_action_request_for`, `PipelineOwner::decode_semantics_action`):
+both ends must lie in the target field's current runs, else `ActionDecodeError::InvalidTextPosition`,
+and the handler receives a `TextSelection` in bytes of the value. A request on a run goes to its
+field. An agent reads the value, not the runs.
+
+**Why.** AccessKit reads text only through `TextRun` children, and a `TextPosition` is a bare
+node id: a reissued identity would point an old selection at other text. Separate types for run
+positions and editor bytes make a mix-up a type error.
+
+**Test.** `a_field_reads_by_character_word_and_line`,
+`a_direction_change_inside_a_line_reads_as_one_line`,
+`a_selection_is_read_only_from_the_fields_own_runs`,
+`runs_without_identities_are_withheld_and_reported`,
+`a_run_is_checked_against_accesskits_model` in `tests/text_runs.rs`;
+`a_fields_runs_keep_their_identities_until_their_text_changes` in
+`crates/flui-widgets/tests/semantics.rs`.
+
 ### A header publishes AccessKit's `Heading` at its level
 
 **Rule.** `SemanticsRole::Heading` publishes `Role::Heading`, and its `HeadingLevel` (`H1`–`H6`,

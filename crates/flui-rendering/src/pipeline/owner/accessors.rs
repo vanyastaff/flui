@@ -2052,6 +2052,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         std::mem::take(&mut self.unchecked_semantics_diagnostics)
     }
 
+    /// Spends the presentation's synthetic identity space, so a test sees
+    /// what exhaustion publishes.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn exhaust_semantics_identities(&mut self) {
+        self.semantics_regions.exhaust();
+    }
+
     /// Installs (or removes) the semantics owner directly, bypassing the
     /// lazy-creation path in [`Self::set_semantics_enabled`].
     ///

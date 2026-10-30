@@ -14,6 +14,8 @@ use flui_platform::drag::ProcessNonce;
 use flui_platform::{Clipboard, Storage};
 use flui_rendering::TextContextHandle;
 use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
+use flui_view::__runtime::{FlushRegistry, OwnerNotify};
+use flui_view::CloseReason;
 
 /// What a host hands a [`UiRuntime`](crate::ui_runtime::UiRuntime) it builds: the
 /// services the host owns and every UI runtime shares, as opposed to the
@@ -31,6 +33,8 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
     pub(crate) data_transfer: Arc<dyn DataTransferSource>,
     pub(crate) process_nonce: ProcessNonce,
+    pub(crate) flush_registry: Option<FlushRegistry>,
+    pub(crate) close_vetoes: Vec<CloseReason>,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
@@ -78,6 +82,8 @@ impl<'a> RuntimeHostServices<'a> {
             preferences: None,
             data_transfer: Arc::new(NullDataTransferSource),
             process_nonce: ProcessNonce::mint(),
+            flush_registry: None,
+            close_vetoes: Vec::new(),
         }
     }
 
@@ -105,6 +111,26 @@ impl<'a> RuntimeHostServices<'a> {
     #[must_use]
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// The host's flush registry, which every presentation of the UI runtime
+    /// hands the `Persisted` documents of its widgets. The host keeps the
+    /// registry's `FlushHost` outside every UI runtime and writes what was
+    /// published when the application or the session ends. Without it a
+    /// document publishes nowhere.
+    #[must_use]
+    pub fn with_flush_registry(mut self, registry: FlushRegistry) -> Self {
+        self.flush_registry = Some(registry);
+        self
+    }
+
+    /// The reasons the platform lets the application refuse a close for:
+    /// every presentation's close guard holds a close for these and lets
+    /// every other one through. Without it no close is refused.
+    #[must_use]
+    pub fn with_close_vetoes(mut self, vetoes: &[CloseReason]) -> Self {
+        self.close_vetoes = vetoes.to_vec();
         self
     }
 
@@ -154,6 +180,8 @@ pub(crate) struct RuntimeServices {
     pub(crate) data_transfer: Arc<dyn DataTransferSource>,
     /// The platform instance's nonce, naming this runtime's drags.
     pub(crate) process_nonce: ProcessNonce,
+    /// What every presentation closes and persists through.
+    pub(crate) close: CloseServices,
 }
 
 impl RuntimeServices {
@@ -175,7 +203,10 @@ impl RuntimeServices {
             preferences,
             data_transfer,
             process_nonce,
+            flush_registry,
+            close_vetoes,
         } = host;
+        let close = CloseServices::new(flush_registry, &close_vetoes, Arc::clone(&wake));
         // Frame times come from `clock`, so the scheduler measures frames on it.
         let scheduler = flui_scheduler::SchedulerBuilder::new()
             .clock(clock.clone())
@@ -193,6 +224,7 @@ impl RuntimeServices {
             text: TextContextHandle::new(TextContext::new(fonts)),
             data_transfer,
             process_nonce,
+            close,
         }
     }
 }
@@ -239,4 +271,42 @@ pub(crate) fn exhausted_incarnations_never_alias_previous_ui_runtimes() {
     let (ui_runtime, presentation) = next_identity_with_counter(&fresh);
     assert_ne!(ui_runtime, last);
     assert_ne!(presentation, last_presentation);
+}
+
+/// What a UI runtime hands each presentation for closing and persisting: the
+/// host's flush registry, the reasons a close may be refused for, and the one
+/// channel through which every presentation's close guard tells the owner it
+/// has something to settle.
+#[derive(Clone)]
+pub(crate) struct CloseServices {
+    pub(crate) flush_registry: Option<FlushRegistry>,
+    pub(crate) vetoes: Arc<[CloseReason]>,
+    pub(crate) notify: OwnerNotify,
+    /// Set by `notify`, taken by the owner's next settle.
+    pub(crate) settle_owed: Arc<AtomicBool>,
+}
+
+impl CloseServices {
+    /// Services whose guards signal the owner through the platform `wake`.
+    pub(crate) fn new(
+        flush_registry: Option<FlushRegistry>,
+        vetoes: &[CloseReason],
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        let settle_owed = Arc::new(AtomicBool::new(false));
+        let owed = Arc::clone(&settle_owed);
+        // The owner settles on its next turn, which the wake brings; a wake
+        // the loop no longer takes leaves the flag set, and nothing is lost.
+        let notify = OwnerNotify::new(move |_| {
+            owed.store(true, Ordering::Release);
+            wake();
+            Ok(())
+        });
+        Self {
+            flush_registry,
+            vetoes: vetoes.into(),
+            notify,
+            settle_owed,
+        }
+    }
 }

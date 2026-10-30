@@ -415,6 +415,10 @@ pub(crate) struct AppRuntime {
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
     pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// The flush registry over [`Self::host_storage`], kept outside every UI
+    /// runtime: what their documents publish, written on the loop's IO pool
+    /// and flushed when the application or the session ends.
+    pub(super) flush_host: Option<flui_view::__runtime::FlushHost>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
@@ -508,6 +512,7 @@ impl AppRuntime {
             platform_clipboard: Arc::new(Mutex::new(None)),
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
+            flush_host: None,
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),
@@ -1208,10 +1213,41 @@ impl AppRuntime {
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
     pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
-        self.host_storage = dirs.map(|dirs| {
-            let io = Arc::downgrade(self.ensure_execution());
-            super::storage_host::host_storage(dirs, io)
-        });
+        let Some(dirs) = dirs else {
+            self.host_storage = None;
+            self.flush_host = None;
+            return;
+        };
+        let io = Arc::downgrade(self.ensure_execution());
+        let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
+        let wake = self.frame_wake_callback();
+        self.flush_host = Some(flui_view::__runtime::FlushHost::new(
+            Arc::clone(&storage),
+            Box::new(move |write| {
+                // A write the pool refuses is dropped, which keeps its bytes
+                // owed for the flush at the end.
+                if let Some(services) = io.upgrade()
+                    && let Err(error) = services.spawn_io(write)
+                {
+                    tracing::debug!(%error, "the IO pool refused a document write");
+                }
+                Ok(())
+            }),
+            // The turn the wake brings settles the registry.
+            flui_view::__runtime::OwnerNotify::new(move |_| {
+                wake();
+                Ok(())
+            }),
+        ));
+        self.host_storage = Some(storage);
+    }
+
+    /// The publishing side of the host's flush registry, for the UI runtimes
+    /// the runners build; `None` without storage.
+    pub(super) fn flush_registry(&self) -> Option<flui_view::__runtime::FlushRegistry> {
+        self.flush_host
+            .as_ref()
+            .map(flui_view::__runtime::FlushHost::registry)
     }
 
     /// The host's byte storage, if the run configured one.

@@ -190,6 +190,8 @@ impl PipelineOwner<Semantics> {
                     retire_rejected_plan(planned);
                     return Err(crate::error::RenderError::semantics(error.to_string()));
                 }
+                self.semantics_regions
+                    .assign_text_runs(&mut planned, &self.render_tree);
                 match planned {
                     SemanticsPlan::Rebuild(built) => {
                         rebuild_semantics_owner(
@@ -270,12 +272,21 @@ struct RegionSource {
     key: flui_semantics::SemanticsRegionKey,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SemanticsSource {
     Render(RenderId),
     Region(RegionSource),
 }
 
+/// A text run's full identity (ADR-0204): an edit that changes any part gives
+/// the run a new identity, so an old position never lands on other text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextRunKey {
+    field: SemanticsSource,
+    ordinal: usize,
+    start: usize,
+    text: Box<str>,
+}
 /// The pipeline keeps the authority across accessibility disable/enable and
 /// owner replacement. Only a successfully assembled scope retires missing keys.
 #[derive(Debug, Default)]
@@ -287,6 +298,11 @@ pub(super) struct RegionIdentities {
     announcements: Option<flui_semantics::Announcements>,
     /// The identity space ran out before the announcer nodes were minted.
     announcements_exhausted: bool,
+    /// Each field's text runs and their identities, kept while the run is
+    /// the same: the same node, place, start and text.
+    text_runs: FxHashMap<TextRunKey, flui_semantics::SemanticsRegionId>,
+    /// The identity space ran out before a field's runs were given theirs.
+    text_runs_exhausted: bool,
 }
 
 #[derive(Default)]
@@ -343,6 +359,76 @@ impl RegionIdentities {
             }
         }
         self.announcements.clone()
+    }
+
+    /// Gives the text runs of every field `plan` builds their identities:
+    /// a run seen before keeps its own, a new one takes one from the source.
+    /// When the source is exhausted the field keeps its runs without
+    /// identities, so the owner publishes it without them and reports it.
+    /// A field the plan rebuilt forgets the runs it no longer has.
+    fn assign_text_runs(&mut self, plan: &mut SemanticsPlan, tree: &RenderTree) {
+        let mut stack: Vec<&mut BuiltSemanticsNode> = match plan {
+            SemanticsPlan::Rebuild(root) => root.as_deref_mut().into_iter().collect(),
+            SemanticsPlan::Graft(grafts) => grafts.iter_mut().map(|(_, built)| built).collect(),
+        };
+        let mut rebuilt = FxHashSet::default();
+        let mut live = FxHashSet::default();
+        while let Some(node) = stack.pop() {
+            rebuilt.insert(node.source);
+            if let Some(content) = node.config.text_content() {
+                let keys: Vec<TextRunKey> = content
+                    .runs()
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, run)| TextRunKey {
+                        field: node.source,
+                        ordinal,
+                        start: run.byte_range().start,
+                        text: run.text().into(),
+                    })
+                    .collect();
+                let missing: Vec<&TextRunKey> = keys
+                    .iter()
+                    .filter(|key| !self.text_runs.contains_key(*key))
+                    .collect();
+                match self.source.allocate(missing.len()) {
+                    Ok(ids) => {
+                        for (key, id) in missing.into_iter().zip(ids) {
+                            self.text_runs.insert(key.clone(), id);
+                        }
+                        let ids = keys.iter().map(|key| self.text_runs[key]).collect();
+                        let content = content
+                            .clone()
+                            .with_run_identities(ids)
+                            .expect("BUG: one identity is assigned per run");
+                        node.config.set_text_content(content);
+                    }
+                    Err(_) if !self.text_runs_exhausted => {
+                        self.text_runs_exhausted = true;
+                        tracing::error!(
+                            "semantics identity space exhausted: text fields publish without runs"
+                        );
+                    }
+                    Err(_) => {}
+                }
+                live.extend(keys);
+            }
+            stack.extend(node.children.iter_mut());
+        }
+        let retained = &self.retained;
+        self.text_runs.retain(|key, _| {
+            live.contains(key)
+                || (!rebuilt.contains(&key.field)
+                    && match key.field {
+                        SemanticsSource::Render(id) => tree.contains(id),
+                        SemanticsSource::Region(source) => retained.contains_key(&source),
+                    })
+        });
+    }
+    /// Spends the identity source.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) fn exhaust(&mut self) {
+        self.source.exhaust();
     }
 
     /// The queue, if one was requested.
@@ -1020,6 +1106,14 @@ fn build_semantics_fragments_impl(
 
     let node = tree.get(id)?;
     let mut config = describe_semantics_configuration(id, node, regions);
+    // Runs are laid out in the declaring render object's space; its node is
+    // published in the window's.
+    if let Some(content) = config.text_content() {
+        match content.transformed(&transform) {
+            Some(content) => config.set_text_content(content),
+            None => config.clear_text_content(),
+        }
+    }
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     config.set_has_reveal_ancestor(context.has_reveal_ancestor);

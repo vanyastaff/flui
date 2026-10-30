@@ -237,7 +237,9 @@ mod measured {
         SelectedContent as _, SelectionArea as _, SelectionContainer as _,
         SelectionController as _, SelectionError as _, SelectionHandles as _, SelectionPoint as _,
     };
-    use flui_sdk::widgets::{CellPosition as _, SetSize as _, SortDirection as _, TableShape as _};
+    use flui_sdk::widgets::{
+        CellPosition as _, SetSize as _, SortDirection as _, TableShape as _, TextSelection as _,
+    };
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
         HeaderExtentsError as _, HeaderOrder as _,
