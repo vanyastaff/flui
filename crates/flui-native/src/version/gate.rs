@@ -16,14 +16,35 @@
 
 use std::marker::PhantomData;
 
+use flui_platform::{Environment, OsRelease};
+
+use crate::PlatformError;
+
 /// An environment's version type: its floor, and an order over its values.
-pub(crate) trait OsVersion: Copy {
+pub(crate) trait OsVersion: Copy + std::fmt::Display {
+    /// The environment a refusal below the floor names.
+    const ENVIRONMENT: Environment;
+    /// The floor itself, as a refusal shows it.
+    const FLOOR_RELEASE: Self;
     /// The floor's position in [`ordinal`](Self::ordinal)'s order.
     const FLOOR: u64;
 
     /// The version's position in an order every version of this type agrees with; `None` when
     /// the version could not be read.
     fn ordinal(self) -> Option<u64>;
+}
+
+/// [`PlatformError::UnsupportedOs`] when `version` is below its floor (ADR-0244 §3). A version
+/// that could not be read is not below it: the platform starts, and no gate opens.
+pub(crate) fn refuse_below_floor<V: OsVersion>(version: V) -> Result<(), PlatformError> {
+    match version.ordinal() {
+        Some(ordinal) if ordinal < V::FLOOR => Err(PlatformError::UnsupportedOs {
+            environment: V::ENVIRONMENT,
+            found: OsRelease::from_display(version),
+            floor: OsRelease::from_display(V::FLOOR_RELEASE),
+        }),
+        Some(_) | None => Ok(()),
+    }
 }
 
 /// A feature that exists from [`SINCE`](Self::SINCE) on, in the versions of
@@ -62,6 +83,8 @@ pub(crate) fn since<F: Gate>(version: F::Version) -> Option<Since<F>> {
 pub(crate) mod windows {
     use crate::version::floor::WINDOWS_BUILD;
 
+    use flui_platform::Environment;
+
     use super::{Gate, OsVersion, Since};
 
     /// The OS build number (`dwBuildNumber`); private (see the module above).
@@ -84,6 +107,8 @@ pub(crate) mod windows {
     }
 
     impl OsVersion for WindowsBuild {
+        const ENVIRONMENT: Environment = Environment::Windows;
+        const FLOOR_RELEASE: Self = Self(WINDOWS_BUILD);
         const FLOOR: u64 = WINDOWS_BUILD as u64;
 
         fn ordinal(self) -> Option<u64> {
@@ -166,6 +191,8 @@ pub(crate) mod apple {
     #[cfg(any(target_os = "macos", test))]
     use crate::version::floor::MACOS_FLOOR;
 
+    use flui_platform::Environment;
+
     use super::{Gate, OsVersion, Since};
 
     /// An operating-system version as `NSProcessInfo.operatingSystemVersion` reports it. Ordered
@@ -234,7 +261,9 @@ pub(crate) mod apple {
     /// As an iOS version, over iOS's floor.
     #[cfg(any(target_os = "ios", test))]
     impl OsVersion for AppleVersion {
-        const FLOOR: u64 = AppleVersion::new(IOS_FLOOR.0, IOS_FLOOR.1, IOS_FLOOR.2).rank();
+        const ENVIRONMENT: Environment = Environment::iOS;
+        const FLOOR_RELEASE: Self = AppleVersion::new(IOS_FLOOR.0, IOS_FLOOR.1, IOS_FLOOR.2);
+        const FLOOR: u64 = Self::FLOOR_RELEASE.rank();
 
         fn ordinal(self) -> Option<u64> {
             (self != Self::UNKNOWN).then(|| self.rank())
@@ -278,7 +307,9 @@ pub(crate) mod apple {
 
     #[cfg(any(target_os = "macos", test))]
     impl OsVersion for MacOSVersion {
-        const FLOOR: u64 = MacOSVersion::new(MACOS_FLOOR.0, MACOS_FLOOR.1, MACOS_FLOOR.2).rank();
+        const ENVIRONMENT: Environment = Environment::MacOS;
+        const FLOOR_RELEASE: Self = MacOSVersion::new(MACOS_FLOOR.0, MACOS_FLOOR.1, MACOS_FLOOR.2);
+        const FLOOR: u64 = Self::FLOOR_RELEASE.rank();
 
         fn ordinal(self) -> Option<u64> {
             (self.0 != AppleVersion::UNKNOWN).then(|| self.rank())
@@ -354,6 +385,8 @@ pub(crate) mod apple {
 pub(crate) mod android {
     use crate::version::floor::ANDROID_API;
 
+    use flui_platform::Environment;
+
     use super::{Gate, OsVersion, Since};
 
     /// The API level of the running system (`Build.VERSION.SDK_INT`); private (see the module
@@ -377,6 +410,8 @@ pub(crate) mod android {
     }
 
     impl OsVersion for AndroidApi {
+        const ENVIRONMENT: Environment = Environment::Android;
+        const FLOOR_RELEASE: Self = Self(ANDROID_API);
         const FLOOR: u64 = ANDROID_API as u64;
 
         fn ordinal(self) -> Option<u64> {
@@ -745,6 +780,76 @@ mod tests {
             api(35),
             api(36),
             unknown,
+        ));
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Each environment refuses one step below its floor with the release and the floor named,
+    /// starts on the floor, and starts on a version it could not read.
+    #[test]
+    fn floor_refusal_contract() {
+        use flui_platform::{Environment, OsRelease};
+
+        use super::apple::{AppleVersion, MacOSVersion};
+        use super::windows::WindowsBuild;
+        use super::{OsVersion, refuse_below_floor};
+        use crate::PlatformError;
+
+        fn case<V: OsVersion>(
+            below: V,
+            unknown: V,
+            environment: Environment,
+            found: &str,
+            floor: &str,
+        ) -> Vec<String> {
+            let mut failures = Vec::new();
+            match refuse_below_floor(below) {
+                Err(PlatformError::UnsupportedOs {
+                    environment: refused,
+                    found: reported,
+                    floor: stated,
+                }) if refused == environment
+                    && reported == OsRelease::from_display(found)
+                    && stated == OsRelease::from_display(floor) => {}
+                other => failures.push(format!("{environment} {below}: {other:?}")),
+            }
+            for starts in [V::FLOOR_RELEASE, unknown] {
+                if let Err(error) = refuse_below_floor(starts) {
+                    failures.push(format!("{environment} {starts}: {error}"));
+                }
+            }
+            failures
+        }
+
+        let mut failures = Vec::new();
+        failures.extend(case(
+            WindowsBuild::from_number(9600),
+            WindowsBuild::UNKNOWN,
+            Environment::Windows,
+            "build 9600",
+            "build 10240",
+        ));
+        failures.extend(case(
+            AppleVersion::new(12, 5, 7),
+            AppleVersion::UNKNOWN,
+            Environment::iOS,
+            "12.5.7",
+            "13.0.0",
+        ));
+        failures.extend(case(
+            MacOSVersion::new(10, 12, 6),
+            MacOSVersion::UNKNOWN,
+            Environment::MacOS,
+            "10.12.6",
+            // 10.13 on x86_64, 11.0 on arm64.
+            &MacOSVersion::FLOOR_RELEASE.to_string(),
+        ));
+        failures.extend(case(
+            AndroidApi::from_level(22),
+            AndroidApi::UNKNOWN,
+            Environment::Android,
+            "API 22",
+            "API 23",
         ));
         assert!(failures.is_empty(), "{failures:#?}");
     }

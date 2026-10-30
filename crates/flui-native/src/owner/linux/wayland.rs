@@ -1252,8 +1252,9 @@ mod event_loop {
         ///
         /// # Errors
         /// [`PlatformError::Init`] when no compositor answers, libwayland
-        /// cannot be loaded, or the compositor lacks `wl_compositor` or
-        /// `xdg_wm_base`.
+        /// cannot be loaded, or the compositor lacks `wl_compositor`;
+        /// [`PlatformError::MissingRequirement`] when it lacks `xdg_wm_base`,
+        /// part of Linux's floor (ADR-0244 §3).
         pub(crate) fn try_new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
@@ -1270,7 +1271,13 @@ mod event_loop {
                 .map_err(|error| init("wl_compositor", &error))?;
             let wm_base = globals
                 .bind::<XdgWmBase, _, _>(&handle, 1..=WM_BASE_VERSION, ())
-                .map_err(|error| init("xdg_wm_base", &error))?;
+                .map_err(|error| {
+                    tracing::error!(%error, "Wayland: xdg_wm_base");
+                    PlatformError::MissingRequirement {
+                        environment: flui_platform::Environment::Linux,
+                        requirement: "the Wayland `xdg_wm_base` global",
+                    }
+                })?;
             let viewporter = globals
                 .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())
                 .ok();
