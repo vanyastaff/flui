@@ -295,6 +295,7 @@ mod agent_act_read;
 mod agent_locate;
 mod agent_semantics;
 mod agent_stability;
+mod agent_wait;
 
 // ========================================================================
 // Frame pipeline, first-frame deferral, and Vsync — migrated from the
