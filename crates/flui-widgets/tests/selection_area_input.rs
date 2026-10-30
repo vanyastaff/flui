@@ -71,6 +71,19 @@ impl Scene {
         self.laid.find_all_by_render_type("RenderParagraph")
     }
 
+    /// The index in [`paragraphs`](Self::paragraphs) of the paragraph
+    /// showing `words`.
+    fn index_of(&self, words: &str) -> usize {
+        self.paragraphs()
+            .iter()
+            .position(|&paragraph| {
+                self.laid
+                    .render_property(paragraph, "text")
+                    .is_some_and(|text| text.contains(words))
+            })
+            .expect("a paragraph shows the words")
+    }
+
     /// A point `fraction` of the way across paragraph `index`, at its
     /// vertical middle.
     fn at(&self, index: usize, fraction: f64) -> Offset<f64> {
@@ -351,8 +364,9 @@ pub(crate) fn a_blur_dims_the_highlight_and_keeps_the_selection() {
 }
 
 /// A text that leaves while holding an end hands that end to the text it
-/// leaves beside, keeping the selection's direction; once no selected text
-/// is left, the selection clears. Each move is reported.
+/// leaves beside, keeping the selection's direction even when both ends
+/// leave at once; once no selected text is left, the selection clears.
+/// Each move is reported.
 ///
 /// Red-check: never move a departed end (the listener keeps the old text).
 pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
@@ -418,4 +432,134 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
             "nothing selected is left"
         );
     }
+
+    // Both ends leave at once: the middle text keeps the selection, still
+    // backward, so the moving end is at its start. The outer texts sit in
+    // columns of their own, so emptying those leaves the middle text's
+    // element in place.
+    let nested = |outer: bool| {
+        let around = |words: &'static str| {
+            let children: Vec<BoxedView> = if outer {
+                vec![Text::new(words).boxed()]
+            } else {
+                Vec::new()
+            };
+            Column::new(children).boxed()
+        };
+        Column::new(vec![
+            around(FIRST),
+            Text::new(SECOND).boxed(),
+            around(THIRD),
+        ])
+        .boxed()
+    };
+    let mut scene = Scene::over(nested(true));
+    let (first, third) = (scene.index_of(FIRST), scene.index_of(THIRD));
+    scene.drag(scene.at(third, 0.5), scene.at(first, 0.3));
+    scene.replace(nested(false));
+    assert_eq!(scene.selected().as_deref(), Some(SECOND));
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowRight),
+        Code::ArrowRight,
+        Modifiers::SHIFT
+    ));
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some(&SECOND[1..]),
+        "still backward"
+    );
+}
+
+/// A drag ends where the button is released, even when the release lies
+/// past the last move.
+///
+/// Red-check: end a drag without applying its release position (the
+/// selection stops at the last move, inside the first text).
+pub(crate) fn a_drag_ends_where_it_is_released() {
+    use flui_platform::pointer::PointerMove;
+
+    let mut scene = Scene::two_texts();
+    let mouse = PointerInfo::new(
+        PointerId::try_from(78_u64).expect("a nonzero id"),
+        PointerKind::Mouse,
+    );
+    let sample = |millis: u64, at: Offset<f64>| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        )
+    };
+    let (from, middle) = (scene.at(0, 0.0) + Offset::new(-2.0, 0.0), scene.at(0, 0.5));
+    let release = scene.at(1, 1.0) + Offset::new(2.0, 0.0);
+    let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            mouse,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(0, from),
+        )));
+    for step in 1..=4_u32 {
+        let at = from + (middle - from) * (f64::from(step) / 4.0);
+        scene.laid.pump_for(Duration::from_millis(16));
+        scene
+            .laid
+            .dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+                mouse,
+                held,
+                sample(u64::from(step) * 16, at),
+            )));
+    }
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+            mouse,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(80, release),
+        )));
+    scene.settle();
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+}
+
+/// A click that selects nothing still makes the area the keys' target, and
+/// the keys cross into the next text at the shown end of a text a line
+/// limit cuts, never through its hidden tail.
+///
+/// Red-check: take the focus only for a nonempty selection (select all
+/// after a single click is not handled); step the keys through the whole
+/// text (Shift+Right at the shown end selects nothing more).
+pub(crate) fn a_click_targets_the_keys_which_cross_at_the_shown_end() {
+    let mut scene = Scene::two_texts();
+    scene.clicks(scene.at(1, 0.5), 1);
+    assert!(
+        scene.key(Key::character("a"), Code::KeyA, command()),
+        "select all is handled"
+    );
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("Hello world\nSecond line")
+    );
+
+    let mut scene = Scene::over(
+        Column::new((Text::new("Shown\nhidden").max_lines(1), Text::new(SECOND))).boxed(),
+    );
+    scene.clicks(scene.at(0, 0.3), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Shown"));
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowRight),
+        Code::ArrowRight,
+        Modifiers::SHIFT
+    ));
+    assert_eq!(scene.selected().as_deref(), Some("Shown\n"));
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowLeft),
+        Code::ArrowLeft,
+        Modifiers::SHIFT
+    ));
+    assert_eq!(scene.selected().as_deref(), Some("Shown"));
 }

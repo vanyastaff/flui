@@ -196,6 +196,7 @@ impl StatefulView for SelectionArea {
                 post_frame: RefCell::new(None),
                 clamp_pending: Cell::new(false),
                 mounted: Cell::new(true),
+                backward: Cell::new(false),
             }),
         }
     }
@@ -330,6 +331,9 @@ struct SelectionModel {
     /// Cleared when the area is disposed, so a move scheduled before then
     /// finds no area to tell.
     mounted: Cell<bool>,
+    /// Whether the last committed selection runs backward, its anchor
+    /// after its focus, so ends that both leave keep that direction.
+    backward: Cell<bool>,
 }
 
 impl SelectionModel {
@@ -359,9 +363,13 @@ impl SelectionModel {
         if *self.selection.borrow() == selection {
             return;
         }
-        let covered = selection
+        let coverage = selection
             .as_ref()
             .and_then(|selection| self.covered(selection));
+        if let Some((_, backward)) = &coverage {
+            self.backward.set(*backward);
+        }
+        let covered = coverage.map(|(parts, _)| parts);
         let selected = covered.as_ref().map(|covered| self.joined(covered));
         let take_focus = from_user && selection.is_some();
         *self.selection.borrow_mut() = selection;
@@ -431,7 +439,8 @@ impl SelectionModel {
     /// Moves each end held by a text that left onto the edge of what the
     /// selection still highlights in the texts that stay: an end on the
     /// earlier side moves to the start of the first of them, an end on the
-    /// later side to the end of the last. Nothing left highlighted clears
+    /// later side to the end of the last; when both ends left, the selection
+    /// keeps the direction it was committed in. Nothing left highlighted clears
     /// the selection. The listener hears of the result; the focus stays
     /// where it is.
     fn keep_what_remains(&self) {
@@ -470,7 +479,12 @@ impl SelectionModel {
                 } else if focus_held {
                     selection.focus()
                 } else {
-                    return DocumentSelection::new(first.clone(), last.clone());
+                    let (anchor, focus) = if self.backward.get() {
+                        (last, first)
+                    } else {
+                        (first, last)
+                    };
+                    return DocumentSelection::new(anchor.clone(), focus.clone());
                 };
                 // The kept end bounds the highlight on one side; the departed
                 // end takes the other.
@@ -491,10 +505,11 @@ impl SelectionModel {
 
     /// The parts of the texts `selection` covers, in reading order, each as
     /// its entry's index and a byte range of its text; `None` when it covers
-    /// none. Each text contributes only what its layout shows: the lines a
+    /// none, with whether the anchor reads after the focus. Each text
+    /// contributes only what its layout shows: the lines a
     /// line limit cuts are not in its runs, so they are neither reported nor
     /// highlighted.
-    fn covered(&self, selection: &DocumentSelection) -> Option<Vec<Covered>> {
+    fn covered(&self, selection: &DocumentSelection) -> Option<(Vec<Covered>, bool)> {
         let entries = self.registry.entries.borrow();
         let order = self.reading_order(&entries);
         let place = |at: &DocumentPosition| {
@@ -503,14 +518,14 @@ impl SelectionModel {
                 .position(|entry| entry.anchor == *at.text())?;
             Some((order.iter().position(|&(i, _)| i == index)?, at.byte()))
         };
-        let (from, to) = {
+        let (from, to, backward) = {
             let (a, b) = (place(selection.anchor())?, place(selection.focus())?);
-            if a <= b { (a, b) } else { (b, a) }
+            if a <= b { (a, b, false) } else { (b, a, true) }
         };
         if from == to {
             return None;
         }
-        Some(
+        Some((
             order
                 .iter()
                 .enumerate()
@@ -528,7 +543,8 @@ impl SelectionModel {
                     }
                 })
                 .collect(),
-        )
+            backward,
+        ))
     }
 
     /// The covered parts' text, joined by `'\n'`.

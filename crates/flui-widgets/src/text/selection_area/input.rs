@@ -70,10 +70,13 @@ pub(super) struct PointerState {
     shift: Cell<bool>,
 }
 
-/// A registered text in reading order, with its plain text as of now.
+/// A registered text in reading order, with its plain text as of now and
+/// the byte its laid-out text ends at: a line limit can show less than the
+/// whole text, and the keys move only through what is shown.
 pub(super) struct Ordered {
     pub(super) entry: Rc<SelectableEntry>,
     pub(super) text: String,
+    pub(super) shown: usize,
 }
 
 impl SelectionModel {
@@ -82,9 +85,13 @@ impl SelectionModel {
         let entries = self.registry.entries.borrow().clone();
         self.reading_order(&entries)
             .into_iter()
-            .map(|(index, _)| Ordered {
-                entry: Rc::clone(&entries[index]),
-                text: entries[index].text.borrow().clone(),
+            .map(|(index, shown)| {
+                let text = entries[index].text.borrow().clone();
+                Ordered {
+                    entry: Rc::clone(&entries[index]),
+                    shown: shown.unwrap_or(text.len()).min(text.len()),
+                    text,
+                }
             })
             .collect()
     }
@@ -185,6 +192,11 @@ impl SelectionModel {
     /// focus, so its highlight is the active one, and the listener hears of
     /// the change through the area's writer.
     fn select_from_input(&self, selection: Option<DocumentSelection>) {
+        // A click that selects nothing still makes this area the target of
+        // the keys, so select all and copy act on the area last clicked.
+        if !self.focus.has_primary_focus() {
+            let _outcome = self.focus.request_focus();
+        }
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             writer.write(|cx| self.select(cx, selection.as_ref()));
@@ -282,7 +294,7 @@ impl SelectionModel {
         };
         let selection = DocumentSelection::new(
             DocumentPosition::new(first.entry.anchor.clone(), 0),
-            DocumentPosition::new(last.entry.anchor.clone(), last.text.len()),
+            DocumentPosition::new(last.entry.anchor.clone(), last.shown),
         );
         self.select(cx, Some(&selection));
         ActionOutcome::Performed
@@ -295,7 +307,7 @@ impl SelectionModel {
         let (Some(clipboard), Some(selection)) = (clipboard, selection) else {
             return ActionOutcome::NotPerformed;
         };
-        let Some(covered) = self.covered(&selection) else {
+        let Some((covered, _)) = self.covered(&selection) else {
             return ActionOutcome::NotPerformed;
         };
         let selected = self.joined(&covered);
@@ -329,7 +341,12 @@ impl SelectionModel {
         else {
             return KeyEventResult::Ignored;
         };
-        let text = &ordered[index].text;
+        // Only the shown text: a line limit's hidden tail is never stepped
+        // through, and crossing happens at the shown end.
+        let text = ordered[index]
+            .text
+            .get(..ordered[index].shown)
+            .unwrap_or(&ordered[index].text);
         let byte = selection.focus().byte().min(text.len());
         let at = |index: usize, byte: usize| {
             DocumentPosition::new(ordered[index].entry.anchor.clone(), byte)
@@ -347,7 +364,7 @@ impl SelectionModel {
             )),
             Key::Named(NamedKey::ArrowLeft) if byte == 0 => index
                 .checked_sub(1)
-                .map(|previous| at(previous, ordered[previous].text.len())),
+                .map(|previous| at(previous, ordered[previous].shown)),
             Key::Named(NamedKey::ArrowLeft) if by_word => {
                 Some(at(index, text_boundaries::previous_word_start(text, byte)))
             }
@@ -600,8 +617,11 @@ impl SelectionGesturesState {
                         model.drag_moved(details.global_position);
                     }
                 })
-                .on_drag_end(move |_details| {
+                .on_drag_end(move |details| {
                     if let Some(model) = end.upgrade() {
+                        // The release can lie past the last update, which
+                        // smoothing may also have moved.
+                        model.drag_moved(details.global_position);
                         model.drag_ended();
                     }
                 })
