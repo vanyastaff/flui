@@ -1,23 +1,26 @@
 //! The X11 clipboard against a real X server: two clipboards, each on a
-//! connection and a thread of its own, exchange the selection through it as
-//! two applications would.
+//! connection and a thread of its own, exchange the selections through it
+//! as two applications would.
 //!
 //! CI runs the crate's tests under `xvfb-run`, which sets `DISPLAY`; the
 //! tests skip without it.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
-    PendingCompletions,
+    PendingCompletions, Resolver,
 };
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 use super::X11Clipboard;
-use crate::host::NativeClipboard as _;
+use crate::host::{NativeClipboard, NativePrimarySelection};
+use crate::owner::linux::x11::LoopClipboard as _;
 
 /// How long a read may take before the case fails.
 const STEP: Duration = Duration::from_secs(10);
@@ -43,6 +46,12 @@ fn server() -> Option<std::sync::MutexGuard<'static, Option<RustConnection>>> {
         *server = Some(connection);
     }
     Some(server)
+}
+
+/// A clipboard whose owner's loop is the case itself: it turns by calling
+/// `deliver` while it waits, so the wake has nothing to ring.
+fn clipboard() -> X11Clipboard {
+    X11Clipboard::start(Box::new(|| {})).expect("the X server answers")
 }
 
 /// The completions a read answers through, settled by hand as an
@@ -71,11 +80,34 @@ impl Answers {
 
     /// Read `clipboard`, waiting for its answer.
     fn read(&self, clipboard: &X11Clipboard) -> Option<String> {
+        self.read_with(
+            |answer| NativeClipboard::read_text(clipboard, answer),
+            || {},
+        )
+    }
+
+    /// Read the primary selection through `reader`, turning the loops of
+    /// `owners` while it waits.
+    fn read_primary(&self, reader: &X11Clipboard, owners: &[&X11Clipboard]) -> Option<String> {
+        self.read_with(
+            |answer| NativePrimarySelection::read_text(reader, answer),
+            || owners.iter().for_each(|owner| owner.deliver()),
+        )
+    }
+
+    /// Start a read with `start` and wait for its answer, calling `turn`
+    /// for the owners' loops meanwhile.
+    fn read_with(
+        &self,
+        start: impl FnOnce(Resolver<Option<String>>),
+        mut turn: impl FnMut(),
+    ) -> Option<String> {
         let (mut completion, resolver): (Completion<Option<String>>, _) =
             self.source.pending::<Option<String>>();
-        clipboard.read_text(resolver);
+        start(resolver);
         let deadline = Instant::now() + STEP;
         loop {
+            turn();
             let jobs = std::mem::take(&mut *self.queue.lock().expect("the answers"));
             let scope = OwnerScope::new(&self.pending);
             for job in jobs {
@@ -98,8 +130,8 @@ fn the_clipboard_crosses_between_connections() {
         return;
     };
     let answers = Answers::new();
-    let first = X11Clipboard::start().expect("the X server answers");
-    let second = X11Clipboard::start().expect("the X server answers");
+    let first = clipboard();
+    let second = clipboard();
 
     first.write_text("from the first".to_owned());
     assert_eq!(answers.read(&first).as_deref(), Some("from the first"));
@@ -124,8 +156,8 @@ fn a_large_selection_crosses_in_chunks() {
         return;
     };
     let answers = Answers::new();
-    let owner = X11Clipboard::start().expect("the X server answers");
-    let reader = X11Clipboard::start().expect("the X server answers");
+    let owner = clipboard();
+    let reader = clipboard();
     let text: String = (0..300_000_u32)
         .map(|at| char::from(b'a' + u8::try_from(at % 26).expect("BUG: below 26")))
         .chain("конец".chars())
@@ -162,7 +194,7 @@ fn a_selection_nobody_owns_reads_as_nothing() {
         .expect("the server answers");
 
     let answers = Answers::new();
-    let reader = X11Clipboard::start().expect("the X server answers");
+    let reader = clipboard();
     let started = Instant::now();
     assert_eq!(answers.read(&reader), None);
     assert!(
@@ -179,7 +211,7 @@ fn a_read_after_a_write_answers_the_write() {
         return;
     };
     let answers = Answers::new();
-    let clipboard = X11Clipboard::start().expect("the X server answers");
+    let clipboard = clipboard();
     clipboard.write_text("before".to_owned());
     assert_eq!(answers.read(&clipboard).as_deref(), Some("before"));
     for round in 0..20 {
@@ -187,6 +219,140 @@ fn a_read_after_a_write_answers_the_write() {
         clipboard.write_text(text.clone());
         assert_eq!(answers.read(&clipboard), Some(text));
     }
+}
+
+/// A closure over `text` that counts how often it is asked.
+fn counted(text: &str, asked: &Rc<Cell<u32>>) -> Rc<dyn Fn() -> Option<String>> {
+    let text = text.to_owned();
+    let asked = Rc::clone(asked);
+    Rc::new(move || {
+        asked.set(asked.get() + 1);
+        Some(text.clone())
+    })
+}
+
+/// The application's primary selection is asked for its text only when it
+/// is read: by another client through the server, at the owner's turn, and
+/// by the application itself at once.
+#[test]
+fn the_primary_selection_is_asked_only_when_read() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let owner = clipboard();
+    let reader = clipboard();
+    let asked = Rc::new(Cell::new(0));
+
+    owner.offer(counted("selected", &asked));
+    assert!(owner.owns());
+    assert_eq!(asked.get(), 0, "an offer asks nothing");
+    assert_eq!(
+        answers.read_primary(&reader, &[&owner]).as_deref(),
+        Some("selected")
+    );
+    assert_eq!(asked.get(), 1);
+    assert_eq!(
+        answers.read_primary(&owner, &[]).as_deref(),
+        Some("selected")
+    );
+    assert_eq!(asked.get(), 2);
+}
+
+/// Another client's selection takes the primary selection from the
+/// application's offer, whose closure is dropped at the owner's next turn.
+#[test]
+fn another_selection_takes_the_primary_from_the_offer() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let first = clipboard();
+    let second = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    let first_text = counted("from the first", &asked);
+    let held = Rc::downgrade(&first_text);
+
+    first.offer(first_text);
+    assert_eq!(
+        answers.read_primary(&second, &[&first]).as_deref(),
+        Some("from the first")
+    );
+    second.offer(counted("from the second", &asked));
+    let deadline = Instant::now() + STEP;
+    while first.owns() {
+        assert!(
+            Instant::now() < deadline,
+            "the first never heard its selection was taken"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    first.deliver();
+    assert_eq!(held.strong_count(), 0, "the turn drops the taken closure");
+    assert_eq!(
+        answers.read_primary(&first, &[&second]).as_deref(),
+        Some("from the second")
+    );
+}
+
+/// A withdrawn offer leaves no primary selection: a read answers nothing,
+/// and does not wait for its timeout.
+#[test]
+fn a_withdrawn_offer_reads_as_nothing() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let owner = clipboard();
+    let reader = clipboard();
+    let asked = Rc::new(Cell::new(0));
+
+    owner.offer(counted("selected", &asked));
+    assert_eq!(
+        answers.read_primary(&reader, &[&owner]).as_deref(),
+        Some("selected")
+    );
+    owner.withdraw();
+    assert!(!owner.owns());
+    let started = Instant::now();
+    assert_eq!(answers.read_primary(&reader, &[&owner]), None);
+    assert!(started.elapsed() < super::selection::TRANSFER_TIMEOUT);
+    assert_eq!(asked.get(), 1, "a withdrawn offer is not asked");
+}
+
+/// A closure that fails while another client reads the selection answers
+/// that client with nothing at once, and its failure goes on from the turn.
+#[test]
+fn a_failing_selection_answers_its_reader_with_nothing() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let owner = clipboard();
+    let reader = clipboard();
+    owner.offer(Rc::new(|| panic!("the selection failed")));
+
+    let failure = std::cell::RefCell::new(None);
+    let started = Instant::now();
+    let read = answers.read_with(
+        |answer| NativePrimarySelection::read_text(&reader, answer),
+        || {
+            let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.deliver()));
+            if let Err(payload) = turn {
+                failure.borrow_mut().get_or_insert(payload);
+            }
+        },
+    );
+    assert_eq!(read, None);
+    assert!(
+        started.elapsed() < super::selection::TRANSFER_TIMEOUT,
+        "the reader is answered as the closure fails, not at the timeout"
+    );
+    let failure = failure.into_inner().expect("the turn failed");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("the selection failed")
+    );
 }
 
 /// A client that owns `CLIPBOARD` and never answers, so reads of it wait;
@@ -237,15 +403,15 @@ fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
     };
     let _owner = silent_owner();
     let answers = Answers::new();
-    let reader = X11Clipboard::start().expect("the X server answers");
+    let reader = clipboard();
     let mut waiting: Vec<Completion<Option<String>>> = Vec::new();
     for _ in 0..super::selection::MAX_READERS {
         let (completion, resolver) = answers.source.pending::<Option<String>>();
-        reader.read_text(resolver);
+        NativeClipboard::read_text(&reader, resolver);
         waiting.push(completion);
     }
     let (mut past, resolver) = answers.source.pending::<Option<String>>();
-    reader.read_text(resolver);
+    NativeClipboard::read_text(&reader, resolver);
     let deadline = Instant::now() + super::selection::TRANSFER_TIMEOUT / 2;
     let outcome = loop {
         let jobs = std::mem::take(&mut *answers.queue.lock().expect("the answers"));
@@ -309,11 +475,11 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
             panic!("the owner's queue failed")
         });
         let source = CompletionSource::new(poster, PendingCompletions::new());
-        let reader = X11Clipboard::start().expect("the X server answers");
+        let reader = clipboard();
         let (_first, answer) = source.pending::<Option<String>>();
-        reader.read_text(answer);
+        NativeClipboard::read_text(&reader, answer);
         let (_second, answer) = source.pending::<Option<String>>();
-        reader.read_text(answer);
+        NativeClipboard::read_text(&reader, answer);
         drop(reader);
         assert_eq!(
             posts.load(std::sync::atomic::Ordering::SeqCst),

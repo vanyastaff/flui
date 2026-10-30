@@ -1,11 +1,11 @@
-//! The clipboard thread: the `CLIPBOARD` selection as ICCCM §2 has an owner
-//! and a requestor exchange it.
+//! The clipboard thread: the `CLIPBOARD` and `PRIMARY` selections as ICCCM
+//! §2 has an owner and a requestor exchange them.
 //!
 //! - **Owning.** A write takes a timestamp from the server first (a
-//!   zero-length append to the window's own property, whose
+//!   zero-length append to one of the window's own properties, whose
 //!   `PropertyNotify` carries the time), then sets the window as the
-//!   selection's owner at that time and checks that it took. The text is
-//!   held until another client takes the selection (`SelectionClear`).
+//!   selection's owner at that time and checks that it took. The selection
+//!   is held until another client takes it (`SelectionClear`).
 //! - **Answering.** A `SelectionRequest` for `TARGETS`, `TIMESTAMP` or a
 //!   text form is answered by writing the requestor's property and sending
 //!   it `SelectionNotify`; anything else, a request older than the
@@ -15,7 +15,15 @@
 //!   written, a zero-length one last. At most [`MAX_WRITERS`] such
 //!   transfers run at once, each given [`TRANSFER_TIMEOUT`] between
 //!   chunks.
-//! - **Reading.** While the application owns the selection a read answers
+//! - **The primary selection is lazy.** The application offers it with a
+//!   closure the owner thread alone may call, so the thread holds only the
+//!   offer's [`Generation`]. A request for its text waits while the thread
+//!   asks the owner through the [`Notice`], which wakes the owner's loop; at
+//!   its turn the loop asks the closure and sends the text back
+//!   ([`Command::Answer`]), and every request waiting on that offer is
+//!   answered with it. One that waits past [`TRANSFER_TIMEOUT`], or whose
+//!   offer stopped being the selection, is refused.
+//! - **Reading.** While the application owns the clipboard a read answers
 //!   its text at once; a read sent after a write waits for the write to own
 //!   it. Otherwise the thread takes a server timestamp, as a write does, and
 //!   asks the owner to convert the selection at that time into one of its
@@ -25,7 +33,9 @@
 //!   property, and a read that times out retires its property, so an owner
 //!   that answers late never answers a later read. Reads that arrive
 //!   meanwhile join the one under way. A read gets [`TRANSFER_TIMEOUT`] in
-//!   all and at most [`MAX_TEXT`] bytes.
+//!   all and at most [`MAX_TEXT`] bytes. The primary selection is read so
+//!   too when the application's offer is not the selection; while it is,
+//!   the owner thread asks its closure itself and sends no read.
 
 use std::cell::OnceCell;
 use std::os::fd::{AsFd, OwnedFd};
@@ -52,8 +62,9 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::linux::text::TextForm;
 
-/// How long a transfer may wait for its peer: a whole read, or the next
-/// chunk of an `INCR` write.
+/// How long a transfer may wait for its peer: a whole read, the next chunk
+/// of an `INCR` write, or the owner thread's text for the primary
+/// selection.
 pub(super) const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The most text a read takes; an owner offering more answers nothing.
@@ -63,8 +74,8 @@ const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// property holds one until its timeout, and more are refused.
 const MAX_WRITERS: usize = 4;
 
-/// The most reads waiting at once: each is answered with its own copy of
-/// the text, so more are answered nothing at once.
+/// The most reads of a selection waiting at once: each is answered with its
+/// own copy of the text, so more are answered nothing at once.
 pub(super) const MAX_READERS: usize = 4;
 
 /// The most bytes of text the `INCR` writes hold at once, each shared text
@@ -72,6 +83,10 @@ pub(super) const MAX_READERS: usize = 4;
 /// left, which a transfer keeps writing (ICCCM §2.2). Each encodes its form
 /// a chunk at a time, so the texts are all it holds.
 const TRANSFER_BUDGET: usize = 2 * MAX_TEXT;
+
+/// The most requests waiting on the owner thread for the primary
+/// selection's text; more are refused.
+const MAX_ASKS: usize = 16;
 
 /// The largest chunk written in one request, below the server's request
 /// limit whatever it is.
@@ -84,96 +99,141 @@ const DESTINATIONS: usize = 4;
 /// every toolkit answers, then the MIME name, then ISO 8859-1.
 const READ_ORDER: [TextForm; 3] = [TextForm::Utf8String, TextForm::PlainUtf8, TextForm::Latin1];
 
+/// One of the two selections the thread speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Name {
+    /// `CLIPBOARD`, which a copy writes.
+    Clipboard,
+    /// `PRIMARY`, the text selected last.
+    Primary,
+}
+
+/// An offer of the application's primary selection, numbered by the owner
+/// thread in the order it made them, from 1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Generation(u64);
+
+impl Generation {
+    /// The offer after this one.
+    pub(super) fn next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("BUG: an application makes fewer than 2^64 offers"),
+        )
+    }
+}
+
 /// What the handle asks of the thread.
 pub(super) enum Command {
-    /// Own the selection with this text.
+    /// Own the clipboard with this text.
     Write(String),
+    /// Own the primary selection with the application's offer, whose text
+    /// the owner thread answers.
+    Offer(Generation),
+    /// Let go of the primary selection if this offer holds it.
+    Withdraw(Generation),
+    /// The owner thread's text for an offer the thread asked about; `None`
+    /// when the offer is no longer the application's or holds no text.
+    Answer(Generation, Option<String>),
     /// Answer with the selection's text.
-    Read(Resolver<Option<String>>),
+    Read(Name, Resolver<Option<String>>),
     /// Let go of everything and end.
     Stop,
 }
 
-/// The atoms the selection speaks.
+/// What the thread tells the owner thread about its primary selection, and
+/// the wake that has the owner's loop read it.
+pub(super) struct Notice {
+    state: parking_lot::Mutex<NoticeState>,
+    wake: Box<dyn Fn() + Send + Sync>,
+}
+
+#[derive(Default)]
+struct NoticeState {
+    /// The offer whose text a requestor waits for.
+    asked: Option<Generation>,
+    /// The newest offer another client took the selection from, or that
+    /// never became the selection.
+    lost: Generation,
+}
+
+impl Notice {
+    /// A notice that calls `wake` for the owner's loop to read it.
+    pub(super) fn new(wake: Box<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            state: parking_lot::Mutex::new(NoticeState::default()),
+            wake,
+        }
+    }
+
+    /// A requestor waits for `offer`'s text.
+    fn ask(&self, offer: Generation) {
+        self.state.lock().asked = Some(offer);
+        (self.wake)();
+    }
+
+    /// `offer` is not the selection any more.
+    fn lose(&self, offer: Generation) {
+        {
+            let mut state = self.state.lock();
+            state.lost = state.lost.max(offer);
+        }
+        (self.wake)();
+    }
+
+    /// The offer a requestor waits for, once.
+    pub(super) fn take_asked(&self) -> Option<Generation> {
+        self.state.lock().asked.take()
+    }
+
+    /// The newest offer that is not the selection.
+    pub(super) fn lost(&self) -> Generation {
+        self.state.lock().lost
+    }
+}
+
+/// Intern `names`, every request sent before the first reply is read.
+fn intern<const N: usize>(
+    connection: &RustConnection,
+    names: [&[u8]; N],
+) -> Result<[xproto::Atom; N], ReplyOrIdError> {
+    let cookies = names
+        .map(|name| connection.intern_atom(false, name))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let atoms = cookies
+        .into_iter()
+        .map(|cookie| Ok(cookie.reply()?.atom))
+        .collect::<Result<Vec<xproto::Atom>, ReplyOrIdError>>()?;
+    Ok(<[xproto::Atom; N]>::try_from(atoms)
+        .unwrap_or_else(|_| unreachable!("BUG: one atom is interned for each name")))
+}
+
+/// The atoms both selections speak.
 struct Atoms {
-    clipboard: xproto::Atom,
     targets: xproto::Atom,
     timestamp: xproto::Atom,
     incr: xproto::Atom,
     text: xproto::Atom,
-    /// The window's properties a read is converted into, one at a time: a
-    /// read that timed out retires its property, so an owner that answers
-    /// it late writes where no read looks.
-    destinations: [xproto::Atom; DESTINATIONS],
-    /// The window's property a write appends to for a timestamp.
-    clock: xproto::Atom,
-    /// The window's property a read appends to for a timestamp, which tells
-    /// its answers from a late answer to an earlier read.
-    read_clock: xproto::Atom,
     /// Each of [`TextForm::OFFERED`], by its position there.
     forms: [xproto::Atom; 4],
 }
 
 impl Atoms {
     fn intern(connection: &RustConnection) -> Result<Self, ReplyOrIdError> {
-        let names: [&[u8]; 11] = [
-            b"CLIPBOARD",
-            b"TARGETS",
-            b"TIMESTAMP",
-            b"INCR",
-            b"TEXT",
-            b"FLUI_CLIPBOARD_CLOCK",
-            b"FLUI_CLIPBOARD_READ_CLOCK",
-            b"FLUI_CLIPBOARD_0",
-            b"FLUI_CLIPBOARD_1",
-            b"FLUI_CLIPBOARD_2",
-            b"FLUI_CLIPBOARD_3",
-        ];
-        let cookies = names
-            .map(|name| connection.intern_atom(false, name))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
-        let forms = TextForm::OFFERED
-            .map(|form| connection.intern_atom(false, form.name().as_bytes()))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
-        let atoms = cookies
-            .into_iter()
-            .map(|cookie| Ok(cookie.reply()?.atom))
-            .collect::<Result<Vec<xproto::Atom>, ReplyOrIdError>>()?;
-        let forms = forms
-            .into_iter()
-            .map(|cookie| Ok(cookie.reply()?.atom))
-            .collect::<Result<Vec<xproto::Atom>, ReplyOrIdError>>()?;
-        let [
-            clipboard,
-            targets,
-            timestamp,
-            incr,
-            text,
-            clock,
-            read_clock,
-            first,
-            second,
-            third,
-            fourth,
-        ] = atoms[..]
-        else {
-            unreachable!("BUG: one atom is interned for each name");
-        };
-        let [plain_utf8, utf8_string, plain, latin1] = forms[..] else {
-            unreachable!("BUG: one atom is interned for each form");
-        };
+        let [targets, timestamp, incr, text] =
+            intern(connection, [b"TARGETS", b"TIMESTAMP", b"INCR", b"TEXT"])?;
+        let forms = intern(
+            connection,
+            TextForm::OFFERED.map(|form| form.name().as_bytes()),
+        )?;
         Ok(Self {
-            clipboard,
             targets,
             timestamp,
             incr,
             text,
-            destinations: [first, second, third, fourth],
-            clock,
-            read_clock,
-            forms: [plain_utf8, utf8_string, plain, latin1],
+            forms,
         })
     }
 
@@ -195,22 +255,27 @@ impl Atoms {
     }
 }
 
-/// The text the application owns the selection with, and since when. Every
-/// transfer shares the text and encodes its own form a chunk at a time, so
-/// no form of it is ever held whole besides the text.
-struct Owned {
+/// What the application owns a selection with.
+enum Content {
+    /// The clipboard's text.
+    Text(Encodings),
+    /// The primary selection's offer, whose text the owner thread answers.
+    Offered(Generation),
+}
+
+/// Text for every transfer to share: each encodes its own form a chunk at a
+/// time, so no form of it is ever held whole besides the text.
+struct Encodings {
     text: Arc<str>,
-    time: xproto::Timestamp,
     /// The text's length in ISO 8859-1, counted once: each request for the
     /// form would otherwise scan the whole text again.
     latin1_len: OnceCell<usize>,
 }
 
-impl Owned {
-    fn new(text: String, time: xproto::Timestamp) -> Self {
+impl Encodings {
+    fn new(text: Arc<str>) -> Self {
         Self {
-            text: text.into(),
-            time,
+            text,
             latin1_len: OnceCell::new(),
         }
     }
@@ -222,6 +287,23 @@ impl Owned {
             TextForm::PlainUtf8 | TextForm::Utf8String | TextForm::Plain => {
                 form.encoded_len(&self.text)
             }
+        }
+    }
+}
+
+/// What the application owns a selection with, and since when.
+struct Owned {
+    content: Content,
+    time: xproto::Timestamp,
+}
+
+impl Owned {
+    /// The clipboard's text and its length in `form`; `None` for an offer,
+    /// whose text the owner thread answers.
+    fn text_in(&self, form: TextForm) -> Option<(Arc<str>, usize)> {
+        match &self.content {
+            Content::Text(encodings) => Some((Arc::clone(&encodings.text), encodings.len_in(form))),
+            Content::Offered(_) => None,
         }
     }
 }
@@ -240,6 +322,16 @@ struct Transfer {
     deadline: Instant,
 }
 
+/// A request for the primary selection's text, waiting on the owner
+/// thread.
+struct Ask {
+    request: SelectionRequestEvent,
+    property: xproto::Atom,
+    form: TextForm,
+    offer: Generation,
+    deadline: Instant,
+}
+
 /// The read under way: the form asked for and what came so far.
 struct Reading {
     form: TextForm,
@@ -250,14 +342,21 @@ struct Reading {
     deadline: Instant,
 }
 
-/// The clipboard thread's state over its connection.
-pub(super) struct Selections {
-    connection: RustConnection,
-    window: xproto::Window,
-    atoms: Atoms,
+/// One selection: what the application owns it with, and the reads of it.
+struct Selection {
+    atom: xproto::Atom,
+    /// The window's property a write appends to for a timestamp.
+    clock: xproto::Atom,
+    /// The window's property a read appends to for a timestamp, which tells
+    /// its answers from a late answer to an earlier read.
+    read_clock: xproto::Atom,
+    /// The window's properties a read is converted into, one at a time: a
+    /// read that timed out retires its property, so an owner that answers
+    /// it late writes where no read looks.
+    destinations: [xproto::Atom; DESTINATIONS],
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
-    pending: Option<String>,
+    pending: Option<Content>,
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
@@ -267,48 +366,27 @@ pub(super) struct Selections {
     /// leaves, so they join no read that began before it.
     after_write: Vec<Resolver<Option<String>>>,
     reading: Option<Reading>,
-    /// Which of [`Atoms::destinations`] the reads are converted into now.
+    /// Which of [`Self::destinations`] the reads are converted into now.
     destination: usize,
-    transfers: Vec<Transfer>,
-    chunk: usize,
 }
 
-impl Selections {
-    /// Make the selection window on the root of `screen`, which hears its
-    /// own properties change.
-    pub(super) fn try_new(
-        connection: RustConnection,
-        screen: usize,
+impl Selection {
+    /// Selection `atom`, whose properties on the window are named after
+    /// `prefix`.
+    fn try_new(
+        connection: &RustConnection,
+        atom: xproto::Atom,
+        prefix: &str,
     ) -> Result<Self, ReplyOrIdError> {
-        let root = connection
-            .setup()
-            .roots
-            .get(screen)
-            .map_or(NONE, |screen| screen.root);
-        let window = connection.generate_id()?;
-        connection.create_window(
-            COPY_DEPTH_FROM_PARENT,
-            window,
-            root,
-            0,
-            0,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            COPY_FROM_PARENT,
-            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-        )?;
-        let atoms = Atoms::intern(&connection)?;
-        let chunk = connection
-            .maximum_request_bytes()
-            .saturating_sub(64)
-            .clamp(1, MAX_CHUNK);
-        connection.flush()?;
+        let names = ["CLOCK", "READ_CLOCK", "0", "1", "2", "3"]
+            .map(|suffix| format!("FLUI_{prefix}_{suffix}"));
+        let [clock, read_clock, first, second, third, fourth] =
+            intern(connection, names.each_ref().map(String::as_bytes))?;
         Ok(Self {
-            connection,
-            window,
-            atoms,
+            atom,
+            clock,
+            read_clock,
+            destinations: [first, second, third, fourth],
             owned: None,
             pending: None,
             clocks: 0,
@@ -316,74 +394,42 @@ impl Selections {
             after_write: Vec::new(),
             reading: None,
             destination: 0,
-            transfers: Vec::new(),
-            chunk,
         })
     }
 
-    /// Carry out `command`; `false` once it asks the thread to end.
-    fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
-        match command {
-            Command::Write(text) => {
-                self.pending = Some(text);
-                self.clocks += 1;
-                // The server stamps the property's change with its time.
-                self.connection.change_property8(
-                    PropMode::APPEND,
-                    self.window,
-                    self.atoms.clock,
-                    AtomEnum::INTEGER,
-                    &[],
-                )?;
-            }
-            Command::Read(answer) => {
-                // Each waiting read is answered with a copy of the text: past
-                // a few, a read answers nothing rather than hold another.
-                if self.readers.len() + self.after_write.len() >= MAX_READERS {
-                    // A retired owner has nobody left to answer. The read is
-                    // settled before the diagnostic, which runs user code.
-                    let _ = answer.resolve(None);
-                    tracing::debug!("an X11 clipboard read past {MAX_READERS} waiting was refused");
-                    return Ok(true);
-                }
-                // A read after a write answers what the write left: it waits
-                // for the write to own the selection or fail to.
-                if self.pending.is_some() {
-                    self.after_write.push(answer);
-                } else {
-                    self.readers.push(answer);
-                    self.serve()?;
-                }
-            }
-            Command::Stop => return Ok(false),
+    /// The offer the application owns the selection with, if any.
+    fn offered(&self) -> Option<Generation> {
+        match self.owned {
+            Some(Owned {
+                content: Content::Offered(offer),
+                ..
+            }) => Some(offer),
+            _ => None,
         }
-        Ok(true)
     }
 
     /// Answer the waiting reads: with the application's text while it owns
-    /// the selection, otherwise through the read under way or a new one.
-    fn serve(&mut self) -> Result<(), ReplyOrIdError> {
+    /// the clipboard, otherwise through the read under way or a new one.
+    fn serve(
+        &mut self,
+        connection: &RustConnection,
+        window: xproto::Window,
+    ) -> Result<(), ReplyOrIdError> {
         if self.readers.is_empty() {
             return Ok(());
         }
-        // A clear queued behind this read would leave the text stale: the
-        // server says whether the window still owns the selection.
-        if self.owned.is_some() {
-            let owner = self
-                .connection
-                .get_selection_owner(self.atoms.clipboard)?
-                .reply()?
-                .owner;
-            if owner != self.window {
-                self.owned = None;
-            }
-        }
         if let Some(owned) = &self.owned {
-            let text = owned.text.to_string();
+            // The owner thread reads its own offer itself: a read that
+            // reaches the thread found the offer gone, and the application
+            // holds no text.
+            let text = match &owned.content {
+                Content::Text(encodings) => Some(encodings.text.to_string()),
+                Content::Offered(_) => None,
+            };
             if self.reading.is_some() {
                 self.retire_destination();
             }
-            self.answer(Some(text));
+            self.answer(text);
             return Ok(());
         }
         if self.reading.is_none() {
@@ -394,10 +440,10 @@ impl Selections {
                 deadline: Instant::now() + TRANSFER_TIMEOUT,
             });
             // The server stamps the property's change with its time.
-            self.connection.change_property8(
+            connection.change_property8(
                 PropMode::APPEND,
-                self.window,
-                self.atoms.read_clock,
+                window,
+                self.read_clock,
                 AtomEnum::INTEGER,
                 &[],
             )?;
@@ -407,7 +453,7 @@ impl Selections {
 
     /// The property reads are converted into now.
     fn destination(&self) -> xproto::Atom {
-        self.atoms.destinations[self.destination]
+        self.destinations[self.destination]
     }
 
     /// Leave the read under way unanswered by the owner: the next read is
@@ -420,7 +466,12 @@ impl Selections {
 
     /// Ask the owner for the selection as the read's form, at the read's
     /// time.
-    fn convert(&mut self) -> Result<(), ReplyOrIdError> {
+    fn convert(
+        &self,
+        connection: &RustConnection,
+        window: xproto::Window,
+        atoms: &Atoms,
+    ) -> Result<(), ReplyOrIdError> {
         let Some(Reading {
             form,
             time: Some(time),
@@ -429,10 +480,10 @@ impl Selections {
         else {
             return Ok(());
         };
-        self.connection.convert_selection(
-            self.window,
-            self.atoms.clipboard,
-            self.atoms.form(form),
+        connection.convert_selection(
+            window,
+            self.atom,
+            atoms.form(form),
             self.destination(),
             time,
         )?;
@@ -474,93 +525,33 @@ impl Selections {
         failure.resume();
     }
 
-    fn event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
-        match event {
-            Event::PropertyNotify(event) => {
-                if event.window == self.window && event.atom == self.atoms.clock {
-                    self.own(event.time)?;
-                } else if event.window == self.window && event.atom == self.atoms.read_clock {
-                    if let Some(reading) = &mut self.reading
-                        && reading.time.is_none()
-                    {
-                        reading.time = Some(event.time);
-                        self.convert()?;
-                    }
-                } else if event.window == self.window
-                    && event.atom == self.destination()
-                    && event.state == Property::NEW_VALUE
-                {
-                    self.read_chunk()?;
-                } else if event.state == Property::DELETE {
-                    self.write_chunk(event.window, event.atom)?;
-                }
-            }
-            Event::SelectionNotify(event) => self.converted(&event)?,
-            Event::SelectionRequest(event) => self.request(&event)?,
-            Event::SelectionClear(event) => self.cleared(&event)?,
-            // A requestor that went away fails the writes to it; its
-            // transfer ends at its deadline.
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// The server's time arrived: own the selection with the pending text.
-    fn own(&mut self, time: xproto::Timestamp) -> Result<(), ReplyOrIdError> {
-        // A stamp of a write a newer one replaced: the newer write takes the
-        // stamp of its own append, which follows.
-        self.clocks = self.clocks.saturating_sub(1);
-        if self.clocks > 0 {
-            return Ok(());
-        }
-        let Some(text) = self.pending.take() else {
-            return Ok(());
-        };
-        self.connection
-            .set_selection_owner(self.window, self.atoms.clipboard, time)?;
-        let owner = self
-            .connection
-            .get_selection_owner(self.atoms.clipboard)?
-            .reply()?
-            .owner;
-        if owner == self.window {
-            self.owned = Some(Owned::new(text, time));
-        } else {
-            // A client took it at a later time than ours.
-            self.owned = None;
-            tracing::debug!("the X11 clipboard was taken before the write could own it");
-        }
-        // The reads that waited for the write.
-        self.readers.append(&mut self.after_write);
-        self.serve()
-    }
-
-    /// Another client took the selection, unless the window owns it again:
-    /// a clear queued behind the write that took it back is stale.
-    fn cleared(&mut self, event: &SelectionClearEvent) -> Result<(), ReplyOrIdError> {
-        if event.owner != self.window
-            || event.selection != self.atoms.clipboard
-            || self.owned.is_none()
+    /// The read's timestamp arrived: ask for the conversion at it.
+    fn stamped(
+        &mut self,
+        connection: &RustConnection,
+        window: xproto::Window,
+        atoms: &Atoms,
+        time: xproto::Timestamp,
+    ) -> Result<(), ReplyOrIdError> {
+        if let Some(reading) = &mut self.reading
+            && reading.time.is_none()
         {
-            return Ok(());
-        }
-        let owner = self
-            .connection
-            .get_selection_owner(self.atoms.clipboard)?
-            .reply()?
-            .owner;
-        if owner != self.window {
-            self.owned = None;
+            reading.time = Some(time);
+            self.convert(connection, window, atoms)?;
         }
         Ok(())
     }
 
     /// The owner answered a conversion: read its property, or ask for the
     /// next form if it refused.
-    fn converted(&mut self, event: &SelectionNotifyEvent) -> Result<(), ReplyOrIdError> {
-        if event.requestor != self.window || event.selection != self.atoms.clipboard {
-            return Ok(());
-        }
+    fn converted(
+        &mut self,
+        connection: &RustConnection,
+        window: xproto::Window,
+        atoms: &Atoms,
+        event: &SelectionNotifyEvent,
+    ) -> Result<(), ReplyOrIdError> {
+        let destination = self.destination();
         let Some(reading) = &mut self.reading else {
             return Ok(());
         };
@@ -569,9 +560,8 @@ impl Selections {
         let ours = reading
             .time
             .is_some_and(|time| event.time == time || event.time == CURRENT_TIME)
-            && event.target == self.atoms.form(reading.form)
-            && (event.property == NONE
-                || event.property == self.atoms.destinations[self.destination]);
+            && event.target == atoms.form(reading.form)
+            && (event.property == NONE || event.property == destination);
         if !ours {
             return Ok(());
         }
@@ -583,15 +573,15 @@ impl Selections {
             match next {
                 Some(&form) => {
                     reading.form = form;
-                    self.convert()?;
+                    self.convert(connection, window, atoms)?;
                 }
                 None => self.answer(None),
             }
             return Ok(());
         }
         let form = reading.form;
-        let reply = self.take_property(MAX_TEXT)?;
-        if reply.type_ == self.atoms.incr {
+        let reply = self.take_property(connection, window, MAX_TEXT)?;
+        if reply.type_ == atoms.incr {
             // The owner says how much is coming, at least: room for that is
             // taken once, so honest chunks land without growing the buffer.
             let announced = reply
@@ -626,7 +616,11 @@ impl Selections {
 
     /// The owner wrote an `INCR` chunk: read at most what the read has left
     /// of [`MAX_TEXT`], the first chunk kept as it came.
-    fn read_chunk(&mut self) -> Result<(), ReplyOrIdError> {
+    fn read_chunk(
+        &mut self,
+        connection: &RustConnection,
+        window: xproto::Window,
+    ) -> Result<(), ReplyOrIdError> {
         let Some(received) = self
             .reading
             .as_ref()
@@ -635,7 +629,7 @@ impl Selections {
         else {
             return Ok(());
         };
-        let reply = self.take_property(MAX_TEXT.saturating_sub(received))?;
+        let reply = self.take_property(connection, window, MAX_TEXT.saturating_sub(received))?;
         let Some(reading) = &mut self.reading else {
             return Ok(());
         };
@@ -664,22 +658,328 @@ impl Selections {
     /// Read and delete the window's destination property, at most `limit`
     /// bytes of it, rounded up to whole 32-bit units; a longer value says
     /// so in `bytes_after`.
-    fn take_property(&self, limit: usize) -> Result<GetPropertyReply, ReplyOrIdError> {
+    fn take_property(
+        &self,
+        connection: &RustConnection,
+        window: xproto::Window,
+        limit: usize,
+    ) -> Result<GetPropertyReply, ReplyOrIdError> {
         let longs = u32::try_from(limit.div_ceil(4)).expect("BUG: the text limit fits a request");
-        Ok(self
-            .connection
-            .get_property(
-                true,
-                self.window,
-                self.destination(),
-                AtomEnum::ANY,
-                0,
-                longs,
-            )?
+        Ok(connection
+            .get_property(true, window, self.destination(), AtomEnum::ANY, 0, longs)?
             .reply()?)
     }
 
-    /// Another client asks for the selection.
+    /// End the read under way if it waited past `now`.
+    fn expire(&mut self, now: Instant) {
+        if self
+            .reading
+            .as_ref()
+            .is_some_and(|reading| reading.deadline <= now)
+        {
+            tracing::debug!("an X11 selection read timed out");
+            self.retire_destination();
+            self.answer(None);
+        }
+    }
+}
+
+/// How a request is answered.
+enum Reply {
+    /// Now: `true` when its property holds the answer, `false` when it is
+    /// refused.
+    Now(bool),
+    /// Once the owner thread sends the text.
+    Later,
+}
+
+/// The clipboard thread's state over its connection.
+pub(super) struct Selections {
+    connection: RustConnection,
+    window: xproto::Window,
+    atoms: Atoms,
+    clipboard: Selection,
+    primary: Selection,
+    /// What the owner thread hears of the primary selection.
+    notice: Arc<Notice>,
+    /// The requests waiting on the owner thread for the primary
+    /// selection's text.
+    asks: Vec<Ask>,
+    transfers: Vec<Transfer>,
+    chunk: usize,
+}
+
+impl Selections {
+    /// Make the selection window on the root of `screen`, which hears its
+    /// own properties change.
+    pub(super) fn try_new(
+        connection: RustConnection,
+        screen: usize,
+        notice: Arc<Notice>,
+    ) -> Result<Self, ReplyOrIdError> {
+        let root = connection
+            .setup()
+            .roots
+            .get(screen)
+            .map_or(NONE, |screen| screen.root);
+        let window = connection.generate_id()?;
+        connection.create_window(
+            COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )?;
+        let atoms = Atoms::intern(&connection)?;
+        let [clipboard] = intern(&connection, [b"CLIPBOARD"])?;
+        let clipboard = Selection::try_new(&connection, clipboard, "CLIPBOARD")?;
+        let primary = Selection::try_new(&connection, AtomEnum::PRIMARY.into(), "PRIMARY")?;
+        let chunk = connection
+            .maximum_request_bytes()
+            .saturating_sub(64)
+            .clamp(1, MAX_CHUNK);
+        connection.flush()?;
+        Ok(Self {
+            connection,
+            window,
+            atoms,
+            clipboard,
+            primary,
+            notice,
+            asks: Vec::new(),
+            transfers: Vec::new(),
+            chunk,
+        })
+    }
+
+    fn selection(&self, name: Name) -> &Selection {
+        match name {
+            Name::Clipboard => &self.clipboard,
+            Name::Primary => &self.primary,
+        }
+    }
+
+    /// The connection, the window and the atoms beside selection `name`,
+    /// for a step of the selection's own.
+    fn split(&mut self, name: Name) -> (&RustConnection, xproto::Window, &Atoms, &mut Selection) {
+        let selection = match name {
+            Name::Clipboard => &mut self.clipboard,
+            Name::Primary => &mut self.primary,
+        };
+        (&self.connection, self.window, &self.atoms, selection)
+    }
+
+    /// The selection `atom` names, if it is one the thread speaks.
+    fn named(&self, atom: xproto::Atom) -> Option<Name> {
+        if atom == self.clipboard.atom {
+            Some(Name::Clipboard)
+        } else if atom == self.primary.atom {
+            Some(Name::Primary)
+        } else {
+            None
+        }
+    }
+
+    /// Carry out `command`; `false` once it asks the thread to end.
+    fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
+        match command {
+            Command::Write(text) => {
+                self.claim(Name::Clipboard, Content::Text(Encodings::new(text.into())))?;
+            }
+            Command::Offer(offer) => self.claim(Name::Primary, Content::Offered(offer))?,
+            Command::Withdraw(offer) => self.withdraw(offer)?,
+            Command::Answer(offer, text) => self.answered(offer, text)?,
+            Command::Read(name, answer) => {
+                // Each waiting read is answered with a copy of the text: past
+                // a few, a read answers nothing rather than hold another.
+                let selection = self.split(name).3;
+                if selection.readers.len() + selection.after_write.len() >= MAX_READERS {
+                    // A retired owner has nobody left to answer. The read is
+                    // settled before the diagnostic, which runs user code.
+                    let _ = answer.resolve(None);
+                    tracing::debug!("an X11 selection read past {MAX_READERS} waiting was refused");
+                    return Ok(true);
+                }
+                // A read after a write answers what the write left: it waits
+                // for the write to own the selection or fail to.
+                if self.split(name).3.pending.is_some() {
+                    self.split(name).3.after_write.push(answer);
+                } else {
+                    // A clear queued behind this read would answer it from
+                    // what the window no longer owns.
+                    if !self.still_owned(name)? {
+                        self.lost(name)?;
+                    }
+                    let (connection, window, _, selection) = self.split(name);
+                    selection.readers.push(answer);
+                    selection.serve(connection, window)?;
+                }
+            }
+            Command::Stop => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Own selection `name` with `content` once the server's time arrives.
+    fn claim(&mut self, name: Name, content: Content) -> Result<(), ReplyOrIdError> {
+        let (connection, window, _, selection) = self.split(name);
+        selection.pending = Some(content);
+        selection.clocks += 1;
+        // The server stamps the property's change with its time.
+        connection.change_property8(
+            PropMode::APPEND,
+            window,
+            selection.clock,
+            AtomEnum::INTEGER,
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// The owner thread withdrew `offer`: let go of the primary selection
+    /// if `offer` holds it, or never take it if `offer` waits to.
+    fn withdraw(&mut self, offer: Generation) -> Result<(), ReplyOrIdError> {
+        let (connection, window, _, primary) = self.split(Name::Primary);
+        if matches!(primary.pending, Some(Content::Offered(pending)) if pending == offer) {
+            primary.pending = None;
+        }
+        if primary.offered() == Some(offer)
+            && let Some(owned) = primary.owned.take()
+        {
+            connection.set_selection_owner(NONE, primary.atom, owned.time)?;
+        }
+        if primary.pending.is_none() {
+            // The reads that waited for the withdrawn offer.
+            primary.readers.append(&mut primary.after_write);
+            primary.serve(connection, window)?;
+        }
+        self.settle_asks()
+    }
+
+    fn event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
+        match event {
+            Event::PropertyNotify(event) => {
+                if event.window == self.window {
+                    for name in [Name::Clipboard, Name::Primary] {
+                        let (connection, window, atoms, selection) = self.split(name);
+                        if event.atom == selection.clock {
+                            return self.own(name, event.time);
+                        }
+                        if event.atom == selection.read_clock {
+                            return selection.stamped(connection, window, atoms, event.time);
+                        }
+                        if event.atom == selection.destination()
+                            && event.state == Property::NEW_VALUE
+                        {
+                            return selection.read_chunk(connection, window);
+                        }
+                    }
+                }
+                if event.state == Property::DELETE {
+                    self.write_chunk(event.window, event.atom)?;
+                }
+            }
+            Event::SelectionNotify(event) => {
+                if event.requestor == self.window
+                    && let Some(name) = self.named(event.selection)
+                {
+                    let (connection, window, atoms, selection) = self.split(name);
+                    selection.converted(connection, window, atoms, &event)?;
+                }
+            }
+            Event::SelectionRequest(event) => self.request(&event)?,
+            Event::SelectionClear(event) => self.cleared(&event)?,
+            // A requestor that went away fails the writes to it; its
+            // transfer ends at its deadline.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The server's time arrived: own selection `name` with what waits.
+    fn own(&mut self, name: Name, time: xproto::Timestamp) -> Result<(), ReplyOrIdError> {
+        let (connection, window, _, selection) = self.split(name);
+        // A stamp of a write a newer one replaced: the newer write takes the
+        // stamp of its own append, which follows.
+        selection.clocks = selection.clocks.saturating_sub(1);
+        if selection.clocks > 0 {
+            return Ok(());
+        }
+        let Some(content) = selection.pending.take() else {
+            return Ok(());
+        };
+        connection.set_selection_owner(window, selection.atom, time)?;
+        let owner = connection
+            .get_selection_owner(selection.atom)?
+            .reply()?
+            .owner;
+        if owner == window {
+            selection.owned = Some(Owned { content, time });
+        } else {
+            // A client took it at a later time than ours.
+            selection.owned = None;
+            tracing::debug!("an X11 selection was taken before the write could own it");
+            if let Content::Offered(offer) = content {
+                self.notice.lose(offer);
+            }
+        }
+        // The reads that waited for the write.
+        let (connection, window, _, selection) = self.split(name);
+        selection.readers.append(&mut selection.after_write);
+        selection.serve(connection, window)?;
+        self.settle_asks()
+    }
+
+    /// Another client took a selection the window owned, unless the window
+    /// owns it again: a clear queued behind the write that took it back is
+    /// stale.
+    fn cleared(&mut self, event: &SelectionClearEvent) -> Result<(), ReplyOrIdError> {
+        if event.owner != self.window {
+            return Ok(());
+        }
+        let Some(name) = self.named(event.selection) else {
+            return Ok(());
+        };
+        if self.still_owned(name)? {
+            return Ok(());
+        }
+        self.lost(name)
+    }
+
+    /// Whether the window owns selection `name` as far as the server says,
+    /// or owns nothing to lose.
+    fn still_owned(&mut self, name: Name) -> Result<bool, ReplyOrIdError> {
+        let (connection, window, _, selection) = self.split(name);
+        if selection.owned.is_none() {
+            return Ok(true);
+        }
+        let owner = connection
+            .get_selection_owner(selection.atom)?
+            .reply()?
+            .owner;
+        Ok(owner == window)
+    }
+
+    /// Another client took selection `name`: the ownership ends, and an
+    /// offer that held it is lost.
+    fn lost(&mut self, name: Name) -> Result<(), ReplyOrIdError> {
+        if let Some(Owned {
+            content: Content::Offered(offer),
+            ..
+        }) = self.split(name).3.owned.take()
+        {
+            self.notice.lose(offer);
+        }
+        self.settle_asks()
+    }
+
+    /// Another client asks for a selection.
     fn request(&mut self, request: &SelectionRequestEvent) -> Result<(), ReplyOrIdError> {
         // An obsolete client names no property: the target is its name.
         let property = if request.property == NONE {
@@ -687,7 +987,20 @@ impl Selections {
         } else {
             request.property
         };
-        let answered = self.answer_request(request, property)?;
+        match self.answer_request(request, property)? {
+            Reply::Now(true) => self.notify(request, property),
+            Reply::Now(false) => self.notify(request, NONE),
+            Reply::Later => Ok(()),
+        }
+    }
+
+    /// Tell `request`'s requestor its answer is in `property`, or with
+    /// `NONE` that it is refused.
+    fn notify(
+        &self,
+        request: &SelectionRequestEvent,
+        property: xproto::Atom,
+    ) -> Result<(), ReplyOrIdError> {
         let notify = SelectionNotifyEvent {
             response_type: xproto::SELECTION_NOTIFY_EVENT,
             sequence: 0,
@@ -695,28 +1008,30 @@ impl Selections {
             requestor: request.requestor,
             selection: request.selection,
             target: request.target,
-            property: if answered { property } else { NONE },
+            property,
         };
         self.connection
             .send_event(false, request.requestor, EventMask::NO_EVENT, notify)?;
         Ok(())
     }
 
-    /// Write the answer to `request` into the requestor's `property`;
-    /// `false` when it is refused.
+    /// Write the answer to `request` into the requestor's `property`, or
+    /// hold it for the owner thread's text.
     fn answer_request(
         &mut self,
         request: &SelectionRequestEvent,
         property: xproto::Atom,
-    ) -> Result<bool, ReplyOrIdError> {
-        let Some(owned) = &self.owned else {
-            return Ok(false);
+    ) -> Result<Reply, ReplyOrIdError> {
+        let Some(name) = self.named(request.selection) else {
+            return Ok(Reply::Now(false));
         };
-        let current = request.selection == self.atoms.clipboard
-            && request.owner == self.window
+        let Some(owned) = &self.selection(name).owned else {
+            return Ok(Reply::Now(false));
+        };
+        let current = request.owner == self.window
             && (request.time == CURRENT_TIME || not_before(request.time, owned.time));
         if !current {
-            return Ok(false);
+            return Ok(Reply::Now(false));
         }
         let target = request.target;
         if target == self.atoms.targets {
@@ -729,7 +1044,7 @@ impl Selections {
                 AtomEnum::ATOM,
                 &targets,
             )?;
-            return Ok(true);
+            return Ok(Reply::Now(true));
         }
         if target == self.atoms.timestamp {
             self.connection.change_property32(
@@ -739,14 +1054,92 @@ impl Selections {
                 AtomEnum::INTEGER,
                 &[owned.time],
             )?;
-            return Ok(true);
+            return Ok(Reply::Now(true));
         }
         let Some(form) = self.atoms.form_of(target) else {
-            return Ok(false);
+            return Ok(Reply::Now(false));
         };
+        let Content::Offered(offer) = owned.content else {
+            let (_, _, _, selection) = self.split(name);
+            let Some((text, len)) = selection
+                .owned
+                .as_ref()
+                .and_then(|owned| owned.text_in(form))
+            else {
+                return Ok(Reply::Now(false));
+            };
+            let answered = self.write_text(request, property, form, text, len)?;
+            return Ok(Reply::Now(answered));
+        };
+        if self.asks.len() >= MAX_ASKS {
+            tracing::debug!("an X11 primary selection request past {MAX_ASKS} waiting was refused");
+            return Ok(Reply::Now(false));
+        }
+        // One ask covers every request waiting on the offer.
+        let asked = self.asks.iter().any(|ask| ask.offer == offer);
+        self.asks.push(Ask {
+            request: *request,
+            property,
+            form,
+            offer,
+            deadline: Instant::now() + TRANSFER_TIMEOUT,
+        });
+        if !asked {
+            self.notice.ask(offer);
+        }
+        Ok(Reply::Later)
+    }
+
+    /// The owner thread answered `offer` with `text`: answer the requests
+    /// that waited on it, if it is still the selection.
+    fn answered(&mut self, offer: Generation, text: Option<String>) -> Result<(), ReplyOrIdError> {
+        let (ready, waiting): (Vec<Ask>, Vec<Ask>) = std::mem::take(&mut self.asks)
+            .into_iter()
+            .partition(|ask| ask.offer == offer);
+        self.asks = waiting;
+        let encodings = text
+            .filter(|_| self.primary.offered() == Some(offer))
+            .map(|text| Encodings::new(text.into()));
+        for ask in ready {
+            let answered = match &encodings {
+                Some(encodings) => {
+                    let text = Arc::clone(&encodings.text);
+                    let len = encodings.len_in(ask.form);
+                    self.write_text(&ask.request, ask.property, ask.form, text, len)?
+                }
+                None => false,
+            };
+            self.notify(&ask.request, if answered { ask.property } else { NONE })?;
+        }
+        Ok(())
+    }
+
+    /// Refuse the requests waiting on an offer that is no longer the
+    /// primary selection.
+    fn settle_asks(&mut self) -> Result<(), ReplyOrIdError> {
+        let current = self.primary.offered();
+        let (stale, kept): (Vec<Ask>, Vec<Ask>) = std::mem::take(&mut self.asks)
+            .into_iter()
+            .partition(|ask| Some(ask.offer) != current);
+        self.asks = kept;
+        for ask in stale {
+            self.notify(&ask.request, NONE)?;
+        }
+        Ok(())
+    }
+
+    /// Write `text` in `form`, `len` bytes of it, into the requestor's
+    /// `property`: whole, or `INCR` when larger than one request, each chunk
+    /// encoded as it is written. `false` when it is refused.
+    fn write_text(
+        &mut self,
+        request: &SelectionRequestEvent,
+        property: xproto::Atom,
+        form: TextForm,
+        text: Arc<str>,
+        len: usize,
+    ) -> Result<bool, ReplyOrIdError> {
         let kind = self.atoms.form(form);
-        let text = Arc::clone(&owned.text);
-        let len = owned.len_in(form);
         if len <= self.chunk {
             let (bytes, _) = form.encode_chunk(&text, 0, len);
             self.connection.change_property8(
@@ -762,11 +1155,11 @@ impl Selections {
             transfer.requestor != request.requestor || transfer.property != property
         });
         if self.transfers.len() >= MAX_WRITERS {
-            tracing::debug!("an X11 clipboard transfer past {MAX_WRITERS} at once was refused");
+            tracing::debug!("an X11 selection transfer past {MAX_WRITERS} at once was refused");
             return Ok(false);
         }
         if !self.within_budget(&text) {
-            tracing::debug!("an X11 clipboard transfer past the retained-text budget was refused");
+            tracing::debug!("an X11 selection transfer past the retained-text budget was refused");
             return Ok(false);
         }
         let Ok(size) = u32::try_from(len) else {
@@ -871,32 +1264,45 @@ impl Selections {
 
     /// End what waited past its deadline.
     fn expire(&mut self, now: Instant) -> Result<(), ReplyOrIdError> {
-        if self
-            .reading
-            .as_ref()
-            .is_some_and(|reading| reading.deadline <= now)
-        {
-            tracing::debug!("an X11 clipboard read timed out");
-            self.retire_destination();
-            self.answer(None);
-        }
+        self.clipboard.expire(now);
+        self.primary.expire(now);
         let (expired, kept): (Vec<Transfer>, Vec<Transfer>) = std::mem::take(&mut self.transfers)
             .into_iter()
             .partition(|transfer| transfer.deadline <= now);
         self.transfers = kept;
         for transfer in expired {
-            tracing::debug!("an X11 clipboard transfer timed out");
+            tracing::debug!("an X11 selection transfer timed out");
             self.forget(transfer.requestor)?;
+        }
+        let (expired, kept): (Vec<Ask>, Vec<Ask>) = std::mem::take(&mut self.asks)
+            .into_iter()
+            .partition(|ask| ask.deadline <= now);
+        self.asks = kept;
+        for ask in expired {
+            tracing::debug!("the owner thread left an X11 primary selection request unanswered");
+            self.notify(&ask.request, NONE)?;
         }
         Ok(())
     }
 
+    /// The thread ends: abandon the reads still waiting on either
+    /// selection, each drop contained, the first failure going on after
+    /// both.
+    fn abandon(&mut self) {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.clipboard.abandon());
+        failure.contain(|| self.primary.abandon());
+        failure.resume();
+    }
+
     /// The earliest deadline waiting.
     fn deadline(&self) -> Option<Instant> {
-        self.reading
-            .iter()
+        [&self.clipboard, &self.primary]
+            .into_iter()
+            .filter_map(|selection| selection.reading.as_ref())
             .map(|reading| reading.deadline)
             .chain(self.transfers.iter().map(|transfer| transfer.deadline))
+            .chain(self.asks.iter().map(|ask| ask.deadline))
             .min()
     }
 }

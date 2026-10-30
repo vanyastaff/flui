@@ -41,11 +41,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
+use crate::clipboard::linux::offered::{SelectionText, ask, drop_retired};
 use crate::clipboard::linux::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
-
-/// What the application offers as its selection.
-type SelectionText = Rc<dyn Fn() -> Option<String>>;
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -231,33 +229,6 @@ impl Released {
         drop(self.sends);
         let current = self.owned.map(Owned::release);
         drop_retired(current.into_iter().chain(self.retired).collect());
-    }
-}
-
-/// Drop the closures the dispatch retired, in order. Once a destructor
-/// panics the rest are retained, not dropped during the unwind, and the
-/// first failure goes on (ADR-0127).
-fn drop_retired(retired: Vec<SelectionText>) {
-    let mut retired = retired.into_iter();
-    for text in retired.by_ref() {
-        if let Err(failure) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(text)))
-        {
-            retired.for_each(std::mem::forget);
-            std::panic::resume_unwind(failure);
-        }
-    }
-}
-
-/// Ask the application's closure for its text. A closure that panics is
-/// retained rather than dropped during the unwind, which may be its last
-/// owner: a capture's destructor that panicked then would abort (ADR-0127).
-fn ask(text: SelectionText) -> Option<String> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| text())) {
-        Ok(answer) => answer,
-        Err(failure) => {
-            std::mem::forget(text);
-            std::panic::resume_unwind(failure)
-        }
     }
 }
 
