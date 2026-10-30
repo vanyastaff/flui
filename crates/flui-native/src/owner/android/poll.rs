@@ -61,6 +61,27 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     [deadline, sample].into_iter().flatten().min().map(until)
 }
 
+/// Which past deadline the owner was last offered.
+///
+/// The offer wakes the owner signal, and that wake also wakes the looper. Until
+/// a frame clears the deadline it stays behind, so offering it on every turn
+/// would wake the looper on every turn: a busy loop while the turn waits for
+/// the choreographer's next frame or for the Activity to resume.
+#[derive(Debug, Default)]
+pub(crate) struct DueDeadline {
+    offered: Option<Instant>,
+}
+
+impl DueDeadline {
+    /// Whether `deadline` is behind `now` and has not been offered yet.
+    /// A deadline the owner moves, or clears and arms again, is offered again.
+    pub(crate) fn offer(&mut self, deadline: Option<Instant>, now: Instant) -> bool {
+        let due = deadline.filter(|deadline| now >= *deadline);
+        let fresh = due.is_some() && due != self.offered;
+        self.offered = due;
+        fresh
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +174,34 @@ mod tests {
             ),
         ] {
             assert_eq!(poll_timeout(turn, now), expected, "{case}");
+        }
+    }
+
+    /// A deadline left behind is offered once, however many turns pass before
+    /// a frame clears it; a later deadline, or one cleared and armed again, is
+    /// offered again.
+    #[test]
+    fn a_deadline_left_behind_is_offered_once() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let behind = now.checked_sub(ms(40));
+        let mut due = DueDeadline::default();
+        for (case, deadline, at, expected) in [
+            ("nothing armed", None, now, false),
+            ("a deadline ahead", Some(now + ms(5)), now, false),
+            ("the deadline passes", Some(now + ms(5)), now + ms(5), true),
+            (
+                "the next turn, still behind",
+                Some(now + ms(5)),
+                now + ms(9),
+                false,
+            ),
+            ("the owner moves it, and it is behind", behind, now, true),
+            ("a turn waiting for the frame", behind, now, false),
+            ("a frame clears it", None, now, false),
+            ("armed again at the same instant", behind, now, true),
+        ] {
+            assert_eq!(due.offer(deadline, at), expected, "{case}");
         }
     }
 }

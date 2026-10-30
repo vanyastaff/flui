@@ -72,7 +72,8 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
    holds the loop thread's choreographer. A turn that would deliver a frame posts one callback,
    unless one is still posted, and blocks: `LoopTurn::awaiting_vsync` makes `poll_timeout` wait
    until woken, or until a deadline or preference sample still ahead. A deadline already behind is
-   the frame being waited for.
+   the frame being waited for. It is offered to the owner once (`owner::android::poll::DueDeadline`):
+   that offer wakes the looper, and offered on every turn it would spin until the callback came.
 3. **The callback records and wakes.** It runs as one `os_entry`, records a `VsyncTick` (the frame
    time, and on API 33 the preferred timeline's expected presentation) and wakes the looper. It
    calls no user code. Each post hands the callback a counted reference to the state it records
@@ -106,7 +107,8 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 - `ndk_gate_table` rows for each marker, and `the_frame_callback_is_the_newest_the_system_has` in
   `os_capability_table` (`flui-native`, run on the Linux CI host).
 - `a_tick_places_its_vsync_and_presentation_around_the_reading` (`owner::android::frame_clock`).
-- `a_paused_loop_blocks_until_it_is_woken` (`owner::android::poll`) rows for a turn waiting for the
+- `a_deadline_left_behind_is_offered_once` and `a_paused_loop_blocks_until_it_is_woken`
+  (`owner::android::poll`), the latter with rows for a turn waiting for the
   next frame.
 - `os_entry` around both callbacks: `xtask panic-boundary`.
 - CI's `cross-typecheck (aarch64-linux-android)` builds the loop. A run on a device: frames follow

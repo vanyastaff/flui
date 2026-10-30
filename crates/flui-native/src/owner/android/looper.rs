@@ -81,6 +81,7 @@ use crate::{
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
     owner::android::ndk::{FrameCallbacks, SymbolSource},
+    owner::android::poll::DueDeadline,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
     owner::app_delivery::AppDelivery,
@@ -608,6 +609,7 @@ impl host::Loop for AndroidLoop {
         // When preferences, scroll factors and insets are read next; `None`
         // waits for a change to be reported.
         let mut next_preference_sample = Some(web_time::Instant::now());
+        let mut due_deadline = DueDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
@@ -688,9 +690,12 @@ impl host::Loop for AndroidLoop {
             // The handler re-enters `flui-app`, so it is asked through the
             // call point with no lock held (ADR-0038 §5).
             let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
-            let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
-            if deadline_due {
+            let now = web_time::Instant::now();
+            let deadline_due = is_deadline_due(wake_deadline, now);
+            if due_deadline.offer(wake_deadline, now) {
                 // Owner services remain deliverable while execution gates frames.
+                // Once per deadline: the wake also wakes the looper, and a
+                // deadline only a frame clears stays behind until one runs.
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive() {
                     self.running.store(false, Ordering::Relaxed);
