@@ -81,6 +81,7 @@ impl TextForm {
     /// How many bytes of text [`decode`](Self::decode) makes of `bytes`,
     /// measured without making it: a reader refuses text past its limit
     /// before ISO 8859-1 or ill-formed UTF-8 grows as it decodes.
+    #[cfg(x11_host)]
     pub(crate) fn decoded_len(self, bytes: &[u8]) -> usize {
         let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
         match self {
@@ -102,6 +103,7 @@ impl TextForm {
 
     /// Whether the form's bytes are UTF-8, the same bytes for each such
     /// form.
+    #[cfg(x11_host)]
     pub(crate) const fn is_utf8(self) -> bool {
         !matches!(self, Self::Latin1)
     }
@@ -186,6 +188,7 @@ mod tests {
 
     /// The decoded length is measured without decoding and matches what
     /// decoding makes, ill-formed UTF-8 and ISO 8859-1's high half included.
+    #[cfg(x11_host)]
     #[test]
     fn the_decoded_length_matches_the_decoded_text() {
         let cases: [&[u8]; 6] = [
