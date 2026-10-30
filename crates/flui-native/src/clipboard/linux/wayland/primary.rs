@@ -5,14 +5,16 @@
 //! It mirrors the clipboard beside it, on its own devices: one per seat,
 //! keeping the offer of the seat's primary selection. Two things differ.
 //!
-//! - **The application's selection is lazy.** [`offer`](Primary::offer)
-//!   holds the application's closure and sets a source offering every form
-//!   of [`TextForm::OFFERED`]; the closure is asked for the text only when
-//!   the selection is read. A `send` from another client is recorded by the
+//! - **The application's selection is lazy.**
+//!   [`offer_primary`](super::SeatClipboard::offer_primary) holds the
+//!   application's closure and sets a source offering every form of
+//!   [`TextForm::OFFERED`]; the closure is asked for the text only when the
+//!   selection is read. A `send` from another client is recorded by the
 //!   dispatch with its descriptor and answered at the loop's turn
-//!   ([`deliver`](Primary::deliver)), with no lock of the loop or of this
-//!   selection held, so the closure may read widget state and call back into
-//!   the selection; the reader waits on its pipe meanwhile.
+//!   ([`deliver_primary`](super::SeatClipboard::deliver_primary)), with no
+//!   lock of the loop or of this selection held, so the closure may read
+//!   widget state and call back into the selection; the reader waits on its
+//!   pipe meanwhile.
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
 
@@ -359,7 +361,17 @@ impl super::SeatClipboard {
     /// Answer the `send`s recorded since the last turn: each still asking
     /// the application's current source gets the closure's text now.
     pub(super) fn deliver_primary(&self) {
-        let (sends, text, retired) = self
+        // The closures the dispatch retired drop first, with nothing held and
+        // nothing of the current selection taken yet: a destructor that
+        // withdraws the current selection and then panics leaves no snapshot
+        // of it for the unwind to drop.
+        let retired = self
+            .shared
+            .primary
+            .with(|primary| std::mem::take(&mut primary.retired))
+            .unwrap_or_default();
+        drop_retired(retired);
+        let (sends, text) = self
             .shared
             .primary
             .with(|primary| {
@@ -367,11 +379,9 @@ impl super::SeatClipboard {
                 let current = primary.owned.as_ref().and_then(|owned| {
                     Some((owned.source.as_ref()?.1.clone(), Rc::clone(&owned.text)))
                 });
-                (sends, current, std::mem::take(&mut primary.retired))
+                (sends, current)
             })
             .unwrap_or_default();
-        // The closures the dispatch retired drop here, with nothing held.
-        drop_retired(retired);
         if sends.is_empty() {
             return;
         }
