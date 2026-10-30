@@ -181,6 +181,10 @@ fn navigation_contracts() {
             tab_scaffold::an_inactive_tabs_state_survives_switching_away_and_back,
         ),
         (
+            "tab_scaffold::controller mutation during build is refused",
+            tab_scaffold::controller_mutation_during_build_is_refused,
+        ),
+        (
             "tab_scaffold::tapping a tab item switches the active tab",
             tab_scaffold::tapping_a_tab_item_switches_the_active_tab,
         ),

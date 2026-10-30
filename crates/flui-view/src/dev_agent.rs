@@ -56,8 +56,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{
-    ActionRequest, Actionability, ActionabilityParams, ErrorCode, LocateParams, Matches, ReadQuery,
-    Retry, Tree, WindowId,
+    ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, LocateParams,
+    Matches, ReadQuery, Retry, Snapshot, Tree, WindowId,
 };
 
 use crate::__runtime::{AgentPort, PendingAnswer};
@@ -339,6 +339,25 @@ impl AgentWindow {
             .act(request)
     }
 
+    /// As [`Self::act`], and read the window's tree back as `snapshot` asks
+    /// once the action's effect has settled: the frame it ran in, or the next
+    /// one. The outcome says the action ran on the `semantic` path; a tree
+    /// that cannot be read back afterwards is `readback_failed` on an outcome
+    /// that still says it ran.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest.
+    pub fn act_and_read(
+        &self,
+        request: ActionRequest,
+        snapshot: Snapshot,
+    ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .act_and_read(request, snapshot)
+    }
+
     /// Resolve `params.locator` over the window's committed semantics tree.
     /// Every match is listed, or the ones `pick` and `max_matches` leave; no
     /// match is an empty list, not a fault. The answer's matches carry the
@@ -435,6 +454,14 @@ mod tests {
 
         fn act(&self, _request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
             Ok(crate::__runtime::agent_answer(Ready(Some(()))))
+        }
+
+        fn act_and_read(
+            &self,
+            _request: ActionRequest,
+            _snapshot: Snapshot,
+        ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
+            Err(AgentFault::window_gone())
         }
 
         fn locate(&self, _params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {

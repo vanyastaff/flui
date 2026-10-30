@@ -392,3 +392,192 @@ impl SystemPreferences {
         self
     }
 }
+
+/// The fields of a [`SystemPreferences`], public: the boundary every
+/// serialization and mirror of the snapshot goes through (a recording's schema,
+/// a test kit's DTO).
+///
+/// Deliberately not `#[non_exhaustive]`: a mirror builds and destructures this
+/// struct exhaustively, so a field added here breaks every mirror at compile
+/// time until it carries the field, instead of dropping it from a recording.
+/// [`SystemPreferences::into_parts`] takes a snapshot apart and
+/// [`Self::try_into_preferences`] puts one together through the same
+/// validation as the `with_*` methods.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreferenceParts {
+    /// [`SystemPreferences::text_scale`].
+    pub text_scale: Option<f64>,
+    /// [`SystemPreferences::motion`].
+    pub motion: Option<MotionPreference>,
+    /// [`SystemPreferences::high_contrast`].
+    pub high_contrast: Option<bool>,
+    /// [`SystemPreferences::haptics`].
+    pub haptics: Option<bool>,
+    /// [`SystemPreferences::text_weight`].
+    pub text_weight: Option<TextWeightPreference>,
+    /// [`SystemPreferences::locales`].
+    pub locales: Option<Arc<[Locale]>>,
+    /// [`SystemPreferences::gestures`], taken apart.
+    pub gestures: GestureParts,
+    /// [`SystemPreferences::wheel`], taken apart.
+    pub wheel: WheelParts,
+}
+
+/// The fields of a [`GesturePreferences`], public, for the same mirrors and
+/// for the same reason as [`PreferenceParts`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GestureParts {
+    /// [`GesturePreferences::double_click_interval`].
+    pub double_click_interval: Option<Duration>,
+    /// [`GesturePreferences::double_tap_interval`].
+    pub double_tap_interval: Option<Duration>,
+    /// [`GesturePreferences::long_press_timeout`].
+    pub long_press_timeout: Option<Duration>,
+    /// [`GesturePreferences::native_mouse_geometry`].
+    pub native_mouse_geometry: Option<NativeMouseGeometry>,
+    /// [`GesturePreferences::native_touch_geometry`].
+    pub native_touch_geometry: Option<NativeTouchGeometry>,
+}
+
+/// The fields of a [`WheelPreferences`], public, for the same mirrors and for
+/// the same reason as [`PreferenceParts`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WheelParts {
+    /// [`WheelPreferences::vertical`].
+    pub vertical: Option<WheelStep>,
+    /// [`WheelPreferences::horizontal_characters`].
+    pub horizontal_characters: Option<u32>,
+}
+
+impl SystemPreferences {
+    /// Take the snapshot apart into its fields.
+    #[must_use]
+    pub fn into_parts(self) -> PreferenceParts {
+        let Self {
+            text_scale,
+            motion,
+            high_contrast,
+            haptics,
+            text_weight,
+            locales,
+            gestures,
+            wheel,
+        } = self;
+        PreferenceParts {
+            text_scale,
+            motion,
+            high_contrast,
+            haptics,
+            text_weight,
+            locales,
+            gestures: gestures.into_parts(),
+            wheel: wheel.into_parts(),
+        }
+    }
+}
+
+impl PreferenceParts {
+    /// The snapshot these fields describe.
+    ///
+    /// # Errors
+    /// What the `with_*` method of an invalid field refuses: a text scale
+    /// outside `1/64..=64` is [`InvalidPreference::TextScale`].
+    pub fn try_into_preferences(self) -> Result<SystemPreferences, InvalidPreference> {
+        let Self {
+            text_scale,
+            motion,
+            high_contrast,
+            haptics,
+            text_weight,
+            locales,
+            gestures,
+            wheel,
+        } = self;
+        let mut preferences = SystemPreferences {
+            text_scale: None,
+            motion,
+            high_contrast,
+            haptics,
+            text_weight,
+            locales,
+            gestures: gestures.into_preferences(),
+            wheel: wheel.into_preferences(),
+        };
+        if let Some(scale) = text_scale {
+            preferences = preferences.with_text_scale(scale)?;
+        }
+        Ok(preferences)
+    }
+}
+
+impl GesturePreferences {
+    /// Take the observations apart into their fields.
+    #[must_use]
+    pub const fn into_parts(self) -> GestureParts {
+        let Self {
+            double_click_interval,
+            double_tap_interval,
+            long_press_timeout,
+            native_mouse_geometry,
+            native_touch_geometry,
+        } = self;
+        GestureParts {
+            double_click_interval,
+            double_tap_interval,
+            long_press_timeout,
+            native_mouse_geometry,
+            native_touch_geometry,
+        }
+    }
+}
+
+impl GestureParts {
+    /// The observations these fields describe; every field is valid by its type.
+    #[must_use]
+    pub const fn into_preferences(self) -> GesturePreferences {
+        let Self {
+            double_click_interval,
+            double_tap_interval,
+            long_press_timeout,
+            native_mouse_geometry,
+            native_touch_geometry,
+        } = self;
+        GesturePreferences {
+            double_click_interval,
+            double_tap_interval,
+            long_press_timeout,
+            native_mouse_geometry,
+            native_touch_geometry,
+        }
+    }
+}
+
+impl WheelPreferences {
+    /// Take the observations apart into their fields.
+    #[must_use]
+    pub const fn into_parts(self) -> WheelParts {
+        let Self {
+            vertical,
+            horizontal_characters,
+        } = self;
+        WheelParts {
+            vertical,
+            horizontal_characters,
+        }
+    }
+}
+
+impl WheelParts {
+    /// The observations these fields describe; every field is valid by its type.
+    #[must_use]
+    pub const fn into_preferences(self) -> WheelPreferences {
+        let Self {
+            vertical,
+            horizontal_characters,
+        } = self;
+        WheelPreferences {
+            vertical,
+            horizontal_characters,
+        }
+    }
+}

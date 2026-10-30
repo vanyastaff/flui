@@ -251,6 +251,10 @@ impl AnimationController {
             drop(inner);
             return self.reported_teardown("AnimationController::stop", Err(disposed));
         }
+        if let Err(building) = Self::check_build(&inner) {
+            drop(inner);
+            return self.reported("AnimationController::stop", Err(building));
+        }
 
         let delivery = inner.stop_running(&mut retired);
 
@@ -280,6 +284,10 @@ impl AnimationController {
         if let Err(disposed) = Self::check_disposed(&inner) {
             drop(inner);
             return self.reported_teardown("AnimationController::reset", Err(disposed));
+        }
+        if let Err(building) = Self::check_build(&inner) {
+            drop(inner);
+            return self.reported("AnimationController::reset", Err(building));
         }
 
         let delivery = inner.stop_running(&mut retired);

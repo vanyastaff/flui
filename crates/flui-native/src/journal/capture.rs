@@ -7,7 +7,10 @@
 //! call that shapes its output: its clock and setup, each reading or
 //! coalesced batch, device hot-plug and cancellation. That journal is a
 //! native recording: replaying it through the same calls reproduces the
-//! input the backend delivered. A sink receives it: [`recorder`](super::recorder)
+//! input the backend delivered. A loop's application delivery, a window's
+//! delivery and a platform created there journal the same way: what they
+//! handed the application, and what the platform answered its reads of the
+//! system with. A sink receives it: [`recorder`](super::recorder)
 //! folds it into recordings, which [`codec`](super::codec) writes; a build
 //! without the feature links neither.
 //!
@@ -25,10 +28,11 @@ use std::time::Duration;
 
 use flui_platform::EventTime;
 use flui_platform::pointer::PointerKind;
-use flui_platform::{ImeEvent, SessionEndPhase, SystemNotice};
+use flui_platform::{ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences};
 use flui_protocol::native_recording::Stream;
 use parking_lot::{Mutex, ReentrantMutex};
 
+use crate::error::PlatformError;
 use crate::input::assembly::{
     ClickSettings, ContactScroll, CounterAnchor, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, WheelReading,
@@ -36,7 +40,7 @@ use crate::input::assembly::{
 use crate::input::assembly::{TouchpadFrame, ViewportReading};
 
 /// One registry call, as a native recording holds it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Captured<'a> {
     /// The registry was created on a clock with these anchors.
@@ -139,6 +143,9 @@ pub enum Captured<'a> {
     Reopen,
     /// The window's input method delivered an event.
     Ime(&'a ImeEvent),
+    /// The application read the system preferences, and this is what the
+    /// platform answered.
+    Preferences(Result<&'a SystemPreferences, &'a PlatformError>),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in

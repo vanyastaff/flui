@@ -1353,11 +1353,11 @@ pub(crate) fn a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide() {
     laid.dispatch_pointer_move(300.0, 25.0);
     laid.pump();
 
-    scroll.jump_to(4000.0);
+    scroll.jump_to(4000.0).expect("no build is running");
     for _ in 0..4 {
         laid.pump_for(Duration::from_millis(16));
     }
-    scroll.jump_to(0.0);
+    scroll.jump_to(0.0).expect("no build is running");
     for _ in 0..4 {
         laid.pump_for(Duration::from_millis(16));
     }

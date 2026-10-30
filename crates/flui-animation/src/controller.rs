@@ -935,11 +935,22 @@ impl AnimationController {
     /// scrollable to a bound it doesn't have. Either way the warning below
     /// is latched (`non_finite_warned`): it fires once per controller, not
     /// once per frame of a misbehaving caller.
-    pub fn set_value(&self, value: f64) {
+    ///
+    /// # Errors
+    ///
+    /// [`AnimationError::Disposed`] after owner disposal, and
+    /// [`AnimationError::MutatedDuringBuild`] while the presentation the
+    /// controller ticks for is building; the value is unchanged either way.
+    pub fn set_value(&self, value: f64) -> Result<(), AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
-        if inner.disposed {
-            return;
+        if let Err(disposed) = Self::check_disposed(&inner) {
+            drop(inner);
+            return self.reported_teardown("AnimationController::set_value", Err(disposed));
+        }
+        if let Err(building) = Self::check_build(&inner) {
+            drop(inner);
+            return self.reported("AnimationController::set_value", Err(building));
         }
 
         let should_warn = !value.is_finite() && !inner.non_finite_warned;
@@ -951,7 +962,7 @@ impl AnimationController {
         else {
             drop(inner);
             self.warn_non_finite_value(should_warn, value, NonFiniteOutcome::Ignored);
-            return;
+            return Ok(());
         };
 
         let delivery = inner.stop_running(&mut retired);
@@ -960,6 +971,7 @@ impl AnimationController {
         inner.status = status;
         self.deliver_transition(status, ValueChange::Notify, delivery, retired, inner);
         self.warn_non_finite_value(should_warn, value, NonFiniteOutcome::Canonicalized);
+        Ok(())
     }
 
     /// Close the kernel and cancel its run under the owning lifecycle's recovery.

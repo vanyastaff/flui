@@ -298,7 +298,7 @@ where
         let clock = AnimationController::builder(MotionSpec::DEFAULT_DURATION)
             .debug_label("AnimatedList.placement")
             .build_on(None);
-        clock.controller().set_value(1.0);
+        let _ = clock.controller().set_value(1.0);
         SliverAnimatedListState {
             roster: RefCell::new(roster),
             generation: Cell::new(0),

@@ -194,7 +194,11 @@ fn exercise_with_secondary(
     // status listener stays quiet while the setup settles the controller.
     {
         let _quiet = handle.shared.enter_reconcile();
-        handle.shared.entry_controller.set_value(0.0);
+        handle
+            .shared
+            .entry_controller
+            .set_value(0.0)
+            .expect("no build is running");
     }
     forward.binding.pump_frame(Duration::from_millis(16));
     for probe in &mut fanout {
@@ -351,7 +355,11 @@ fn a_second_display_timer_retires_the_first() {
     handle
         .show_snack_bar(snack_bar("replacement").duration(Duration::from_millis(800)))
         .on_closed(move |_cx, reason| seen.borrow_mut().push(reason));
-    handle.shared.entry_controller.set_value(1.0);
+    handle
+        .shared
+        .entry_controller
+        .set_value(1.0)
+        .expect("no build is running");
     harness.tick();
     let registry = handle
         .shared

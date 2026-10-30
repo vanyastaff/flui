@@ -3,6 +3,8 @@
 
 #[path = "actionability.rs"]
 mod actionability;
+#[path = "delta.rs"]
+mod delta;
 #[path = "fixture.rs"]
 mod fixture;
 #[path = "identifier.rs"]
