@@ -498,7 +498,8 @@ fn multi_browse(
                 medium_count -= 1;
             }
         }
-        arrangement = Arrangement::search(targets, &[small_count], &[medium_count], &large_options)?;
+        arrangement =
+            Arrangement::search(targets, &[small_count], &[medium_count], &large_options)?;
     }
     Some(arrangement.start_aligned(viewport, spacing))
 }
