@@ -1,10 +1,12 @@
 # ADR-0091: One owner thread hosts isolated UI runtimes; one raster thread per GpuContext
 
 - **Status:** Accepted (2026-10-30) for §2–§6, as decisions; Verification lists what is still
-  to be built. §1 stays Proposed: the `!Send` flip it scheduled has landed (the UI callback
-  surface, `Listenable`, `ListenerCallback` and `RenderView::RenderObject` are owner-local, and
-  `cargo xtask send-positions` holds the remaining `Send` positions), and its threading model
-  is to be superseded by the UI runtime model ADR.
+  to be built. §1's `!Send` flip has landed (the UI callback surface, `Listenable`,
+  `ListenerCallback` and `RenderView::RenderObject` are owner-local, and `cargo xtask
+  send-positions` holds the remaining `Send` positions).
+- **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for §1 (one owner
+  thread is the model, not a stage before per-runtime threads; the spike and `OwnerExecutor` are
+  withdrawn)
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (the verdict and §1: UI runtimes are
   isolated, not concurrent, through H2; §5: one raster thread serves several presentations' raster

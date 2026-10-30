@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
   decisions below remain in force.
+- **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for the verdict's
+  sentence "Multiple UI runtimes may execute concurrently" and §1's sentence on runtime count per
+  owner thread: every UI runtime runs on one owner thread.
 - **Date:** 2026-07-11
 - **Amended:** 2026-10-30 — §9 matches the code after the `!Send` flip: the view, render and
   callback surfaces carry no `Send` bound, and the cross-thread handles are the ones listed there.
