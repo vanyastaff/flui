@@ -5,7 +5,6 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, MotionPolicy,
@@ -431,7 +430,7 @@ impl StatefulView for Carousel {
             frames: CarouselItemFrames::new(),
             snap: self
                 .snap_policy()
-                .map(|policy| Arc::new(policy) as SharedSnapPolicy),
+                .map(|policy| Rc::new(policy) as SharedSnapPolicy),
             scroll_listener: None,
             pause_listener: None,
             focus: FocusNode::new(),
@@ -668,7 +667,7 @@ impl ViewState<Carousel> for CarouselState {
         {
             self.snap = new_view
                 .snap_policy()
-                .map(|policy| Arc::new(policy) as SharedSnapPolicy);
+                .map(|policy| Rc::new(policy) as SharedSnapPolicy);
         }
         if old_view.autoplay != new_view.autoplay {
             self.autoplay = new_view.autoplay;
@@ -718,7 +717,7 @@ impl ViewState<Carousel> for CarouselState {
                     .boxed()
             }));
         if let Some(snap) = &self.snap {
-            scrollable = scrollable.snap_policy(Arc::clone(snap));
+            scrollable = scrollable.snap_policy(Rc::clone(snap));
         }
         if let Some(label) = &view.semantic_label {
             scrollable = scrollable.semantic_label(label.clone());

@@ -23,7 +23,6 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
@@ -201,7 +200,7 @@ impl<K: Copy + Eq + 'static> DraggableAnchorsBuilder<K> {
             .expect("BUG: the anchors were checked non-empty and finite above");
         Ok(DraggableAnchors {
             entries: entries.into(),
-            policy: Arc::new(snap),
+            policy: Rc::new(snap),
         })
     }
 }
@@ -470,7 +469,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         };
         let target = anchors.offset(key).unwrap_or(pixels);
         let (min, max) = anchors.extent();
-        let policy = Arc::clone(&anchors.policy);
+        let policy = Rc::clone(&anchors.policy);
         // Commit before anything that reaches user code: listeners of the
         // position and of this controller may read or replace the anchors.
         let outgoing = inner.anchors.replace(anchors);
@@ -1254,7 +1253,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .controller(controller.inner.scroll.clone())
             .scroll_direction(axis)
             .axis_direction(axis_direction)
-            .snap_policy(Arc::clone(&anchors.policy))
+            .snap_policy(Rc::clone(&anchors.policy))
             .viewport_builder(content)
             .anchored(AnchoredLeaf {
                 motion: Rc::clone(&self.motion),

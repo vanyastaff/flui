@@ -2377,7 +2377,7 @@ pub(crate) fn a_release_taken_over_by_reentrant_code_still_ends_its_sequence() {
                 probe.connection(),
                 Scrollable::new()
                     .controller(controller.clone())
-                    .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
+                    .snap_policy(Rc::new(PageSnap::new(ViewportFraction::FULL)))
                     .child(SizedBox::new(300.0, 3000.0)),
             ),
         )
@@ -2633,7 +2633,7 @@ pub(crate) fn snap_policy_targets() {
         }
     }
     for device in DEVICES {
-        let rests = |policy: Arc<dyn SnapPolicy>, script: PointerScript| {
+        let rests = |policy: Rc<dyn SnapPolicy>, script: PointerScript| {
             let (controller, vsync) = (ScrollController::new(), Vsync::new());
             let pages = Row::new(vec![
                 SizedBox::new(300.0, 300.0).boxed(),
@@ -2654,7 +2654,7 @@ pub(crate) fn snap_policy_targets() {
             settle(&mut laid);
             controller.pixels()
         };
-        let pages = || Arc::new(PageSnap::new(ViewportFraction::FULL)) as Arc<dyn SnapPolicy>;
+        let pages = || Rc::new(PageSnap::new(ViewportFraction::FULL)) as Rc<dyn SnapPolicy>;
         let near = |pixels: f64, target: f64| (pixels - target).abs() < 1.0;
         let short = rests(pages(), slow(device, at(250.0, 150.0), at(150.0, 150.0)));
         assert!(
@@ -2672,7 +2672,7 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: a fling commits to the next page, at {flung}"
         );
         let broken = rests(
-            Arc::new(Broken(f64::NAN)),
+            Rc::new(Broken(f64::NAN)),
             slow(device, at(280.0, 150.0), at(80.0, 150.0)),
         );
         assert!(
@@ -2680,7 +2680,7 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: NaN rests on an extent, at {broken}"
         );
         let beyond = rests(
-            Arc::new(Broken(f64::INFINITY)),
+            Rc::new(Broken(f64::INFINITY)),
             slow(device, at(280.0, 150.0), at(80.0, 150.0)),
         );
         assert!(
@@ -2688,8 +2688,8 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: infinity rests on the far extent, at {beyond}"
         );
         let stops = || {
-            Arc::new(AnchorSnap::try_new([500.0, 0.0, 120.0]).expect("finite anchors"))
-                as Arc<dyn SnapPolicy>
+            Rc::new(AnchorSnap::try_new([500.0, 0.0, 120.0]).expect("finite anchors"))
+                as Rc<dyn SnapPolicy>
         };
         let anchored = rests(stops(), slow(device, at(250.0, 150.0), at(150.0, 150.0)));
         assert!(
@@ -2702,7 +2702,7 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: a fling takes the next anchor, at {anchor_fling}"
         );
         let past_extent = rests(
-            Arc::new(AnchorSnap::try_new([0.0, 900.0]).expect("finite anchors")),
+            Rc::new(AnchorSnap::try_new([0.0, 900.0]).expect("finite anchors")),
             fling(device, at(250.0, 150.0), at(190.0, 150.0)),
         );
         assert!(
@@ -2801,7 +2801,6 @@ pub(crate) fn scroll_channel_data_is_send() {
     send_sync::<OverscrollBehavior>();
     send_sync::<PageSnap>();
     send_sync::<AnchorSnap>();
-    send_sync::<Arc<dyn SnapPolicy>>();
 }
 
 /// `Contain` keeps a scrollable's remainder and fling residual: nothing
