@@ -73,7 +73,17 @@ fn consumer_project(
     let project = tempfile::tempdir().expect("create external consumer directory");
     std::fs::create_dir(project.path().join("src")).expect("create source directory");
     let mut package = toml::Table::new();
-    package.insert("name".into(), "facade-consumer".into());
+    // Every consumer shares one target directory, and two consumers with the
+    // same name and dependencies get the same test binary path: a parallel
+    // case would run the other's binary. The directory's name keeps it apart.
+    let name = project
+        .path()
+        .file_name()
+        .expect("BUG: a temporary directory has a name")
+        .to_string_lossy()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    package.insert("name".into(), format!("facade-consumer-{name}").into());
     package.insert("version".into(), "0.1.0".into());
     package.insert("edition".into(), "2024".into());
     let mut manifest = toml::Table::new();
