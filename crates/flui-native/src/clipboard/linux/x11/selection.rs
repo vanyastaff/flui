@@ -341,6 +341,18 @@ impl Selections {
         if self.readers.is_empty() {
             return Ok(());
         }
+        // A clear queued behind this read would leave the text stale: the
+        // server says whether the window still owns the selection.
+        if self.owned.is_some() {
+            let owner = self
+                .connection
+                .get_selection_owner(self.atoms.clipboard)?
+                .reply()?
+                .owner;
+            if owner != self.window {
+                self.owned = None;
+            }
+        }
         if let Some(owned) = &self.owned {
             let text = owned.text.to_string();
             if self.reading.is_some() {
@@ -588,12 +600,14 @@ impl Selections {
         let Some(bytes) = &mut reading.incremental else {
             return Ok(());
         };
-        if reply.value.is_empty() {
+        // A chunk past what the read has left reads as empty with bytes after
+        // it, which is not the end of the transfer.
+        if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
+            self.answer(None);
+        } else if reply.value.is_empty() {
             let form = reading.form;
             let bytes = std::mem::take(bytes);
             self.answer(decode(form, bytes));
-        } else if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
-            self.answer(None);
         } else if bytes.is_empty() {
             *bytes = reply.value;
         } else {
