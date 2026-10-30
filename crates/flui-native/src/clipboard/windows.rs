@@ -32,7 +32,8 @@ use windows::{
     core::w,
 };
 
-use crate::clipboard::{NativeClipboard, SyncClipboard, lock};
+use crate::clipboard::lock;
+use crate::host::{NativeClipboard, SyncClipboard};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// Windows clipboard implementation

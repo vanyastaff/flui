@@ -292,8 +292,8 @@ impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
         Box::new(NoHostNotices)
     }
 
-    fn clipboard() -> Arc<dyn crate::clipboard::SharedClipboard> {
-        Arc::new(crate::clipboard::MemoryClipboard::new())
+    fn clipboard() -> Arc<dyn crate::host::SharedClipboard> {
+        Arc::new(crate::host::MemoryClipboard::new())
     }
 
     fn drag() -> Arc<dyn FileDrops> {

@@ -239,7 +239,7 @@ pub struct AndroidLoop {
     notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
-    pub(crate) clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     /// The input of the Activity's queue, as the table made it
     /// ([`AndroidHost::input`]).
     pub(crate) input: Box<dyn ActivityInput>,

@@ -33,6 +33,11 @@
 //! names no feature's platform file. A table that leaves one of them
 //! [`Absent`] gets windows that hand out [`Absent`].
 
+mod clipboard;
+
+pub use clipboard::{MemoryClipboard, NativeClipboard};
+pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
+
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -348,7 +353,7 @@ pub trait Input<O> {
 /// The clipboard position.
 pub trait Clipboard<O> {
     /// [`Platform::clipboard`].
-    fn clipboard(owner: &O) -> Rc<dyn crate::clipboard::NativeClipboard>;
+    fn clipboard(owner: &O) -> Rc<dyn NativeClipboard>;
 }
 
 /// The drag-and-drop position.
@@ -535,7 +540,7 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
 
 /// A host without a clipboard holds nothing: a read answers `None`, a write
 /// is dropped.
-impl crate::clipboard::SyncClipboard for Absent<position::Clipboard> {
+impl SyncClipboard for Absent<position::Clipboard> {
     fn read_now(&self) -> Option<String> {
         None
     }
@@ -546,7 +551,7 @@ impl crate::clipboard::SyncClipboard for Absent<position::Clipboard> {
 }
 
 impl<O> Clipboard<O> for Absent<position::Clipboard> {
-    fn clipboard(_: &O) -> Rc<dyn crate::clipboard::NativeClipboard> {
+    fn clipboard(_: &O) -> Rc<dyn NativeClipboard> {
         Rc::new(Self::NEW)
     }
 }

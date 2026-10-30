@@ -245,8 +245,8 @@ pub use window::installation::{
 // The typed lifecycle/service error taxonomy — `anyhow` is retired from
 // this crate's public API (the window-open family lives with its
 // capability types in `owner`).
-pub use clipboard::NativeClipboard;
 pub use error::{BootstrapError, PlatformError, PlatformResult};
+pub use host::NativeClipboard;
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;

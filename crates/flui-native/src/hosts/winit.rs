@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::clipboard::SharedClipboard;
+use crate::host::SharedClipboard;
 
 #[cfg(target_os = "linux")]
 use crate::accessibility::linux::UnixAccessibility;

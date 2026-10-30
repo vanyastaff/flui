@@ -171,7 +171,7 @@ pub(crate) trait WinitHost: 'static {
 
     /// The clipboard, made once per loop: the loop holds it and answers the
     /// table's clipboard position from it.
-    fn clipboard() -> Arc<dyn crate::clipboard::SharedClipboard>;
+    fn clipboard() -> Arc<dyn crate::host::SharedClipboard>;
 
     /// The drag-and-drop transport, made once per loop: the loop holds it,
     /// answers the table's drag position from it and tells it of the files
@@ -533,7 +533,7 @@ pub(crate) struct WinitLoopState {
     pub(crate) background_executor: Arc<BackgroundExecutor>,
 
     /// Clipboard
-    pub(crate) clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
 
     /// The one data-transfer source of this platform instance (ADR-0038):
     /// constructed once by the host's table, cloned out by
@@ -571,7 +571,7 @@ pub(crate) struct WinitLoopState {
 
 impl WinitLoopState {
     fn new(
-        clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
+        clipboard: Arc<dyn crate::host::SharedClipboard>,
         data_transfer: Arc<dyn FileDrops>,
         input: Box<dyn LoopInput>,
     ) -> Self {

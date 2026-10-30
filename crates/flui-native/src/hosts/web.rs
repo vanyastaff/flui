@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::clipboard::SharedClipboard;
+use crate::host::SharedClipboard;
 
 use crate::clipboard::web::WebClipboard;
 use crate::display::web::WebDisplays;

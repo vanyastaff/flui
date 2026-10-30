@@ -73,7 +73,7 @@ pub(crate) trait WebHost: 'static {
 
     /// The clipboard, made once per loop: the loop holds it and answers the
     /// table's clipboard position from it.
-    fn clipboard() -> Arc<dyn crate::clipboard::SharedClipboard>;
+    fn clipboard() -> Arc<dyn crate::host::SharedClipboard>;
 
     /// The drag-and-drop transport, made once per loop: the loop holds it and
     /// answers the table's drag position from it, and the window it opens
@@ -383,7 +383,7 @@ pub struct WebLoop {
 
 pub(crate) struct WebState {
     background_executor: Arc<WebExecutor>,
-    pub(crate) clipboard: Arc<dyn crate::clipboard::SharedClipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.

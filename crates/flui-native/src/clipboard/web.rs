@@ -18,7 +18,7 @@ use flui_platform::capability::Resolver;
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::clipboard::NativeClipboard;
+use crate::host::NativeClipboard;
 
 pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,

@@ -2,8 +2,8 @@
 
 use std::{rc::Rc, sync::Arc};
 
-use super::{MemoryClipboard, NativeClipboard};
 use crate::host;
+use crate::host::{MemoryClipboard, NativeClipboard};
 use crate::owner::headless::HeadlessLoop;
 
 impl host::Clipboard<HeadlessLoop> for MemoryClipboard {

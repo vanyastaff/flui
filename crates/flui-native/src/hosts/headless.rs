@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::clipboard::MemoryClipboard;
+use crate::host::MemoryClipboard;
 
 use crate::accessibility::headless::FakeAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};

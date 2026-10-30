@@ -16,7 +16,7 @@ use objc2::rc::Retained;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
 
-use crate::clipboard::{NativeClipboard, SyncClipboard};
+use crate::host::{NativeClipboard, SyncClipboard};
 
 use crate::host;
 use crate::owner::apple::IOSLoop;

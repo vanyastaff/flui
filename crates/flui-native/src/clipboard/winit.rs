@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::clipboard::SyncClipboard;
+use crate::host::SyncClipboard;
 
 /// Arboard-based clipboard implementation
 ///
