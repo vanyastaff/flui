@@ -1,10 +1,10 @@
 //! The renderer a desktop window's raster lane owns, and where a loop gets it.
 //!
 //! A window's lane needs more from its renderer than
-//! [`RasterBackend`](flui_engine::RasterBackend): the device rebuild of
+//! [`RasterBackend`]: the device rebuild of
 //! [`DeviceRecovery`], the display colour of [`DisplayColorFollow`] and the
 //! frame latency. [`WindowRenderer`] is that set. Production builds the wgpu
-//! [`Renderer`](flui_engine::Renderer) from the window's surface target; the
+//! [`Renderer`] from the window's surface target; the
 //! runner's test kit gives every window a stand-in that needs no GPU, so a
 //! headless run opens the windows an application opens and runs their frames.
 
