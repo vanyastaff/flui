@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_platform::{
-    StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+    CopiedAside, StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason,
+    WriteMode,
 };
 
 use super::DataDirs;
@@ -26,6 +27,11 @@ const MACHINE_LOCAL_DIR: &str = ".machine-local";
 /// The start of every file this store stages a write in. Specific to this
 /// store, so a sweep never touches another program's temporary files.
 const STAGED_PREFIX: &str = ".flui-staged-";
+
+/// What joins a value's name and a copy's number in the name
+/// [`FileStore::copy_aside`] keeps the copy under. A [`StorageName`] cannot
+/// hold `.`, so no value is ever named like a copy.
+const COPY_INFIX: &str = ".corrupt-";
 
 /// How old a staged file must be before a based write sweeps it away as the
 /// leftover of a killed writer. A live write keeps its file younger than
@@ -225,6 +231,49 @@ impl FileStore {
         Ok(StoredVersion::of_bytes(bytes))
     }
 
+    /// Copy the value stored under `name` to the first free file
+    /// `<name>.corrupt-<n>` beside it, counting `n` from 1, and leave `name`
+    /// as it is.
+    ///
+    /// The copy's file is claimed with an exclusive create, so two copies,
+    /// from this process or another, never share it; it is flushed to the
+    /// disk before this returns. The value is read whole once, so the
+    /// returned version is the version of exactly the bytes copied.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::NotFound`] when `name` holds no value;
+    /// [`StorageError::Busy`], [`StorageError::Full`] and
+    /// [`StorageError::Inaccessible`] as for [`read`](Self::read) and
+    /// [`write`](Self::write). A copy that fails leaves no file behind.
+    pub fn copy_aside(&self, name: &StorageName) -> Result<CopiedAside, StorageError> {
+        let root = self.root_of(name);
+        let bytes = match fs::read(root.join(name.as_str())) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(StorageError::NotFound);
+            }
+            Err(error) => return Err(storage_error(&error)),
+        };
+        let (kept_as, mut file) = claim_copy(root, name)?;
+        let written = file
+            .write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| storage_error(&error));
+        drop(file);
+        if let Err(error) = written {
+            if let Err(removal) = fs::remove_file(root.join(&kept_as)) {
+                tracing::debug!(%removal, kept_as, "removing a failed copy failed");
+            }
+            return Err(error);
+        }
+        sync_directory(root);
+        Ok(CopiedAside {
+            kept_as,
+            version: StoredVersion::of_bytes(&bytes),
+        })
+    }
+
     /// The root `name` lives under.
     fn root_of(&self, name: &StorageName) -> &Path {
         if name.is_machine_local() {
@@ -278,6 +327,24 @@ fn lock_root(root: &Path) -> Result<File, StorageError> {
         Err(TryLockError::WouldBlock) => Err(StorageError::Busy),
         Err(TryLockError::Error(error)) => Err(lock_error(&error)),
     }
+}
+
+/// Create the first free `<name>.corrupt-<n>` in `root`, exclusively; its
+/// file name and the open file.
+fn claim_copy(root: &Path, name: &StorageName) -> Result<(String, File), StorageError> {
+    for n in 1_u64.. {
+        let kept_as = format!("{}{COPY_INFIX}{n}", name.as_str());
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join(&kept_as))
+        {
+            Ok(file) => return Ok((kept_as, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(storage_error(&error)),
+        }
+    }
+    unreachable!("BUG: a root holds fewer than 2^64 copies of one value")
 }
 
 /// Whether `target` holds the value `base` names. The lengths are compared

@@ -993,3 +993,117 @@ fn a_hidden_application_or_a_close_retries_a_busy_write_at_once() {
         );
     }
 }
+
+/// A stored file the document cannot read is never written over until the
+/// application starts over, and starting over keeps its bytes first (R17):
+/// a file without a header, a body `decode` refuses and a decode that panics
+/// are each kept under a free name and replaced by the initial value; a
+/// reload that finds the file corrupted after a save reports it rather than
+/// the earlier save; a failed copy leaves the file and resumes on retry.
+#[test]
+fn corrupt_bytes_are_kept_until_start_over() {
+    let unreadable: [(&str, Vec<u8>); 3] = [
+        ("no header", b"not a document".to_vec()),
+        (
+            "refused body",
+            stored(1, "\u{fffd}").into_iter().chain([0xff]).collect(),
+        ),
+        ("decode panic", stored(1, "panic")),
+    ];
+    for (case, bytes) in unreadable {
+        let storage = MemoryStorage::new();
+        storage.put(&Note::NAME, bytes.clone());
+        let (mut laid, notes, _guard) = mount_guarded(&storage);
+        let refused = drive(&mut laid, notes.load()).map(|_| ());
+        assert!(refused.is_err(), "{case}: the load fails");
+        assert_eq!(
+            notes.set(Note("edit".into())),
+            Err(PersistError::NotLoaded),
+            "{case}"
+        );
+        laid.pump();
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            Some(bytes.clone()),
+            "{case}: untouched"
+        );
+
+        notes.start_over();
+        assert_eq!(notes.status(), SaveStatus::Saving, "{case}");
+        laid.pump();
+        laid.pump();
+        assert_eq!(notes.status(), SaveStatus::Clean, "{case}");
+        assert_eq!(storage.kept_aside(&Note::NAME), vec![bytes], "{case}: kept");
+        assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")), "{case}");
+        assert_eq!(notes.committed().map(Revision::get), Some(1), "{case}");
+        assert_eq!(
+            notes.set(Note("fresh".into())).map(Revision::get),
+            Ok(2),
+            "{case}: the fresh value is loaded"
+        );
+        laid.pump();
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            Some(stored(2, "fresh")),
+            "{case}"
+        );
+    }
+
+    // A file corrupted after a save: the reload's failure, not the save's
+    // success, is the status, and starting over keeps that file.
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    storage.put(&Note::NAME, b"overwritten".to_vec());
+    assert!(drive(&mut laid, notes.load()).is_err());
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::NotLoaded(Some(PersistError::Corrupt { .. }))
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        storage.kept_aside(&Note::NAME),
+        vec![b"overwritten".to_vec()]
+    );
+
+    // A copy that fails writes nothing; a retry makes it.
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err());
+    storage.fail_copies(Some(StorageError::Full));
+    notes.start_over();
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Full))
+    );
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(b"not a document".to_vec())
+    );
+    storage.fail_copies(None);
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.kept_aside(&Note::NAME).len(), 1);
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+
+    // A readable document never starts over.
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    notes.start_over();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.kept_aside(&Note::NAME), Vec::<Vec<u8>>::new());
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+}

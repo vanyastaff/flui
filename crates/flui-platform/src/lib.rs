@@ -189,8 +189,8 @@ pub use preferences::{
     WheelStep,
 };
 pub use storage::{
-    AppDataDir, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName, Stored,
-    StoredVersion, WriteMode,
+    AppDataDir, CopiedAside, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName,
+    Stored, StoredVersion, WriteMode,
 };
 pub use surface_target::{
     DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
