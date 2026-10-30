@@ -394,6 +394,12 @@ impl UiRuntime {
             )
             .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
+        // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
+        // left, and the waits an agent parked see the window as the frame left it.
+        for presentation in self.presentations.iter() {
+            Self::complete_agent_reads(presentation);
+        }
+        self.evaluate_agent_waits(true);
         self.run_commit_anchor();
         result
     }
@@ -412,9 +418,6 @@ impl UiRuntime {
         let mut first = None;
         let mut paid = true;
         for presentation in self.presentations.iter() {
-            // A frame has passed since the actions an agent ran: the
-            // readings they owe are taken from the tree it left.
-            Self::complete_agent_reads(presentation);
             if presentation.text_input().is_transaction_open() {
                 // Its commits are still closed (a frame, a native text
                 // preparation): its anchor comes when they reopen.

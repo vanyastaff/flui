@@ -57,7 +57,7 @@ use std::time::Duration;
 
 use flui_protocol::{
     ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, LocateParams,
-    Matches, ReadQuery, Retry, Snapshot, Tree, WindowId,
+    Matches, ReadQuery, Retry, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
 };
 
 use crate::__runtime::{AgentPort, PendingAnswer};
@@ -393,6 +393,22 @@ impl AgentWindow {
             .actionability(params)
     }
 
+    /// Hold out for `params.condition` in this window without polling: the owner evaluates it
+    /// as the request arrives, after each frame it presents and when the timeout passes. A
+    /// wait that runs out is an answer with `satisfied: false`, the last observation and why
+    /// the window had not settled; a fault means the window answered nothing. `params.window`
+    /// is the caller's own bookkeeping: the wait is this window's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest, among them `busy` when the window
+    /// already holds as many waits as it admits.
+    pub fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .wait(params)
+    }
+
     /// Read or change this window's animation playback through its owner inbox.
     /// Rate and step are applied together only after validation.
     ///
@@ -474,6 +490,10 @@ mod tests {
             &self,
             _params: ActionabilityParams,
         ) -> Result<AgentAnswer<Actionability>, AgentFault> {
+            Err(AgentFault::window_gone())
+        }
+
+        fn wait(&self, _params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
             Err(AgentFault::window_gone())
         }
 

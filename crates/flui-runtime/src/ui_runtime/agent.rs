@@ -28,7 +28,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
     ElementId, ElementRef, ErrorCode, InputPath, LocateParams, Matches, ReadQuery, Retry, Snapshot,
-    SnapshotReading, Tree, WindowId,
+    SnapshotReading, Tree, WaitOutcome, WaitParams, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
@@ -120,6 +120,10 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
     },
+    /// The presentation already holds as many waits as it admits; one ends before another is
+    /// taken.
+    #[error("the window already holds as many waits as it admits")]
+    TooManyWaits,
     /// The render tree was busy (a layout was in progress) when the hit-test
     /// asked for it; the same call can succeed after the frame.
     #[error("the render tree was busy")]
@@ -131,7 +135,9 @@ impl AgentError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy => ErrorCode::Busy,
+            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
+                ErrorCode::Busy
+            }
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone | Self::NodeNotFound { issued: true, .. } => ErrorCode::Gone,
             Self::NodeNotFound { issued: false, .. } => ErrorCode::UnknownHandle,
@@ -149,7 +155,9 @@ impl AgentError {
     #[must_use]
     pub fn retry(&self) -> Retry {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy => Retry::Soon,
+            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
+                Retry::Soon
+            }
             _ => Retry::Never,
         }
     }
@@ -362,6 +370,14 @@ fn record_issued_matches(matches: &Matches, issued: &Mutex<IssuedHandles>) {
     let mut issued = issued.lock();
     for found in &matches.matches {
         issued.record(found.element.element);
+    }
+}
+
+/// Records the element handles a wait's last observation reported.
+fn record_issued_wait(outcome: &WaitOutcome, issued: &Mutex<IssuedHandles>) {
+    let mut issued = issued.lock();
+    for node in &outcome.observation.matched {
+        issued.record(node.id);
     }
 }
 
@@ -584,6 +600,38 @@ impl SemanticsAgent {
         )
     }
 
+    /// Hold out for `params.condition` in this agent's window, without polling: the owner
+    /// evaluates it as the request arrives, after each frame it presents and when the deadline
+    /// passes, and answers once it holds or time is up.
+    ///
+    /// A wait that runs out is still an answer: `satisfied: false`, with the last observation
+    /// and why the window had not settled. `Frames` counts frames the owner presents after the
+    /// request and keeps them coming; a condition on events is refused until the event stream
+    /// exists. The timeout is on the window's clock, 5 s when absent and at most a day.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
+    /// enqueued; the reply carries the rest, among them [`AgentError::TooManyWaits`] when the
+    /// window already holds as many waits as it admits.
+    pub fn wait(&self, params: WaitParams) -> Result<AgentReply<WaitOutcome>, AgentError> {
+        let (command, answer) = self.wait_command(params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn wait_command(&self, params: WaitParams) -> (UiCommand, AgentReply<WaitOutcome>) {
+        let (reply, answer) = self.reply(record_issued_wait);
+        (
+            UiCommand::SemanticsAgentWait {
+                presentation_id: self.sender.presentation_id,
+                params: Box::new(params),
+                reply,
+            },
+            answer,
+        )
+    }
+
     /// Resolve `params.locator` over the last committed tree: every match, or
     /// the ones `pick` and `max_matches` leave. No match is an empty list.
     ///
@@ -736,6 +784,10 @@ impl AgentPort for DevAgentPort {
 
     fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
         self.admit(|agent| agent.locate_command(params))
+    }
+
+    fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
+        self.admit(|agent| agent.wait_command(params))
     }
 
     fn actionability(

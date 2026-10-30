@@ -815,9 +815,11 @@ enum Published {
 mod actionability;
 mod delta;
 mod locate;
+mod wait;
 
 pub use delta::TreeSnapshot;
 pub use locate::WireLocateError;
+pub use wait::{Evaluation, WaitFacts, counts_frames, waits_on_events};
 
 #[cfg(test)]
 mod tests;

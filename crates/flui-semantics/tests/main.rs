@@ -13,3 +13,5 @@ mod identifier;
 mod incremental_flush;
 #[path = "locate.rs"]
 mod locate;
+#[path = "wait.rs"]
+mod wait;

@@ -107,6 +107,7 @@ const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
 mod agent_stability;
+mod agent_wait;
 mod attach;
 mod commands;
 mod construct;
@@ -122,6 +123,7 @@ pub use crate::runtime_services::RuntimeHostServices;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_stability::AgentStability;
+pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;

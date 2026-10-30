@@ -441,6 +441,10 @@ pub struct PresentationState {
     /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
     /// and as failed when the presentation closes first. Owner thread only.
     pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
+    /// Waits an agent parked: conditions held out for until a frame makes them hold or
+    /// their deadline passes. Answered `gone` when the presentation closes first. Owner
+    /// thread only.
+    pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -986,6 +990,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_waits: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1111,6 +1116,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_waits: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1781,12 +1787,16 @@ impl PresentationState {
         }
     }
 
-    /// Answers every reading an agent's action still owes as failed: the
-    /// presentation closes before a frame could take it. The actions ran.
-    pub(crate) fn abandon_agent_reads(&self) {
+    /// Answers every job an agent parked on this presentation when it closes before a frame
+    /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`.
+    pub(crate) fn abandon_agent_jobs(&self) {
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         for pending in owed {
             pending.abandon();
+        }
+        let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
+        for wait in waits {
+            wait.abandon();
         }
     }
 
@@ -2191,7 +2201,7 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
-        self.abandon_agent_reads();
+        self.abandon_agent_jobs();
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -2314,7 +2324,7 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
-        self.abandon_agent_reads();
+        self.abandon_agent_jobs();
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

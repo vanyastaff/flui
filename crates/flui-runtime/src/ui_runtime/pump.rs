@@ -366,6 +366,8 @@ impl UiRuntime {
                 tracing::trace!(?report, "owner inbox drained");
             }
             self.service_gesture_geometry(&turn);
+            // A wake at an agent wait's deadline may run no frame: the wait still ends.
+            self.evaluate_agent_waits(false);
             self.take_redraw_request()
         }));
         drop(turn);

@@ -2,8 +2,9 @@
 
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
-  locate and actionability jobs have merged (#1968), the snapshot delta is in review; waits and events, and the
-  inspect jobs follow). FD28, FD29 and FD30 can start now. `interaction/completeness` has merged
+  locate and actionability jobs (#1968) and the snapshot delta (#1980) have merged, the waits are
+  in review; the events and the inspect jobs follow). FD28, FD29 and FD30 can start now.
+  `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
   that endpoint and `flui mcp` start from them. The owner deleted `interaction_gallery`, the
@@ -319,7 +320,7 @@ graph LR
   - two clients serialized;
   - a delta table: appeared, gone, changed name, value and state; a scroll yields no bounds noise.
   - a node ref read from one window and sent to another answers `UnknownPresentation`.
-- **Slices:** the locate and actionability jobs; the snapshot delta; wait conditions and events;
+- **Slices:** the locate and actionability jobs; the snapshot delta; wait conditions; events;
   the inspect jobs and `NodeRef`. Each merges on its own.
 - **Evidence, locate and actionability jobs (2026-10-29):**
   - `flui-runtime`'s `ui_runtime::tests::agent_locate`:
@@ -357,6 +358,32 @@ graph LR
     the completion call each fails a test.
   - As built: `AgentWindow::act_and_read` and the same on `SemanticsAgent`; no server reaches it
     until FD7 replaces the ADR-0095 endpoint, and FD6 composes it into `act`.
+- **Evidence, waits (2026-10-30):**
+  - `flui-semantics`'s `tests/wait`: `a_condition_holds_or_not_against_the_published_tree` (table:
+    appears, gone, name, value, state, count, focus, settled, frames, all, any, event),
+    `a_window_that_has_drawn_nothing_makes_nothing_disappear`,
+    `the_observation_names_the_revision_and_the_elements_matched`,
+    `a_composite_reports_what_it_needs_from_the_runtime`.
+  - `flui-runtime`'s `ui_runtime::tests::agent_wait`:
+    `a_wait_is_satisfied_at_the_frame_its_condition_first_holds`,
+    `a_condition_that_holds_already_answers_at_the_drain`,
+    `a_frame_count_keeps_frames_coming_and_counts_the_ones_after_the_request`,
+    `a_wait_that_runs_out_answers_unsatisfied_at_its_deadline_without_a_frame`,
+    `a_timeout_names_why_the_window_had_not_settled`,
+    `a_timer_the_window_waits_on_is_named_with_when_it_is_due`,
+    `a_parked_wait_is_not_a_reason_the_window_has_not_settled`,
+    `a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_error`,
+    `a_wait_on_events_is_refused_until_the_event_stream_exists`,
+    `a_window_that_closes_first_answers_its_waits_gone`.
+  - Skipping the frame evaluation, the deadline wake, the cap, the close answer and the redraw
+    request for `Frames` each fails a test.
+  - As built: `AgentWindow::wait` and the same on `SemanticsAgent`; `UiRuntime::next_wake` counts
+    a parked wait's deadline. Left for the event slice: the `Event` condition and the
+    subscription fan-out. Left for the scheduler's decode service (s4-10): `image_loads` among
+    the unsettled causes, since the runtime cannot see image loads. Evaluating after input
+    delivery needs nothing more: the tree changes only in a frame. Moving an act-and-read
+    completion into `drive_frame` right after the frame makes it independent of the commit anchor,
+    which also runs at the end of a platform entry.
 
 ### FD6. Synthetic input, journal, recording (IC)
 
