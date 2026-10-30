@@ -22,6 +22,8 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 pub mod degradation;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod engine_state;
 pub(crate) mod headless;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
