@@ -265,6 +265,29 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
+/// The closes this platform lets the application refuse (ADR-0260): a
+/// desktop asks before a window closes, and Windows and macOS also ask before
+/// the session ends; Android, iOS and the web never ask.
+#[cfg(any(windows, target_os = "macos"))]
+const CLOSE_VETOES: &[flui_view::CloseReason] = &[
+    flui_view::CloseReason::User,
+    flui_view::CloseReason::Program,
+    flui_view::CloseReason::SessionEnd,
+];
+#[cfg(not(any(
+    windows,
+    target_os = "macos",
+    target_os = "android",
+    target_os = "ios",
+    target_arch = "wasm32"
+)))]
+const CLOSE_VETOES: &[flui_view::CloseReason] = &[
+    flui_view::CloseReason::User,
+    flui_view::CloseReason::Program,
+];
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+const CLOSE_VETOES: &[flui_view::CloseReason] = &[];
+
 /// Builds a runner's UI runtime with its own window wake and redraw debt,
 /// the platform clipboard and the app's font
 /// collection and the host's byte storage. Every runner site and secondary
@@ -303,6 +326,10 @@ pub(super) fn build_ui_runtime(
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
+    if let Some(registry) = APP_RUNTIME.with(|slot| slot.borrow().flush_registry()) {
+        host = host.with_flush_registry(registry);
+    }
+    host = host.with_close_vetoes(CLOSE_VETOES);
     if let Some(transfer) = APP_RUNTIME.with(|slot| slot.borrow().data_transfer()) {
         host = host
             .with_data_transfer(transfer.source)

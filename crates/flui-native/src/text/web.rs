@@ -65,7 +65,7 @@ mod input {
     //! canvas forwards focus to it while a field is focused.
 
     use std::cell::{Cell, RefCell};
-    use std::collections::VecDeque;
+
     use std::rc::{Rc, Weak};
 
     use flui_platform::keyboard::KeyState;
@@ -82,6 +82,7 @@ mod input {
     use crate::owner::slot::OwnerSlot;
     use crate::owner::web::listener::CanvasListener;
     use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
+    use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{diff, document_text, scalar_spans};
 
     #[wasm_bindgen(inline_js = "
@@ -167,13 +168,6 @@ mod input {
         _listeners: Vec<CanvasListener>,
     }
 
-    /// A host request made while the host was already inside a call into a
-    /// store: applied, in order, when that call returns.
-    enum HostOp {
-        Focus(Option<Rc<dyn TextStore>>),
-        Complete(Rc<dyn TextStore>),
-    }
-
     /// The window's text input (see the module doc). Public where it is
     /// defined, as the host's table names it as its text position, and
     /// nameable only inside the crate.
@@ -188,24 +182,13 @@ mod input {
         /// opens.
         edit_context: bool,
         attached: RefCell<Option<Attached>>,
-        /// How deep the host is in calls into a store; requests made meanwhile
-        /// wait in `pending`.
-        entry: Cell<u32>,
-        pending: RefCell<VecDeque<HostOp>>,
+        /// The requests made while the host is inside a call into a store.
+        queue: HostQueue<MirrorHostOp>,
         retired: Cell<bool>,
         /// The stores whose re-attach, republishing them to the surface, is
         /// queued.
         resync_queued: RefCell<Vec<Rc<dyn TextStore>>>,
         this: Weak<Self>,
-    }
-
-    /// Counts one call into a store, however it ends.
-    struct Entered<'a>(&'a Cell<u32>);
-
-    impl Drop for Entered<'_> {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() - 1);
-        }
     }
 
     fn offset(value: u32) -> Utf16Offset {
@@ -255,8 +238,7 @@ mod input {
                 keys: Rc::clone(&window.keys),
                 edit_context: has_edit_context(),
                 attached: RefCell::new(None),
-                entry: Cell::new(0),
-                pending: RefCell::new(VecDeque::new()),
+                queue: HostQueue::new(),
                 retired: Cell::new(false),
                 resync_queued: RefCell::default(),
                 this: this.clone(),
@@ -266,7 +248,7 @@ mod input {
         /// The window closed: detach the focused field, if any, for good.
         fn retire(&self) {
             self.retired.set(true);
-            self.pending.borrow_mut().clear();
+            self.queue.clear();
             self.detach();
         }
 
@@ -278,37 +260,30 @@ mod input {
                 .map(|attached| Rc::clone(&attached.store))
         }
 
-        /// Enter a call into a store; requests made until the guard drops queue.
-        fn enter(&self) -> Entered<'_> {
-            self.entry.set(self.entry.get() + 1);
-            Entered(&self.entry)
-        }
-
         /// Apply the requests queued while the host was inside a store call.
         fn drain(&self) {
-            if self.entry.get() > 0 {
-                return;
+            while let Some(op) = self.queue.next() {
+                self.run(op);
             }
-            loop {
-                let next = self.pending.borrow_mut().pop_front();
-                match next {
-                    Some(HostOp::Focus(store)) => self.refocus(store),
-                    Some(HostOp::Complete(store)) => {
-                        // Whoever was told `Deferred` owes nothing more: what the
-                        // browser does not commit is committed in place here.
-                        let focused = self
-                            .focused()
-                            .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
-                        let end = if focused {
-                            self.end_composition()
-                        } else {
-                            CompositionEnd::Abandoned
-                        };
-                        if end != CompositionEnd::Committed {
-                            let _ = commit_composition_in_place(&*store);
-                        }
+        }
+
+        fn run(&self, op: MirrorHostOp) {
+            match op {
+                MirrorHostOp::Focus(store) => self.refocus(store),
+                MirrorHostOp::Complete(store) => {
+                    // Whoever was told `Deferred` owes nothing more: what the
+                    // browser does not commit is committed in place here.
+                    let focused = self
+                        .focused()
+                        .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
+                    let end = if focused {
+                        self.end_composition()
+                    } else {
+                        CompositionEnd::Abandoned
+                    };
+                    if end != CompositionEnd::Committed {
+                        let _ = commit_composition_in_place(&*store);
                     }
-                    None => return,
                 }
             }
         }
@@ -335,7 +310,7 @@ mod input {
                 }
             });
             {
-                let _entered = self.enter();
+                let _entered = self.queue.enter();
                 if let Err(error) = store.request_lock(grant, LockTiming::Async) {
                     tracing::debug!(?error, "the focused store refused the browser's edit");
                     self.schedule_resync(Rc::clone(&store));
@@ -1104,12 +1079,10 @@ mod input {
 
     impl TextStoreHost for WebTextInput {
         fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
-            if self.entry.get() > 0 {
-                self.pending.borrow_mut().push_back(HostOp::Focus(store));
-                return;
+            if let Some(op) = self.queue.defer(MirrorHostOp::Focus(store)) {
+                self.run(op);
+                self.drain();
             }
-            self.refocus(store);
-            self.drain();
         }
 
         fn complete_composition(
@@ -1123,18 +1096,15 @@ mod input {
                 .into());
             }
             // The focus a queued request will give is the one asked about.
-            let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
-                HostOp::Focus(store) => Some(store.clone()),
-                HostOp::Complete(_) => None,
-            });
-            let focused = queued.unwrap_or_else(|| self.focused());
+            let focused = self.queue.focus_after_queue(|| self.focused());
             if !focused.is_some_and(|focused| Rc::ptr_eq(&focused, store)) {
                 return Err(TextStoreHostError::NotFocused);
             }
-            if self.entry.get() > 0 {
-                self.pending
-                    .borrow_mut()
-                    .push_back(HostOp::Complete(Rc::clone(store)));
+            if self
+                .queue
+                .defer(MirrorHostOp::Complete(Rc::clone(store)))
+                .is_none()
+            {
                 return Ok(CompositionEnd::Deferred);
             }
             let end = self.end_composition();

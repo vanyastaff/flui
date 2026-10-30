@@ -417,6 +417,16 @@ pub struct CloseGuardSource {
     state: Rc<RefCell<GuardState>>,
 }
 
+/// A clone is the same guard: what the host answers the platform with where
+/// a close arrives, beside the one its presentation settles.
+impl Clone for CloseGuardSource {
+    fn clone(&self) -> Self {
+        Self {
+            state: Rc::clone(&self.state),
+        }
+    }
+}
+
 impl fmt::Debug for CloseGuardSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CloseGuardSource")

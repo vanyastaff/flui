@@ -988,6 +988,48 @@ impl Semantics {
         self
     }
 
+    /// Invoke `handler` with the selection a platform asked this field to
+    /// take, in bytes of its value: the owner has read it from the field's
+    /// published text runs, and refused one whose
+    /// ends lie outside them before it reaches here.
+    #[must_use]
+    pub fn on_set_text_selection<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetTextSelection,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetTextSelection(selection) = call {
+                    handler(cx, selection);
+                }
+            }),
+        );
+        self
+    }
+
+    /// Invoke `handler` with the text a platform asked this field to put in
+    /// place of its selection.
+    #[must_use]
+    pub fn on_replace_selected_text<F, R>(mut self, handler: F) -> Self
+    where
+        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = ref_callback::<str, _, _>(handler);
+        self.event_actions.insert(
+            SemanticsAction::ReplaceSelectedText,
+            Rc::new(move |cx, call| {
+                if let ActionCall::ReplaceSelectedText(text) = call {
+                    handler(cx, &text);
+                }
+            }),
+        );
+        self
+    }
+
     /// Invoke `handler` with the offset, in this node's coordinates, a
     /// platform asked this node to scroll its content to.
     #[must_use]

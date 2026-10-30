@@ -15,3 +15,5 @@ mod identifier;
 mod incremental_flush;
 #[path = "locate.rs"]
 mod locate;
+#[path = "text_runs.rs"]
+mod text_runs;
