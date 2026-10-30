@@ -353,6 +353,59 @@ fn removing_the_focused_element_keeps_focus_in_the_window() {
     window.close_now();
 }
 
+/// Two nodes that swap places, the outer one moving under its old child,
+/// end up nested as published.
+#[wasm_bindgen_test]
+fn nodes_that_swap_places_are_nested_as_published() {
+    let (_platform, window, accessibility) = open();
+    let node = |label: &str, children: &[NodeId]| {
+        let mut node = Node::new(Role::Group);
+        node.set_label(label);
+        node.set_children(children.to_vec());
+        node
+    };
+    let (outer, inner) = (NodeId(3), NodeId(2));
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![NodeId(4)]);
+    accessibility.publish(TreeUpdate {
+        nodes: vec![
+            (ROOT, root),
+            (NodeId(4), node("wrapper", &[outer])),
+            (outer, node("outer", &[inner])),
+            (inner, node("inner", &[])),
+        ],
+        tree: Some(TreeInfo::new(ROOT)),
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    activate_placeholder();
+    accessibility.publish(TreeUpdate {
+        nodes: vec![
+            (NodeId(4), node("wrapper", &[inner])),
+            (inner, node("inner", &[outer])),
+            (outer, node("outer", &[])),
+        ],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    let group = |label: &str, children: Vec<serde_json::Value>| {
+        let mut group = serde_json::json!({ "role": "group", "label": label });
+        if !children.is_empty() {
+            group["children"] = serde_json::Value::from(children);
+        }
+        group
+    };
+    assert_eq!(
+        tree()["children"][0],
+        group(
+            "wrapper",
+            vec![group("inner", vec![group("outer", vec![])])]
+        )
+    );
+    window.close_now();
+}
+
 /// The host covers the canvas in the viewport, and follows it when a
 /// container the canvas is in scrolls, also when that container is
 /// transformed, which makes it the host's containing block, and when the

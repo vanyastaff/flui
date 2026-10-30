@@ -679,6 +679,11 @@ fn run(
                 host.append_child(root)?;
             }
         }
+        Op::Detach(id) => {
+            if let Some(element) = elements.get(&id) {
+                element.remove();
+            }
+        }
         Op::Remove(id) => {
             if let Some(element) = elements.remove(&id) {
                 element.remove();

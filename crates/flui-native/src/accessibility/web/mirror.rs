@@ -27,6 +27,9 @@ pub(crate) enum Op {
     Children { id: NodeId, children: Vec<NodeId> },
     /// The host's one child is `id`'s element.
     Root(NodeId),
+    /// Take `id`'s element out of its parent's, keeping it: an [`Op::Children`]
+    /// of its new parent places it again.
+    Detach(NodeId),
     /// Drop `id`'s element and its listeners.
     Remove(NodeId),
     /// The tree's focus moved to `id`.
@@ -134,9 +137,31 @@ impl Mirror {
             );
         }
 
-        // Parents from the children lists, and what left the tree.
+        // Parents from the children lists, and what left the tree. An element
+        // whose parent changes is taken out first: the parents are arranged
+        // in identity order, and one placed under its old descendant before
+        // that descendant moves out would be a cycle the DOM refuses.
         if structure_changed {
+            let before: HashMap<NodeId, Option<NodeId>> = self
+                .nodes
+                .iter()
+                .filter(|(_, entry)| entry.spec.is_some())
+                .map(|(&id, entry)| (id, entry.parent))
+                .collect();
             let reachable = self.relink(root);
+            let mut moved: Vec<NodeId> = before
+                .into_iter()
+                .filter(|&(id, parent)| {
+                    reachable.contains(&id)
+                        && self
+                            .nodes
+                            .get(&id)
+                            .is_some_and(|entry| entry.parent != parent)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            moved.sort_unstable();
+            ops.extend(moved.into_iter().map(Op::Detach));
             let mut removed: Vec<NodeId> = self
                 .nodes
                 .keys()
@@ -325,6 +350,7 @@ mod tests {
                     id.0,
                     children.iter().map(|child| child.0).collect::<Vec<_>>()
                 ),
+                Op::Detach(id) => format!("detach {}", id.0),
                 Op::Root(id) => format!("root {}", id.0),
                 Op::Remove(id) => format!("remove {}", id.0),
                 Op::Focus(id) => format!("focus {}", id.0),
@@ -416,6 +442,63 @@ mod tests {
         assert_eq!(
             button.map(|placement| (placement.left, placement.top)),
             Some((5.0, 5.0))
+        );
+    }
+
+    /// A node moving under its old descendant leaves its parent's element
+    /// before any parent is arranged, so no arrangement makes a cycle.
+    #[test]
+    fn a_reparented_node_is_detached_before_parents_are_arranged() {
+        let group = |children: &[NodeId]| {
+            let mut node = Node::new(Role::Group);
+            node.set_children(children.to_vec());
+            node
+        };
+        let (wrapper, outer, inner) = (NodeId(4), NodeId(3), NodeId(2));
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[wrapper])),
+                    (wrapper, group(&[outer])),
+                    (outer, group(&[inner])),
+                    (inner, group(&[])),
+                ],
+                ROOT,
+            ))
+            .expect("first tree");
+        let ops = mirror
+            .apply(partial(
+                vec![
+                    (wrapper, group(&[inner])),
+                    (inner, group(&[outer])),
+                    (outer, group(&[])),
+                ],
+                ROOT,
+            ))
+            .expect("the two swapped");
+        let structure: Vec<&Op> = ops
+            .iter()
+            .filter(|op| matches!(op, Op::Detach(_) | Op::Children { .. }))
+            .collect();
+        assert_eq!(
+            structure,
+            [
+                &Op::Detach(inner),
+                &Op::Detach(outer),
+                &Op::Children {
+                    id: inner,
+                    children: vec![outer]
+                },
+                &Op::Children {
+                    id: outer,
+                    children: vec![]
+                },
+                &Op::Children {
+                    id: wrapper,
+                    children: vec![inner]
+                },
+            ]
         );
     }
 
