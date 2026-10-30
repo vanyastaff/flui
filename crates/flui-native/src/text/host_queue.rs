@@ -13,10 +13,20 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
 use std::rc::Rc;
 
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
 use flui_platform::text_store::TextStore;
 
 #[cfg(test)]
@@ -103,7 +113,12 @@ impl<Op> HostQueue<Op> {
     }
 
     /// Forget every queued request: the host retired with its window.
-    #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "macos",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn clear(&self) {
         // Taken out before dropping, so a store a request held cannot reach
         // the queue from its destructor while it is borrowed.
@@ -112,7 +127,12 @@ impl<Op> HostQueue<Op> {
     }
 }
 
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
 /// A request of a host that mirrors one field to the platform (Android's
 /// view, the browser's surface).
 pub(crate) enum MirrorHostOp {
@@ -123,7 +143,12 @@ pub(crate) enum MirrorHostOp {
     Complete(Rc<dyn TextStore>),
 }
 
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
 impl HostQueue<MirrorHostOp> {
     /// The store focused once the queue has run: the newest queued focus
     /// change's, else `current`'s.
