@@ -269,7 +269,8 @@ impl SelectionModel {
             caret,
             &mut failure,
         );
-        if self.selection.borrow().is_some() {
+        // A listener that moved the focus away has taken the handles with it.
+        if self.selection.borrow().is_some() && self.focus.has_primary_focus() {
             self.show_handles(&mut failure);
         }
         failure.resume();

@@ -804,3 +804,30 @@ pub(crate) fn a_failing_wake_as_the_handles_appear_still_shows_them() {
     scene.escape();
     assert_eq!((scene.selected(), scene.handles()), (None, 0));
 }
+
+/// A listener that moves the focus away as a long press selects leaves
+/// the selection without handles.
+///
+/// Red-check: show the handles whether or not the area kept the focus.
+pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .on_selection_changed(move |_cx, selected| {
+            recorded
+                .borrow_mut()
+                .push(selected.map(|selected| selected.text.clone()));
+            let _ = moved.request_focus();
+        })
+        .handles(Marked::default());
+    let app = WidgetsApp::new(Column::new((
+        area,
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert!(elsewhere.has_primary_focus());
+    assert_eq!(scene.handles(), 0);
+}

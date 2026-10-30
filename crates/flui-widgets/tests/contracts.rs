@@ -611,6 +611,7 @@ fn selection_area_handles() {
             ("selection_area_handles::shown_handles_follow_an_inherited_style", crate::selection_area_handles::shown_handles_follow_an_inherited_style),
             ("selection_area_handles::losing_the_focus_hides_the_handles", crate::selection_area_handles::losing_the_focus_hides_the_handles),
             ("selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them", crate::selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them),
+            ("selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles", crate::selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles),
             ("selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging", crate::selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging),
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
