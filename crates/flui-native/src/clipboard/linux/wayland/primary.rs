@@ -658,6 +658,33 @@ mod tests {
         });
     }
 
+    /// Retired closures a teardown drops while the application's panic
+    /// unwinds are retained, so a capture that fails to drop cannot abort
+    /// the process, and the application's failure goes on.
+    #[test]
+    fn retired_closures_dropped_by_an_unwind_are_retained() {
+        in_child("retired_closures_dropped_by_an_unwind_are_retained", || {
+            /// Drops its closures as a host's teardown does.
+            struct Teardown(Vec<SelectionText>);
+
+            impl Drop for Teardown {
+                fn drop(&mut self) {
+                    drop_retired(std::mem::take(&mut self.0));
+                }
+            }
+
+            let drops = Rc::new(std::cell::Cell::new(0));
+            let teardown = Teardown(vec![counted(&drops), counted(&drops)]);
+            let failure = catch_unwind(AssertUnwindSafe(move || {
+                let _teardown = teardown;
+                panic!("the application failed")
+            }))
+            .expect_err("it failed");
+            assert_eq!(failure_text(&*failure), Some("the application failed"));
+            assert_eq!(drops.get(), 0, "every closure is retained");
+        });
+    }
+
     /// At the loop's end the current selection drops in the same protected
     /// sequence as the retired ones: a failure there retains them.
     #[test]

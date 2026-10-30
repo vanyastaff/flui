@@ -849,7 +849,9 @@ impl Selections {
         if matches!(primary.pending, Some(Content::Offered(pending)) if pending == offer) {
             primary.pending = None;
         }
-        if primary.offered() == Some(offer)
+        // An older offer the withdrawn one replaced is no longer the
+        // application's either, even when its replacement never owned.
+        if primary.offered().is_some_and(|owned| owned <= offer)
             && let Some(owned) = primary.owned.take()
         {
             connection.set_selection_owner(NONE, primary.atom, owned.time)?;

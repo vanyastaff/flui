@@ -11,11 +11,16 @@ use std::rc::Rc;
 
 /// What the application offers as its selection.
 pub(crate) type SelectionText = Rc<dyn Fn() -> Option<String>>;
-
 /// Drop the closures the host retired, in order. Once a destructor panics
 /// the rest are retained, not dropped during the unwind, and the first
-/// failure goes on (ADR-0127).
+/// failure goes on (ADR-0127). Dropped by an unwind (a host torn down while
+/// the application's panic unwinds), every closure is retained: the failure
+/// unwinding stays the only one (ADR-0127 §2).
 pub(crate) fn drop_retired(retired: Vec<SelectionText>) {
+    if std::thread::panicking() {
+        std::mem::forget(retired);
+        return;
+    }
     let mut retired = retired.into_iter();
     for text in retired.by_ref() {
         if let Err(failure) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(text)))

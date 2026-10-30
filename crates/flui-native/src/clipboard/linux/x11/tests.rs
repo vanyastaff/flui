@@ -320,6 +320,52 @@ fn a_withdrawn_offer_reads_as_nothing() {
     assert_eq!(asked.get(), 1, "a withdrawn offer is not asked");
 }
 
+/// An offer withdrawn before it owns the primary selection lets go of the
+/// older offer it replaced, which owned it: no client goes on asking the
+/// application for text it no longer offers.
+#[test]
+fn withdrawing_a_replacement_lets_go_of_the_offer_it_replaced() {
+    let Some(server) = server() else {
+        return;
+    };
+    let server = server.as_ref().expect("the server's connection is held");
+    let answers = Answers::new();
+    let owner = clipboard();
+    let reader = clipboard();
+    let asked = Rc::new(Cell::new(0));
+
+    owner.offer(counted("first", &asked));
+    assert_eq!(
+        answers.read_primary(&reader, &[&owner]).as_deref(),
+        Some("first")
+    );
+    owner.offer(counted("second", &asked));
+    owner.withdraw();
+    let primary = server
+        .intern_atom(false, b"PRIMARY")
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .atom;
+    let deadline = Instant::now() + STEP;
+    loop {
+        let held = server
+            .get_selection_owner(primary)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .owner;
+        if held == x11rb::NONE {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the replaced offer still owns the primary selection"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// A closure that fails while another client reads the selection answers
 /// that client with nothing at once, and its failure goes on from the turn.
 #[test]
