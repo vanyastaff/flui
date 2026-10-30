@@ -1783,6 +1783,12 @@ impl LazyMultiBoxRender for RenderSliverCarousel {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverCarousel::set_semantic_set_size(self, count)
     }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_pinned_indices(self, pinned)
+    }
     type Config = CarouselSliverConfig;
 
     const KIND: &'static str = "SliverCarousel";

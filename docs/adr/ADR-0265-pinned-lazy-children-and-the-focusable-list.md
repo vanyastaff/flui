@@ -17,10 +17,10 @@ the held child attached but not laid out (ADR-0056). Its placed-generation stamp
 paint, hit testing and semantics all skip it. That is right for a half-typed row the user scrolled
 away from, and wrong for the row that has keyboard focus: a screen reader loses the focused node,
 focus geometry reads a rect from a pass that no longer holds, and the next arrow key has nothing to
-move from. The lazy multi-box slivers are `RenderSliverList`, `RenderSliverFixedExtentList` and
-`RenderSliverGrid`, driven by `SliverAdaptorManager` in `flui-view`. How does a lazy child stay
-measurable and announced outside the band without changing what the sliver paints, hits or
-reports as its extent?
+move from. The lazy multi-box slivers are `RenderSliverList`, `RenderSliverFixedExtentList`,
+`RenderSliverGrid` and `RenderSliverCarousel`, driven by `SliverAdaptorManager` in `flui-view`.
+How does a lazy child stay measurable and announced outside the band without changing what the
+sliver paints, hits or reports as its extent?
 
 ## Decision drivers
 
@@ -71,12 +71,16 @@ Each lazy sliver keeps a `PinnedChildren` (`crates/flui-objects/src/sliver/pinne
 band, it lays out every attached child whose index is pinned and outside the band, under the
 band's child constraints, at the place the band would give it: the virtualizer's offset for that
 index in `RenderSliverList`, `index × item_extent` in `RenderSliverFixedExtentList`, the tile
-layout's cell in `RenderSliverGrid`. The child gets a fresh placed-generation stamp, so semantics
+layout's cell in `RenderSliverGrid`, and in `RenderSliverCarousel` the place where it rests on
+the large keyline (the keylines at the current offset park every item outside them at an edge,
+which is no place to reveal it from). The child gets a fresh placed-generation stamp, so semantics
 and focus see it at a current rect.
 
 Its extent goes into none of `scroll_extent`, `paint_extent`, `cache_extent`, the anchor
 correction or `Virtualizer::set_measured`. Paint and hit testing skip its slot explicitly, by the
 slots the last pass recorded, since a freshly stamped child would otherwise be painted and hit.
+The carousel paints and hits only the items it shows, so its pinned child needs no skip there;
+its semantics visit admits the pinned slot alongside the shown items.
 
 ### §3 A focusable list is one Tab stop, and its row holds the pin
 
@@ -103,7 +107,7 @@ The focus state lives in the row markers and a controller the list provides; it 
   the next key moves from it.
 - Good, because the sliver's geometry is unchanged by a pin: the harness compares it with the
   unpinned run.
-- Good, because the three lazy slivers share one implementation of the pinned slot.
+- Good, because the lazy slivers share one implementation of the pinned slot.
 - Bad, because a pinned row costs a layout per frame while it is pinned; one row per focusable
   list bounds it.
 - Bad, because the pinned child's offset in `RenderSliverList` is the virtualizer's estimate, not a
@@ -114,7 +118,7 @@ The focus state lives in the row markers and a controller the list provides; it 
 ### Confirmation
 
 - `harness_lazy_slivers_keep_a_pinned_child_out_of_band` (`crates/flui-objects/tests/render_object_harness.rs`):
-  on all three slivers, under `Clip::HardEdge` and `Clip::None`, the pinned row is laid out at its
+  on all four slivers, under `Clip::HardEdge` and `Clip::None`, the pinned row is laid out at its
   place, announced, not painted, adds nothing to the sliver geometry, and leaves the tree when
   unpinned; it fails with the paint skip or the pinned layout removed.
 - `a_pinned_row_stays_announced_until_its_pin_is_released` (`crates/flui-widgets/tests/lazy_list.rs`):

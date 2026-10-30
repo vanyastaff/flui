@@ -8345,12 +8345,13 @@ fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
     );
 }
 
-/// The three lazy multi-box slivers, which share the pinned-child contract.
+/// The lazy multi-box slivers, which share the pinned-child contract.
 #[derive(Clone, Copy, Debug)]
 enum LazySliver {
     List,
     FixedExtentList,
     Grid,
+    Carousel,
 }
 
 impl LazySliver {
@@ -8375,6 +8376,17 @@ impl LazySliver {
                     RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(6), count);
                 let _ = grid.set_pinned_indices(pinned);
                 sliver_node(grid)
+            }
+            Self::Carousel => {
+                // Uncontained 50 px items, one after another like a list.
+                let layout = CarouselLayout::uncontained(50.0).expect("a positive extent");
+                let mut carousel = RenderSliverCarousel::new(
+                    CarouselConfig::new(layout, 0.0),
+                    count,
+                    CarouselItemFrames::new(),
+                );
+                let _ = carousel.set_pinned_indices(pinned);
+                sliver_node(carousel)
             }
         }
         .label("sliver");
@@ -8412,6 +8424,9 @@ impl LazySliver {
             Self::Grid => run.update::<RenderSliverGrid>(sliver, |grid| {
                 let _ = grid.set_pinned_indices(pinned);
             }),
+            Self::Carousel => run.update::<RenderSliverCarousel>(sliver, |carousel| {
+                let _ = carousel.set_pinned_indices(pinned);
+            }),
         }
     }
 }
@@ -8443,6 +8458,7 @@ fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
         LazySliver::List,
         LazySliver::FixedExtentList,
         LazySliver::Grid,
+        LazySliver::Carousel,
     ] {
         // The grid fits six tiles a row; give it as many rows as a list.
         let count = match sliver {
