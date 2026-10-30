@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::fallback_chain::FallbackChain;
 use super::font_resolve;
-use super::system_fallback::SystemFallback;
+use super::system_fallback::{SystemFallback, ask_contained};
 
 /// The host's installed faces, found by one fontdb scan, with the generic
 /// families and the fallback lists FLUI picks for them.
@@ -59,23 +59,24 @@ impl HostFonts {
     /// locale, and what it returns is merged when a collection is fed.
     ///
     /// The platform layer passes its query here, so it runs where the scan
-    /// does, off the owner thread. A panic in `ask` unwinds out of the scan,
-    /// as one in the scan itself would.
+    /// does, off the owner thread. A panic in `ask` is logged and leaves no
+    /// answer: the scanned faces and FLUI's tables still install.
     #[must_use]
     pub fn scan_with(ask: impl FnOnce(&str) -> SystemFallback) -> Self {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
         let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
         tracing::debug!(faces = db.len(), locale, "scanned the host's fonts");
-        let mut host = Self::from_database(db, &locale);
-        host.system = ask(&locale);
-        host
+        let system = ask_contained(ask, &locale);
+        Self::from_database(db, &locale).with_system_fallback(system)
     }
 
-    /// These host fonts with `system` as the host's fallback answer, for a
-    /// test.
-    #[cfg(any(test, feature = "testing"))]
+    /// These host fonts with `system` as the host's fallback answer, and
+    /// FLUI's tables picked for the locale the answer was given for.
     pub(crate) fn with_system_fallback(mut self, system: SystemFallback) -> Self {
+        if system.locale != self.system.locale {
+            self.chain = FallbackChain::platform(&system.locale);
+        }
         self.system = system;
         self
     }
@@ -326,6 +327,27 @@ impl fmt::Debug for HostData {
             // failed.
             Self::Blob(_) => f.write_str("Blob"),
         }
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::{FallbackChain, HostFonts, SystemFallback};
+
+    /// An answer given for another locale than the host's picks FLUI's
+    /// tables for that locale too, as a rescan does, so a Japanese answer
+    /// on an English host does not sit ahead of Simplified Chinese Han
+    /// faces.
+    #[test]
+    fn the_tables_follow_the_answers_locale() {
+        let host = HostFonts::from_database(fontdb::Database::new(), "en-US")
+            .with_system_fallback(SystemFallback::none("ja-JP"));
+        assert_eq!(host.chain, FallbackChain::platform("ja-JP"));
+        assert_ne!(
+            FallbackChain::platform("ja-JP"),
+            FallbackChain::platform("en-US"),
+            "the locales pick different Han lists"
+        );
     }
 }
 

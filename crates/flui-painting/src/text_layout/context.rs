@@ -36,7 +36,7 @@ use std::sync::{Arc, Weak};
 use flui_foundation::memory::MemoryPressureLevel;
 
 use super::host::{HostData, HostFaces, HostFonts};
-use super::system_fallback::SystemFallback;
+use super::system_fallback::{SystemFallback, ask_contained};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
 
@@ -387,7 +387,7 @@ impl HostFontFeed {
         if self.faces_fed {
             if let Some(ask) = self.ask {
                 let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
-                order.set_system_fallback(&ask(&locale));
+                order.set_system_fallback(&ask_contained(ask, &locale));
             }
             return order;
         }
@@ -398,7 +398,7 @@ impl HostFontFeed {
         #[cfg(any(test, feature = "testing"))]
         let host = match (self.host, self.ask) {
             (Some(host), Some(ask)) => {
-                let system = ask(host.locale());
+                let system = ask_contained(ask, host.locale());
                 host.with_system_fallback(system)
             }
             (Some(host), None) => host,

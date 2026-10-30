@@ -19,7 +19,7 @@ use super::system_fallback::{FaceRef, SystemFallback};
 
 /// The fallback lists a host feed installs: a common list, the colour emoji
 /// faces, and a list per script, chosen for one locale.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FallbackChain {
     common: Vec<&'static str>,
     emoji: Vec<&'static str>,
@@ -147,7 +147,7 @@ pub(crate) fn resolve(
         }
         ids
     };
-    let scripts = system
+    let scripts: Vec<(Script, Vec<parley::fontique::FamilyId>)> = system
         .scripts
         .iter()
         .map(|(script, refs)| (script.to_fontique(), text_list(&mut faces, refs)))
@@ -288,8 +288,8 @@ fn has_colour_tables(font: &parley::fontique::FontInfo) -> bool {
 /// sans-serif generic names rather than `.notdef` (a host whose common list
 /// is empty, as on Android, falls back there alone). Only the default key
 /// of each script is set (no locale): the Parley path shapes with no locale
-/// today. A script with no held family at all gets no entry, so it keeps
-/// whatever it had.
+/// today. Every list is replaced, an empty one too, so an answer that names
+/// fewer faces than the one before it withdraws the rest.
 ///
 /// Returns whether any list it wrote differs from the one the collection
 /// had; a list equal to the one already there is not written again.
@@ -317,10 +317,9 @@ pub(crate) fn install_into(
             }
         }
         let key = FallbackKey::new(script, None);
-        if !families.is_empty()
-            && !collection
-                .fallback_families(key)
-                .eq(families.iter().copied())
+        if !collection
+            .fallback_families(key)
+            .eq(families.iter().copied())
         {
             collection.set_fallbacks(key, families.into_iter());
             changed = true;
@@ -332,10 +331,9 @@ pub(crate) fn install_into(
             emoji.push(*id);
         }
     }
-    if !emoji.is_empty()
-        && !collection
-            .generic_families(GenericFamily::Emoji)
-            .eq(emoji.iter().copied())
+    if !collection
+        .generic_families(GenericFamily::Emoji)
+        .eq(emoji.iter().copied())
     {
         collection.set_generic_families(GenericFamily::Emoji, emoji.into_iter());
         changed = true;

@@ -157,6 +157,34 @@ impl SystemFallback {
     }
 }
 
+/// What `ask` answers for `locale`, or no answer where it panics.
+///
+/// The query is the platform layer's code calling the operating system; a
+/// panic in it must not take the scanned faces and FLUI's tables with it
+/// (ADR-0271 §3). The panic is logged; its payload is leaked rather than
+/// dropped here, since its destructor is code of the query's too.
+pub(crate) fn ask_contained(
+    ask: impl FnOnce(&str) -> SystemFallback,
+    locale: &str,
+) -> SystemFallback {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    match catch_unwind(AssertUnwindSafe(|| ask(locale))) {
+        Ok(answer) => answer,
+        Err(payload) => {
+            let text = flui_foundation::panic::payload_text(&*payload)
+                .unwrap_or("non-string panic payload");
+            tracing::error!(
+                panic = text,
+                locale,
+                "the host's fallback query panicked; FLUI's tables alone"
+            );
+            std::mem::forget(payload);
+            SystemFallback::none(locale)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FaceRef, ScriptCode, SystemFallback};

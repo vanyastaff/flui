@@ -304,6 +304,56 @@ fn a_rescan_swaps_the_fallback_order_between_frames() {
     assert_eq!(notdef_glyphs(&fonts, ARABIC), 0, "the host's face is back");
 }
 
+/// A rescan replaces the whole order, the emoji generic included, even when
+/// the replacement leaves it empty: on a collection that holds none of
+/// FLUI's tables' faces, an answer that named an emoji face and then one
+/// that names none must withdraw that face and say so. Fails if an empty
+/// replacement keeps the withdrawn face.
+fn a_rescan_withdraws_the_hosts_emoji_faces() {
+    use flui_painting::testing::{feed_with_host, host_fonts_from};
+    use flui_painting::{FaceRef, SystemFallback};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let emoji = |locale: &str| {
+        SystemFallback::none(locale)
+            .with_emoji(vec![FaceRef::Family("FLUI Probe Arabic".to_owned())])
+    };
+    let mut order = feed_with_host(feed, host_fonts_from(&[PROBE_ARABIC]))
+        .with_system_fallback(emoji)
+        .run();
+    let fed = fonts.generation();
+    assert!(
+        order.set_system_fallback(&SystemFallback::none("en-US")),
+        "withdrawing the host's emoji face is a change"
+    );
+    assert_eq!(fonts.generation(), fed + 1);
+    assert!(
+        order.set_system_fallback(&emoji("en-US")),
+        "naming it again is a change"
+    );
+}
+
+/// A fallback query that panics leaves no answer, not a lost feed: the
+/// host's faces still arrive and FLUI's tables still install. Fails if the
+/// panic escapes the feed (the faces are then never fed).
+fn a_fallback_query_that_panics_leaves_the_faces_fed() {
+    use flui_painting::testing::{feed_with_host, host_fed, host_fonts_from};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let before = fonts.generation();
+    feed_with_host(feed, host_fonts_from(&[PROBE_ARABIC]))
+        .with_system_fallback(|_: &str| -> flui_painting::SystemFallback {
+            panic!("the platform's query failed")
+        })
+        .run();
+    assert!(host_fed(&fonts), "the feed ran to the end");
+    assert_eq!(
+        fonts.generation(),
+        before + 1,
+        "the host's faces arrived, announced once"
+    );
+}
+
 #[test]
 fn host_feed_contract() {
     crate::cases::run_cases(
@@ -328,6 +378,14 @@ fn host_feed_contract() {
             (
                 "a_rescan_swaps_the_fallback_order_between_frames",
                 a_rescan_swaps_the_fallback_order_between_frames,
+            ),
+            (
+                "a_rescan_withdraws_the_hosts_emoji_faces",
+                a_rescan_withdraws_the_hosts_emoji_faces,
+            ),
+            (
+                "a_fallback_query_that_panics_leaves_the_faces_fed",
+                a_fallback_query_that_panics_leaves_the_faces_fed,
             ),
         ],
     );
