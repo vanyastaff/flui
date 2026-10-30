@@ -1247,3 +1247,346 @@ pub trait WindowControl {
     /// Ask the window to close through the vetoed close path.
     fn request_close(&self);
 }
+
+/// The fields of a [`WindowState`] other than its revision, public: the
+/// boundary every serialization and mirror of a window's snapshot goes through
+/// (a recording's schema).
+///
+/// Deliberately not `#[non_exhaustive]`, unlike [`WindowState`]: a mirror
+/// builds and destructures this struct exhaustively, so a fact the snapshot
+/// gains breaks every mirror at compile time until it carries the fact,
+/// instead of dropping it from a recording. The revision stays apart because
+/// [`WindowState::successor`] issues it: [`Self::into_state`] is a sample, and
+/// publishing it gives it the revision its window's history earns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowStateParts {
+    /// [`WindowState::outer`].
+    pub outer: WindowGeometry,
+    /// [`WindowState::content_size`].
+    pub content_size: Size<f64>,
+    /// [`WindowState::mode`].
+    pub mode: WindowMode,
+    /// [`WindowState::normal_geometry`].
+    pub normal_geometry: Option<WindowGeometry>,
+    /// [`WindowState::visible`].
+    pub visible: bool,
+    /// [`WindowState::occluded`].
+    pub occluded: bool,
+    /// [`WindowState::focused`].
+    pub focused: bool,
+    /// [`WindowState::title`].
+    pub title: Option<String>,
+    /// [`WindowState::constraints`].
+    pub constraints: SizeConstraints,
+    /// [`WindowState::resizable`].
+    pub resizable: bool,
+    /// [`WindowState::decorated`].
+    pub decorated: bool,
+    /// [`WindowState::display`].
+    pub display: Option<DisplayId>,
+    /// [`WindowState::metrics`].
+    pub metrics: Option<WindowMetrics>,
+    /// [`WindowState::appearance`].
+    pub appearance: WindowAppearance,
+    /// [`WindowState::safe_area`].
+    pub safe_area: EdgeInsets,
+    /// [`WindowState::execution`].
+    pub execution: WindowExecutionState,
+    /// [`WindowState::hovered`].
+    pub hovered: bool,
+    /// [`WindowState::active`].
+    pub active: bool,
+    /// [`WindowState::capabilities`], taken apart.
+    pub capabilities: CapabilityParts,
+}
+
+/// What a [`WindowCapabilities`] honours, public, for the same mirrors and for
+/// the same reason as [`WindowStateParts`].
+///
+/// A capability a command is admitted against, and the presentation report,
+/// is `Err` with its absence while it is `Unavailable`, which is all
+/// [`WindowCapabilities`] compares; an `Ok(Unavailable)` reads as the
+/// platform's absence, as a field set by hand does. The capabilities' owner
+/// and revision are the publishing window's ([`WindowState::successor`]), so
+/// they are not fields here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityParts {
+    /// [`WindowCapabilities::sets_title`].
+    pub sets_title: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_position`].
+    pub sets_position: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_size`].
+    pub sets_size: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_constraints`].
+    pub sets_constraints: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_resizable`].
+    pub sets_resizable: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_decorated`].
+    pub sets_decorated: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::minimizes`].
+    pub minimizes: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::maximizes`].
+    pub maximizes: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::enters_fullscreen`].
+    pub enters_fullscreen: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::hides`].
+    pub hides: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::shows`].
+    pub shows: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::activates`].
+    pub activates: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::closes`].
+    pub closes: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::material`].
+    pub material: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::reports_presentation`], with
+    /// [`WindowCapabilities::presentation_feedback`]'s absence.
+    pub reports_presentation: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::observes_position`].
+    pub observes_position: Availability,
+    /// [`WindowCapabilities::observes_minimized`].
+    pub observes_minimized: Availability,
+    /// [`WindowCapabilities::places_at_open`].
+    pub places_at_open: Availability,
+    /// [`WindowCapabilities::frame_rate_hint`].
+    pub frame_rate_hint: Availability,
+}
+
+impl WindowState {
+    /// Take the snapshot apart into every fact but its revision.
+    #[must_use]
+    pub fn into_parts(self) -> WindowStateParts {
+        let Self {
+            revision: _,
+            outer,
+            content_size,
+            mode,
+            normal_geometry,
+            visible,
+            occluded,
+            focused,
+            title,
+            constraints,
+            resizable,
+            decorated,
+            display,
+            metrics,
+            appearance,
+            safe_area,
+            execution,
+            hovered,
+            active,
+            capabilities,
+        } = self;
+        WindowStateParts {
+            outer,
+            content_size,
+            mode,
+            normal_geometry,
+            visible,
+            occluded,
+            focused,
+            title,
+            constraints,
+            resizable,
+            decorated,
+            display,
+            metrics,
+            appearance,
+            safe_area,
+            execution,
+            hovered,
+            active,
+            capabilities: capabilities.into_parts(),
+        }
+    }
+}
+
+impl WindowStateParts {
+    /// A sample with these facts, at [`WindowRevision::ZERO`]: what a window
+    /// publishes through [`WindowState::successor`], which issues its
+    /// revision. Every field is valid by its type.
+    #[must_use]
+    pub fn into_state(self) -> WindowState {
+        let Self {
+            outer,
+            content_size,
+            mode,
+            normal_geometry,
+            visible,
+            occluded,
+            focused,
+            title,
+            constraints,
+            resizable,
+            decorated,
+            display,
+            metrics,
+            appearance,
+            safe_area,
+            execution,
+            hovered,
+            active,
+            capabilities,
+        } = self;
+        WindowState {
+            revision: WindowRevision::ZERO,
+            outer,
+            content_size,
+            mode,
+            normal_geometry,
+            visible,
+            occluded,
+            focused,
+            title,
+            constraints,
+            resizable,
+            decorated,
+            display,
+            metrics,
+            appearance,
+            safe_area,
+            execution,
+            hovered,
+            active,
+            capabilities: capabilities.into_capabilities(),
+        }
+    }
+}
+
+impl WindowCapabilities {
+    /// What `slot` honours, or its absence while it is `Unavailable`.
+    const fn honoured_in(&self, slot: Slot) -> Result<Availability, CapabilityAbsence> {
+        match self.absence_in_force(slot) {
+            Some(absence) => Err(absence),
+            None => Ok(self.field(slot)),
+        }
+    }
+
+    /// Take the capabilities apart into what they honour, and why each
+    /// unavailable one is missing.
+    #[must_use]
+    pub const fn into_parts(self) -> CapabilityParts {
+        let Self {
+            sets_title: _,
+            sets_position: _,
+            sets_size: _,
+            sets_constraints: _,
+            sets_resizable: _,
+            sets_decorated: _,
+            minimizes: _,
+            maximizes: _,
+            enters_fullscreen: _,
+            hides: _,
+            shows: _,
+            activates: _,
+            closes: _,
+            observes_position,
+            observes_minimized,
+            places_at_open,
+            frame_rate_hint,
+            material: _,
+            reports_presentation,
+            absences: _,
+            presentation_absence: _,
+            owner: _,
+            revision: _,
+        } = self;
+        CapabilityParts {
+            sets_title: self.honoured_in(Slot::SetTitle),
+            sets_position: self.honoured_in(Slot::SetPosition),
+            sets_size: self.honoured_in(Slot::SetSize),
+            sets_constraints: self.honoured_in(Slot::SetConstraints),
+            sets_resizable: self.honoured_in(Slot::SetResizable),
+            sets_decorated: self.honoured_in(Slot::SetDecorated),
+            minimizes: self.honoured_in(Slot::Minimize),
+            maximizes: self.honoured_in(Slot::Maximize),
+            enters_fullscreen: self.honoured_in(Slot::EnterFullscreen),
+            hides: self.honoured_in(Slot::Hide),
+            shows: self.honoured_in(Slot::Show),
+            activates: self.honoured_in(Slot::Activate),
+            closes: self.honoured_in(Slot::Close),
+            material: self.honoured_in(Slot::SetMaterial),
+            reports_presentation: match self.presentation_absence_in_force() {
+                Some(absence) => Err(absence),
+                None => Ok(reports_presentation),
+            },
+            observes_position,
+            observes_minimized,
+            places_at_open,
+            frame_rate_hint,
+        }
+    }
+}
+
+impl CapabilityParts {
+    /// The capabilities these fields describe, with no owner and at
+    /// [`WindowRevision::ZERO`], as capabilities built by hand are.
+    #[must_use]
+    pub const fn into_capabilities(self) -> WindowCapabilities {
+        let Self {
+            sets_title,
+            sets_position,
+            sets_size,
+            sets_constraints,
+            sets_resizable,
+            sets_decorated,
+            minimizes,
+            maximizes,
+            enters_fullscreen,
+            hides,
+            shows,
+            activates,
+            closes,
+            material,
+            reports_presentation,
+            observes_position,
+            observes_minimized,
+            places_at_open,
+            frame_rate_hint,
+        } = self;
+        let mut capabilities = WindowCapabilities {
+            observes_position,
+            observes_minimized,
+            places_at_open,
+            frame_rate_hint,
+            ..WindowCapabilities::NONE
+        };
+        let slots = [
+            (Slot::SetTitle, sets_title),
+            (Slot::SetPosition, sets_position),
+            (Slot::SetSize, sets_size),
+            (Slot::SetConstraints, sets_constraints),
+            (Slot::SetResizable, sets_resizable),
+            (Slot::SetDecorated, sets_decorated),
+            (Slot::Minimize, minimizes),
+            (Slot::Maximize, maximizes),
+            (Slot::EnterFullscreen, enters_fullscreen),
+            (Slot::Hide, hides),
+            (Slot::Show, shows),
+            (Slot::Activate, activates),
+            (Slot::Close, closes),
+            (Slot::SetMaterial, material),
+        ];
+        let mut at = 0;
+        while at < slots.len() {
+            let (slot, honoured) = slots[at];
+            match honoured {
+                Ok(availability) => *capabilities.field_mut(slot) = availability,
+                Err(absence) => {
+                    *capabilities.field_mut(slot) = Availability::Unavailable;
+                    capabilities.absences[slot as usize] = absence;
+                }
+            }
+            at += 1;
+        }
+        match reports_presentation {
+            Ok(availability) => capabilities.reports_presentation = availability,
+            Err(absence) => {
+                capabilities.reports_presentation = Availability::Unavailable;
+                capabilities.presentation_absence = absence;
+            }
+        }
+        capabilities
+    }
+}

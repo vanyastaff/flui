@@ -391,8 +391,8 @@ request.
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - Honest absence: the nine spellings of "not here" are one now, `Unsupported` with its reason in every contract error (ADR-0151 §4); the Android clipboard is still an in-process mock (ADR-0152). Other layers show what silent spellings cost: winit setters return `()` while their documentation lists platforms as unsupported, `tauri-plugin-geolocation` resolves to a zeroed position on the desktop, and `tauri-plugin-notification` reports a permission it did not check.
-- Replay: pointer, key and wheel traces, system notices, session ends, reopens, input method events and reads of the system preferences and displays replay on the headless host; window state recordings do not exist yet.
-- The `native-capture` journal records pointers, system notices, session ends, reopens, input method events and reads of the system preferences and displays, not window state. An input method that edits the focused text store directly (TSF on Windows, the Android and web mirrors) delivers no event, so its edits are not journaled: the `ime` row family reserves a store-edit payload for them.
+- Replay: pointer, key and wheel traces, system notices, session ends, reopens, input method events, reads of the system preferences and displays, and window snapshots replay on the headless host; close requests and closes do not.
+- The `native-capture` journal records pointers, system notices, session ends, reopens, input method events, reads of the system preferences and displays, and window snapshots (titles redacted by default), not close requests or closes. An input method that edits the focused text store directly (TSF on Windows, the Android and web mirrors) delivers no event, so its edits are not journaled: the `ime` row family reserves a store-edit payload for them.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
 
 ### 34. Power-aware pacing and throttling

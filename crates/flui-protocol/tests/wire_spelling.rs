@@ -77,11 +77,16 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Verdict::ALL, Verdict::name);
     {
         use flui_protocol::native_recording::{
-            Absence, Backend, CancelReason, DynamicRange, FailureKind, Gamut, GestureComponent,
-            GesturePhase, MemoryPressureLevel, Modifier, PointerKind, ScrollPhase, ScrollUnit,
-            SessionEndPhase, Stream, ViewportStatus, WheelAxis,
+            Absence, Appearance, Availability, Backend, CancelReason, DynamicRange, Execution,
+            FailureKind, Gamut, GestureComponent, GesturePhase, MemoryPressureLevel, Modifier,
+            PointerKind, ScrollPhase, ScrollUnit, SessionEndPhase, Stream, ViewportStatus,
+            WheelAxis, WindowMode,
         };
         spelled_as_named(Absence::ALL, Absence::name);
+        spelled_as_named(Appearance::ALL, Appearance::name);
+        spelled_as_named(Availability::ALL, Availability::name);
+        spelled_as_named(Execution::ALL, Execution::name);
+        spelled_as_named(WindowMode::ALL, WindowMode::name);
         spelled_as_named(Backend::ALL, Backend::name);
         spelled_as_named(DynamicRange::ALL, DynamicRange::name);
         spelled_as_named(Gamut::ALL, Gamut::name);

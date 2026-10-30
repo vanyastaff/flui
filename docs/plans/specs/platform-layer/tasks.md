@@ -4548,8 +4548,9 @@ graph LR
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
 
-- [ ] **LY97** (не закрыта: четыре PR, первые три — потоки, предпочтения и дисплеи; дальше состояние
-  окна, затем строка store-edit для IME без событий) — ветка `claude/project-thread-jqc75j` после
+- [ ] **LY97** (не закрыта: четыре PR — потоки, предпочтения, дисплеи и состояние окна; дальше строки
+  `close_request`/`closed` после T8 и строка store-edit для IME без событий) — ветка
+  `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
   (`AppDelivery`: `notice`, `session_end`, `reopen`) и `window` (`WindowDelivery::dispatch_input`:
@@ -4591,6 +4592,23 @@ graph LR
   `headless_platform_preferences.jsonl` переименован в `headless_platform_reads.jsonl` и несёт три
   чтения дисплеев; `platform_recordings_replay_on_the_headless_host` и платформенная часть
   `captured_streams_replay_to_what_the_session_delivered` сверяют чтения дисплеев по меткам.
+  **Четвёртая часть — состояние окна.** Поток `window_state` (без часов): `WindowStateCell::new`
+  открывает журнал и пишет первый снимок, `publish` пишет каждый изменившийся снимок целиком
+  (`Captured::WindowState`) после снятия замка слота; через ячейку публикуют все хосты, поэтому
+  своих точек записи у них нет. Строка `state { state, redacted }`: ревизия как сведение, дисплей
+  меткой (та же, что в потоке `platform`), остальные поля через публичные
+  `flui_platform::{WindowStateParts, CapabilityParts}` (`WindowState::into_parts`,
+  `WindowStateParts::into_state`, `WindowCapabilities::into_parts`,
+  `CapabilityParts::into_capabilities`); возможность команды пишется как `native`/`emulated` или
+  `unavailable` с причиной. `Privacy::Redact` заменяет заголовок и помечает строку, replay её
+  отвергает. Headless воспроизводит снимок через `MockWindow::simulate_state`: снимок публикуется
+  через `WindowState::successor`, ревизии свои, до следующего изменения модели. Тесты: золотой
+  `headless_window_state.jsonl` и строка `window_state_recordings_replay_on_the_headless_host`;
+  в `captured_streams_replay_to_what_the_session_delivered` replay снимков с общим реестром меток
+  даёт те же факты и ревизии, что живая публикация, включая свёрнутое окно, которое не бывает
+  occluded и сохраняет метрики; отказ на снимке с вычеркнутым заголовком в
+  `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Строки `close_request`/`closed` с
+  причиной и решением охранника (veto или доставка) — отдельный PR после T8.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

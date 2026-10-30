@@ -1,13 +1,15 @@
 //! The native recording schema (ADR-0215 §4): the journal of one backend's pointer registry,
-//! loop delivery, window delivery or system reads, before the application heard it.
+//! loop delivery, window delivery, system reads or window snapshots, before the application
+//! heard it.
 //!
 //! A recording is JSON Lines: one [`Header`] object, which names the [`Stream`] it journals,
 //! then one [`Row`] object per call — a reading, a coalesced batch, a device hot-plug, a
 //! capture loss; a system notice, a session end, a reopen; an input method's event; a read of
-//! the system preferences or the displays. Rows hold the plain fields a backend copies out of
-//! its native event, so a Win32 or Apple recording replays through the shared decoder on any
-//! host. The header names the format's major version under [`VERSION_KEY`]; a reader skips
-//! unknown fields, and an unknown variant is a refusal, never a skipped row.
+//! the system preferences or the displays; a window's snapshot. Rows hold the plain fields a
+//! backend copies out of its native event, so a Win32 or Apple recording replays through the
+//! shared decoder on any host. The header names the format's major version under
+//! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
+//! skipped row.
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -276,7 +278,8 @@ pub struct Device {
 
 vocabulary! {
     /// What a recording journals: one pointer registry, one loop's application delivery, one
-    /// window's delivery, or one platform's reads of the system.
+    /// window's delivery, one platform's reads of the system, or one window's published
+    /// snapshots.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -290,6 +293,8 @@ vocabulary! {
         Window => "window",
         /// A platform's reads of the system: its preferences and displays.
         Platform => "platform",
+        /// A window's published snapshots.
+        WindowState => "window_state",
     }
 }
 
@@ -944,6 +949,214 @@ pub enum DisplayRead {
     Failed(Failure),
 }
 
+vocabulary! {
+    /// How a window occupies its display.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum WindowMode {
+        /// Its own bounds.
+        Normal => "normal",
+        /// Minimized.
+        Minimized => "minimized",
+        /// Filling the display's usable area.
+        Maximized => "maximized",
+        /// Borderless on the whole display.
+        Fullscreen => "fullscreen",
+    }
+}
+
+vocabulary! {
+    /// The user's theme as applied to a window.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Appearance {
+        /// Light.
+        Light => "light",
+        /// Dark.
+        Dark => "dark",
+        /// Light, with vibrancy.
+        VibrantLight => "vibrant_light",
+        /// Dark, with vibrancy.
+        VibrantDark => "vibrant_dark",
+    }
+}
+
+vocabulary! {
+    /// Whether the platform lets a window run its UI.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Execution {
+        /// Running.
+        Running => "running",
+        /// Suspended.
+        Suspended => "suspended",
+        /// Detached from its surface.
+        Detached => "detached",
+    }
+}
+
+vocabulary! {
+    /// How a window honours a command or makes a report.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Availability {
+        /// The window system does it.
+        Native => "native",
+        /// The backend builds it from what the window system provides.
+        Emulated => "emulated",
+        /// Not at all.
+        Unavailable => "unavailable",
+    }
+}
+
+/// How a window honours a command it is admitted against, or why it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Capability {
+    /// The window system does it.
+    Native,
+    /// The backend builds it from what the window system provides.
+    Emulated,
+    /// Not at all, for this reason.
+    Unavailable(Absence),
+}
+
+/// Which commands a window honours, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Capabilities {
+    /// Setting the title.
+    pub sets_title: Capability,
+    /// Moving the window.
+    pub sets_position: Capability,
+    /// Resizing the window.
+    pub sets_size: Capability,
+    /// Setting its size limits.
+    pub sets_constraints: Capability,
+    /// Making it resizable or not.
+    pub sets_resizable: Capability,
+    /// Giving it a frame or not.
+    pub sets_decorated: Capability,
+    /// Minimizing it.
+    pub minimizes: Capability,
+    /// Maximizing it.
+    pub maximizes: Capability,
+    /// Making it fullscreen.
+    pub enters_fullscreen: Capability,
+    /// Hiding it.
+    pub hides: Capability,
+    /// Showing it.
+    pub shows: Capability,
+    /// Activating it.
+    pub activates: Capability,
+    /// Closing it.
+    pub closes: Capability,
+    /// Setting its material.
+    pub material: Capability,
+    /// Reporting that its frames reached the screen.
+    pub reports_presentation: Capability,
+    /// Reporting its position.
+    pub observes_position: Availability,
+    /// Reporting that it is minimized.
+    pub observes_minimized: Availability,
+    /// Placing it where asked when it opens.
+    pub places_at_open: Availability,
+    /// Taking a frame rate hint.
+    pub frame_rate_hint: Availability,
+}
+
+/// A window rectangle in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WindowGeometry {
+    /// The top-left corner in global coordinates, where the OS reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 2]>,
+    /// Width and height.
+    pub size: [f64; 2],
+}
+
+/// A window's inner-size limits in logical pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SizeConstraints {
+    /// The smallest inner size, if limited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<[f64; 2]>,
+    /// The largest inner size, if limited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<[f64; 2]>,
+}
+
+/// A window's drawable area and scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WindowMetrics {
+    /// The drawable area in device pixels: width and height.
+    pub physical: [i32; 2],
+    /// Device pixels per logical pixel.
+    pub scale: f64,
+}
+
+/// What the operating system reported about one window, at one revision.
+///
+/// `display` is the display's label, as a `platform` recording of the same session writes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WindowState {
+    /// The revision the window published it at.
+    pub revision: u64,
+    /// The outer rectangle.
+    pub outer: WindowGeometry,
+    /// The content area's size: width and height.
+    pub content_size: [f64; 2],
+    /// How it occupies its display.
+    pub mode: WindowMode,
+    /// The rectangle it returns to from another mode, where known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_geometry: Option<WindowGeometry>,
+    /// Whether it is shown.
+    pub visible: bool,
+    /// Whether the window system says nothing of it reaches the screen.
+    pub occluded: bool,
+    /// Whether it has keyboard focus.
+    pub focused: bool,
+    /// Its title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Its inner-size limits.
+    #[serde(default)]
+    pub constraints: SizeConstraints,
+    /// Whether the user can resize it.
+    pub resizable: bool,
+    /// Whether it has a frame.
+    pub decorated: bool,
+    /// The display it is on, by label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<u64>,
+    /// Its drawable area and scale, once reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<WindowMetrics>,
+    /// The theme applied to it.
+    pub appearance: Appearance,
+    /// The safe-area insets in logical pixels: top, right, bottom, left.
+    pub safe_area: [f64; 4],
+    /// Whether the platform lets it run its UI.
+    pub execution: Execution,
+    /// Whether the pointer is over it.
+    pub hovered: bool,
+    /// Whether it is the active window of its desktop.
+    pub active: bool,
+    /// Which commands it honours.
+    pub capabilities: Capabilities,
+}
+
 /// One registry call, after the header.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "row", rename_all = "snake_case")]
@@ -1066,6 +1279,14 @@ pub enum Row {
         read: DisplayRead,
         /// Each display's name and persistent key were replaced before writing (ADR-0215 §5):
         /// a key by a pseudonym numbered within the recording, so equal keys stay equal.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redacted: bool,
+    },
+    /// A window published a new snapshot (a `window_state` recording).
+    State {
+        /// The snapshot.
+        state: WindowState,
+        /// Its title was replaced before writing (ADR-0215 §5): replay refuses the row.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         redacted: bool,
     },
