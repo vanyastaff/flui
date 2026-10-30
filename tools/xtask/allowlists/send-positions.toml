@@ -23,6 +23,8 @@ positions = [
     { item = "flui_app::app::config::AppConfig::with_memory_reclaim", at = "impl-trait", marker = "Sync" },
     { item = "flui_app::app::direct::run_direct", at = "bound", marker = "Send" },
     { item = "flui_app::app::direct::run_direct", at = "impl-trait", marker = "Send" },
+    { item = "flui_app::app::launch::LaunchError::Platform::source", at = "dyn", marker = "Send" },
+    { item = "flui_app::app::launch::LaunchError::Platform::source", at = "dyn", marker = "Sync" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "bound", marker = "Send" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "bound", marker = "Sync" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "impl-trait", marker = "Send" },

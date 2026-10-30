@@ -3411,6 +3411,17 @@ alternatives: what they move stays reachable by the scroll keys, the scroll sema
 (ADR-0157) and the focus reveal, and their motion operates nothing. Tests: `tests/page_view.rs`
 and the matrix row `page_view_with_page_controls` in `gesture_alternatives`.
 
+`PageIndicator` lives in `scroll`, beside the pager it names: `controls` sits below `scroll` and
+cannot see `PageController`. Its source is a type, not a flag. `controlled` reads
+`PageController::page`, or `initial_page` before the first layout, and offers a tap and the
+increase and decrease actions only toward a page that exists. `observed` reads an
+`Animation<f64>` and offers neither. The state keeps the last finite position, so a non-finite
+sample never moves the dots, and it rebuilds only when the nearest page changes, which is when
+the announced "page n of N" (`page_label` again) and the offered actions change. The painter
+reads the position at paint time from the source's listenable and draws no motion of its own.
+Under reduced motion a tap or a step jumps the pager rather than animating it. Tests:
+`tests/page_indicator.rs`.
+
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,

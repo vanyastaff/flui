@@ -209,6 +209,13 @@ impl OwnerPlatform {
         self.platform.release_session_end();
     }
 
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
+    }
+
     /// The commands and observations every window of this platform has, known
     /// before one opens. See [`Platform::window_capabilities`].
     #[must_use]
@@ -401,6 +408,13 @@ impl SharedPlatform {
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known

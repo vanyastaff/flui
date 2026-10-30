@@ -26,6 +26,9 @@ mod cupertino_app;
 #[path = "nav_bar.rs"]
 mod nav_bar;
 
+#[path = "page_control.rs"]
+mod page_control;
+
 #[path = "page_scaffold.rs"]
 mod page_scaffold;
 

@@ -567,6 +567,11 @@ impl FlushReport {
     }
 }
 
+/// How long the host writes the flush registry when the user's session ends,
+/// counted from the start of the `Ending` phase (ADR-0260): the framework's
+/// share of the time the operating system gives a process before it ends it.
+pub const SESSION_END_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The host's side of the flush registry: it builds the registry, settles it
 /// on the owner's turn and flushes it when the application or the session
 /// ends. Only the host holds it, and a clone of it flushes at exit; documents

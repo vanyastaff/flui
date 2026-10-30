@@ -130,7 +130,7 @@ pub type AppBuilder = Rc<dyn Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedVi
 /// ```rust,ignore
 /// use flui_widgets::WidgetsApp;
 ///
-/// flui::run_app(WidgetsApp::new(MyHome::new()));
+/// flui::run_app(WidgetsApp::new(MyHome::new()), flui::AppLaunch::new())?;
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct WidgetsApp<F: AppForm = NavigatorForm> {

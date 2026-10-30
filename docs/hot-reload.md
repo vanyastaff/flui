@@ -81,7 +81,7 @@ configuration, and the runner drives it through the `DevReloadHook` trait
 use flui::hot_reload::WorkerReloadHook;
 
 let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
-run_app_with_config(root, config);
+run_app(root, AppLaunch::new().config(config))?;
 ```
 
 The loop attaches the hook once, before the first window, and detaches it when
@@ -231,7 +231,7 @@ WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 bu
 
 ## iOS
 
-iOS runs the same host/worker path as desktop and Android (`run_app_ios_with_config` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the UI runtime reassembles with state preserved.
+iOS runs the same host/worker path as desktop and Android (`run_app` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the UI runtime reassembles with state preserved.
 
 One iOS-specific requirement is structural rather than a platform limit. A worker `cdylib` statically links its own `flui-painting` while never linking `flui-engine`. iOS exposes no system font to a fontdb scan, so a worker that shaped on host fonts alone would have no face. Every `FontCollection` holds the embedded `Roboto-Regular` with `bundled-fonts`, and the plugin's pipeline shapes on a bundled-only collection (ADR-0092 §10 step 3b), so every image linking the shaper renders text without the engine and without a host scan.
 

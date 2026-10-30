@@ -30,15 +30,12 @@ use std::path::Path;
 /// that command put in the environment.
 pub(super) fn main_rs(lib_name: &str, root: &str) -> String {
     format!(
-        "fn main() {{\n\
+        "fn main() -> Result<(), flui::LaunchError> {{\n\
+         \x20   let config = flui::AppConfig::new();\n\
          \x20   #[cfg(feature = \"dev-agent\")]\n\
-         \x20   flui::run_app_with_config(\n\
-         \x20       {lib_name}::{root},\n\
-         \x20       flui::AppConfig::new()\n\
-         \x20           .with_dev_agent(flui::devtools::agent::AgentServer::from_env()),\n\
-         \x20   );\n\
-         \x20   #[cfg(not(feature = \"dev-agent\"))]\n\
-         \x20   flui::run_app({lib_name}::{root});\n\
+         \x20   let config =\n\
+         \x20       config.with_dev_agent(flui::devtools::agent::AgentServer::from_env());\n\
+         \x20   flui::run_app({lib_name}::{root}, flui::AppLaunch::new().config(config))\n\
          }}\n"
     )
 }

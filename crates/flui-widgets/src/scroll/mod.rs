@@ -28,6 +28,7 @@ mod interactive_viewer;
 mod list_focus;
 mod list_view;
 pub mod nested;
+mod page_indicator;
 mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
@@ -79,6 +80,9 @@ pub use nested::{
     AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, InvalidViewportFraction, NestedScroll,
     NestedScrollConnection, NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause,
     ScrollDevice, ScrollEndReason, ScrollStep, SnapPolicy, ViewportFraction,
+};
+pub use page_indicator::{
+    PageIndicator, PageIndicatorState, PageIndicatorStyle, PageIndicatorStyleError,
 };
 pub use page_view::{PageController, PageIntent, PageView, PageViewState};
 pub use refresh_indicator::{

@@ -86,8 +86,35 @@ graph LR
 
 - **T8** — доставка закрытия с защёлкой и `UiRuntime::report_contained_panic` есть. Остаток —
   задача T8 ниже.
-- **T14** — доставка завершения сеанса до `flui-app` есть (`runner/host.rs`,
-  `answer_session_end`). Остаток — задача T14 ниже.
+- **T14** — сделано: S1 (вопрос `CloseReason::SessionEnd` обработчику и guard каждой presentation
+  в слоте, сначала обработчик, потом guard; извлечённый runtime не спрашивается,
+  `RuntimeStatus::checked_out`), S2 (отзыв только
+  записи `SessionEnd`; отказ окна держит блок на запросе до закрытия окна), S3 (уведомление и
+  `Detached` с коммитом композиции, если осталось ≥ 1 с; извлечённому — уведомление в FIFO), S4
+  (размещение окон и `flush_within` от начала
+  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit). У `NotifyOnly` (остановка Android, pagehide в web) приложение остаётся живым: уведомление и flush идут, `Detached` и quit — нет. В web (`pagehide`) только уведомление: синхронного бюджета нет, `std::time::Instant` там паникует.
+  Вето сеанса зависит от `SessionEndSupport` платформы (`Hold` — Windows, macOS, headless;
+  `Delay` — Linux/logind; `NotifyOnly` — Android, iOS, web), а не от cfg. Строки:
+  `a_session_end_query_asks_each_window_guard`,
+  `a_notify_only_session_end_leaves_the_application_running`,
+  `a_refused_session_end_is_released_when_an_earlier_close_carries_out`,
+  `session_end_skips_detached_once_the_notice_spent_the_margin`,
+  `a_repeated_session_end_query_does_not_release_the_session`,
+  `a_slow_observer_stops_the_session_end_delivery`,
+  `a_refused_session_end_is_released_by_an_explicit_close`,
+  `a_window_closed_during_the_query_does_not_hold_the_session`,
+  `a_session_end_handler_panic_with_a_panicking_payload_refuses`,
+  `a_cancelled_logoff_withdraws_only_the_session_entry`,
+  `a_session_end_with_a_checked_out_runtime_calls_no_user_code`,
+  `a_session_end_asks_the_handler_before_the_guard`,
+  `a_refused_session_end_is_released_when_its_window_closes`,
+  `session_end_commits_composition_before_the_flush`,
+  `a_session_end_with_nothing_to_save_proceeds` (quit). Остаток: S5 (разбор realms внутри `Ending`
+  при ≥ 1 с и без извлечённых — сейчас разбор идёт выходом цикла после quit, если процесс жив);
+  строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
+  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
+  persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
+  байты пока нечем.
 
 ## Устаревшие задачи
 

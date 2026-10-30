@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -47,7 +47,7 @@ impl RuntimeDispatcher {
         ))
     }
 
-    #[cfg(all(test, not(target_os = "android")))]
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -572,6 +572,9 @@ fn close_presentation(
 /// would tear down an ENTIRE `WindowPolicy::Shared` group out from under a still-open
 /// sibling window.
 pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
+    // A window that closes no longer holds the session end it refused, however
+    // the close came: its guard, the user, or `request_presentation_close`.
+    super::host::release_session_end_refusal(dispatcher.address);
     if let Err(error) = close_presentation(dispatcher, dispatcher.address.presentation_id) {
         tracing::warn!(?dispatcher, ?error, "close_this_window: dispatch refused");
     }
@@ -646,16 +649,17 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
 pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
-    // The process may be gone before a subscriber has finished: write what the
-    // host itself keeps first.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
-        super::placement::flush_all();
-    }
+    deliver_host_notice_while(notice, || true)
+}
+
+/// [`deliver_host_notice`], starting each runtime's subscribers only while
+/// `may_start` allows: the session's end stops once its margin for application
+/// code is spent, whatever the runtimes before spent. A runtime not started is
+/// counted refused.
+pub(super) fn deliver_host_notice_while(
+    notice: &flui_platform::HostNotice,
+    may_start: impl Fn() -> bool,
+) -> NoticeDelivery {
     // The host's shared memory is reclaimed once, ahead of every runtime's own
     // caches and of every subscriber: the notice reaches subscribers on later
     // owner turns.
@@ -683,6 +687,14 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     });
     let mut outcome = NoticeDelivery::default();
     for dispatcher in dispatchers {
+        if !may_start() {
+            outcome.refused += 1;
+            tracing::warn!(
+                ?dispatcher,
+                "the notice's budget is spent; this runtime hears it no more"
+            );
+            continue;
+        }
         match dispatcher.host_notice(notice.clone()) {
             Ok(flui_runtime::owner::Delivery::Driven) => outcome.ran += 1,
             Ok(_) => outcome.queued += 1,
@@ -694,6 +706,52 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     }
     failure.resume();
     outcome
+}
+
+/// Tell every UI runtime in its slot that the session is ending, as the close
+/// delivery does (ADR-0259 §6, ADR-0260 §3): each presentation commits its
+/// composition and its observers hear `Detached`, so what they publish reaches
+/// the flush after it. A runtime that is checked out runs none of its code; its
+/// composition is lost, a documented limit. A runtime's observers start only
+/// while `margin` is left before `deadline`, whatever the runtimes before it
+/// spent, so the flush keeps the rest. The first panic is contained and
+/// reported by the caller.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: std::time::Duration) {
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        let logical = runtime.installed_host.logical();
+        logical
+            .runtime_ids()
+            .map(|ids| {
+                ids.into_iter()
+                    .filter(|id| {
+                        logical
+                            .runtime_status(*id)
+                            .is_ok_and(|status| !status.checked_out)
+                    })
+                    .map(|id| RuntimeDispatcher { owner_thread, id })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    for dispatcher in dispatchers {
+        if deadline.saturating_duration_since(std::time::Instant::now()) < margin {
+            tracing::warn!(
+                ?dispatcher,
+                "the session end's budget is spent; the remaining windows hear no Detached"
+            );
+            break;
+        }
+        if let Err(error) = dispatcher.lifecycle(AppLifecycleState::Detached) {
+            tracing::debug!(?dispatcher, ?error, "session-end close not delivered");
+        }
+    }
 }
 
 /// How a system notice reached the UI runtimes: on the spot, queued behind a
