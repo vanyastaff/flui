@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use flui_animation::{Animation, MotionPolicy, SharedCurve, curves};
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Rect, Size};
 use flui_foundation::{Listenable, ListenerId};
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
@@ -37,6 +37,9 @@ pub enum PageIndicatorStyleError {
     /// The gap between dots is not finite or is negative.
     #[error("a page indicator's gap must be finite and not negative, not {0}")]
     Gap(f64),
+    /// The window shows fewer than two dots, which cannot tell one page from the next.
+    #[error("a page indicator's window must show at least two dots, not {0}")]
+    Window(usize),
     /// The window of dots is wider than a finite length.
     #[error("a page indicator's window of dots overflows")]
     Overflow,
@@ -77,8 +80,8 @@ impl PageIndicatorStyle {
     /// # Errors
     ///
     /// [`PageIndicatorStyleError`] when `dot` is not finite and positive, when
-    /// `gap` is not finite and non-negative, or when the window's width
-    /// overflows.
+    /// `gap` is not finite and non-negative, when `window` is under two dots, or when the
+    /// window's width overflows.
     pub fn try_new(
         dot: f64,
         gap: f64,
@@ -86,6 +89,9 @@ impl PageIndicatorStyle {
     ) -> Result<Self, PageIndicatorStyleError> {
         if !dot.is_finite() || dot <= 0.0 {
             return Err(PageIndicatorStyleError::Dot(dot));
+        }
+        if window.get() < 2 {
+            return Err(PageIndicatorStyleError::Window(window.get()));
         }
         if !gap.is_finite() || gap < 0.0 {
             return Err(PageIndicatorStyleError::Gap(gap));
@@ -473,6 +479,11 @@ impl CustomPainter for DotsPainter {
         let before = start.min(1.0);
         let after = (hidden - start).min(1.0);
         let pitch = style.dot + style.gap;
+        // The dots keep to their own strip at the start of whatever box the parent gives,
+        // the strip the tap splits in half, and entering and leaving dots stay inside it.
+        let strip = style.extent(window).width.min(size.width);
+        canvas.save();
+        canvas.clip_rect(Rect::from_ltwh(0.0, 0.0, strip, size.height));
         let cy = size.height / 2.0;
         let last_slot = (window - 1) as f64;
         let first = start.floor() as usize;
@@ -496,13 +507,14 @@ impl CustomPainter for DotsPainter {
             let along = slot * pitch + style.dot / 2.0;
             let cx = match self.direction {
                 TextDirection::Ltr => along,
-                TextDirection::Rtl => size.width - along,
+                TextDirection::Rtl => strip - along,
             };
             let active = (1.0 - (position - page as f64).abs()).clamp(0.0, 1.0);
             let color = Color::lerp(style.inactive, style.active, active);
             let color = color.with_opacity(f64::from(color.opacity()) * fade);
             canvas.draw_circle(Point::new(cx, cy), radius, &Paint::fill(color));
         }
+        canvas.restore();
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {

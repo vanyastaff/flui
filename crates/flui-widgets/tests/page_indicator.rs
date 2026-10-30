@@ -15,7 +15,7 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     ColoredBox, Column, Directionality, Expanded, PageController, PageIndicator,
-    PageIndicatorStyle, PageIndicatorStyleError, PageView, VsyncScope,
+    PageIndicatorStyle, PageIndicatorStyleError, PageView, SizedBox, VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out_animated, pager_alternatives, tight};
@@ -378,5 +378,59 @@ fn a_style_refuses_sizes_that_cannot_be_drawn() {
     assert!(
         PageIndicatorStyle::try_new(f64::MAX / 16.0, 0.0, five).is_ok(),
         "extreme but finite sizes are drawn"
+    );
+    assert_eq!(
+        PageIndicatorStyle::try_new(8.0, 8.0, NonZeroUsize::MIN),
+        Err(PageIndicatorStyleError::Window(1)),
+        "one dot cannot tell one page from the next"
+    );
+}
+
+#[test]
+fn a_box_wider_than_the_dots_keeps_them_and_their_taps_on_the_strip() {
+    let controller = PageController::new();
+    let mut laid = mount(Directionality::new(
+        TextDirection::Rtl,
+        Column::new(vec![
+            Expanded::new(
+                PageView::new(pages(3), pager_alternatives()).controller(controller.clone()),
+            )
+            .boxed(),
+            SizedBox::width(SIDE)
+                .child(PageIndicator::controlled(&controller, 3))
+                .boxed(),
+        ]),
+    ));
+    let xs: Vec<f64> = dots(&laid).iter().map(|dot| dot.x).collect();
+    assert_eq!(xs, [36.0, 20.0, 4.0], "the 40 px strip at the box's start");
+    tap(&mut laid, 4.0);
+    assert_eq!(
+        controller.page(),
+        Some(1.0),
+        "the leftmost dot is the reading end"
+    );
+}
+
+#[test]
+fn dots_sliding_through_the_window_are_clipped_to_the_strip() {
+    let laid = mount(observed(2.5, 20));
+    let drawn = dots(&laid);
+    assert_eq!(
+        drawn.len(),
+        6,
+        "one dot leaving and one entering: {drawn:?}"
+    );
+    let clips: Vec<_> = laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::ClipRect { rect, .. } => Some((rect.width(), rect.height())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        clips,
+        [(72.0, 16.0)],
+        "the five-dot strip, half a gap above and below"
     );
 }
