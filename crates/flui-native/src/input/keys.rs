@@ -57,8 +57,7 @@ mod unplaced;
     x11_host,
     target_os = "windows",
     target_os = "macos",
-    target_arch = "wasm32",
-    test
+    target_arch = "wasm32"
 ))]
 pub(crate) use unplaced::UnplacedKeys;
 
