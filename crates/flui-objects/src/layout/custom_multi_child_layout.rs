@@ -6,7 +6,7 @@
 //! touches children; every child must carry a `LayoutId`/parent-data id; and
 //! the delegate must lay out each child exactly once.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc};
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Size};
@@ -22,13 +22,13 @@ use flui_rendering::{
 /// A multi-child render box whose layout is controlled by a delegate.
 #[derive(Debug, Clone)]
 pub struct RenderCustomMultiChildLayoutBox {
-    delegate: Arc<dyn MultiChildLayoutDelegate>,
+    delegate: Rc<dyn MultiChildLayoutDelegate>,
     child_count: usize,
 }
 
 impl RenderCustomMultiChildLayoutBox {
     /// Creates a custom multi-child layout box.
-    pub fn new(delegate: Arc<dyn MultiChildLayoutDelegate>) -> Self {
+    pub fn new(delegate: Rc<dyn MultiChildLayoutDelegate>) -> Self {
         Self {
             delegate,
             child_count: 0,
@@ -47,9 +47,9 @@ impl RenderCustomMultiChildLayoutBox {
     /// delegate's `should_relayout(old_delegate)` decides.
     pub fn set_delegate(
         &mut self,
-        delegate: Arc<dyn MultiChildLayoutDelegate>,
+        delegate: Rc<dyn MultiChildLayoutDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
-        if Arc::ptr_eq(&self.delegate, &delegate) {
+        if Rc::ptr_eq(&self.delegate, &delegate) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();

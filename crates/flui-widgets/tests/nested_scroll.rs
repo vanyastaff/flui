@@ -1537,7 +1537,7 @@ pub(crate) fn a_run_short_of_the_edge_of_a_long_list_hands_nothing_on() {
                 probe.connection(),
                 Scrollable::new()
                     .controller(controller.clone())
-                    .physics(Arc::new(GlideShort { short_by }))
+                    .physics(Rc::new(GlideShort { short_by }))
                     .child(SizedBox::new(300.0, 5.0e7)),
             ),
         )
@@ -1578,7 +1578,7 @@ pub(crate) fn user_input_preempts_programmatic_scroll() {
         controller.animate_to(
             700.0,
             Duration::from_secs(1),
-            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
         );
         for _ in 0..12 {
             laid.pump_for(SAMPLE);
@@ -1654,7 +1654,7 @@ pub(crate) fn a_participant_declining_programmatic_scrolls_hears_none_of_them() 
         controller.animate_to(
             400.0,
             Duration::from_millis(200),
-            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
         );
         settle(&mut laid);
         assert_eq!(
@@ -1717,7 +1717,7 @@ pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
     for device in DEVICES {
         let (controller, vsync) = (ScrollController::new(), Vsync::new());
         let physics: flui_widgets::SharedScrollPhysics =
-            Arc::new(flui_widgets::BouncingScrollPhysics::new());
+            Rc::new(flui_widgets::BouncingScrollPhysics::new());
         let tree = |probe: &Rc<Probe>| {
             VsyncScope::new(
                 vsync.clone(),
@@ -1780,7 +1780,7 @@ pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
 }
 
 /// An ancestor rebuilt with a fresh physics value mid-drag, as a build that
-/// writes `.physics(Arc::new(..))` does, stays the same link of the drag's
+/// writes `.physics(Rc::new(..))` does, stays the same link of the drag's
 /// chain: the remainder of the list inside it goes on moving it.
 pub(crate) fn a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder() {
     let (outer, inner, vsync) = (
@@ -2866,7 +2866,7 @@ fn list_at_the_top_of_a_bouncing_list(
         vsync.clone(),
         Scrollable::new()
             .controller(outer.clone())
-            .physics(Arc::new(flui_widgets::BouncingScrollPhysics::new()))
+            .physics(Rc::new(flui_widgets::BouncingScrollPhysics::new()))
             .child(content),
     )
     .boxed()
@@ -3263,7 +3263,7 @@ pub(crate) fn shared_connection_hears_a_sequence_once() {
             controller.animate_to(
                 700.0,
                 Duration::from_secs(2),
-                flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+                flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
             );
         }
         laid.pump_for(Duration::from_millis(100));
@@ -3813,7 +3813,7 @@ pub(crate) fn drag_autoscroll_from_past_an_edge_moves_by_its_step() {
     let (controller, vsync) = (ScrollController::new(), Vsync::new());
     let tree = VsyncScope::new(
         vsync.clone(),
-        list(&controller).physics(Arc::new(flui_widgets::BouncingScrollPhysics::new())),
+        list(&controller).physics(Rc::new(flui_widgets::BouncingScrollPhysics::new())),
     )
     .boxed();
     let laid = mounted(tree, vsync);

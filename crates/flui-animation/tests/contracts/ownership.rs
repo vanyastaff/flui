@@ -68,7 +68,7 @@ fn vsync_admission_contract() {
 }
 
 fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
-    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionOverride, MotionSpec};
+    use flui_animation::{AnimatedValue, MotionClock, MotionOverride, MotionSpec, SharedCurve};
     let normal = Vsync::new();
     let reduced = Vsync::new();
     let child = Vsync::new();
@@ -81,7 +81,7 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_secs(1),
-            curve: ArcCurve::new(curves::EASE_IN_OUT),
+            curve: SharedCurve::new(curves::EASE_IN_OUT),
         },
         Some(&child),
     )

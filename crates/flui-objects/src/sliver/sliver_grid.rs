@@ -48,7 +48,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
@@ -162,18 +162,17 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 /// # Construction
 ///
 /// ```ignore
-/// use std::sync::Arc;
 /// use flui_objects::RenderSliverGrid;
 /// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 ///
 /// let grid = RenderSliverGrid::new(
-///     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+///     SliverGridDelegateWithFixedCrossAxisCount::new(2),
 ///     50,
 /// );
 /// ```
 pub struct RenderSliverGrid {
     /// Grid layout delegate — controls tile sizes and cross-axis count.
-    grid_delegate: Arc<dyn SliverGridDelegate>,
+    grid_delegate: Rc<dyn SliverGridDelegate>,
     /// Total known item count.
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
@@ -245,7 +244,18 @@ impl RenderSliverGrid {
     /// Creates a new lazy grid sliver driven by `grid_delegate` over
     /// `item_count` items.
     #[must_use]
-    pub fn new(grid_delegate: Arc<dyn SliverGridDelegate>, item_count: usize) -> Self {
+    pub fn new(grid_delegate: impl SliverGridDelegate + 'static, item_count: usize) -> Self {
+        Self::with_shared_delegate(Rc::new(grid_delegate), item_count)
+    }
+
+    /// [`Self::new`] over a delegate its view already shares, so a later
+    /// [`set_grid_delegate`](Self::set_grid_delegate) with the same handle
+    /// keeps its identity.
+    #[must_use]
+    pub fn with_shared_delegate(
+        grid_delegate: Rc<dyn SliverGridDelegate>,
+        item_count: usize,
+    ) -> Self {
         Self {
             grid_delegate,
             item_count,
@@ -280,7 +290,7 @@ impl RenderSliverGrid {
     /// requires layout; otherwise `should_relayout` is authoritative.
     pub fn set_grid_delegate(
         &mut self,
-        new_delegate: Arc<dyn SliverGridDelegate>,
+        new_delegate: Rc<dyn SliverGridDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
         let type_changed = new_delegate.as_any().type_id() != self.grid_delegate.as_any().type_id();
         let impact = if type_changed || new_delegate.should_relayout(&*self.grid_delegate) {

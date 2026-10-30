@@ -123,7 +123,7 @@ mod harness_snapshot;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use flui_animation::curve::ArcCurve;
+use flui_animation::curve::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
@@ -995,8 +995,8 @@ fn custom_single_child_delegate(
     size: Size,
     child_constraints: BoxConstraints,
     offset: Offset,
-) -> Arc<dyn SingleChildLayoutDelegate> {
-    Arc::new(HarnessSingleChildLayoutDelegate::new(
+) -> Rc<dyn SingleChildLayoutDelegate> {
+    Rc::new(HarnessSingleChildLayoutDelegate::new(
         size,
         child_constraints,
         offset,
@@ -1047,8 +1047,8 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
     }
 }
 
-fn custom_multi_child_delegate(size: Size) -> Arc<dyn MultiChildLayoutDelegate> {
-    Arc::new(HarnessMultiChildLayoutDelegate::new(size))
+fn custom_multi_child_delegate(size: Size) -> Rc<dyn MultiChildLayoutDelegate> {
+    Rc::new(HarnessMultiChildLayoutDelegate::new(size))
 }
 
 fn multi_child_layout_parent_data(id: &str) -> MultiChildLayoutParentData {
@@ -1078,7 +1078,7 @@ fn fixed_extent_list(item_extent: f64, children: Vec<TreeNode>) -> TreeNode {
 /// A request-strategy grid over `children`, each seeded with the logical
 /// index of its position — the parent data the element tree would have
 /// stamped at adoption.
-fn grid_list(delegate: Arc<dyn SliverGridDelegate>, children: Vec<TreeNode>) -> TreeNode {
+fn grid_list(delegate: impl SliverGridDelegate + 'static, children: Vec<TreeNode>) -> TreeNode {
     let count = children.len();
     let mut node = sliver_node(RenderSliverGrid::new(delegate, count));
     for (index, child) in children.into_iter().enumerate() {
@@ -3538,7 +3538,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
         for force_layer in [false, true] {
             let mut config = labelled("Static fade content");
             config.set_role(SemanticsRole::Button);
-            config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
             let child = box_node(
                 RenderSemanticsAnnotations::from_configuration(config).with_container(true),
             )
@@ -3611,7 +3611,7 @@ fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
     };
     let mut config = labelled("Offstage sliver content");
     config.set_role(SemanticsRole::Button);
-    config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
     let mut run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
             .label("offstage")
@@ -5666,7 +5666,7 @@ fn harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions()
             region.config.set_role(SemanticsRole::Button);
             region.config.add_action(
                 SemanticsAction::Click,
-                Arc::new(move |_| {
+                std::rc::Rc::new(move |_| {
                     calls.fetch_add(1, Ordering::Relaxed);
                 }),
             );
@@ -5884,7 +5884,7 @@ impl CustomPainter for CapturingRegionPainter {
                 let key = if self.duplicate { 1 } else { index as u64 + 1 };
                 let mut region = semantic_region(key, "Draft region", index as f64);
                 let handler: flui_rendering::semantics::SemanticsActionHandler =
-                    Arc::new(move |_| {
+                    std::rc::Rc::new(move |_| {
                         std::hint::black_box(&capture);
                     });
                 if self.custom {
@@ -5932,7 +5932,7 @@ impl RenderBox for CapturingSemanticsMerge {
             };
             config.add_action(
                 flui_rendering::semantics::SemanticsAction::Click,
-                Arc::new(move |_| {
+                std::rc::Rc::new(move |_| {
                     std::hint::black_box(&capture);
                 }),
             );
@@ -6086,7 +6086,7 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
     first.config.set_role(SemanticsRole::Button);
     first.config.add_action(
         SemanticsAction::Click,
-        Arc::new(move |_| {
+        std::rc::Rc::new(move |_| {
             count.fetch_add(1, Ordering::Relaxed);
         }),
     );
@@ -6212,7 +6212,7 @@ fn harness_custom_paint_regions_obey_merge_exclude_and_action_blocking() {
         region.config.set_role(SemanticsRole::Button);
         region
             .config
-            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            .add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
         let painter = Rc::new(RegionPainter {
             regions: Rc::new(std::cell::RefCell::new(vec![region])),
             size: Rc::new(Cell::new(Size::ZERO)),
@@ -8008,7 +8008,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     // successful pass" this test's assertions must survive back to.
     let mut run = RenderTester::mount(viewport(
         grid_list(
-            Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2)),
+            SliverGridDelegateWithFixedCrossAxisCount::new(2),
             vec![
                 box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"),
                 box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"),
@@ -8042,7 +8042,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     // render object's own state is at risk, which is what the rest of this
     // test verifies directly).
     run.update::<RenderSliverGrid>(grid_id, |grid| {
-        let impact = grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
+        let impact = grid.set_grid_delegate(Rc::new(ZeroCrossAxisCountDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
     let result = run.owner_mut().run_layout();
@@ -8321,10 +8321,8 @@ impl LazySliver {
             }
             Self::Grid => {
                 // Six 50 px columns across the 300 px viewport.
-                let mut grid = RenderSliverGrid::new(
-                    Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(6)),
-                    count,
-                );
+                let mut grid =
+                    RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(6), count);
                 let _ = grid.set_pinned_indices(pinned);
                 sliver_node(grid)
             }
@@ -8408,7 +8406,7 @@ fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
                 let mut revealing = SemanticsConfiguration::new();
                 revealing.add_action(
                     flui_rendering::semantics::SemanticsAction::ScrollIntoView,
-                    Arc::new(|_| {}),
+                    Rc::new(|_| {}),
                 );
                 let scrollable =
                     box_node(RenderSemanticsAnnotations::from_configuration(revealing))
@@ -8661,8 +8659,7 @@ fn harness_sliver_list_placement_slides_moved_children_into_place() {
 fn harness_sliver_grid_placement_slides_tiles_between_cells() {
     let (clock, driver, motion) = placement_clock();
     let slots = placement_slots(2);
-    let delegate: Arc<dyn SliverGridDelegate> =
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
+    let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(2);
     let mut grid = RenderSliverGrid::new(delegate, 2);
     let _ = grid.set_placement(Some(&Placement::new(
         clock.clone(),
@@ -10019,7 +10016,7 @@ fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
         config.set_role(SemanticsRole::Button);
         config.add_action(
             flui_rendering::semantics::SemanticsAction::Click,
-            Arc::new(|_| {}),
+            std::rc::Rc::new(|_| {}),
         );
         box_node(RenderSemanticsAnnotations::from_configuration(config).with_container(true))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)))
@@ -10553,7 +10550,7 @@ fn animated_size_motion() -> (SizeMotion, Vsync, MotionClock) {
     let registry = Vsync::new();
     let motion = MotionSpec::Curve {
         duration: Duration::from_millis(100),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     (
         SizeMotion::new(motion, Some(&registry)),
@@ -10816,7 +10813,7 @@ fn armed_motion() -> (MotionSpec, Arc<std::sync::atomic::AtomicBool>) {
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(ArmedCurve(Arc::clone(&armed))),
+        curve: SharedCurve::new(ArmedCurve(Arc::clone(&armed))),
     };
     (motion, armed)
 }

@@ -2,6 +2,7 @@
 //! by which two configurations share a node or merge into one (ADR-0206).
 
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
@@ -65,14 +66,14 @@ impl std::fmt::Debug for DeclaredCustomAction<'_> {
 /// # Example
 ///
 /// ```
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
 ///
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
 /// config.set_role(SemanticsRole::Button);
-/// config.add_action(SemanticsAction::Click, Arc::new(|_| {
+/// config.add_action(SemanticsAction::Click, Rc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
 /// ```
@@ -145,7 +146,7 @@ impl PartialEq for SemanticsConfiguration {
                 other
                     .actions
                     .get(action)
-                    .is_some_and(|other_handler| Arc::ptr_eq(handler, other_handler))
+                    .is_some_and(|other_handler| Rc::ptr_eq(handler, other_handler))
             });
 
         self.has_reveal_ancestor == other.has_reveal_ancestor
@@ -163,7 +164,7 @@ impl PartialEq for SemanticsConfiguration {
                 .custom_handlers
                 .iter()
                 .zip(&other.custom_handlers)
-                .all(|((a_id, a), (b_id, b))| a_id == b_id && Arc::ptr_eq(a, b))
+                .all(|((a_id, a), (b_id, b))| a_id == b_id && Rc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -1577,7 +1578,7 @@ impl SemanticsConfiguration {
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
             if (action.value() & effective_other_actions) != 0 {
-                self.actions.insert(*action, Arc::clone(handler));
+                self.actions.insert(*action, Rc::clone(handler));
             }
         }
         // Custom actions append, each with its own handler, so the
@@ -1591,7 +1592,7 @@ impl SemanticsConfiguration {
                 other
                     .custom_handlers
                     .iter()
-                    .map(|(id, handler)| (*id, Arc::clone(handler))),
+                    .map(|(id, handler)| (*id, Rc::clone(handler))),
             );
         }
 
@@ -1834,18 +1835,18 @@ mod tests {
         assert_compatibility_is_symmetric(&label_a, &label_b, true);
 
         let mut tap = SemanticsConfiguration::new();
-        tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        tap.add_action(SemanticsAction::Click, Rc::new(|_| {}));
         let mut long_press = SemanticsConfiguration::new();
-        long_press.add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
+        long_press.add_action(SemanticsAction::ShowContextMenu, Rc::new(|_| {}));
         let mut another_tap = SemanticsConfiguration::new();
-        another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        another_tap.add_action(SemanticsAction::Click, Rc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
         // Custom actions each carry their own handler: two sets share a node.
         let mut archive = SemanticsConfiguration::new();
-        archive.add_custom_action("Archive", Arc::new(|_| {}));
+        archive.add_custom_action("Archive", Rc::new(|_| {}));
         let mut delete = SemanticsConfiguration::new();
-        delete.add_custom_action("Delete", Arc::new(|_| {}));
+        delete.add_custom_action("Delete", Rc::new(|_| {}));
         assert_compatibility_is_symmetric(&archive, &delete, true);
 
         let mut selected_a = SemanticsConfiguration::new();
@@ -1969,7 +1970,7 @@ mod tests {
                 let ran = Arc::clone(&ran);
                 config.add_custom_action(
                     label,
-                    Arc::new(move |_| ran.lock().expect("log").push((side, label))),
+                    Rc::new(move |_| ran.lock().expect("log").push((side, label))),
                 );
             }
             config
@@ -2028,8 +2029,8 @@ mod tests {
     #[test]
     fn removing_the_custom_action_removes_every_one() {
         let mut config = SemanticsConfiguration::new();
-        config.add_custom_action("Archive", Arc::new(|_| {}));
-        config.add_custom_action("Pin", Arc::new(|_| {}));
+        config.add_custom_action("Archive", Rc::new(|_| {}));
+        config.add_custom_action("Pin", Rc::new(|_| {}));
         config.remove_action(SemanticsAction::CustomAction);
         assert!(!config.has_action(SemanticsAction::CustomAction));
         assert_eq!(config.custom_actions().count(), 0);
@@ -2043,7 +2044,7 @@ mod tests {
         let mut config = SemanticsConfiguration::new();
         config.set_focusable(true);
         assert!(config.is_focus_state_only());
-        config.add_custom_action("Archive", Arc::new(|_| {}));
+        config.add_custom_action("Archive", Rc::new(|_| {}));
         assert!(!config.is_focus_state_only());
     }
 
@@ -2374,7 +2375,7 @@ mod tests {
     fn a_blocked_node_keeps_only_blur() {
         for &action in SemanticsAction::ALL {
             let mut config = SemanticsConfiguration::new();
-            config.add_action(action, Arc::new(|_| {}));
+            config.add_action(action, Rc::new(|_| {}));
             config.set_blocks_user_actions(true);
 
             let expected = if action == SemanticsAction::Blur {

@@ -17,7 +17,7 @@
 //!   `Scrollable`'s drag `on_end` notes this explicitly.
 //! - Parent-physics chaining (`ScrollPhysics.parent`) — not yet wired.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_animation::simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
@@ -227,7 +227,7 @@ impl From<&ScrollPosition> for ScrollMetrics {
 /// `apply_boundary_conditions` returns the _allowed position_ (not the rejected
 /// overshoot), which is ergonomically simpler for a callback-driven update
 /// model.
-pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
+pub trait ScrollPhysics: std::fmt::Debug {
     /// Return the position the scroller should move to given a `proposed_pixels`
     /// offset in the context of `metrics`.
     ///
@@ -272,8 +272,8 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
 
 /// Shared, type-erased physics handle.
 ///
-/// Cloning the `Arc` is cheap; the physics object itself is stateless.
-pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
+/// Cloning the `Rc` is cheap; the physics object itself is stateless.
+pub type SharedScrollPhysics = Rc<dyn ScrollPhysics>;
 
 // ---------------------------------------------------------------------------
 // ClampingScrollPhysics — Android-style hard clamp

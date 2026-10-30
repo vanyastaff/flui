@@ -109,7 +109,7 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
 - [x] T1 — #1496
 - [x] T6a — #1523, #1539
 - [x] T6b — #1523 (ADR-0178)
-- [ ] T3 — путь записи, остаток. Ветка `send-flip/write-path`, PR #1956, ждёт CI и слияния.
+- [x] T3 — путь записи, остаток (#1956).
   - Сделано: `impl WriteTarget for Reactive` удалён; `BuildContext::reactive` заменён скрытым
     `graph(CrateToken)`; `BuildOwner::reactive` стал `pub(crate)`, добавлены
     `BuildOwner::writer_source` и `writer_source_for(slot)`; `HeadlessBinding::reactive` →
@@ -152,7 +152,18 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
       `nested_write_panics_inside_an_event_cx`;
     - trybuild `flui-view` (`signal_write_through_build_context` + `ctx.reactive()`, новая
       `signal_write_through_the_graph`) прогнан локально, `.stderr` пересняты.
-- [ ] T10 — остаток flip
+- [ ] T10 — остаток flip: PR #1962.
+  Сняты все позиции строки T10. Отличия от строки: `ArcCurve` держит кривую в `Rc` и
+  переименован в `SharedCurve`; `SnapPolicy` остаётся `Send + Sync` (ADR-0209 §9, §10);
+  `PhysicalClipShape`/`PhysicalClipSource` снаружи крейта не видны (модуль `proxy` их не
+  реэкспортирует), закреплять нечего; у сетки общий делегат остаётся `Rc<dyn …>` в
+  `RenderSliverGrid::{with_shared_delegate, set_grid_delegate}` и `SliverGrid::over`, по значению
+  его берут `new`/`list`/`GridView::builder`/`AnimatedGrid::new`; `flui::rendering` экспортирует
+  `HitMetadata`. Тесты: `owner_local_values_fit_every_flip_position` в
+  `tests/facade_consumer.rs` (через `flui` и `flui-sdk`),
+  `owner_local_values_fit_hit_metadata_and_semantics_actions` и закрепления `!Send` в
+  `flui-widgets`, `flui-interaction`, `flui-animation`; trybuild
+  `owner_values_stay_on_their_thread`.
 - [ ] T11 — отказ мутации контроллеров во время `build`
 - [ ] T9 — `TextEditingController`
 - [ ] T2 — gate

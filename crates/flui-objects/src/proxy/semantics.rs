@@ -12,7 +12,6 @@ use flui_rendering::{
     view::{ScrollPosition, ViewportOffset},
 };
 use std::rc::Rc;
-use std::sync::Arc;
 
 struct ScrollSubscription {
     position: ScrollPosition,
@@ -99,7 +98,7 @@ impl Drop for RefreshSubscription {
 ///
 /// A widget whose action handlers are owner-local closures keeps them in the
 /// owner's interaction lane under `target`, and advertises each action in the
-/// configuration through one `Send + Sync` `handler` that resolves `target`
+/// configuration through one shared `handler` that resolves `target`
 /// when the action is invoked. The render object stores the pair so a rebuild
 /// can replace the lane payload under the same ticket and reuse the same
 /// `handler`, which keeps the configuration comparing equal.
@@ -194,7 +193,7 @@ impl RenderSemanticsAnnotations {
             && self.custom_actions.len() == actions.len()
             && self.custom_actions.iter().zip(&actions).all(|(old, new)| {
                 old.label == new.label
-                    && std::sync::Arc::ptr_eq(&old.handler, &new.handler)
+                    && std::rc::Rc::ptr_eq(&old.handler, &new.handler)
                     && old.is_offered() == new.is_offered()
             });
         self.custom_base = custom_base;
@@ -476,7 +475,7 @@ impl RenderBox for RenderSemanticsAnnotations {
                 config.add_custom_action_as(
                     CustomActionId::at(self.custom_base + index),
                     action.label.as_str(),
-                    Arc::clone(&action.handler),
+                    std::rc::Rc::clone(&action.handler),
                 );
             }
         }

@@ -223,7 +223,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
                 RepaintBoundary::new().child(
                     CustomPaint::new()
                         .size(Size::new(SIDE, SIDE))
-                        .painter(std::rc::Rc::new(painter)),
+                        .painter(painter),
                 ),
             )
     }

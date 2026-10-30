@@ -64,7 +64,7 @@ pub struct GridView {
     scroll_direction: Axis,
     offset_source: OffsetSource,
     shrink_wrap: bool,
-    grid_delegate: Arc<dyn SliverGridDelegate>,
+    grid_delegate: Rc<dyn SliverGridDelegate>,
     /// Children for the static variants ([`GridView::count`],
     /// [`GridView::extent`]). Empty in the lazy variant.
     /// The static children as handed in — a shared delegate, so a `GridView`
@@ -96,7 +96,7 @@ impl GridView {
             scroll_direction: Axis::Vertical,
             offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
-            grid_delegate: Arc::new(delegate),
+            grid_delegate: Rc::new(delegate),
             children: StaticChildren::new(children.into_boxed_vec()),
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
@@ -119,7 +119,7 @@ impl GridView {
             scroll_direction: Axis::Vertical,
             offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
-            grid_delegate: Arc::new(delegate),
+            grid_delegate: Rc::new(delegate),
             children: StaticChildren::new(children.into_boxed_vec()),
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
@@ -136,7 +136,7 @@ impl GridView {
     /// the tile view, or `None` when the index is at or past the end of the
     /// data source.
     pub fn builder<F>(
-        grid_delegate: Arc<dyn SliverGridDelegate>,
+        grid_delegate: impl SliverGridDelegate + 'static,
         item_count: usize,
         builder: F,
     ) -> Self
@@ -147,7 +147,7 @@ impl GridView {
             scroll_direction: Axis::Vertical,
             offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
-            grid_delegate,
+            grid_delegate: Rc::new(grid_delegate),
             children: StaticChildren::new(Vec::new()),
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
@@ -273,8 +273,8 @@ impl StatelessView for GridView {
                 Rc::clone(&delegate.builder)
             };
             named({
-                let sliver = SliverGrid::new(
-                    Arc::clone(&self.grid_delegate),
+                let sliver = SliverGrid::with_config(
+                    Rc::clone(&self.grid_delegate),
                     delegate.item_count,
                     builder,
                 );
@@ -301,7 +301,7 @@ impl StatelessView for GridView {
             } else {
                 Rc::clone(&self.children)
             };
-            named(SliverGrid::over(Arc::clone(&self.grid_delegate), &children)).boxed()
+            named(SliverGrid::over(Rc::clone(&self.grid_delegate), &children)).boxed()
         };
 
         if self.shrink_wrap {

@@ -143,7 +143,6 @@
 //! together.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use flui_sdk::foundation::ElementId;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
@@ -654,10 +653,10 @@ impl ViewState<Scaffold> for ScaffoldState {
                 media_query.view_padding.bottom
             };
 
-        let delegate: Arc<dyn MultiChildLayoutDelegate> = Arc::new(ScaffoldLayoutDelegate {
+        let delegate = ScaffoldLayoutDelegate {
             min_insets,
             min_view_padding_bottom,
-        });
+        };
 
         ScaffoldScope {
             handle: self.handle.clone(),

@@ -631,7 +631,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
     let selected = Rc::new(Cell::new(0));
     let opacity = Rc::new(Cell::new(1.0));
     let notifier = Rc::new(ChangeNotifier::new());
-    let view = |delegate: Rc<dyn FlowDelegate>| {
+    let view = |delegate: Delegate| {
         Flow::new(
             delegate,
             (
@@ -647,11 +647,11 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         )
     };
     let mut laid = lay_out(
-        view(Rc::new(Delegate {
+        view(Delegate {
             selected: selected.clone(),
             opacity: opacity.clone(),
             notifier: notifier.clone(),
-        })),
+        }),
         loose(100.0),
     );
     laid.enable_semantics();
@@ -672,11 +672,11 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         assert_eq!(tree.find_by_label("first flow child").is_ok(), alpha > 0.0);
         assert!(tree.find_by_label("second flow child").is_err());
     }
-    laid.pump_widget(view(Rc::new(Delegate {
+    laid.pump_widget(view(Delegate {
         selected: Rc::new(Cell::new(1)),
         opacity: Rc::new(Cell::new(1.0)),
         notifier: Rc::new(ChangeNotifier::new()),
-    })));
+    }));
     assert_eq!(
         notifier.len(),
         0,
@@ -722,10 +722,10 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
     let view = |width, label, rebuild_semantics| {
         CustomPaint::new()
             .size(Size::new(width, 20.0))
-            .painter(Rc::new(Painter {
+            .painter(Painter {
                 label,
                 rebuild_semantics,
-            }))
+            })
     };
     let mut laid = lay_out(view(40.0, "first", true), loose(200.0));
     laid.enable_semantics();

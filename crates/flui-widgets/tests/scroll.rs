@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{ArcCurve, Vsync, curves};
+use flui_animation::{SharedCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
@@ -352,7 +352,7 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
         .update_dimensions(300.0, 0.0, 500.0)
         .expect("ordered extents");
 
-    let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::default());
+    let physics: SharedScrollPhysics = Rc::new(ClampingScrollPhysics::default());
     let widget = Scrollable::new()
         .controller(controller.clone())
         .physics(physics)
@@ -594,7 +594,7 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
 
-    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
     let vsync = Vsync::new();
     let widget = Scrollable::new()
         .controller(controller.clone())
@@ -654,7 +654,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         1000.0,
         Duration::from_secs(1),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
@@ -668,7 +668,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         target,
         Duration::from_secs(1),
-        ArcCurve::new(curves::EASE_IN),
+        SharedCurve::new(curves::EASE_IN),
     );
     assert!((controller.pixels() - seam).abs() < 1e-12);
     assert!(controller.position().is_scrolling());
@@ -700,7 +700,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -796,7 +796,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             controller.animate_to(
                 100.0,
                 Duration::from_secs(1),
-                ArcCurve::new(RetiringCurve {
+                SharedCurve::new(RetiringCurve {
                     drops: Arc::clone(&drops),
                     fails: retirement_fails,
                 }),
@@ -825,7 +825,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                     controller.animate_to(
                         200.0,
                         Duration::from_secs(1),
-                        ArcCurve::new(curves::LINEAR),
+                        SharedCurve::new(curves::LINEAR),
                     );
                 }
             }));
@@ -868,7 +868,11 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
                 "mounted consumer keeps accepted command"
             );
             controller.jump_to(75.0);
-            controller.animate_to(280.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            controller.animate_to(
+                280.0,
+                Duration::from_secs(1),
+                SharedCurve::new(curves::LINEAR),
+            );
             laid.pump_for(Duration::ZERO);
             laid.pump_for(Duration::from_millis(400));
             assert!(
@@ -894,7 +898,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
         controller.animate_to(
             1000.0,
             Duration::from_secs(1),
-            ArcCurve::new(curves::LINEAR),
+            SharedCurve::new(curves::LINEAR),
         );
         laid.pump_for(Duration::ZERO);
         laid.pump_for(Duration::from_millis(200));
@@ -915,7 +919,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
                         reentry.animate_to(
                             275.0,
                             Duration::from_secs(1),
-                            ArcCurve::new(curves::LINEAR),
+                            SharedCurve::new(curves::LINEAR),
                         );
                     }
                 }
@@ -966,7 +970,11 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
             if jumps {
                 controller.jump_to(325.0);
             } else {
-                controller.animate_to(275.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+                controller.animate_to(
+                    275.0,
+                    Duration::from_secs(1),
+                    SharedCurve::new(curves::LINEAR),
+                );
             }
         }
     }
@@ -988,7 +996,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                 controller.animate_to(
                     100.0,
                     Duration::from_secs(1),
-                    ArcCurve::new(ReentrantCurve(Arc::clone(&drops))),
+                    SharedCurve::new(ReentrantCurve(Arc::clone(&drops))),
                 );
                 if let Some(laid) = &mut mounted_scene {
                     laid.pump_for(Duration::ZERO);
@@ -1005,7 +1013,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
                     controller.animate_to(
                         200.0,
                         Duration::from_secs(1),
-                        ArcCurve::new(curves::LINEAR),
+                        SharedCurve::new(curves::LINEAR),
                     );
                 }
                 assert_eq!(
@@ -1121,7 +1129,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -1157,7 +1165,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -2469,7 +2477,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2485,7 +2493,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2510,7 +2518,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2601,7 +2609,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(curves::LINEAR),
+        SharedCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
@@ -2655,7 +2663,7 @@ pub(crate) fn cancelling_bouncing_overscroll_settles_without_release_velocity() 
             vsync.clone(),
             Scrollable::new()
                 .controller(scroll.clone())
-                .physics(Arc::new(BouncingScrollPhysics::new()))
+                .physics(Rc::new(BouncingScrollPhysics::new()))
                 .child(SizedBox::new(300.0, 800.0)),
         ),
         tight(300.0, 300.0),
@@ -2727,7 +2735,7 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
     controller
         .update_dimensions(300.0, 0.0, 4700.0)
         .expect("ordered extents");
-    let recording = Arc::new(RecordingPhysics::default());
+    let recording = Rc::new(RecordingPhysics::default());
     let physics: SharedScrollPhysics = recording.clone();
     let widget = Scrollable::new()
         .controller(controller)
@@ -2880,7 +2888,7 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     controller
         .update_dimensions(300.0, 0.0, max_extent)
         .expect("ordered extents");
-    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
     let widget = Scrollable::new()
         .controller(controller.clone())
         .physics(physics)
@@ -2946,8 +2954,8 @@ pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
 /// and comes back.
 pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
     let physics: [(SharedScrollPhysics, bool); 2] = [
-        (Arc::new(ClampingScrollPhysics::new()), false),
-        (Arc::new(BouncingScrollPhysics::new()), true),
+        (Rc::new(ClampingScrollPhysics::new()), false),
+        (Rc::new(BouncingScrollPhysics::new()), true),
     ];
     for (physics, bounces) in physics {
         let controller = ScrollController::new();
@@ -3049,7 +3057,7 @@ fn fling_rebuilt_as_the_end_moves_in(
     let (controller, vsync) = (ScrollController::new(), Vsync::new());
     let height = Rc::new(Cell::new(5300.0));
     let resized = Rc::new(flui_foundation::ChangeNotifier::new());
-    let first = Arc::clone(&physics);
+    let first = Rc::clone(&physics);
     let mut laid = crate::common::lay_out_animated(
         resizable_list(&controller, &height, &resized, &vsync, |list| {
             list.physics(first)
@@ -3085,8 +3093,8 @@ fn fling_rebuilt_as_the_end_moves_in(
 /// progress its simulation.
 pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
     let frames = fling_rebuilt_as_the_end_moves_in(
-        Arc::new(BouncingScrollPhysics::new()),
-        Arc::new(ClampingScrollPhysics::new()),
+        Rc::new(BouncingScrollPhysics::new()),
+        Rc::new(ClampingScrollPhysics::new()),
     );
     let past = frames
         .iter()
@@ -3150,7 +3158,7 @@ pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
     let resized = Rc::new(flui_foundation::ChangeNotifier::new());
     let mut laid = crate::common::lay_out_animated(
         resizable_list(&controller, &height, &resized, &vsync, |list| {
-            list.physics(Arc::new(JumpingPhysics))
+            list.physics(Rc::new(JumpingPhysics))
         }),
         tight(300.0, 300.0),
         vsync.clone(),
@@ -3308,7 +3316,7 @@ pub(crate) fn a_rebuilt_run_keeps_the_mode_its_release_started_in() {
 }
 
 /// A scrollable rebuilt with a fresh physics value every frame, as a build
-/// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
+/// that writes `.physics(Rc::new(..))` does, keeps its fling: the run goes
 /// on, bounces past the edge and comes back to rest exactly on it, and a
 /// press after it rests reaches the content as a tap.
 pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
@@ -3319,7 +3327,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
     let taps = Rc::new(Cell::new(0_u32));
     let tree = || {
         let taps = Rc::clone(&taps);
-        let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+        let physics: SharedScrollPhysics = Rc::new(BouncingScrollPhysics::new());
         VsyncScope::new(
             vsync.clone(),
             Scrollable::new()
@@ -3406,7 +3414,7 @@ fn nested_fling_content(
             }));
     }
     if bouncing {
-        child = child.physics(Arc::new(BouncingScrollPhysics::new()));
+        child = child.physics(Rc::new(BouncingScrollPhysics::new()));
     }
     let child = flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(SizedBox::new(200.0, 200.0).child(child));
@@ -3540,9 +3548,9 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     for density_sensitive in [false, true] {
         let (outer, inner) = (ScrollController::new(), ScrollController::new());
         let physics: SharedScrollPhysics = if density_sensitive {
-            Arc::new(HighDensityPhysics)
+            Rc::new(HighDensityPhysics)
         } else {
-            Arc::new(ClampingScrollPhysics::new())
+            Rc::new(ClampingScrollPhysics::new())
         };
         let parent = Scrollable::new()
             .controller(outer.clone())
@@ -4070,7 +4078,7 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         .child(SizedBox::new(200.0, 1000.0));
     let middle_view = Scrollable::new()
         .controller(middle.clone())
-        .physics(Arc::new(BouncingScrollPhysics::new()))
+        .physics(Rc::new(BouncingScrollPhysics::new()))
         .child(flui_widgets::Column::new(vec![
             SizedBox::new(200.0, 800.0).boxed(),
             SizedBox::new(200.0, 200.0).child(leaf).boxed(),
@@ -4720,7 +4728,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
         let parent = Scrollable::new()
             .controller(outer.clone())
-            .physics(Arc::new(FaultPhysics {
+            .physics(Rc::new(FaultPhysics {
                 fail_boundary: Arc::clone(&fail_boundary),
                 fail_drop: Arc::clone(&fail_drop),
             }))
@@ -4823,7 +4831,11 @@ pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
         .add_activity_listener(Rc::new(move || {
             seen.set(Some(writer.write(|cx| signal.set(cx, 1))));
         }));
-    controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+    controller.animate_to(
+        100.0,
+        Duration::from_secs(1),
+        SharedCurve::new(curves::LINEAR),
+    );
     assert_eq!(outcome.get(), None, "nothing serves the command yet");
 
     laid.pump_widget(VsyncScope::new(

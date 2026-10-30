@@ -9,7 +9,7 @@
 
 use std::any::Any;
 use std::f64::consts::TAU;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
@@ -189,7 +189,7 @@ impl Waves {
         let level = amplitude.controller().clone();
         let flat = amplitude
             .controller()
-            .subscribe_status(std::rc::Rc::new(move |status| {
+            .subscribe_status(Rc::new(move |status| {
                 let settled = matches!(
                     status,
                     AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
@@ -315,12 +315,12 @@ impl WaveSample {
         self.amplitude.as_ref().map_or(0.0, Animation::value)
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         // The phase runs whenever the indicator moves and ticks with the other controllers,
         // so following it repaints every moving frame.
         self.phase
             .as_ref()
-            .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
+            .map(|controller| Rc::new(controller.clone()) as Rc<dyn Listenable>)
     }
 }
 
@@ -328,14 +328,14 @@ impl WaveSample {
 #[derive(Debug)]
 pub struct LinearWavyProgressIndicatorState {
     waves: Waves,
-    bars: Arc<Bars>,
+    bars: Rc<Bars>,
 }
 
 /// Persistent state for [`CircularWavyProgressIndicator`].
 #[derive(Debug)]
 pub struct CircularWavyProgressIndicatorState {
     waves: Waves,
-    arc: Arc<ActivityArc>,
+    arc: Rc<ActivityArc>,
 }
 
 impl StatefulView for LinearWavyProgressIndicator {
@@ -344,7 +344,7 @@ impl StatefulView for LinearWavyProgressIndicator {
     fn create_state(&self) -> Self::State {
         LinearWavyProgressIndicatorState {
             waves: Waves::new(linear::CYCLE, self.value),
-            bars: Arc::new(Bars::new()),
+            bars: Rc::new(Bars::new()),
         }
     }
 }
@@ -355,7 +355,7 @@ impl StatefulView for CircularWavyProgressIndicator {
     fn create_state(&self) -> Self::State {
         CircularWavyProgressIndicatorState {
             waves: Waves::new(ActivityArc::CYCLE, self.value),
-            arc: Arc::new(ActivityArc::new()),
+            arc: Rc::new(ActivityArc::new()),
         }
     }
 }
@@ -375,7 +375,7 @@ impl ViewState<LinearWavyProgressIndicator> for LinearWavyProgressIndicatorState
         let fraction = sample.fraction;
         let painter = LinearWavePainter {
             sample,
-            bars: Arc::clone(&self.bars),
+            bars: Rc::clone(&self.bars),
             active: colors.primary,
             track: colors.secondary_container,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
@@ -383,7 +383,7 @@ impl ViewState<LinearWavyProgressIndicator> for LinearWavyProgressIndicatorState
         progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
                 .size(Size::new(linear::WIDTH, LINEAR_HEIGHT))
-                .painter(std::rc::Rc::new(painter)),
+                .painter(painter),
         )
     }
 
@@ -415,14 +415,14 @@ impl ViewState<CircularWavyProgressIndicator> for CircularWavyProgressIndicatorS
         let fraction = sample.fraction;
         let painter = CircularWavePainter {
             sample,
-            arc: Arc::clone(&self.arc),
+            arc: Rc::clone(&self.arc),
             active: colors.primary,
             track: colors.secondary_container,
         };
         progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
                 .size(Size::new(CIRCULAR_SIDE, CIRCULAR_SIDE))
-                .painter(std::rc::Rc::new(painter)),
+                .painter(painter),
         )
     }
 
@@ -444,7 +444,7 @@ impl ViewState<CircularWavyProgressIndicator> for CircularWavyProgressIndicatorS
 #[derive(Debug)]
 struct LinearWavePainter {
     sample: WaveSample,
-    bars: Arc<Bars>,
+    bars: Rc<Bars>,
     active: Color,
     track: Color,
     rtl: bool,
@@ -494,7 +494,7 @@ impl CustomPainter for LinearWavePainter {
         true
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.sample.repaint()
     }
 
@@ -508,7 +508,7 @@ impl CustomPainter for LinearWavePainter {
 #[derive(Debug)]
 struct CircularWavePainter {
     sample: WaveSample,
-    arc: Arc<ActivityArc>,
+    arc: Rc<ActivityArc>,
     active: Color,
     track: Color,
 }
@@ -573,7 +573,7 @@ impl CustomPainter for CircularWavePainter {
         true
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.sample.repaint()
     }
 

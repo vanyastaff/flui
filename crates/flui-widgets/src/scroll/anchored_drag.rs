@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationStatus, ArcCurve, ConstantAnimation, ProxyAnimation, StatusObserver,
+    Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, SharedCurve, StatusObserver,
     StatusSubscription,
 };
 use flui_foundation::geometry::{Axis, Offset, Vec2};
@@ -492,7 +492,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
                 inner.scroll.animate_to(
                     target,
                     RESETTLE,
-                    ArcCurve::new(flui_animation::curves::EASE_OUT),
+                    SharedCurve::new(flui_animation::curves::EASE_OUT),
                 );
             } else {
                 inner.scroll.jump_to(target);
@@ -511,7 +511,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         &self,
         key: K,
         duration: Duration,
-        curve: ArcCurve,
+        curve: SharedCurve,
     ) -> Result<(), AnchorsError> {
         let target = self.inner.anchors.borrow().offset(key);
         let target = target.ok_or(AnchorsError::Missing)?;

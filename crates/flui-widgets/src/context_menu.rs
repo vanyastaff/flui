@@ -18,7 +18,6 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
@@ -490,7 +489,7 @@ impl ViewState<MenuPanel> for MenuPanelState {
         ] {
             keys = keys.shortcut(SingleActivator::named(key), step);
         }
-        CustomSingleChildLayout::new(Arc::new(view.placement)).child(
+        CustomSingleChildLayout::new(view.placement).child(
             Semantics::new()
                 .container(true)
                 .role(SemanticsRole::Menu)
