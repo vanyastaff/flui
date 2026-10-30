@@ -1739,8 +1739,10 @@ and writes only what changed between two specs.
 - **The host is part of the canvas's focus area** (`EditorSlot::set_semantics`),
   so focus moving between the canvas, its editor and the host's elements is no
   window focus change. Keys on an element reach the window through
-  `CanvasKeys`. The tree's focus moves the page's focus only when the page's
-  focus is already in the host or was on the placeholder.
+  `CanvasKeys`. The tree's focus moves the page's focus only while the page's
+  focus is the window's, on the canvas or in the host (activating a focused
+  placeholder puts it on the canvas); a focus whose element takes no DOM focus
+  puts it on the canvas.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.

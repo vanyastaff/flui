@@ -21,11 +21,20 @@ export function placeholderLabel() {
 }
 export function activatePlaceholder() { document.querySelector('flui-a11y-placeholder').click(); }
 export function focusPlaceholder() { document.querySelector('flui-a11y-placeholder').focus(); }
+export function focusOutside() {
+    const outside = document.createElement('button');
+    outside.id = 'outside';
+    document.body.append(outside);
+    outside.focus();
+}
+export function removeOutside() { document.getElementById('outside')?.remove(); }
+export function focusCanvas() { document.getElementById('flui-canvas').focus(); }
 // What holds the page's focus: a node's identifier, the canvas, or the tag.
 export function focused() {
     const active = document.activeElement;
     if (!active) return 'nothing';
     if (active.id === 'flui-canvas') return 'canvas';
+    if (active.id === 'outside') return 'outside';
     return active.getAttribute('data-flui-id') ?? active.tagName.toLowerCase();
 }
 // The host's elements as the browser's accessibility tree reads them.
@@ -94,6 +103,12 @@ extern "C" {
     fn activate_placeholder();
     #[wasm_bindgen(js_name = focusPlaceholder)]
     fn focus_placeholder();
+    #[wasm_bindgen(js_name = focusOutside)]
+    fn focus_outside();
+    #[wasm_bindgen(js_name = removeOutside)]
+    fn remove_outside();
+    #[wasm_bindgen(js_name = focusCanvas)]
+    fn focus_canvas();
     fn focused() -> String;
     #[wasm_bindgen(js_name = semanticsTree)]
     fn semantics_tree() -> String;
@@ -259,10 +274,13 @@ fn a_click_on_an_element_reaches_the_action_listener() {
 }
 
 /// A keyboard user who activates the placeholder keeps the page's focus in
-/// the window: on the canvas while the published focus is a node that takes
-/// no DOM focus, on that node's element once one does.
+/// the window, and the window's focus follows the tree's while it is there:
+/// on the canvas while the published focus is a node that takes no DOM
+/// focus, on that node's element once one does, and on the canvas again,
+/// off the element, when the focus returns to the root. Once the page's
+/// focus is elsewhere, the tree's focus never takes it back.
 #[wasm_bindgen_test]
-fn activating_the_focused_placeholder_keeps_focus_in_the_window() {
+fn the_page_s_focus_follows_the_tree_s_while_it_is_in_the_window() {
     let (_platform, window, accessibility) = open();
     accessibility.publish(counter(0));
     focus_placeholder();
@@ -271,15 +289,28 @@ fn activating_the_focused_placeholder_keeps_focus_in_the_window() {
     activate_placeholder();
     assert_eq!(focused(), "canvas", "the root takes no DOM focus");
 
-    accessibility.publish(TreeUpdate {
-        focus: BUTTON,
-        ..counter(1)
-    });
+    let focused_on = |focus, count| {
+        accessibility.publish(TreeUpdate {
+            focus,
+            ..counter(count)
+        });
+        focused()
+    };
+    // Focus that leaves before any node can take it is not taken back.
+    focus_outside();
     assert_eq!(
-        focused(),
-        "increment",
-        "the claim waited for a focusable node"
+        focused_on(BUTTON, 1),
+        "outside",
+        "the page's focus is elsewhere"
     );
+    remove_outside();
+    focus_canvas();
+    assert_eq!(
+        focused_on(BUTTON, 2),
+        "increment",
+        "a focusable node takes it"
+    );
+    assert_eq!(focused_on(ROOT, 3), "canvas", "back on the root");
     window.close_now();
 }
 

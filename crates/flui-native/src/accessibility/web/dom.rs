@@ -176,9 +176,6 @@ struct Page {
     tree: RefCell<Tree>,
     work: RefCell<VecDeque<Work>>,
     running: Cell<bool>,
-    /// The placeholder had the page's focus when it was activated: the
-    /// tree's focus takes it once the tree is mirrored.
-    claim_focus: Cell<bool>,
     /// The composition root was asked for the whole tree after a refused
     /// update and has not answered with one that stands yet.
     asked_again: Cell<bool>,
@@ -205,7 +202,6 @@ impl Page {
             }),
             work: RefCell::default(),
             running: Cell::new(false),
-            claim_focus: Cell::new(false),
             asked_again: Cell::new(false),
         });
         let placeholder = page.placeholder()?;
@@ -411,7 +407,6 @@ impl Page {
         if let Stage::Placeholder(placeholder) = replaced {
             placeholder.element.remove();
         }
-        self.claim_focus.set(placeholder_focused);
         self.place();
         // The tree retained before activation goes first, then what the
         // root publishes when told.
@@ -438,7 +433,10 @@ impl Page {
         let Some(host) = self.host_element() else {
             return;
         };
-        let focus_was_inside = self.holds_focus(&host);
+        // The tree's focus is followed only while the page's focus is the
+        // window's: on the canvas or in the host, before this update removed
+        // an element that held it.
+        let focus_was_in_window = self.holds_focus(&host) || self.canvas_focused();
         let mut focus_moved = false;
         {
             let mut tree = self.tree.borrow_mut();
@@ -452,16 +450,14 @@ impl Page {
             }
         }
         self.place();
-        let follow = self.claim_focus.get() || focus_was_inside;
-        if follow && (focus_moved || !self.holds_focus(&host)) {
+        if focus_was_in_window && (focus_moved || !self.holds_focus(&host)) {
             self.follow_focus();
         }
     }
 
     /// Move the page's focus to the tree's focus. A focus whose element
-    /// takes no DOM focus (a root without `Action::Focus`) leaves the page's
-    /// focus on the canvas, and the claim stands until a later update names
-    /// a node that takes it.
+    /// takes no DOM focus (a root without `Action::Focus`) puts the page's
+    /// focus on the canvas, off any element it was on before.
     fn follow_focus(&self) {
         let element = {
             let tree = self.tree.borrow();
@@ -476,25 +472,27 @@ impl Page {
             if let Err(error) = element.focus_with_options(&unscrolled()) {
                 warn_failure("the focused node's element could not be focused", &error);
             }
-            if self.holds_focus(&element) {
-                self.claim_focus.set(false);
+            let target: &Element = element.as_ref();
+            if self.document.active_element().as_ref() == Some(target) {
                 return;
             }
         }
         self.focus_canvas();
     }
 
-    /// Keep the page's focus in the window: on the canvas, when nothing in
-    /// the host holds it.
+    /// Put the page's focus on the canvas.
     fn focus_canvas(&self) {
-        if let Some(host) = self.host_element()
-            && self.holds_focus(&host)
-        {
+        if self.canvas_focused() {
             return;
         }
         if let Err(error) = self.canvas.focus_with_options(&unscrolled()) {
             warn_failure("the canvas could not be focused", &error);
         }
+    }
+
+    fn canvas_focused(&self) -> bool {
+        let canvas: &Element = self.canvas.as_ref();
+        self.document.active_element().as_ref() == Some(canvas)
     }
 
     /// A `click`, `focusin` or `contextmenu` on an element of the host,
