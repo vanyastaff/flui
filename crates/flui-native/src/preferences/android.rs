@@ -323,7 +323,7 @@ mod configuration {
                 duration_scale_and_haptics,
                 languages_and_contrast,
             )| {
-                let ratio = DevicePixelRatio::new(density)
+                let ratio = DevicePixelRatio::try_new(density)
                     .ok_or(flui_platform::InvalidPreference::PixelRatio)?;
                 let (duration_scale, haptics) = duration_scale_and_haptics.unzip();
                 let (tags, high_contrast) = languages_and_contrast.unzip();
@@ -517,7 +517,7 @@ mod configuration {
                 .f()
                 .map(f64::from)
         })?;
-        DevicePixelRatio::new(density)
+        DevicePixelRatio::try_new(density)
             .ok_or_else(|| flui_platform::InvalidPreference::PixelRatio.into())
     }
 
@@ -558,7 +558,7 @@ mod configuration {
     }
 
     fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQueryError> {
-        NativeTouchGeometry::new(
+        NativeTouchGeometry::try_new(
             reading.touch_slop,
             reading.double_tap_slop,
             reading.min_fling,

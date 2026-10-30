@@ -612,7 +612,7 @@ fn the_page_label_comes_from_the_widgets_localizations() {
 
     let (mut laid, _vsync) = mount_tree(|vsync| {
         Localizations::new(
-            Locale::new("de", None::<&str>).expect("valid German locale"),
+            Locale::try_new("de", None::<&str>).expect("valid German locale"),
             vec![BoxedLocalizationsDelegate::new(GermanDelegate)],
             VsyncScope::new(vsync, PageView::new(pages(3), pager_alternatives())),
         )

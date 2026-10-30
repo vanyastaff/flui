@@ -129,7 +129,7 @@ impl GeometryProjection {
 
 fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
     presentation.renderer().root_pipeline_owner().with(|owner| {
-        DevicePixelRatio::new(owner.device_pixel_ratio())
+        DevicePixelRatio::try_new(owner.device_pixel_ratio())
             .expect("BUG: renderer accepted invalid pixel ratio")
     })
 }
@@ -603,7 +603,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("pan ratio two");
     let profiles = GestureProfiles::from(baseline.clone());
     let old_geometry = GestureGeometry::new(DevicePixelRatio::ONE)
-        .with_touch_slop(Distance::new(2.0).expect("touch slop"));
+        .with_touch_slop(Distance::try_new(2.0).expect("touch slop"));
     let preferences =
         GesturePreferences::default().with_long_press_timeout(Duration::from_millis(200));
     for changed_context in [false, true] {
@@ -618,7 +618,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
                 .is_none()
         );
         if changed_context {
-            state.context = DevicePixelRatio::new(2.0).expect("ratio");
+            state.context = DevicePixelRatio::try_new(2.0).expect("ratio");
         }
         state.pending = Some(QueryDebt {
             barrier: Rc::clone(&state.barrier),
@@ -626,7 +626,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
             delay: Duration::from_millis(100),
         });
         let refused = GestureGeometry::new(state.context)
-            .with_touch_slop(Distance::new(f64::MAX).expect("finite native distance"));
+            .with_touch_slop(Distance::try_new(f64::MAX).expect("finite native distance"));
         assert!(
             state
                 .accept(&profiles, &preferences, Ok(Some(refused)))

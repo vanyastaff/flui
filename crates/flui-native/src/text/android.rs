@@ -207,7 +207,7 @@ pub(crate) mod ime {
             }
             let units: Vec<u16> = state.text.encode_utf16().collect();
             let replaced = diff(&self.units, &units).map(|change| {
-                let range = Utf16Range::new(
+                let range = Utf16Range::try_new(
                     Utf16Offset::new(change.start),
                     Utf16Offset::new(change.old_end),
                 )
@@ -233,7 +233,7 @@ pub(crate) mod ime {
                         at(state.composition_start.min(state.composition_end)),
                         at(state.composition_start.max(state.composition_end)),
                     );
-                    Utf16Range::new(start, end).expect("BUG: ordered offsets make a range")
+                    Utf16Range::try_new(start, end).expect("BUG: ordered offsets make a range")
                 })
                 .filter(|range| !range.is_empty());
             self.units = units;
@@ -1230,7 +1230,8 @@ pub(crate) mod sizing {
                     result
                 })
                 .map_err(native_error)?;
-            flui_foundation::TextSize::new(f64::from(physical) / self.density).map_err(Into::into)
+            flui_foundation::TextSize::try_new(f64::from(physical) / self.density)
+                .map_err(Into::into)
         }
     }
 

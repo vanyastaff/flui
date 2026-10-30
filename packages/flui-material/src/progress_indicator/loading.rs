@@ -102,7 +102,7 @@ fn reach(path: &Path) -> f64 {
 fn morph_spring() -> Result<SpringSimulation, SimulationError> {
     let spring =
         SpringDescription::with_damping_ratio(1.0, SPRING_STIFFNESS, SPRING_DAMPING_RATIO)?;
-    SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
+    SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
 }
 
 /// A Material 3 Expressive loading indicator: a 38 dp shape in a 48 dp square that morphs

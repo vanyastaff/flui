@@ -145,7 +145,7 @@ let controller = AnimationController::builder(Duration::from_millis(300)).build(
 
 // Or with builder for full control
 let controller = AnimationController::builder(duration)
-    .bounds(flui_animation::ValueRange::new(0.0, 1.0)?)
+    .bounds(flui_animation::ValueRange::try_new(0.0, 1.0)?)
     .initial_value(0.5)
     .reverse_duration(Duration::from_millis(200))
     .build();
@@ -216,7 +216,7 @@ controller.repeat(RepeatMode::Restart)?;   // Loop:      0→1, 0→1, ...
 controller.repeat(RepeatMode::Alternate)?; // Alternate: 0→1→0→1→...
 
 // Three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
-let range = ValueRange::new(0.2, 0.8).expect("finite, ordered range");
+let range = ValueRange::try_new(0.2, 0.8).expect("finite, ordered range");
 controller.repeat(
     RepeatSpec::new(RepeatMode::Alternate)
         .with_range(range)
@@ -244,7 +244,7 @@ controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation, oscillating springs included
 let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7).expect("valid spring");
-let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0, Tolerance::DEFAULT)?;
+let sim = SpringSimulation::try_new(bouncy, 0.0, 1.0, 2.0, Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -365,7 +365,7 @@ inputs and NaN follow the normalized `Curve` contract.
 ```rust
 use flui_animation::{Curve, LinearStop, PiecewiseLinear};
 
-let easing = PiecewiseLinear::new(&[
+let easing = PiecewiseLinear::try_new(&[
     LinearStop::new(0.0),
     LinearStop::new(0.5).at(0.25),
     LinearStop::new(0.5).at(0.75),
@@ -383,8 +383,8 @@ Use `MotionSpec::Spring` for physical motion that inherits velocity on retarget.
 ```rust
 use flui_animation::{Keyframes, SpringCurve, SpringDescription, Tolerance};
 
-let easing = SpringCurve::new(
-    SpringDescription::new(1.0, 100.0, 10.0)?, Tolerance::DEFAULT,
+let easing = SpringCurve::try_new(
+    SpringDescription::try_new(1.0, 100.0, 10.0)?, Tolerance::DEFAULT,
 )?;
 let duration = easing.duration();
 let track = Keyframes::builder(0.0, duration)
@@ -695,7 +695,7 @@ use std::time::Duration;
 
 # fn main() -> Result<(), SimulationError> {
 // Explicit parameters: mass, stiffness (k), damping (c), all finite and > 0.
-let physical = SpringDescription::new(1.0, 500.0, 10.0)?;
+let physical = SpringDescription::try_new(1.0, 500.0, 10.0)?;
 
 // Perceptual parameters (SwiftUI's `Spring(duration:bounce:)`).
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
@@ -705,7 +705,7 @@ assert_eq!(perceptual.spring_type(), SpringType::Underdamped);
 let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 assert_eq!(critical.spring_type(), SpringType::CriticallyDamped);
 
-assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
+assert!(SpringDescription::try_new(1.0, 500.0, 0.0).is_err()); // never rests
 # let _ = physical;
 # Ok(())
 # }
@@ -718,7 +718,7 @@ use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
 assert_eq!(sim.x(0.0), 0.0);
 assert!(sim.dx(0.05) > 0.0);
@@ -742,7 +742,7 @@ use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1): the fraction of velocity kept per second.
-let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
+let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
 let rest = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(rest / 2.0) > 0.0);
 assert_eq!(sim.time_at_x(-1.0), f64::INFINITY); // behind the start: never
@@ -763,12 +763,12 @@ use flui_animation::simulation::{
 };
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-let bounds = SimulationBounds::new(0.0, 100.0)?;
+let bounds = SimulationBounds::try_new(0.0, 100.0)?;
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
-let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
+let sim = BouncingScrollSimulation::try_new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
 assert!(sim.is_done(10.0));
 assert_eq!(sim.x(10.0), 100.0);
-assert!(SimulationBounds::new(1.0, 0.0).is_err());
+assert!(SimulationBounds::try_new(1.0, 0.0).is_err());
 # Ok(())
 # }
 ```
@@ -780,11 +780,11 @@ use flui_animation::simulation::Tolerance;
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // Distance and speed limits, in the simulation's units.
-let precise = Tolerance::new(1e-4, 1e-4)?;
+let precise = Tolerance::try_new(1e-4, 1e-4)?;
 // Half a device pixel at a ratio of 2, with a velocity limit derived from
 // the motion's own time scale: what scroll physics use.
 let screen = Tolerance::for_device_pixel_ratio(2.0)?;
-assert_eq!(screen, Tolerance::new(0.25, f64::INFINITY)?);
+assert_eq!(screen, Tolerance::try_new(0.25, f64::INFINITY)?);
 # let _ = precise;
 # Ok(())
 # }
@@ -817,12 +817,12 @@ Controller operations return `Result<_, AnimationError>`:
 ```rust
 use flui_animation::{RangeDefect, ValueRange};
 
-assert_eq!(ValueRange::new(1.0, 0.0), Err(RangeDefect::Inverted));
-assert_eq!(ValueRange::new(f64::NAN, 1.0), Err(RangeDefect::NonFinite));
-assert_eq!(ValueRange::new(-f64::MAX, f64::MAX), Err(RangeDefect::SpanOverflow));
+assert_eq!(ValueRange::try_new(1.0, 0.0), Err(RangeDefect::Inverted));
+assert_eq!(ValueRange::try_new(f64::NAN, 1.0), Err(RangeDefect::NonFinite));
+assert_eq!(ValueRange::try_new(-f64::MAX, f64::MAX), Err(RangeDefect::SpanOverflow));
 ```
 
-`ValueRange::new()` returns the narrow `RangeDefect`, so configuration code
+`ValueRange::try_new()` returns the narrow `RangeDefect`, so configuration code
 can distinguish invalid endpoint data, ordering and span overflow without
 parsing a message. Controller lifetime and admission errors remain separate.
 
@@ -854,10 +854,10 @@ dropping the owner unregisters and cancels the run. A manual controller from
 ## Validation
 
 Simulation constructors return `Err(SimulationError)` on invalid input
-(`SpringDescription::new`, `with_damping_ratio`, `with_duration_and_bounce`,
-`with_response_and_damping`, `SpringSimulation::new`,
-`FrictionSimulation::new`, `BoundedFrictionSimulation::new`,
-`BouncingScrollSimulation::new`, `SimulationBounds::new`, `Tolerance::new`,
+(`SpringDescription::try_new`, `with_damping_ratio`, `with_duration_and_bounce`,
+`with_response_and_damping`, `SpringSimulation::try_new`,
+`FrictionSimulation::try_new`, `BoundedFrictionSimulation::try_new`,
+`BouncingScrollSimulation::try_new`, `SimulationBounds::try_new`, `Tolerance::try_new`,
 `Tolerance::for_device_pixel_ratio`). These constructors, meant for constants,
 panic instead:
 

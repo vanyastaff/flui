@@ -252,10 +252,10 @@ pub(crate) fn a_text_scale_change_relayouts_a_preserved_text_subtree() {
     let exact = |answer| {
         TextSizing::exact([(
             TextSizeRequest {
-                size: TextSize::new(16.0).expect("authored size"),
+                size: TextSize::try_new(16.0).expect("authored size"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(answer).expect("resolved size"),
+            TextSize::try_new(answer).expect("resolved size"),
         )])
         .expect("one exact answer")
     };

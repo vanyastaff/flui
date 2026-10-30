@@ -114,25 +114,25 @@ pub(crate) fn exact_profiles_reach_every_measurement_and_painted_run() {
     use flui_painting::styling::Color;
     use flui_painting::{DrawOp, TextBaseline, TextMeasurement, TextSizing};
     let request = |size, profile| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile,
     };
     let sizing = TextSizing::exact([
         (
             request(14.0, Profile::Body),
-            TextSize::new(24.25).expect("body"),
+            TextSize::try_new(24.25).expect("body"),
         ),
         (
             request(14.0, Profile::Headline),
-            TextSize::new(21.5).expect("headline"),
+            TextSize::try_new(21.5).expect("headline"),
         ),
         (
             request(14.0, Profile::Caption1),
-            TextSize::new(17.75).expect("caption"),
+            TextSize::try_new(17.75).expect("caption"),
         ),
         (
             request(18.25, Profile::Body),
-            TextSize::new(28.125).expect("fractional"),
+            TextSize::try_new(28.125).expect("fractional"),
         ),
     ])
     .expect("consistent capture");
@@ -311,11 +311,11 @@ pub(crate) fn exact_frontier_is_complete_and_does_not_publish_stale_geometry() {
         frontier.requests,
         [
             TextSizeRequest {
-                size: TextSize::new(14.0).expect("default"),
+                size: TextSize::try_new(14.0).expect("default"),
                 profile: Profile::Body
             },
             TextSizeRequest {
-                size: TextSize::new(12.25).expect("caption"),
+                size: TextSize::try_new(12.25).expect("caption"),
                 profile: Profile::Caption1
             },
         ]
@@ -332,7 +332,7 @@ pub(crate) fn exact_frontier_is_complete_and_does_not_publish_stale_geometry() {
         .admit(frontier.requests.iter().copied().map(|request| {
             (
                 request,
-                TextSize::new(request.size.value() * 1.5).expect("answer"),
+                TextSize::try_new(request.size.value() * 1.5).expect("answer"),
             )
         }))
         .expect("consistent answers");
@@ -357,11 +357,17 @@ pub(crate) fn captured_answers_reach_retained_clones_without_reshaping_old_geome
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{DrawOp, TextMeasurement, TextMeasurementError, TextSizing};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
-    let first = (request(14.0), TextSize::new(21.0).expect("first answer"));
-    let second = (request(24.0), TextSize::new(30.5).expect("second answer"));
+    let first = (
+        request(14.0),
+        TextSize::try_new(21.0).expect("first answer"),
+    );
+    let second = (
+        request(24.0),
+        TextSize::try_new(30.5).expect("second answer"),
+    );
     let (sizing, mut admission) = TextSizing::captured();
     admission.admit([first]).expect("initial answers");
     let fonts = flui_painting::FontCollection::new();
@@ -438,7 +444,7 @@ pub(crate) fn captured_live_geometry_rejects_conflicts_after_warm_eviction() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{TextMeasurementError, TextSizing, TextSizingAdmissionError};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     let first = request(14.0);
@@ -452,7 +458,7 @@ pub(crate) fn captured_live_geometry_rejects_conflicts_after_warm_eviction() {
         Err(TextMeasurementError::Pending(_))
     ));
     admission
-        .admit([(first, TextSize::new(21.0).expect("answer"))])
+        .admit([(first, TextSize::try_new(21.0).expect("answer"))])
         .expect("initial answer");
     let mut context = text_cx();
     let mut painter = TextPainter::new()
@@ -466,8 +472,8 @@ pub(crate) fn captured_live_geometry_rejects_conflicts_after_warm_eviction() {
     drop(cohort);
     assert!(matches!(
         admission.admit([
-            (fresh, TextSize::new(30.5).expect("fresh answer")),
-            (first, TextSize::new(28.0).expect("contradiction")),
+            (fresh, TextSize::try_new(30.5).expect("fresh answer")),
+            (first, TextSize::try_new(28.0).expect("contradiction")),
         ]),
         Err(TextSizingAdmissionError::Conflict(_))
     ));
@@ -487,9 +493,9 @@ pub(crate) fn captured_live_geometry_rejects_conflicts_after_warm_eviction() {
         .expect("old paragraph remains authoritative");
     assert_eq!(painter.size(), previous);
     admission
-        .admit([(first, TextSize::new(21.0).expect("same answer"))])
+        .admit([(first, TextSize::try_new(21.0).expect("same answer"))])
         .expect("identical repeat");
-    let sealed = TextSizing::exact([(first, TextSize::new(28.0).expect("other capture"))])
+    let sealed = TextSizing::exact([(first, TextSize::try_new(28.0).expect("other capture"))])
         .expect("independent sealed capture");
     assert_ne!(sealed, sizing);
     painter.set_text_sizing(Some(sealed));
@@ -503,7 +509,7 @@ pub(crate) fn captured_cohorts_converge_beyond_warm_capacity_and_retire_history(
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{TextMeasurement, TextMeasurementError, TextSizing};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
@@ -531,7 +537,10 @@ pub(crate) fn captured_cohorts_converge_beyond_warm_capacity_and_retire_history(
             Err(TextMeasurementError::Pending(_))
         ));
         admission
-            .admit([(request(input), TextSize::new(output).expect("table answer"))])
+            .admit([(
+                request(input),
+                TextSize::try_new(output).expect("table answer"),
+            )])
             .expect("admit frontier");
         assert!(
             TextMeasurement::new(&mut context, &attempt)
@@ -562,7 +571,7 @@ pub(crate) fn captured_cohorts_converge_beyond_warm_capacity_and_retire_history(
         admission
             .admit([(
                 request(authored),
-                TextSize::new(authored + 5.0).expect("fractional answer"),
+                TextSize::try_new(authored + 5.0).expect("fractional answer"),
             )])
             .expect("ongoing animation has no cumulative admission cap");
         let painter = make_painter(authored);
@@ -588,7 +597,7 @@ pub(crate) fn captured_cohorts_do_not_pin_other_attempts_history() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{TextMeasurementError, TextSizing};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
@@ -602,7 +611,7 @@ pub(crate) fn captured_cohorts_do_not_pin_other_attempts_history() {
     admission
         .admit([(
             request(14.0),
-            TextSize::new(21.0).expect("suspended answer"),
+            TextSize::try_new(21.0).expect("suspended answer"),
         )])
         .expect("suspended attempt admission");
     for step in 0..300 {
@@ -616,7 +625,7 @@ pub(crate) fn captured_cohorts_do_not_pin_other_attempts_history() {
         admission
             .admit([(
                 request(authored),
-                TextSize::new(authored + 5.0).expect("active answer"),
+                TextSize::try_new(authored + 5.0).expect("active answer"),
             )])
             .expect("independent attempt admission");
         assert_eq!(
@@ -658,7 +667,7 @@ pub(crate) fn captured_cohorts_do_not_pin_other_attempts_history() {
     admission
         .admit([(
             request(20.25),
-            TextSize::new(28.75).expect("recovery answer"),
+            TextSize::try_new(28.75).expect("recovery answer"),
         )])
         .expect("next attempt after repeated cancellation");
     assert_eq!(
@@ -674,7 +683,7 @@ pub(crate) fn captured_attempts_retain_nested_sources_across_frontiers() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{TextMeasurement, TextMeasurementError, TextSizing};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     let make_painter = |size, policy| {
@@ -699,7 +708,7 @@ pub(crate) fn captured_attempts_retain_nested_sources_across_frontiers() {
         Err(TextMeasurementError::Pending(_))
     ));
     root_writer
-        .admit([(request(10.0), TextSize::new(15.0).expect("root answer"))])
+        .admit([(request(10.0), TextSize::try_new(15.0).expect("root answer"))])
         .expect("root frontier admission");
     TextMeasurement::new(&mut context, &inherited)
         .dry_size(&root, 0.0, 400.0)
@@ -720,7 +729,7 @@ pub(crate) fn captured_attempts_retain_nested_sources_across_frontiers() {
         nested_writer
             .admit([(
                 request(authored),
-                TextSize::new(resolved).expect("nested answer"),
+                TextSize::try_new(resolved).expect("nested answer"),
             )])
             .expect("nested frontier admission");
         let geometry = TextMeasurement::new(&mut context, &inherited)
@@ -751,7 +760,7 @@ pub(crate) fn fixed_and_linear_attempts_retain_multiple_nested_sources() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
     use flui_painting::{TextMeasurement, TextMeasurementError, TextSizing};
     let request = |size| TextSizeRequest {
-        size: TextSize::new(size).expect("authored size"),
+        size: TextSize::try_new(size).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     for root in [
@@ -786,7 +795,10 @@ pub(crate) fn fixed_and_linear_attempts_retain_multiple_nested_sources() {
                 Err(TextMeasurementError::Pending(_))
             ));
             writer
-                .admit([(request(authored), TextSize::new(resolved).expect("answer"))])
+                .admit([(
+                    request(authored),
+                    TextSize::try_new(resolved).expect("answer"),
+                )])
                 .expect("source-specific admission");
             let geometry = TextMeasurement::new(&mut context, &inherited)
                 .dry_size(&painter, 0.0, 400.0)
@@ -837,7 +849,7 @@ pub(crate) fn captured_debug_releases_infrastructure_before_formatter_reentry() 
         }
     }
     let request = TextSizeRequest {
-        size: TextSize::new(14.0).expect("authored size"),
+        size: TextSize::try_new(14.0).expect("authored size"),
         profile: TextScaleProfile::Body,
     };
     let (policy, mut admission) = TextSizing::captured();
@@ -846,7 +858,7 @@ pub(crate) fn captured_debug_releases_infrastructure_before_formatter_reentry() 
     let mut output = ReentrantWriter {
         admission: &mut admission,
         request,
-        answer: TextSize::new(21.0).expect("answer"),
+        answer: TextSize::try_new(21.0).expect("answer"),
         calls: 0,
     };
     write!(&mut output, "{source:?} {cohort:?} {policy:?}").expect("opaque metadata formatting");
@@ -870,7 +882,7 @@ pub(crate) fn captured_cache_hits_pin_the_current_attempt_before_font_invalidati
         let (policy, mut admission) = TextSizing::captured();
         admission.set_warm_capacity(0);
         let request = TextSizeRequest {
-            size: TextSize::new(14.0).expect("authored size"),
+            size: TextSize::try_new(14.0).expect("authored size"),
             profile: TextScaleProfile::Body,
         };
         let first = policy.begin_cohort();
@@ -880,7 +892,7 @@ pub(crate) fn captured_cache_hits_pin_the_current_attempt_before_font_invalidati
             Err(TextMeasurementError::Pending(_))
         ));
         admission
-            .admit([(request, TextSize::new(21.0).expect("answer"))])
+            .admit([(request, TextSize::try_new(21.0).expect("answer"))])
             .expect("first answer");
         let fonts = flui_painting::FontCollection::new();
         fonts

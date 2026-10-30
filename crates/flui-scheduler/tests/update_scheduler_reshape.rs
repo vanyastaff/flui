@@ -56,7 +56,7 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     // A deadline that has already passed by the time `handle_draw_frame`
     // checks it — the tightest possible Idle-slice.
     let already_passed_deadline = IdleDeadline(now);
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(now, already_passed_deadline, || {}, || {})
         .expect("live owner frame");
@@ -120,7 +120,7 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
     // Terminates at all -- the primary regression this test guards -- and
     // the warning fires exactly once during complete owner execution.
     let (_frame_id, log) = flui_testing::log_capture::capture(|| {
-        flui_scheduler::OwnerFrame::new(&scheduler)
+        flui_scheduler::OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
             .drive_frame(
                 flui_scheduler::Instant::now(),
@@ -265,7 +265,7 @@ fn a_fanning_out_task_runs_a_bounded_number_of_times_per_frame() {
     fan_out(scheduler.clone(), Arc::clone(&runs));
 
     let now = Instant::now();
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
         .expect("live owner frame");
@@ -305,7 +305,7 @@ fn a_fanning_out_microtask_runs_a_bounded_number_of_times_per_frame() {
     }
 
     let now = Instant::now();
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
         .expect("live owner frame");
@@ -354,7 +354,7 @@ fn idle_tasks_stop_at_the_deadline_one_task_at_a_time() {
     }
 
     let now = clock.now();
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             now,
@@ -379,8 +379,8 @@ fn jank_is_measured_on_the_schedulers_clock() {
     let scheduler = SchedulerBuilder::new()
         .clock(ClockSource::Manual(clock.clone()))
         .build();
-    let owner =
-        flui_scheduler::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler)
+        .expect("the scheduler has no live owner frame");
     for (work, janky_after) in [(30, 1), (5, 1)] {
         let now = clock.now();
         owner
@@ -408,7 +408,7 @@ fn frame_ids_count_per_scheduler() {
         let now = Instant::now();
         let scheduler_in_frame = scheduler.clone();
         let observed_in_frame = Rc::clone(&observed);
-        flui_scheduler::OwnerFrame::new(&scheduler)
+        flui_scheduler::OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
             .drive_frame(
                 now,

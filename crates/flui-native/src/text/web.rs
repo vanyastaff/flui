@@ -197,14 +197,14 @@ mod input {
 
     fn range(start: u32, end: u32) -> Utf16Range {
         let (start, end) = (start.min(end), start.max(end));
-        Utf16Range::new(offset(start), offset(end)).expect("BUG: an ordered range")
+        Utf16Range::try_new(offset(start), offset(end)).expect("BUG: an ordered range")
     }
 
     /// `range` clamped into a document of `len` code units.
     fn clamped(range: Utf16Range, len: Utf16Offset) -> Utf16Range {
         let start = range.start().min(len);
         let end = range.end().min(len);
-        Utf16Range::new(start, end).expect("BUG: clamping keeps the order")
+        Utf16Range::try_new(start, end).expect("BUG: clamping keeps the order")
     }
 
     fn len16(text: &str) -> usize {
@@ -480,7 +480,7 @@ mod input {
                                 return false;
                             }
                             let composition = composing.then(|| Composition {
-                                range: Utf16Range::new(
+                                range: Utf16Range::try_new(
                                     replaced.start(),
                                     Utf16Offset::new(replaced.start().get() + inserted),
                                 )
@@ -722,7 +722,7 @@ mod input {
             self.edit(move |session| {
                 if let Some(change) = change {
                     let replaced = clamped(
-                        Utf16Range::new(
+                        Utf16Range::try_new(
                             Utf16Offset::new(change.start),
                             Utf16Offset::new(change.old_end),
                         )
@@ -734,7 +734,7 @@ mod input {
                         return false;
                     }
                     let composition = composing.then(|| Composition {
-                        range: Utf16Range::new(
+                        range: Utf16Range::try_new(
                             replaced.start(),
                             Utf16Offset::new(
                                 replaced.start().get() + (change.new_end - change.start),
@@ -947,13 +947,14 @@ mod input {
                     let found = if let Ok(rect) = session.rect_for_range(span) {
                         Some((span, rect))
                     } else if let Some(next) = spans.peek().copied()
-                        && let Some(pair) = Utf16Range::new(span.start(), next.end())
+                        && let Some(pair) = Utf16Range::try_new(span.start(), next.end())
                         && let Ok(rect) = session.rect_for_range(pair)
                     {
                         spans.next();
                         Some((pair, rect))
                     } else if let Some(before) = span.start().get().checked_sub(1)
-                        && let Some(pair) = Utf16Range::new(Utf16Offset::new(before), span.end())
+                        && let Some(pair) =
+                            Utf16Range::try_new(Utf16Offset::new(before), span.end())
                         && let Ok(rect) = session.rect_for_range(pair)
                     {
                         Some((pair, rect))

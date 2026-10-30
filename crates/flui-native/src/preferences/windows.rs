@@ -486,10 +486,11 @@ fn drag_extent(metric: i32) -> Result<i32, PreferenceQueryError> {
 
 /// Query mouse metrics at the consuming coordinate context, without subscribing.
 fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
-    let ratio =
-        DevicePixelRatio::new(f64::from(dpi) / 96.0).ok_or(PreferenceQueryError::Unsupported(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-        ))?;
+    let ratio = DevicePixelRatio::try_new(f64::from(dpi) / 96.0).ok_or(
+        PreferenceQueryError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable,
+        )),
+    )?;
     let metric = |index: SYSTEM_METRICS_INDEX| -> Result<i32, PreferenceQueryError> {
         // SAFETY: these scalar getters take no pointers. Clear the thread's error
         // slot so a legitimate zero metric cannot inherit an older API failure.
@@ -510,7 +511,7 @@ fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError>
         drag_extent(metric(SM_CXDRAG)?)?,
         drag_extent(metric(SM_CYDRAG)?)?,
     );
-    Ok(NativeMouseGeometry::new(double_click, drag, ratio)?)
+    Ok(NativeMouseGeometry::try_new(double_click, drag, ratio)?)
 }
 
 fn sample(

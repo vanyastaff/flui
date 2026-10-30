@@ -8,7 +8,7 @@ use flui_animation::simulation::{
 use flui_painting::styling::Color;
 
 fn friction(drag: f64, position: f64, velocity: f64) -> FrictionSimulation {
-    FrictionSimulation::new(drag, position, velocity, Tolerance::DEFAULT)
+    FrictionSimulation::try_new(drag, position, velocity, Tolerance::DEFAULT)
         .expect("admitted friction")
 }
 
@@ -35,11 +35,11 @@ fn weak_drag_preserves_arrival_time() {
 fn weak_drag_with_a_subnormal_tolerance_reaches_finite_rest() {
     let distance = f64::from_bits(1);
     for velocity_limit in [distance, f64::INFINITY] {
-        let simulation = FrictionSimulation::new(
+        let simulation = FrictionSimulation::try_new(
             1.0_f64.next_down(),
             0.0,
             1.0,
-            Tolerance::new(distance, velocity_limit).expect("positive tolerance"),
+            Tolerance::try_new(distance, velocity_limit).expect("positive tolerance"),
         )
         .expect("finite glide endpoint");
         // Independent bound: drag^t < exp(-1000) at 1e19 seconds, so both
@@ -94,7 +94,7 @@ fn nearly_unit_drag() {
 }
 
 fn assert_drag_refused(drag: f64) {
-    match FrictionSimulation::new(drag, 0.0, 1.0, Tolerance::DEFAULT) {
+    match FrictionSimulation::try_new(drag, 0.0, 1.0, Tolerance::DEFAULT) {
         Err(SimulationError::OutOfRange { parameter, .. }) if drag.is_finite() => {
             assert_eq!(parameter, SimulationParameter::Drag);
         }
@@ -108,18 +108,18 @@ fn drag_outside_the_open_unit_interval() {
     for drag in [0.0, -0.5, 1.0, 1.5, f64::NAN, f64::INFINITY] {
         assert_drag_refused(drag);
     }
-    assert!(FrictionSimulation::new(0.5, f64::NAN, 1.0, Tolerance::DEFAULT).is_err());
-    assert!(FrictionSimulation::new(0.5, 0.0, f64::INFINITY, Tolerance::DEFAULT).is_err());
+    assert!(FrictionSimulation::try_new(0.5, f64::NAN, 1.0, Tolerance::DEFAULT).is_err());
+    assert!(FrictionSimulation::try_new(0.5, 0.0, f64::INFINITY, Tolerance::DEFAULT).is_err());
 }
 
 /// Rest comes from the remaining glide: `|v·dᵗ / ln d| ≤ distance`.
 fn rests_when_the_remaining_glide_is_within_distance() {
     let drag: f64 = 0.135;
-    let sim = FrictionSimulation::new(
+    let sim = FrictionSimulation::try_new(
         drag,
         0.0,
         8000.0,
-        Tolerance::new(0.5, f64::INFINITY).expect("tolerance"),
+        Tolerance::try_new(0.5, f64::INFINITY).expect("tolerance"),
     )
     .expect("friction");
     // Reference: 8000·dᵗ/|ln d| = 0.5 at t = 4.48741315404835 s.
@@ -163,7 +163,7 @@ fn friction_preserves_small_decay_and_position_time_roundtrips() {
 
 fn unordered() {
     assert_eq!(
-        SimulationBounds::new(1.0, 0.0),
+        SimulationBounds::try_new(1.0, 0.0),
         Err(SimulationError::InvalidBounds { min: 1.0, max: 0.0 })
     );
 }
@@ -174,19 +174,22 @@ fn not_finite() {
         (f64::NEG_INFINITY, 0.0),
         (0.0, f64::INFINITY),
     ] {
-        assert!(SimulationBounds::new(min, max).is_err(), "[{min}, {max}]");
+        assert!(
+            SimulationBounds::try_new(min, max).is_err(),
+            "[{min}, {max}]"
+        );
     }
 }
 fn empty_range_is_admitted() {
-    let bounds = SimulationBounds::new(5.0, 5.0).expect("a point range");
-    let sim = BoundedFrictionSimulation::new(0.135, 5.0, 100.0, bounds, Tolerance::DEFAULT)
+    let bounds = SimulationBounds::try_new(5.0, 5.0).expect("a point range");
+    let sim = BoundedFrictionSimulation::try_new(0.135, 5.0, 100.0, bounds, Tolerance::DEFAULT)
         .expect("bounded friction");
     assert!(sim.is_done(0.0));
     assert_eq!(sim.x(1.0), 5.0);
 }
 fn bounded_friction_stops_at_the_bound_it_travels_toward() {
-    let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");
-    let sim = BoundedFrictionSimulation::new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)
+    let bounds = SimulationBounds::try_new(0.0, 100.0).expect("bounds");
+    let sim = BoundedFrictionSimulation::try_new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)
         .expect("bounded friction");
     let reach = friction(0.135, 50.0, 8000.0).time_at_x(100.0);
     assert!(!sim.is_done(reach * 0.999));
@@ -216,9 +219,9 @@ fn edge_spring() -> SpringDescription {
 
 /// A fling from `position` at `velocity` that the friction carries past `edge`.
 fn hands_over_at(position: f64, velocity: f64, edge: f64) {
-    let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");
+    let bounds = SimulationBounds::try_new(0.0, 100.0).expect("bounds");
     let drag: f64 = 0.135;
-    let sim = BouncingScrollSimulation::new(
+    let sim = BouncingScrollSimulation::try_new(
         edge_spring(),
         drag,
         position,
@@ -262,8 +265,8 @@ fn from_the_edge_outward() {
     hands_over_at(100.0, 500.0, 100.0);
 }
 fn friction_that_rests_inside_never_springs() {
-    let bounds = SimulationBounds::new(0.0, 1000.0).expect("bounds");
-    let sim = BouncingScrollSimulation::new(
+    let bounds = SimulationBounds::try_new(0.0, 1000.0).expect("bounds");
+    let sim = BouncingScrollSimulation::try_new(
         edge_spring(),
         0.135,
         100.0,
@@ -280,10 +283,16 @@ fn friction_that_rests_inside_never_springs() {
     assert_eq!(sim.x(100.0), 100.0 - 200.0 / 0.135_f64.ln());
 }
 fn outside_the_range_springs_back() {
-    let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");
-    let sim =
-        BouncingScrollSimulation::new(edge_spring(), 0.135, 120.0, 0.0, bounds, Tolerance::DEFAULT)
-            .expect("bouncing");
+    let bounds = SimulationBounds::try_new(0.0, 100.0).expect("bounds");
+    let sim = BouncingScrollSimulation::try_new(
+        edge_spring(),
+        0.135,
+        120.0,
+        0.0,
+        bounds,
+        Tolerance::DEFAULT,
+    )
+    .expect("bouncing");
     assert_eq!(sim.x(0.0), 120.0);
     assert!(sim.x(0.05) < 120.0);
     assert!(sim.is_done(10.0));
@@ -310,15 +319,15 @@ fn bouncing_simulation_hands_friction_to_spring_at_the_edge() {
 // --- tolerance ----------------------------------------------------------------
 
 fn valid_tolerances() {
-    assert!(Tolerance::new(1e-3, 1e-3).is_ok());
-    assert!(Tolerance::new(0.5, f64::INFINITY).is_ok());
+    assert!(Tolerance::try_new(1e-3, 1e-3).is_ok());
+    assert!(Tolerance::try_new(0.5, f64::INFINITY).is_ok());
     assert_eq!(
         Tolerance::for_device_pixel_ratio(1.0),
-        Tolerance::new(0.5, f64::INFINITY)
+        Tolerance::try_new(0.5, f64::INFINITY)
     );
     assert_eq!(
         Tolerance::for_device_pixel_ratio(4.0),
-        Tolerance::new(0.125, f64::INFINITY)
+        Tolerance::try_new(0.125, f64::INFINITY)
     );
 }
 fn refused_tolerances() {
@@ -332,7 +341,7 @@ fn refused_tolerances() {
         (1.0, -1.0),
     ] {
         assert!(
-            Tolerance::new(distance, velocity).is_err(),
+            Tolerance::try_new(distance, velocity).is_err(),
             "({distance}, {velocity})"
         );
     }
@@ -352,7 +361,7 @@ fn device_pixel_ratio_scales_the_rest() {
     // 8000 px/s at drag 0.135 leaves half a device pixel at 4.4874 s (dpr 1)
     // and at 4.8336 s (dpr 2).
     let at = |dpr: f64| {
-        FrictionSimulation::new(
+        FrictionSimulation::try_new(
             0.135,
             0.0,
             8000.0,
@@ -371,7 +380,7 @@ fn color_spring_fades_to_transparent_without_darkening() {
     let spring =
         SpringDescription::with_response_and_damping(std::time::Duration::from_millis(300), 1.0)
             .expect("a critically damped 300 ms spring is valid");
-    let mut v = AnimatedValue::new(red, spring).expect("finite colour");
+    let mut v = AnimatedValue::try_new(red, spring).expect("finite colour");
     assert_eq!(v.value(), red);
     v.animate_to(Color::TRANSPARENT).expect("finite colour");
     for frame in 0..120 {
@@ -396,13 +405,13 @@ fn transparent_color_keeps_its_identity_at_rest() {
             .expect("valid spring");
     let clear_red = Color::rgba(255, 0, 0, 0);
     assert_eq!(
-        AnimatedValue::new(clear_red, spring)
+        AnimatedValue::try_new(clear_red, spring)
             .expect("finite color")
             .value(),
         clear_red
     );
     let clear_blue = Color::rgba(0, 0, 255, 0);
-    let mut v = AnimatedValue::new(Color::rgb(0, 0, 255), spring).expect("finite color");
+    let mut v = AnimatedValue::try_new(Color::rgb(0, 0, 255), spring).expect("finite color");
     v.animate_to(clear_blue).expect("finite color");
     v.advance(std::time::Duration::from_secs(5));
     assert!(v.is_settled());

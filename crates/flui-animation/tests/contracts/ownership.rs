@@ -77,7 +77,7 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
     let mut normal_clock = MotionClock::new();
     let mut reduced_clock = MotionClock::new();
     reduced_clock.set_override(MotionOverride::Reduce);
-    let mut value = AnimatedValue::new(
+    let mut value = AnimatedValue::try_new(
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_secs(1),
@@ -1522,7 +1522,7 @@ fn last_driven_owner_release_revokes_its_driver() {
 
         let first = catch_unwind(AssertUnwindSafe(|| {
             controller.set_playback_rate(
-                flui_animation::PlaybackRate::new(2.0).expect("valid playback rate"),
+                flui_animation::PlaybackRate::try_new(2.0).expect("valid playback rate"),
             );
         }));
         assert_eq!(first.is_err(), fail);

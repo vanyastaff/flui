@@ -29,7 +29,7 @@
 //! cross-thread half (`WakeShared`), through a `Weak`: a ready queue and the
 //! frame-request hook. It sets a per-task `ready` flag and — **only on the
 //! `false → true` transition** — queues the task's id and asks for a frame
-//! through the hook ([`OwnerFrame::new`](crate::OwnerFrame::new) installs the
+//! through the hook ([`OwnerFrame::try_new`](crate::OwnerFrame::try_new) installs the
 //! scheduler's [`FrameWaker`](crate::FrameWaker)). So a burst of wakes between
 //! frames costs one readiness transition and one successfully delivered frame
 //! request. A failed or absent hook retains delivery debt for the next wake or
@@ -843,7 +843,7 @@ impl AsyncDriver {
     }
 
     /// Replace the "request a frame" hook. A test probe: production installs
-    /// the hook only through [`OwnerFrame::new`](crate::OwnerFrame::new), so a
+    /// the hook only through [`OwnerFrame::try_new`](crate::OwnerFrame::try_new), so a
     /// widget cannot replace its UI runtime's frame hook.
     ///
     /// Installation retries undelivered demand. The displaced `Arc` is
@@ -1074,7 +1074,7 @@ mod tests {
     /// A fresh scheduler and the owner frame that holds its tasks.
     fn owner_frame() -> (UpdateScheduler, OwnerFrame) {
         let scheduler = UpdateScheduler::new();
-        let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         (scheduler, frame)
     }
 
@@ -1505,7 +1505,7 @@ mod tests {
     fn a_scheduler_has_one_live_owner_frame() {
         let (scheduler, first) = owner_frame();
         assert_eq!(
-            OwnerFrame::new(&scheduler).err(),
+            OwnerFrame::try_new(&scheduler).err(),
             Some(crate::OwnerFrameError::AlreadyOwned)
         );
         let polled = Arc::new(AtomicUsize::new(0));
@@ -1525,12 +1525,12 @@ mod tests {
 
         let _ = first.retire();
         assert_eq!(
-            OwnerFrame::new(&scheduler).err(),
+            OwnerFrame::try_new(&scheduler).err(),
             Some(crate::OwnerFrameError::AlreadyOwned),
             "a retired owner still holds the slot until it drops"
         );
         drop(first);
-        let second = OwnerFrame::new(&scheduler).expect("the slot frees when the owner drops");
+        let second = OwnerFrame::try_new(&scheduler).expect("the slot frees when the owner drops");
         let _token = second.async_driver().spawn_local(Box::pin(async {}));
         assert!(scheduler.is_frame_scheduled());
         second

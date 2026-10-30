@@ -2416,7 +2416,7 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
         ));
     });
     let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
-    let reported = flui_foundation::geometry::WindowMetrics::new(
+    let reported = flui_foundation::geometry::WindowMetrics::try_new(
         flui_foundation::geometry::DeviceSize::new(115, 201),
         1.75,
     )

@@ -1249,7 +1249,7 @@ fn an_edit_context_serves_the_focused_field() {
     assert_eq!(store.text(), "hello worldに");
 
     store.app_replace(
-        Utf16Range::new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
+        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
         "HELLO",
     );
     assert_eq!(edit_context_text().as_deref(), Some("HELLO worldに"));
@@ -1345,7 +1345,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
     assert_eq!(store.selection().range().start().get(), 4);
 
     store.app_replace(
-        Utf16Range::new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
+        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
         "AB",
     );
     let state = editor().expect("the textarea");

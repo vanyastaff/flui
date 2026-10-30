@@ -14,7 +14,7 @@ fn close(actual: f64, expected: f64) {
 }
 
 fn missing_stops_are_evenly_placed() {
-    let curve = PiecewiseLinear::new(&[
+    let curve = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(0.25),
         LinearStop::new(0.75),
@@ -25,7 +25,7 @@ fn missing_stops_are_evenly_placed() {
     for (input, expected) in [(0.1, 0.125), (0.3, 0.5), (0.5, 0.825), (0.8, 0.95)] {
         close(curve.transform(input), expected);
     }
-    let explicit = PiecewiseLinear::new(&[
+    let explicit = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0).at(0.0),
         LinearStop::new(0.25).at(0.2),
         LinearStop::new(0.75).at(0.4),
@@ -39,7 +39,7 @@ fn missing_stops_are_evenly_placed() {
 }
 
 fn decreasing_inputs_form_a_right_continuous_jump() {
-    let curve = PiecewiseLinear::new(&[
+    let curve = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(0.2).at(0.4),
         LinearStop::new(0.5),
@@ -55,7 +55,7 @@ fn decreasing_inputs_form_a_right_continuous_jump() {
 }
 
 fn plateaus_overshoot_and_knot_slopes() {
-    let curve = PiecewiseLinear::new(&[
+    let curve = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(0.5).at(0.25),
         LinearStop::new(0.5).at(0.5),
@@ -78,7 +78,7 @@ fn plateaus_overshoot_and_knot_slopes() {
 
 fn refused_stops_are_typed() {
     assert_eq!(
-        PiecewiseLinear::new(&[]).unwrap_err(),
+        PiecewiseLinear::try_new(&[]).unwrap_err(),
         PiecewiseLinearError::TooFewStops
     );
     for (input, expected) in [
@@ -107,7 +107,7 @@ fn refused_stops_are_typed() {
         ),
     ] {
         assert_eq!(
-            PiecewiseLinear::new(&[
+            PiecewiseLinear::try_new(&[
                 LinearStop::new(0.0),
                 LinearStop::new(0.5).at(input),
                 LinearStop::new(1.0)
@@ -118,7 +118,7 @@ fn refused_stops_are_typed() {
     }
     for output in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
         assert_eq!(
-            PiecewiseLinear::new(&[
+            PiecewiseLinear::try_new(&[
                 LinearStop::new(0.0),
                 LinearStop::new(output),
                 LinearStop::new(1.0)
@@ -133,14 +133,14 @@ fn refused_stops_are_typed() {
         [LinearStop::new(0.0), LinearStop::new(0.8)],
     ] {
         assert_eq!(
-            PiecewiseLinear::new(&stops).unwrap_err(),
+            PiecewiseLinear::try_new(&stops).unwrap_err(),
             PiecewiseLinearError::InvalidEndpoints
         );
     }
 }
 
 fn extreme_outputs_and_intervals_stay_finite() {
-    let curve = PiecewiseLinear::new(&[
+    let curve = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(f64::MAX).at(0.25),
         LinearStop::new(-f64::MAX).at(0.75),
@@ -156,7 +156,7 @@ fn extreme_outputs_and_intervals_stay_finite() {
         assert!(curve.transform(input).is_finite());
         assert!(curve.slope(input).is_finite());
     }
-    let tiny = PiecewiseLinear::new(&[
+    let tiny = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(0.5).at(f64::from_bits(1)),
         LinearStop::new(1.0),
@@ -167,22 +167,22 @@ fn extreme_outputs_and_intervals_stay_finite() {
 }
 
 fn curves_keep_normalized_input_policy_and_value_equality() {
-    let first = PiecewiseLinear::new(&[
+    let first = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0),
         LinearStop::new(0.25),
         LinearStop::new(1.0),
     ])
     .unwrap();
-    let explicit = PiecewiseLinear::new(&[
+    let explicit = PiecewiseLinear::try_new(&[
         LinearStop::new(0.0).at(0.0),
         LinearStop::new(0.25).at(0.5),
         LinearStop::new(1.0).at(1.0),
     ])
     .unwrap();
     assert_eq!(SharedCurve::new(first.clone()), SharedCurve::new(explicit));
-    let spring = SpringDescription::new(1.0, 100.0, 6.0).unwrap();
-    let one = SpringCurve::new(spring, Tolerance::DEFAULT).unwrap();
-    let two = SpringCurve::new(spring, Tolerance::DEFAULT).unwrap();
+    let spring = SpringDescription::try_new(1.0, 100.0, 6.0).unwrap();
+    let one = SpringCurve::try_new(spring, Tolerance::DEFAULT).unwrap();
+    let two = SpringCurve::try_new(spring, Tolerance::DEFAULT).unwrap();
     assert_eq!(SharedCurve::new(one.clone()), SharedCurve::new(two));
     for curve in [SharedCurve::new(first), SharedCurve::new(one)] {
         for (input, expected) in [
@@ -209,8 +209,8 @@ fn curves_keep_normalized_input_policy_and_value_equality() {
 
 fn spring_matches_independent_physical_references() {
     for damping in [10.0, 20.0, 40.0] {
-        let spring = SpringDescription::new(1.0, 100.0, damping).unwrap();
-        let curve = SpringCurve::new(spring, Tolerance::new(1e-6, 1e-6).unwrap()).unwrap();
+        let spring = SpringDescription::try_new(1.0, 100.0, damping).unwrap();
+        let curve = SpringCurve::try_new(spring, Tolerance::try_new(1e-6, 1e-6).unwrap()).unwrap();
         let omega: f64 = 10.0;
         let zeta = damping / 20.0;
         for time in [0.05, 0.1, 0.25, 0.3] {
@@ -247,8 +247,8 @@ fn spring_matches_independent_physical_references() {
         }
         assert_eq!(curve.slope(1.0), 0.0);
     }
-    let overshoot = SpringCurve::new(
-        SpringDescription::new(1.0, 100.0, 6.0).unwrap(),
+    let overshoot = SpringCurve::try_new(
+        SpringDescription::try_new(1.0, 100.0, 6.0).unwrap(),
         Tolerance::DEFAULT,
     )
     .unwrap();
@@ -256,9 +256,9 @@ fn spring_matches_independent_physical_references() {
 }
 
 fn spring_refuses_unusable_duration_and_admits_nanosecond_motion() {
-    let spring = SpringDescription::new(1.0, 100.0, 20.0).unwrap();
+    let spring = SpringDescription::try_new(1.0, 100.0, 20.0).unwrap();
     assert!(matches!(
-        SpringCurve::new(spring, Tolerance::new(1.0, 1.0).unwrap()),
+        SpringCurve::try_new(spring, Tolerance::try_new(1.0, 1.0).unwrap()),
         Err(SimulationError::OutOfRange {
             parameter: SimulationParameter::UnitDistance,
             value: 1.0
@@ -266,11 +266,11 @@ fn spring_refuses_unusable_duration_and_admits_nanosecond_motion() {
     ));
     let slow = SpringDescription::with_damping_ratio(1.0, 1e-40, 1.0).unwrap();
     assert_eq!(
-        SpringCurve::new(slow, Tolerance::DEFAULT).unwrap_err(),
+        SpringCurve::try_new(slow, Tolerance::DEFAULT).unwrap_err(),
         SimulationError::Overflow
     );
-    let fast = SpringCurve::new(
-        SpringDescription::new(1.0, 1e100, 1e50).unwrap(),
+    let fast = SpringCurve::try_new(
+        SpringDescription::try_new(1.0, 1e100, 1e50).unwrap(),
         Tolerance::DEFAULT,
     )
     .unwrap();
@@ -284,15 +284,15 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
         let make = || {
             if spring {
                 SharedCurve::new(
-                    SpringCurve::new(
-                        SpringDescription::new(1.0, 100.0, 10.0).unwrap(),
+                    SpringCurve::try_new(
+                        SpringDescription::try_new(1.0, 100.0, 10.0).unwrap(),
                         Tolerance::DEFAULT,
                     )
                     .unwrap(),
                 )
             } else {
                 SharedCurve::new(
-                    PiecewiseLinear::new(&[
+                    PiecewiseLinear::try_new(&[
                         LinearStop::new(0.0),
                         LinearStop::new(0.25),
                         LinearStop::new(1.0),
@@ -307,8 +307,8 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
         };
         let registry = Vsync::new();
         let mut clock = MotionClock::new();
-        let mut original = AnimatedValue::new(0.0, motion(), Some(&registry)).unwrap();
-        let mut reference = AnimatedValue::new(0.0, motion(), Some(&registry)).unwrap();
+        let mut original = AnimatedValue::try_new(0.0, motion(), Some(&registry)).unwrap();
+        let mut reference = AnimatedValue::try_new(0.0, motion(), Some(&registry)).unwrap();
         let run = original.animate_to(1.0).unwrap();
         let reference_run = reference.animate_to(1.0).unwrap();
         registry.tick_all(&clock.frame(Duration::ZERO));
@@ -347,8 +347,8 @@ fn natural_spring_duration_controls_once_only_completion() {
             upper = time;
         }
     }
-    let curve = SpringCurve::new(
-        SpringDescription::new(1.0, 100.0, 20.0).unwrap(),
+    let curve = SpringCurve::try_new(
+        SpringDescription::try_new(1.0, 100.0, 20.0).unwrap(),
         Tolerance::DEFAULT,
     )
     .unwrap();
@@ -361,8 +361,8 @@ fn natural_spring_duration_controls_once_only_completion() {
         "natural duration respects the independent conservative bound"
     );
     let before_rest = duration.checked_sub(Duration::from_nanos(1)).unwrap();
-    let physical = SpringSimulation::new(
-        SpringDescription::new(1.0, 100.0, 20.0).unwrap(),
+    let physical = SpringSimulation::try_new(
+        SpringDescription::try_new(1.0, 100.0, 20.0).unwrap(),
         0.0,
         1.0,
         0.0,

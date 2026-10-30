@@ -1420,7 +1420,7 @@ fn preferred_locales_select_resources_and_direction() {
 
         fn is_supported(&self, locale: &Locale) -> bool {
             *locale == Locale::en_us()
-                || *locale == Locale::new("ar", None::<&str>).expect("valid Arabic locale")
+                || *locale == Locale::try_new("ar", None::<&str>).expect("valid Arabic locale")
                 || ["ca-ES", "ca-ES-valencia"].iter().any(|tag| {
                     *locale
                         == tag
@@ -1456,7 +1456,7 @@ fn preferred_locales_select_resources_and_direction() {
         (None, None),
         (Some(Locale::en_us()), Some(("Hello", TextDirection::Ltr))),
         (
-            Some(Locale::new("ar", None::<&str>).expect("valid Arabic locale")),
+            Some(Locale::try_new("ar", None::<&str>).expect("valid Arabic locale")),
             Some(("مرحبا", TextDirection::Rtl)),
         ),
     ] {
@@ -1466,7 +1466,7 @@ fn preferred_locales_select_resources_and_direction() {
         let app = flui_widgets::WidgetsApp::new(LocalizedContent(Rc::clone(&observed)))
             .supported_locales(vec![
                 Locale::en_us(),
-                Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                 "ca-ES".parse().expect("valid Catalan resource locale"),
                 "ca-ES-valencia"
                     .parse()
@@ -1518,7 +1518,7 @@ fn preferred_locales_select_resources_and_direction() {
         for (locales, expected) in [
             (
                 Some(vec![
-                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                     Locale::en_us(),
                 ]),
                 ("مرحبا", TextDirection::Rtl),
@@ -1526,20 +1526,20 @@ fn preferred_locales_select_resources_and_direction() {
             (
                 Some(vec![
                     Locale::en_us(),
-                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                 ]),
                 ("Hello", TextDirection::Ltr),
             ),
             (Some(vec![]), ("Hello", TextDirection::Ltr)),
             (
                 Some(vec![
-                    Locale::new("fr", None::<&str>).expect("valid French locale"),
+                    Locale::try_new("fr", None::<&str>).expect("valid French locale"),
                 ]),
                 ("Hello", TextDirection::Ltr),
             ),
             (
                 Some(vec![
-                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                 ]),
                 ("مرحبا", TextDirection::Rtl),
             ),
@@ -1581,7 +1581,7 @@ fn preferred_locales_select_resources_and_direction() {
             owner
                 .update_preferences(
                     SystemPreferences::default().with_locales(vec![
-                        Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                        Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                     ]),
                     &effects,
                 )
@@ -1609,7 +1609,7 @@ fn preferred_locales_select_resources_and_direction() {
                 &flui_widgets::WidgetsApp::new(LocalizedContent(Rc::clone(&initial)))
                     .supported_locales(vec![
                         Locale::en_us(),
-                        Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                        Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
                     ])
                     .localizations_delegates(vec![
                         BoxedLocalizationsDelegate::new(Greetings),
@@ -1697,7 +1697,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     let profile = |min, max| {
         Some(
             GestureGeometry::new(DevicePixelRatio::ONE)
-                .with_fling_speeds(FlingSpeeds::new(min, max).expect("fling range")),
+                .with_fling_speeds(FlingSpeeds::try_new(min, max).expect("fling range")),
         )
     };
     let event = |millis: u64, y: f64, phase: u8| {
@@ -1988,8 +1988,8 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         .collect::<Vec<_>>();
     for (window, _, _, ratio) in &recipients {
         *window.answer.lock().expect("script") = Ok(Some(
-            GestureGeometry::new(DevicePixelRatio::new(*ratio).expect("ratio"))
-                .with_touch_slop(Distance::new(2.0).expect("slop")),
+            GestureGeometry::new(DevicePixelRatio::try_new(*ratio).expect("ratio"))
+                .with_touch_slop(Distance::try_new(2.0).expect("slop")),
         ));
     }
     clock.advance(Duration::from_millis(101));
@@ -2083,8 +2083,8 @@ fn gesture_values_follow_the_presentation_display() {
 
     let geometry = |ratio: f64, slop: f64| {
         Ok(Some(
-            GestureGeometry::new(DevicePixelRatio::new(ratio).expect("ratio"))
-                .with_touch_slop(Distance::new(slop).expect("distance")),
+            GestureGeometry::new(DevicePixelRatio::try_new(ratio).expect("ratio"))
+                .with_touch_slop(Distance::try_new(slop).expect("distance")),
         ))
     };
     let owner = OwnerHost::new();
@@ -2571,8 +2571,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let window = Rc::new(GeometryWindow {
         inner: Rc::clone(crate::owner_publication::window().window()),
         answer: std::sync::Mutex::new(Ok(Some(
-            GestureGeometry::new(DevicePixelRatio::new(1.0).expect("ratio"))
-                .with_touch_slop(Distance::new(2.0).expect("distance")),
+            GestureGeometry::new(DevicePixelRatio::try_new(1.0).expect("ratio"))
+                .with_touch_slop(Distance::try_new(2.0).expect("distance")),
         ))),
         calls: AtomicUsize::new(0),
         query_time: std::sync::Mutex::new(None),
@@ -2699,8 +2699,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 
     let geometry = |ratio, slop| {
         Some(
-            GestureGeometry::new(DevicePixelRatio::new(ratio).expect("ratio"))
-                .with_touch_slop(Distance::new(slop).expect("distance")),
+            GestureGeometry::new(DevicePixelRatio::try_new(ratio).expect("ratio"))
+                .with_touch_slop(Distance::try_new(slop).expect("distance")),
         )
     };
     *window.answer.lock().expect("script") = Ok(geometry(1.0, 2.0));

@@ -106,7 +106,7 @@ impl Composition {
     /// The range between `a` and `b`, in either order, within the document.
     pub(crate) fn range(&self, a: Utf16Offset, b: Utf16Offset) -> Utf16Range {
         let (a, b) = (self.clamp(a), self.clamp(b));
-        Utf16Range::new(a.min(b), a.max(b)).expect("BUG: the smaller end comes first")
+        Utf16Range::try_new(a.min(b), a.max(b)).expect("BUG: the smaller end comes first")
     }
 
     /// The text of `range`.
@@ -310,7 +310,7 @@ fn collapsed(at: Utf16Offset) -> Utf16Range {
 
 /// The range from `start` to `end` units, start first.
 fn offsets(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(Utf16Offset::new(start), Utf16Offset::new(end))
+    Utf16Range::try_new(Utf16Offset::new(start), Utf16Offset::new(end))
         .expect("BUG: a range in the document starts first")
 }
 
@@ -328,7 +328,7 @@ fn shifted(range: Utf16Range, replaced: Utf16Range, new_end: Utf16Offset) -> Opt
     if replaced.end() <= range.start() {
         let start = shifted_offset(range.start(), replaced, new_end);
         let end = shifted_offset(range.end(), replaced, new_end);
-        return Utf16Range::new(start, end);
+        return Utf16Range::try_new(start, end);
     }
     (range.end() <= replaced.start()).then_some(range)
 }

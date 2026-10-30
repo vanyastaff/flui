@@ -36,6 +36,13 @@
 - **`flui-objects`, `flui-interaction`**: the same for `AspectRatioFactor`, `FractionFactor`,
   `CarouselGeometry`, `RenderSliverConstrainedCrossAxis`, `MultiTapCount`, `OneEuroTuning` and
   `PolynomialFit`.
+- **`flui-foundation`, `flui-platform`, `flui-scheduler`**: the same for `DevicePixelRatio`,
+  `TextSize`, `WindowMetrics`, `Distance`, `FlingSpeeds`, `Locale`, `NativeMouseGeometry`,
+  `NativeTouchGeometry`, `PointerFrame`, `Utf16Range` and `OwnerFrame`.
+- **`flui-animation`**: the same for `AnimatedValue`, `PlaybackRate`, `ValueRange`,
+  `PiecewiseLinear`, `SpringCurve`, `SpringDescription`, `SpringSimulation`, `SpringRest`,
+  `FrictionSimulation`, `BoundedFrictionSimulation`, `BouncingScrollSimulation`,
+  `SimulationBounds` and `Tolerance`.
 
 ### Fixed
 

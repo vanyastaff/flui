@@ -1029,7 +1029,7 @@ mod tests {
             .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
             .expect("headless presentation supports text input");
         let composing = Composition {
-            range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+            range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
             hides_caret: false,
         };
         assert_eq!(

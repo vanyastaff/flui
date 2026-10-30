@@ -138,7 +138,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
     let geometry = |slop| {
         Some(
             GestureGeometry::new(DevicePixelRatio::ONE)
-                .with_touch_slop(Distance::new(slop).expect("slop")),
+                .with_touch_slop(Distance::try_new(slop).expect("slop")),
         )
     };
     for (in_query, panics) in [(true, false), (true, true), (false, false), (false, true)] {

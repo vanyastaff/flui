@@ -33,7 +33,7 @@
 //! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
-//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+//! let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule animation callback (fires during TransientCallbacks)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -2836,7 +2836,7 @@ mod tests {
              false->true edge does not occur on this re-enable"
         );
 
-        let owner = crate::OwnerFrame::new(&scheduler).expect("one frame owner");
+        let owner = crate::OwnerFrame::try_new(&scheduler).expect("one frame owner");
         owner.pump_background(|| {}).expect("live owner turn");
 
         assert_eq!(
@@ -2877,7 +2877,7 @@ mod tests {
 
         // A frame runs; during it a ticker re-registers (transient
         // callback) — the cleared edge fires the hook again.
-        let owner = crate::OwnerFrame::new(&scheduler).expect("one frame owner");
+        let owner = crate::OwnerFrame::try_new(&scheduler).expect("one frame owner");
         let now = Instant::now();
         owner
             .drive_frame(
@@ -2927,7 +2927,7 @@ mod tests {
         requeue(scheduler.clone(), Arc::clone(&runs));
 
         let (_frame_id, log) = flui_testing::log_capture::capture(|| {
-            crate::OwnerFrame::new(&scheduler)
+            crate::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     crate::Instant::now(),
@@ -3035,7 +3035,7 @@ mod tests {
         assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::OwnerFrame::new(&scheduler)
+            crate::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     crate::Instant::now(),
@@ -3133,7 +3133,7 @@ mod tests {
         scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::OwnerFrame::new(&scheduler)
+            crate::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     crate::Instant::now(),

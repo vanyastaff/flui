@@ -668,7 +668,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
         ),
     ] {
         let geometry = GestureGeometry::new(DevicePixelRatio::ONE)
-            .with_touch_slop(Distance::new(observed).expect("valid observation"));
+            .with_touch_slop(Distance::try_new(observed).expect("valid observation"));
         let settings = GestureSettings::resolve_preferences(
             &baseline,
             &GesturePreferences::default(),
@@ -718,7 +718,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
         .try_with_pan_slop(f64::MAX)
         .expect("valid authored tier");
     let geometry = GestureGeometry::new(DevicePixelRatio::ONE)
-        .with_touch_slop(Distance::new(2.0).expect("valid observation"));
+        .with_touch_slop(Distance::try_new(2.0).expect("valid observation"));
     assert!(
         matches!(
             GestureSettings::resolve_preferences(
@@ -736,7 +736,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
         .try_with_pan_slop(1e-200)
         .expect("valid authored tier");
     let geometry = GestureGeometry::new(DevicePixelRatio::ONE)
-        .with_touch_slop(Distance::new(1e-200).expect("valid observation"));
+        .with_touch_slop(Distance::try_new(1e-200).expect("valid observation"));
     assert!(
         matches!(
             GestureSettings::resolve_preferences(
@@ -1279,7 +1279,7 @@ fn native_touch_span_preserves_baseline_ratio() {
         .try_with_pan_slop(30.0)
         .expect("valid pan");
     let geometry = GestureGeometry::new(DevicePixelRatio::ONE)
-        .with_touch_slop(Distance::new(4.0).expect("valid observation"));
+        .with_touch_slop(Distance::try_new(4.0).expect("valid observation"));
     let settings = GestureSettings::resolve_preferences(
         &baseline,
         &GesturePreferences::default(),

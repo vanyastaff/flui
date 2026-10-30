@@ -62,10 +62,10 @@ pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {
                 |(authored, answer)| {
                     (
                         TextSizeRequest {
-                            size: TextSize::new(authored).expect("icon authored size"),
+                            size: TextSize::try_new(authored).expect("icon authored size"),
                             profile: TextScaleProfile::Body,
                         },
-                        TextSize::new(answer).expect("resolved icon size"),
+                        TextSize::try_new(answer).expect("resolved icon size"),
                     )
                 },
             ))

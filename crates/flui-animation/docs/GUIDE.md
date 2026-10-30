@@ -78,14 +78,14 @@ let controller = AnimationController::builder(Duration::from_millis(300)).build(
 
 // With custom bounds
 let controller = AnimationController::builder(Duration::from_millis(300))
-    .bounds(flui_animation::ValueRange::new(0.0, 100.0)?)
+    .bounds(flui_animation::ValueRange::try_new(0.0, 100.0)?)
     .build();
 
 // With builder (full control)
 let controller = AnimationController::builder(
     Duration::from_millis(300),
 )
-.bounds(flui_animation::ValueRange::new(0.0, 100.0)?)
+.bounds(flui_animation::ValueRange::try_new(0.0, 100.0)?)
 .initial_value(50.0)
 .reverse_duration(Duration::from_millis(500))
 .build();
@@ -189,7 +189,7 @@ let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("vali
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, flui_animation::Tolerance::DEFAULT)?;
+let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, flui_animation::Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -290,12 +290,12 @@ let value = curves::ELASTIC_OUT.transform(t);
 use flui_animation::{SharedCurve, Curve, LinearStop, PiecewiseLinear, SpringCurve,
     SpringDescription, Tolerance};
 
-let piecewise = PiecewiseLinear::new(&[
+let piecewise = PiecewiseLinear::try_new(&[
     LinearStop::new(0.0), LinearStop::new(0.25), LinearStop::new(1.0),
 ])?;
 assert_eq!(piecewise.transform(0.5), 0.25);
-let spring = SpringCurve::new(
-    SpringDescription::new(1.0, 100.0, 20.0)?, Tolerance::DEFAULT,
+let spring = SpringCurve::try_new(
+    SpringDescription::try_new(1.0, 100.0, 20.0)?, Tolerance::DEFAULT,
 )?;
 assert!(!spring.duration().is_zero());
 let shared = SharedCurve::new(spring);
@@ -609,7 +609,7 @@ use flui_animation::simulation::{SimulationError, SpringDescription};
 use std::time::Duration;
 
 # fn main() -> Result<(), SimulationError> {
-let physical = SpringDescription::new(1.0, 500.0, 10.0)?; // mass, stiffness, damping
+let physical = SpringDescription::try_new(1.0, 500.0, 10.0)?; // mass, stiffness, damping
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
 let response = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
 // A damping ratio uses the same fallible contract as the physical coefficients.
@@ -626,7 +626,7 @@ use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
 assert!(sim.is_done(5.0));
 assert_eq!(sim.x(5.0), 1.0);
@@ -641,7 +641,7 @@ use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1), position, velocity
-let sim = FrictionSimulation::new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
+let sim = FrictionSimulation::try_new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
 let resting = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(resting / 2.0) > 0.0);
 # Ok(())
@@ -673,7 +673,7 @@ match controller.forward() {
 // Propagation
 fn animate(d: Duration) -> Result<AnimationController, Box<dyn std::error::Error>> {
     let controller = AnimationController::builder(d)
-        .bounds(flui_animation::ValueRange::new(0.0, 100.0)?)
+        .bounds(flui_animation::ValueRange::try_new(0.0, 100.0)?)
         .build();
     controller.forward()?;
     // The caller samples this manually driven controller with tick_at(Duration).

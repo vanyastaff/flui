@@ -43,7 +43,10 @@ pub fn element_of(render: RenderId) -> ElementRef {
 }
 
 pub fn placement() -> Placement {
-    Placement::new(DevicePixelRatio::new(1.0).expect("1 is a ratio"), window())
+    Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        window(),
+    )
 }
 
 /// An owner and the arena ids of the nodes put in it.

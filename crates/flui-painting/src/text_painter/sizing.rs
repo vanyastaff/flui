@@ -444,7 +444,7 @@ impl TextSizing {
                     .iter()
                     .map(|request| {
                         let size = request.size.value() * factor;
-                        TextSize::new(size)
+                        TextSize::try_new(size)
                             .map(TextResolvedSize::fixed)
                             .map_err(|_| crate::TextLayoutError::InvalidFontSize { size }.into())
                     })

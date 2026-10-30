@@ -185,7 +185,7 @@ pub(crate) fn acp(offset: Utf16Offset) -> i32 {
 
 /// The range from `start` to `end`; a negative or inverted one is no range.
 pub(crate) fn range(start: i32, end: i32) -> Result<Utf16Range, Hresult> {
-    Utf16Range::new(offset(start)?, offset(end)?).ok_or(Hresult::TS_E_INVALIDPOS)
+    Utf16Range::try_new(offset(start)?, offset(end)?).ok_or(Hresult::TS_E_INVALIDPOS)
 }
 
 /// A text change as `TS_TEXTCHANGE`'s three ACPs.

@@ -6,7 +6,7 @@ use super::{ScreenRect, ScreenRectError, range_rect_to_screen, screen_point_to_c
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point, Size};
 
 fn ratio(value: f64) -> DevicePixelRatio {
-    DevicePixelRatio::new(value).expect("a positive, finite test scale")
+    DevicePixelRatio::try_new(value).expect("a positive, finite test scale")
 }
 
 fn bounds(x: f64, y: f64, width: f64, height: f64) -> Bounds<f64> {

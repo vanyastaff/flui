@@ -30,7 +30,7 @@ fn named(event: &RuntimeEvent) -> String {
 }
 
 fn metrics(width: i32, scale: f64) -> WindowMetrics {
-    WindowMetrics::new(DeviceSize::new(width, 600), scale).expect("a drawable area")
+    WindowMetrics::try_new(DeviceSize::new(width, 600), scale).expect("a drawable area")
 }
 
 /// A shown, focused, running window at 800×600 and scale 1.

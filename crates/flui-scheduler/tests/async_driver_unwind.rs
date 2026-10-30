@@ -93,7 +93,7 @@ fn assert_next_task(frame: &OwnerFrame) {
 
 fn poll_failure(eager: bool, bombs: usize) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
@@ -161,7 +161,7 @@ fn eager_poll_two_drops() {
 
 fn token_during_unwind() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
@@ -179,7 +179,7 @@ fn token_during_unwind() {
 
 fn retirement(cancel: bool, nested: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let nested_drops = Arc::new(AtomicUsize::new(0));
@@ -222,7 +222,7 @@ fn nested_retirement() {
 
 fn spawn_hook_failure(eager: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     driver.set_request_frame(|| panic!("spawn hook"));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -269,7 +269,7 @@ impl Drop for Counted {
 /// hook installed afterwards instead of keeping it past the UI runtime.
 fn hook_retirement() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let bomb = DropBomb(Arc::clone(&drops));
@@ -309,7 +309,7 @@ impl Drop for ReenterOnDrop {
 
 fn callback_retirement_closes_task_admission() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("owner frame");
     let driver = frame.async_driver();
     let polls = Rc::new(std::cell::Cell::new(0));
     let observed = Rc::clone(&polls);
@@ -332,7 +332,7 @@ fn callback_retirement_closes_task_admission() {
 
 fn task_retirement_disarms_sibling_wakers() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let frame = OwnerFrame::try_new(&scheduler).expect("owner frame");
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let sibling_waker = Arc::clone(&observed);
@@ -373,7 +373,7 @@ fn task_retirement_disarms_sibling_wakers() {
 
 fn eager_poll_cannot_reopen_retired_owner() {
     let scheduler = UpdateScheduler::new();
-    let frame = Rc::new(OwnerFrame::new(&scheduler).expect("owner frame"));
+    let frame = Rc::new(OwnerFrame::try_new(&scheduler).expect("owner frame"));
     let driver = frame.async_driver();
     let owner = Rc::clone(&frame);
     let token = driver
@@ -393,9 +393,9 @@ fn eager_poll_cannot_reopen_retired_owner() {
 fn independent_owner_turn_preserves_pending_demand() {
     for direct in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("owner frame");
+        let owner = OwnerFrame::try_new(&scheduler).expect("owner frame");
         let foreign_scheduler = UpdateScheduler::new();
-        let foreign = OwnerFrame::new(&foreign_scheduler).expect("foreign owner frame");
+        let foreign = OwnerFrame::try_new(&foreign_scheduler).expect("foreign owner frame");
         let driver = owner.async_driver();
         let ran = Rc::new(std::cell::Cell::new(false));
         let observed = Rc::clone(&ran);
@@ -445,7 +445,8 @@ fn hook_retirement_during_unwind() {
     assert_panic(
         catch_unwind(AssertUnwindSafe(|| {
             let scheduler = UpdateScheduler::new();
-            let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+            let frame =
+                OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
             let bomb = DropBomb(Arc::clone(&drops));
             frame.async_driver().set_request_frame(move || {
                 let _capture = &bomb;
@@ -497,7 +498,7 @@ impl Drop for SpawnOnDrop {
 fn refused_spawn() {
     let dead = {
         let scheduler = UpdateScheduler::new();
-        OwnerFrame::new(&scheduler)
+        OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
             .async_driver()
     };

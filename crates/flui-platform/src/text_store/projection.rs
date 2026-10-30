@@ -99,7 +99,7 @@ fn preedit(
     let change = session.replace(region, text)?;
     let start = change.start;
     let range =
-        Utf16Range::new(start, change.new_end).expect("BUG: an insertion ends after it starts");
+        Utf16Range::try_new(start, change.new_end).expect("BUG: an insertion ends after it starts");
     session.set_composition(Some(Composition {
         range,
         hides_caret: cursor.is_none(),

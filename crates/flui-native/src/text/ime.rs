@@ -17,7 +17,7 @@ pub(crate) const PROTECTED_UNIT: char = '\u{2022}';
 pub(crate) fn document_text(session: &dyn TextStoreRead) -> String {
     let len = session.document_len();
     let whole =
-        Utf16Range::new(Utf16Offset::ZERO, len).expect("BUG: the whole document is a range");
+        Utf16Range::try_new(Utf16Offset::ZERO, len).expect("BUG: the whole document is a range");
     session
         .text(whole)
         .unwrap_or_else(|_| std::iter::repeat_n(PROTECTED_UNIT, len.get()).collect())
@@ -37,7 +37,7 @@ pub(crate) fn scalar_spans(text: &str, start: usize, end: usize) -> Vec<Utf16Ran
         let next = at + scalar.len_utf16();
         if next > start && at < end {
             spans.push(
-                Utf16Range::new(Utf16Offset::new(at), Utf16Offset::new(next))
+                Utf16Range::try_new(Utf16Offset::new(at), Utf16Offset::new(next))
                     .expect("BUG: a scalar's span is ordered"),
             );
         }

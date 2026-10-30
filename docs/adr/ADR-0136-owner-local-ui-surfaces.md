@@ -70,7 +70,7 @@ weak-handle and thread-boundary rules in this section still apply.
   A wake after the UI runtime is gone upgrades nothing. `UpdateScheduler::frame_waker()` returns a
   **`FrameWaker`** (`Clone + Send + Sync`, `request_frame()`), which holds a `Weak` to its own
   scheduler: it wakes its own UI runtime and no other, and is inert once the UI runtime is gone.
-  `OwnerFrame::new` installs it as the task store's hook.
+  `OwnerFrame::try_new` installs it as the task store's hook.
 - **The frame latch is unchanged.** `request_frame` swaps `frame_scheduled` to `true` and
   fires the platform hook only on the `false → true` edge; the latch is cleared with a
   `SeqCst` swap *before* the poll (at begin frame, or by `finish_async_pump`), then the poll
