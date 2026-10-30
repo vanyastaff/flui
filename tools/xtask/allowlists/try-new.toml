@@ -5,70 +5,6 @@
 reason = "written before the rule had a gate; each entry is renamed to `try_new`"
 
 [[allow]]
-crate = "flui-animation"
-type = "AnimatedValue"
-
-[[allow]]
-crate = "flui-animation"
-type = "BouncingScrollSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "BoundedFrictionSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "FrictionSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "PiecewiseLinear"
-
-[[allow]]
-crate = "flui-animation"
-type = "PlaybackRate"
-
-[[allow]]
-crate = "flui-animation"
-type = "SimulationBounds"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringCurve"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringDescription"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringRest"
-
-[[allow]]
-crate = "flui-animation"
-type = "SpringSimulation"
-
-[[allow]]
-crate = "flui-animation"
-type = "Tolerance"
-
-[[allow]]
-crate = "flui-animation"
-type = "ValueRange"
-
-[[allow]]
-crate = "flui-foundation"
-type = "DevicePixelRatio"
-
-[[allow]]
-crate = "flui-foundation"
-type = "TextSize"
-
-[[allow]]
-crate = "flui-foundation"
-type = "WindowMetrics"
-
-[[allow]]
 crate = "flui-native"
 type = "ArboardClipboard"
 
@@ -165,40 +101,8 @@ crate = "flui-native"
 type = "X11Loop"
 
 [[allow]]
-crate = "flui-platform"
-type = "Distance"
-
-[[allow]]
-crate = "flui-platform"
-type = "FlingSpeeds"
-
-[[allow]]
-crate = "flui-platform"
-type = "Locale"
-
-[[allow]]
-crate = "flui-platform"
-type = "NativeMouseGeometry"
-
-[[allow]]
-crate = "flui-platform"
-type = "NativeTouchGeometry"
-
-[[allow]]
-crate = "flui-platform"
-type = "PointerFrame"
-
-[[allow]]
-crate = "flui-platform"
-type = "Utf16Range"
-
-[[allow]]
 crate = "flui-runtime"
 type = "UiRuntime"
-
-[[allow]]
-crate = "flui-scheduler"
-type = "OwnerFrame"
 
 [[allow]]
 crate = "flui-widgets"

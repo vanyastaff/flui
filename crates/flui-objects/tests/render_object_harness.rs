@@ -1704,21 +1704,21 @@ fn harness_icon_resolves_square_and_optional_glyph_together() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
     use flui_painting::TextSizing;
 
-    let authored = TextSize::new(20.0).expect("valid side");
+    let authored = TextSize::try_new(20.0).expect("valid side");
     let exact = TextSizing::exact([
         (
             TextSizeRequest {
                 size: authored,
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(32.0).expect("valid body size"),
+            TextSize::try_new(32.0).expect("valid body size"),
         ),
         (
             TextSizeRequest {
                 size: authored,
                 profile: TextScaleProfile::Headline,
             },
-            TextSize::new(45.0).expect("valid headline size"),
+            TextSize::try_new(45.0).expect("valid headline size"),
         ),
     ])
     .expect("consistent answers");
@@ -1772,14 +1772,17 @@ fn harness_icon_without_a_glyph_retains_its_committed_size_answer() {
     use flui_painting::{TextSizing, TextSizingAdmissionError};
 
     let request = TextSizeRequest {
-        size: TextSize::new(20.0).expect("valid authored icon side"),
+        size: TextSize::try_new(20.0).expect("valid authored icon side"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
     admission.set_warm_capacity(1);
     let cohort = sizing.begin_cohort();
     admission
-        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .admit([(
+            request,
+            TextSize::try_new(30.5).expect("valid resolved side"),
+        )])
         .expect("initial captured answer");
     let run = RenderTester::mount(box_node(
         RenderIcon::new(20.0, None, flui_painting::typography::TextStyle::default())
@@ -1800,16 +1803,16 @@ fn harness_icon_without_a_glyph_retains_its_committed_size_answer() {
     admission
         .admit([(
             TextSizeRequest {
-                size: TextSize::new(40.0).expect("valid unrelated request"),
+                size: TextSize::try_new(40.0).expect("valid unrelated request"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(50.0).expect("valid unrelated answer"),
+            TextSize::try_new(50.0).expect("valid unrelated answer"),
         )])
         .expect("a newer answer replaces the one-entry warm history");
     let error = admission
         .admit([(
             request,
-            TextSize::new(20.0).expect("valid conflicting size"),
+            TextSize::try_new(20.0).expect("valid conflicting size"),
         )])
         .expect_err("live icon geometry must retain the original captured answer");
     assert!(matches!(
@@ -1824,13 +1827,16 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     use flui_painting::{TextSizing, TextSizingAdmissionError};
 
     let request = TextSizeRequest {
-        size: TextSize::new(20.0).expect("valid authored icon side"),
+        size: TextSize::try_new(20.0).expect("valid authored icon side"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
     admission.set_warm_capacity(1);
     admission
-        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .admit([(
+            request,
+            TextSize::try_new(30.5).expect("valid resolved side"),
+        )])
         .expect("initial captured answer");
     let first_attempt = sizing.begin_cohort();
     let mut run = RenderTester::mount(box_node(
@@ -1869,16 +1875,16 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     admission
         .admit([(
             TextSizeRequest {
-                size: TextSize::new(40.0).expect("valid unrelated request"),
+                size: TextSize::try_new(40.0).expect("valid unrelated request"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(50.0).expect("valid unrelated answer"),
+            TextSize::try_new(50.0).expect("valid unrelated answer"),
         )])
         .expect("evict the original answer from warm history");
     let error = admission
         .admit([(
             request,
-            TextSize::new(20.0).expect("valid conflicting size"),
+            TextSize::try_new(20.0).expect("valid conflicting size"),
         )])
         .expect_err("the new attempt must retain the answer observed by its intrinsic query");
     assert!(matches!(

@@ -117,11 +117,11 @@ fn spring() -> Result<SpringDescription, SimulationError> {
 /// The run that brings a released overlay back: its fraction, from one to
 /// rest.
 pub(super) fn release_run() -> Result<SpringSimulation, SimulationError> {
-    SpringSimulation::new(spring()?, 1.0, 0.0, 0.0, Tolerance::new(1e-3, 1e-2)?)
+    SpringSimulation::try_new(spring()?, 1.0, 0.0, 0.0, Tolerance::try_new(1e-3, 1e-2)?)
 }
 
 /// The run of a fling stopped at its boundary at `speed` (viewport pixels
 /// per second): the overshoot past the bound in pixels, out and back.
 pub(super) fn overshoot_run(speed: f64) -> Result<SpringSimulation, SimulationError> {
-    SpringSimulation::new(spring()?, 0.0, 0.0, speed, Tolerance::new(0.25, 1.0)?)
+    SpringSimulation::try_new(spring()?, 0.0, 0.0, speed, Tolerance::try_new(0.25, 1.0)?)
 }

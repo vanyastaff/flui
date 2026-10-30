@@ -32,7 +32,7 @@ impl DevicePixelRatio {
 
     /// The ratio, or `None` when `ratio` is zero, negative or not finite.
     #[must_use]
-    pub fn new(ratio: f64) -> Option<Self> {
+    pub fn try_new(ratio: f64) -> Option<Self> {
         (ratio.is_finite() && ratio > 0.0).then_some(Self(ratio))
     }
 

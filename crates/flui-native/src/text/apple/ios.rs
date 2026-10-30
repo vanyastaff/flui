@@ -230,6 +230,6 @@ impl crate::text::sizing::NativeTextSize for Snapshot {
                 message: "UIKit rejected the native text size query".into(),
             }
         })?;
-        TextSize::new(size).map_err(Into::into)
+        TextSize::try_new(size).map_err(Into::into)
     }
 }

@@ -62,7 +62,7 @@ impl TextSize {
         clippy::cast_possible_truncation,
         reason = "validate the shaping representation"
     )]
-    pub fn new(value: f64) -> Result<Self, TextSizeError> {
+    pub fn try_new(value: f64) -> Result<Self, TextSizeError> {
         let shaped = value as f32;
         if value.is_finite() && value > 0.0 && shaped.is_finite() && shaped > 0.0 {
             Ok(Self(value.to_bits()))
@@ -82,7 +82,7 @@ impl TryFrom<f64> for TextSize {
     type Error = TextSizeError;
 
     fn try_from(value: f64) -> Result<Self, Self::Error> {
-        Self::new(value)
+        Self::try_new(value)
     }
 }
 

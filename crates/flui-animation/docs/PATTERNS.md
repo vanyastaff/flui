@@ -48,7 +48,7 @@ use flui_animation::{AnimationController, ValueRange};
 use std::time::Duration;
 
 let controller = AnimationController::builder(Duration::from_millis(300))
-    .bounds(ValueRange::new(0.0, 100.0).expect("finite range"))
+    .bounds(ValueRange::try_new(0.0, 100.0).expect("finite range"))
     .initial_value(50.0)
     .build();
 ```

@@ -223,7 +223,7 @@ impl OwnerFrame {
     ///
     /// [`OwnerFrameError::AlreadyOwned`] while another `OwnerFrame` for
     /// `scheduler` lives.
-    pub fn new(scheduler: &UpdateScheduler) -> Result<Self, OwnerFrameError> {
+    pub fn try_new(scheduler: &UpdateScheduler) -> Result<Self, OwnerFrameError> {
         Self::with_tasks(scheduler, TaskStore::new())
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
 
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         owner
             .post_frame_handle()
             .schedule(|_| panic!("post-frame probe"))
@@ -1098,7 +1098,7 @@ mod tests {
 
     fn post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work() {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         let log = Arc::new(Mutex::new(Vec::new()));
         let panic_calls = Rc::new(Cell::new(0));
         let counted = panic_calls.clone();
@@ -1183,7 +1183,7 @@ mod tests {
         }
 
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
         let handle = owner.post_frame_handle();
         let drops = Rc::new(Cell::new(0));
         let ran = Rc::new(Cell::new(false));

@@ -179,7 +179,7 @@ mod tests {
     use super::*;
 
     fn l(language: &str, country: Option<&str>) -> Locale {
-        Locale::new(language, country).expect("valid fixture locale")
+        Locale::try_new(language, country).expect("valid fixture locale")
     }
 
     #[test]

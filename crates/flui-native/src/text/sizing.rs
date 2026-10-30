@@ -189,7 +189,7 @@ mod tests {
             std::thread::current().id(),
         );
         let request = TextSizeRequest {
-            size: TextSize::new(16.0).expect("valid authored size"),
+            size: TextSize::try_new(16.0).expect("valid authored size"),
             profile: flui_foundation::TextScaleProfile::Body,
         };
         assert!(matches!(

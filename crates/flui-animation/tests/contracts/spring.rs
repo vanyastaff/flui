@@ -55,7 +55,7 @@ fn spring(omega: f64, zeta: f64) -> SpringDescription {
 
 /// A tolerance small enough that no reference row is at rest yet.
 fn exact() -> Tolerance {
-    Tolerance::new(f64::MIN_POSITIVE, f64::MIN_POSITIVE).expect("positive tolerance")
+    Tolerance::try_new(f64::MIN_POSITIVE, f64::MIN_POSITIVE).expect("positive tolerance")
 }
 
 fn assert_close(label: &str, actual: f64, expected: f64) {
@@ -112,45 +112,45 @@ fn assert_overflow<T: std::fmt::Debug>(result: Result<T, SimulationError>) {
 
 fn mass_nan() {
     assert_not_finite(
-        SpringDescription::new(f64::NAN, 1.0, 1.0),
+        SpringDescription::try_new(f64::NAN, 1.0, 1.0),
         SimulationParameter::Mass,
     );
 }
 fn mass_zero() {
     assert_refused(
-        SpringDescription::new(0.0, 1.0, 1.0),
+        SpringDescription::try_new(0.0, 1.0, 1.0),
         SimulationParameter::Mass,
     );
 }
 fn stiffness_infinite() {
     assert_not_finite(
-        SpringDescription::new(1.0, f64::INFINITY, 1.0),
+        SpringDescription::try_new(1.0, f64::INFINITY, 1.0),
         SimulationParameter::Stiffness,
     );
 }
 fn stiffness_negative() {
     assert_refused(
-        SpringDescription::new(1.0, -100.0, 1.0),
+        SpringDescription::try_new(1.0, -100.0, 1.0),
         SimulationParameter::Stiffness,
     );
 }
 fn damping_zero_never_rests() {
     assert_refused(
-        SpringDescription::new(1.0, 100.0, 0.0),
+        SpringDescription::try_new(1.0, 100.0, 0.0),
         SimulationParameter::Damping,
     );
 }
 fn damping_negative() {
     assert_refused(
-        SpringDescription::new(1.0, 100.0, -1.0),
+        SpringDescription::try_new(1.0, 100.0, -1.0),
         SimulationParameter::Damping,
     );
 }
 fn frequency_overflows() {
-    assert_overflow(SpringDescription::new(1e-300, 1e300, 1.0));
+    assert_overflow(SpringDescription::try_new(1e-300, 1e300, 1.0));
 }
 fn damping_ratio_overflows() {
-    assert_overflow(SpringDescription::new(1e-300, 1e-300, 1e300));
+    assert_overflow(SpringDescription::try_new(1e-300, 1e-300, 1e300));
 }
 fn duration_zero() {
     assert_refused(
@@ -227,7 +227,7 @@ fn damping_ratio_refusal_does_not_unwind() {
     }
     let recovered =
         SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("valid input after refusal");
-    let simulation = SpringSimulation::new(recovered, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
+    let simulation = SpringSimulation::try_new(recovered, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
         .expect("refusal does not prevent later motion");
     assert!(simulation.x(0.1) > 0.0 && simulation.x(0.1) < 1.0);
     assert!(simulation.is_done(10.0));
@@ -240,7 +240,10 @@ fn all_spring_constructors_refuse_nonfinite_parameters() {
             (1.0, value, 20.0, SimulationParameter::Stiffness),
             (1.0, 100.0, value, SimulationParameter::Damping),
         ] {
-            assert_not_finite(SpringDescription::new(mass, stiffness, damping), parameter);
+            assert_not_finite(
+                SpringDescription::try_new(mass, stiffness, damping),
+                parameter,
+            );
         }
         assert_not_finite(
             SpringDescription::with_duration_and_bounce(Duration::from_millis(500), value),
@@ -254,13 +257,13 @@ fn all_spring_constructors_refuse_nonfinite_parameters() {
 }
 fn simulation_start_nan() {
     assert_not_finite(
-        SpringSimulation::new(spring(10.0, 1.0), f64::NAN, 0.0, 0.0, Tolerance::DEFAULT),
+        SpringSimulation::try_new(spring(10.0, 1.0), f64::NAN, 0.0, 0.0, Tolerance::DEFAULT),
         SimulationParameter::Position,
     );
 }
 fn simulation_end_infinite() {
     assert_not_finite(
-        SpringSimulation::new(
+        SpringSimulation::try_new(
             spring(10.0, 1.0),
             0.0,
             f64::INFINITY,
@@ -272,12 +275,12 @@ fn simulation_end_infinite() {
 }
 fn simulation_velocity_nan() {
     assert_not_finite(
-        SpringSimulation::new(spring(10.0, 1.0), 0.0, 1.0, f64::NAN, Tolerance::DEFAULT),
+        SpringSimulation::try_new(spring(10.0, 1.0), 0.0, 1.0, f64::NAN, Tolerance::DEFAULT),
         SimulationParameter::Velocity,
     );
 }
 fn simulation_displacement_overflows() {
-    assert_overflow(SpringSimulation::new(
+    assert_overflow(SpringSimulation::try_new(
         spring(10.0, 1.0),
         f64::MAX,
         -f64::MAX,
@@ -332,13 +335,13 @@ fn spring_constructors_refuse_outside_the_admitted_domain() {
 /// non-finite one says only that the input is not finite.
 fn refusal_messages_name_the_admitted_range() {
     let message = |error: SimulationError| error.to_string();
-    let unit = flui_animation::SpringCurve::new(
+    let unit = flui_animation::SpringCurve::try_new(
         spring(10.0, 1.0),
-        Tolerance::new(1.5, f64::INFINITY).expect("tolerance"),
+        Tolerance::try_new(1.5, f64::INFINITY).expect("tolerance"),
     );
     for (refusal, expected) in [
         (
-            SpringDescription::new(0.0, 1.0, 1.0).map(drop),
+            SpringDescription::try_new(0.0, 1.0, 1.0).map(drop),
             "mass = 0 is outside (0, ∞)",
         ),
         (
@@ -346,16 +349,16 @@ fn refusal_messages_name_the_admitted_range() {
             "bounce = 2 is outside (-1, 1)",
         ),
         (
-            FrictionSimulation::new(1.5, 0.0, 1.0, Tolerance::DEFAULT).map(drop),
+            FrictionSimulation::try_new(1.5, 0.0, 1.0, Tolerance::DEFAULT).map(drop),
             "drag = 1.5 is outside (0, 1)",
         ),
         (
-            Tolerance::new(1.0, -1.0).map(drop),
+            Tolerance::try_new(1.0, -1.0).map(drop),
             "velocity = -1 is outside (0, ∞]",
         ),
         (unit.map(drop), "unit distance = 1.5 is outside (0, 1)"),
         (
-            SpringDescription::new(f64::NAN, 1.0, 1.0).map(drop),
+            SpringDescription::try_new(f64::NAN, 1.0, 1.0).map(drop),
             "mass is not finite",
         ),
     ] {
@@ -366,8 +369,8 @@ fn refusal_messages_name_the_admitted_range() {
 // --- analytic reference --------------------------------------------------
 
 fn check_reference(zeta: f64, omega: f64, x0: f64, v0: f64, t: f64, x: f64, v: Option<f64>) {
-    let sim =
-        SpringSimulation::new(spring(omega, zeta), x0, 0.0, v0, exact()).expect("admitted spring");
+    let sim = SpringSimulation::try_new(spring(omega, zeta), x0, 0.0, v0, exact())
+        .expect("admitted spring");
     assert_close("x", sim.x(t), x);
     if let Some(v) = v {
         assert_close("dx", sim.dx(t), v);
@@ -508,7 +511,7 @@ fn overdamped_large_time_stays_finite() {
 fn heavy_damping_keeps_its_slow_root() {
     // λs = −ω/(ζ + √(ζ² − 1)) ≈ −ω/(2ζ): the spring still moves.
     for zeta in [1e6, 1e8, 1e12] {
-        let sim = SpringSimulation::new(spring(10.0, zeta), 1.0, 0.0, 0.0, Tolerance::DEFAULT)
+        let sim = SpringSimulation::try_new(spring(10.0, zeta), 1.0, 0.0, 0.0, Tolerance::DEFAULT)
             .expect("admitted spring");
         let expected = (-10.0 / (2.0 * zeta)).exp();
         assert_close("slow root", sim.x(1.0), expected);
@@ -544,9 +547,9 @@ fn matches_published(duration_ms: u64, bounce: f64, stiffness: f64, damping: f64
     let perceptual =
         SpringDescription::with_duration_and_bounce(Duration::from_millis(duration_ms), bounce)
             .expect("admitted perceptual spring");
-    let physical = SpringDescription::new(1.0, stiffness, damping).expect("admitted spring");
-    let a = SpringSimulation::new(perceptual, 1.0, 0.0, 0.0, exact()).expect("simulation");
-    let b = SpringSimulation::new(physical, 1.0, 0.0, 0.0, exact()).expect("simulation");
+    let physical = SpringDescription::try_new(1.0, stiffness, damping).expect("admitted spring");
+    let a = SpringSimulation::try_new(perceptual, 1.0, 0.0, 0.0, exact()).expect("simulation");
+    let b = SpringSimulation::try_new(physical, 1.0, 0.0, 0.0, exact()).expect("simulation");
     for t in [0.05, 0.1, 0.25, 0.5] {
         assert_close("perceptual", a.x(t), b.x(t));
     }
@@ -579,7 +582,7 @@ fn perceptual(bounce: f64) -> SpringDescription {
         .expect("admitted bounce")
 }
 fn x_at(spring: SpringDescription, t: f64) -> f64 {
-    SpringSimulation::new(spring, 1.0, 0.0, 0.0, exact())
+    SpringSimulation::try_new(spring, 1.0, 0.0, 0.0, exact())
         .expect("simulation")
         .x(t)
 }
@@ -663,18 +666,19 @@ fn assert_time_domain(sim: &dyn Simulation, start: f64, velocity: f64, end: f64)
 }
 fn spring_edges() {
     for zeta in [0.3, 1.0, 3.0] {
-        let sim = SpringSimulation::new(spring(20.0, zeta), 3.0, 10.0, -4.0, Tolerance::DEFAULT)
-            .expect("spring");
+        let sim =
+            SpringSimulation::try_new(spring(20.0, zeta), 3.0, 10.0, -4.0, Tolerance::DEFAULT)
+                .expect("spring");
         assert_time_domain(&sim, 3.0, -4.0, 10.0);
     }
 }
 fn friction_edges() {
-    let sim = FrictionSimulation::new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction");
+    let sim = FrictionSimulation::try_new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction");
     assert_time_domain(&sim, 5.0, 300.0, 5.0 - 300.0 / 0.135_f64.ln());
 }
 fn bouncing_edges() {
-    let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");
-    let sim = BouncingScrollSimulation::new(
+    let bounds = SimulationBounds::try_new(0.0, 100.0).expect("bounds");
+    let sim = BouncingScrollSimulation::try_new(
         spring(22.0, 0.75),
         0.135,
         90.0,
@@ -711,7 +715,7 @@ proptest! {
         x0 in -1e6..=1e6_f64,
         v0 in -1e7..=1e7_f64,
     ) {
-        let sim = SpringSimulation::new(spring(omega, zeta), x0, 0.0, v0, Tolerance::DEFAULT)
+        let sim = SpringSimulation::try_new(spring(omega, zeta), x0, 0.0, v0, Tolerance::DEFAULT)
             .expect("an admitted spring builds");
         for t in [0.0, 1e-9, 1e-3, 0.1, 1.0, 10.0, 1e3, 1e9, 1e300, f64::INFINITY] {
             let (x, v) = (sim.x(t), sim.dx(t));
@@ -751,12 +755,12 @@ proptest! {
         derived in any::<bool>(),
     ) {
         let tolerance = if derived {
-            Tolerance::new(0.5, f64::INFINITY).expect("tolerance")
+            Tolerance::try_new(0.5, f64::INFINITY).expect("tolerance")
         } else {
             Tolerance::DEFAULT
         };
         let (distance, speed) = if derived { (0.5, 0.5 * omega) } else { (1e-3, 1e-3) };
-        let sim = SpringSimulation::new(spring(omega, zeta), x0, 0.0, v0, tolerance)
+        let sim = SpringSimulation::try_new(spring(omega, zeta), x0, 0.0, v0, tolerance)
             .expect("spring");
         let rest = observed_rest(&sim);
         // The settle boundary: exactly the target from `rest` on.
@@ -796,7 +800,7 @@ proptest! {
         zeta in log_uniform(0.3, 3.0),
         v0 in -20.0..=20.0_f64,
     ) {
-        let sim = SpringSimulation::new(spring(omega, zeta), 0.0, 1.0, v0, Tolerance::DEFAULT)
+        let sim = SpringSimulation::try_new(spring(omega, zeta), 0.0, 1.0, v0, Tolerance::DEFAULT)
             .expect("spring");
         let rest = observed_rest(&sim);
         let mut at_sixths: Vec<Vec<f64>> = Vec::new();
@@ -863,11 +867,11 @@ fn animated_spring() -> SpringDescription {
 }
 
 fn refuses_non_finite_initial_value() {
-    assert!(AnimatedValue::new(f64::NAN, animated_spring()).is_err());
-    assert!(AnimatedValue::new(f64::INFINITY, animated_spring()).is_err());
+    assert!(AnimatedValue::try_new(f64::NAN, animated_spring()).is_err());
+    assert!(AnimatedValue::try_new(f64::INFINITY, animated_spring()).is_err());
 }
 fn refused_target_leaves_the_value_unchanged() {
-    let mut value = AnimatedValue::new(0.0_f64, animated_spring()).expect("finite");
+    let mut value = AnimatedValue::try_new(0.0_f64, animated_spring()).expect("finite");
     value.animate_to(100.0).expect("finite target");
     value.advance(Duration::from_millis(50));
     let before = value.value();
@@ -881,7 +885,7 @@ fn refused_target_leaves_the_value_unchanged() {
     assert_eq!(value.value(), 100.0);
 }
 fn retarget_after_rest_starts_still_at_the_old_target() {
-    let mut value = AnimatedValue::new(0.0_f64, animated_spring()).expect("finite");
+    let mut value = AnimatedValue::try_new(0.0_f64, animated_spring()).expect("finite");
     value.animate_to(10.0).expect("finite target");
     value.advance(Duration::from_secs(30));
     value.animate_to(20.0).expect("finite target");
@@ -896,7 +900,7 @@ fn retarget_after_rest_starts_still_at_the_old_target() {
 fn retarget_preserves_velocity() {
     // Midway toward 100, retarget to 0: momentum carries the value further
     // toward 100 before the new spring pulls it back.
-    let mut value = AnimatedValue::new(0.0_f64, animated_spring()).expect("finite");
+    let mut value = AnimatedValue::try_new(0.0_f64, animated_spring()).expect("finite");
     value.animate_to(100.0).expect("finite target");
     value.advance(Duration::from_millis(100));
     let position = value.value();
@@ -937,7 +941,7 @@ proptest! {
         frame_nanos in 1_000_000_u64..40_000_000,
         target in -1e4..=1e4_f64,
     ) {
-        let mut stepped = AnimatedValue::new(0.0_f64, animated_spring()).expect("finite");
+        let mut stepped = AnimatedValue::try_new(0.0_f64, animated_spring()).expect("finite");
         stepped.animate_to(target).expect("finite target");
         let mut once = stepped.clone();
         let dt = Duration::from_nanos(frame_nanos);
@@ -974,7 +978,7 @@ fn assert_finite_and_resting(label: &str, sim: &SpringSimulation) {
 fn phase_past_f64_range() {
     let spring =
         SpringDescription::with_damping_ratio(1.0, 1e308, 1e-308).expect("admitted spring");
-    if let Ok(sim) = SpringSimulation::new(spring, 1.0, 0.0, 0.0, Tolerance::DEFAULT) {
+    if let Ok(sim) = SpringSimulation::try_new(spring, 1.0, 0.0, 0.0, Tolerance::DEFAULT) {
         assert_finite_and_resting("phase", &sim);
     }
 }
@@ -982,7 +986,7 @@ fn phase_past_f64_range() {
 /// The signed coefficients cancel, but their absolute sum overflows.
 fn rest_envelope_past_f64_range() {
     let spring = SpringDescription::with_damping_ratio(1.0, 1.0, 1.0).expect("admitted spring");
-    let sim = SpringSimulation::new(spring, 1e308, 0.0, -1e308, Tolerance::DEFAULT)
+    let sim = SpringSimulation::try_new(spring, 1e308, 0.0, -1e308, Tolerance::DEFAULT)
         .expect("the displacement and its rates are finite");
     assert_finite_and_resting("envelope", &sim);
     assert!(sim.is_done(1e3), "both samples are at rest by t = 1000");
@@ -991,7 +995,7 @@ fn rest_envelope_past_f64_range() {
 /// The displacement is finite but `end + displacement` is not.
 fn position_past_f64_range() {
     let spring = SpringDescription::with_damping_ratio(1.0, 1e-6, 1.0).expect("admitted spring");
-    let sim = SpringSimulation::new(spring, f64::MAX, f64::MAX, 1e307, Tolerance::DEFAULT)
+    let sim = SpringSimulation::try_new(spring, f64::MAX, f64::MAX, 1e307, Tolerance::DEFAULT)
         .expect("the displacement and its rates are finite");
     assert_finite_and_resting("translation", &sim);
     assert_eq!(sim.x(1.0), f64::MAX, "the overflowing sample saturates");
@@ -1000,7 +1004,7 @@ fn position_past_f64_range() {
 /// Finite inputs do not imply representable trajectory coefficients.
 fn constructor_refuses_coefficient_overflow() {
     let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("admitted spring");
-    assert_overflow(SpringSimulation::new(
+    assert_overflow(SpringSimulation::try_new(
         spring,
         1e308,
         1.1e308,
@@ -1017,7 +1021,7 @@ fn fling_with_overflowing_spring_preserves_the_admitted_run() {
 }
 
 fn assert_fling_refusal_preserves_run(damping_ratio: f64) {
-    let controller = flui_animation::ValueRange::new(1e308, 1.1e308)
+    let controller = flui_animation::ValueRange::try_new(1e308, 1.1e308)
         .map(|bounds| {
             AnimationController::builder(Duration::from_secs(1))
                 .bounds(bounds)
@@ -1112,10 +1116,10 @@ proptest! {
         end in any_magnitude(),
         velocity in any_magnitude(),
     ) {
-        let Ok(spring) = SpringDescription::new(mass, stiffness, damping) else {
+        let Ok(spring) = SpringDescription::try_new(mass, stiffness, damping) else {
             return Ok(());
         };
-        if let Ok(sim) = SpringSimulation::new(spring, start, end, velocity, Tolerance::DEFAULT) {
+        if let Ok(sim) = SpringSimulation::try_new(spring, start, end, velocity, Tolerance::DEFAULT) {
             assert_finite_and_resting("property", &sim);
         }
     }

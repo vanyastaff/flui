@@ -1775,7 +1775,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
 }
 
 fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
-    DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods
@@ -1840,7 +1840,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
                 .map(|geometry| {
                     let [area_w, area_h] = geometry.double_click_area;
                     let [drag_w, drag_h] = geometry.drag_tolerance;
-                    NativeMouseGeometry::new(
+                    NativeMouseGeometry::try_new(
                         Size::new(area_w, area_h),
                         Size::new(drag_w, drag_h),
                         pixel_ratio(geometry.pixel_ratio)?,
@@ -1851,7 +1851,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
             native_touch_geometry: gestures
                 .native_touch_geometry
                 .map(|geometry| {
-                    NativeTouchGeometry::new(
+                    NativeTouchGeometry::try_new(
                         geometry.touch_slop,
                         geometry.double_tap_slop,
                         geometry.min_fling,
@@ -2334,7 +2334,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     let metrics = metrics
         .map(|wire::WindowMetrics { physical, scale }| {
             let [width, height] = physical;
-            WindowMetrics::new(Size::new(width, height), scale)
+            WindowMetrics::try_new(Size::new(width, height), scale)
                 .map_err(|error| invalid(format!("metrics {width}x{height} at {scale}: {error}")))
         })
         .transpose()?;

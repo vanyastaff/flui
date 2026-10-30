@@ -27,13 +27,13 @@ pub(crate) struct AnimatedValue<T: TwoWayConverter + 'static> {
 }
 
 impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
-    pub(crate) fn new(initial: T, spring: SpringDescription) -> Result<Self, AnimationError> {
+    pub(crate) fn try_new(initial: T, spring: SpringDescription) -> Result<Self, AnimationError> {
         Self::with_motion(initial, MotionSpec::Spring(spring))
     }
 
     pub(crate) fn with_motion(initial: T, motion: MotionSpec) -> Result<Self, AnimationError> {
         let registry = Vsync::new();
-        let value = DrivenValue::new(initial.clone(), motion.clone(), Some(&registry))?;
+        let value = DrivenValue::try_new(initial.clone(), motion.clone(), Some(&registry))?;
         Ok(Self {
             value,
             registry,

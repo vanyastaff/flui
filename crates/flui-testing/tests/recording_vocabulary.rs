@@ -244,7 +244,7 @@ fn preferences(values: SystemPreferences) -> InputRecord {
 
 /// Preferences with every field observed.
 fn full_preferences() -> SystemPreferences {
-    let ratio = DevicePixelRatio::new(1.5).expect("positive");
+    let ratio = DevicePixelRatio::try_new(1.5).expect("positive");
     SystemPreferences::default()
         .with_text_scale(1.25)
         .expect("in range")
@@ -262,11 +262,11 @@ fn full_preferences() -> SystemPreferences {
                 .with_double_tap_interval(Duration::from_millis(300))
                 .with_long_press_timeout(Duration::from_millis(450))
                 .with_native_mouse_geometry(
-                    NativeMouseGeometry::new(Size::new(4, 4), Size::new(2, 3), ratio)
+                    NativeMouseGeometry::try_new(Size::new(4, 4), Size::new(2, 3), ratio)
                         .expect("valid"),
                 )
                 .with_native_touch_geometry(
-                    NativeTouchGeometry::new(8, 100, 50, 8000, ratio).expect("valid"),
+                    NativeTouchGeometry::try_new(8, 100, 50, 8000, ratio).expect("valid"),
                 ),
         )
         .with_wheel(
@@ -391,7 +391,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             InputOutcome::Queued,
         )),
         ("WindowObservation", "Metrics") => one(window(WindowObservation::Metrics(
-            WindowMetrics::new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
+            WindowMetrics::try_new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
         ))),
         ("WindowObservation", "Focus") => one(window(WindowObservation::Focus(false))),
         ("WindowObservation", "Visibility") => one(window(WindowObservation::Visibility(true))),
@@ -408,7 +408,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }
         ("PlatformInput", "PointerFrame") => one(platform(PlatformInput::PointerFrame(
-            PointerFrame::new(vec![
+            PointerFrame::try_new(vec![
                 PointerEvent::Down(press(touch())),
                 PointerEvent::Down(press(info(PointerKind::Touch, PointerRole::Additional))),
             ])

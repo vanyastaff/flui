@@ -129,7 +129,7 @@ fn sample_state(
             state.hidden,
             state.execution,
             // The backing store is the drawable area; an empty box is none.
-            flui_foundation::geometry::WindowMetrics::new(
+            flui_foundation::geometry::WindowMetrics::try_new(
                 flui_foundation::geometry::DeviceSize::new(
                     i32::try_from(state.backing.width).unwrap_or(i32::MAX),
                     i32::try_from(state.backing.height).unwrap_or(i32::MAX),

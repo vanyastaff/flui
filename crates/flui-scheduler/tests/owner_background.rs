@@ -12,7 +12,7 @@ use flui_scheduler::{ExecutionError, IdleDeadline, Instant, OwnerFrame, UpdateSc
 
 fn background_batches_are_bounded_with_frames_disabled() {
     let mut scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     scheduler.set_frames_enabled(false);
     let visual_calls = Rc::new(Cell::new(0));
     let observed = Rc::clone(&visual_calls);
@@ -81,7 +81,7 @@ fn background_batches_are_bounded_with_frames_disabled() {
 fn failed_preparation_restores_hook_delivery_and_preserves_ready_work() {
     for hook_present in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+        let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
         let polls = Rc::new(Cell::new(0));
         let observed = Rc::clone(&polls);
         let token = owner.async_driver().spawn_local(Box::pin(async move {
@@ -131,7 +131,7 @@ fn failed_preparation_restores_hook_delivery_and_preserves_ready_work() {
 
 fn preparation_generated_demand_survives_the_ready_poll() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let task_ran = Rc::new(Cell::new(false));
     let observed = Rc::clone(&task_ran);
     let token = owner.async_driver().spawn_local(Box::pin(async move {
@@ -192,7 +192,7 @@ impl Drop for HookCapture {
 fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
     for hook_fails in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+        let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
         RECOVERY_OWNER
             .with(|slot| *slot.borrow_mut() = Some((Rc::clone(&owner), scheduler.downgrade())));
         let _scope = OwnerScope;
@@ -293,7 +293,7 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
 
 fn healthy_wake_retirement_observes_newly_caught_failure() {
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     RECOVERY_OWNER.with(|slot| {
         *slot.borrow_mut() = Some((Rc::clone(&owner), scheduler.downgrade()));
     });
@@ -333,7 +333,7 @@ fn healthy_wake_retirement_observes_newly_caught_failure() {
 
 fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let hook_drops = Arc::new(AtomicUsize::new(0));
     let hook_capture = HookCapture(Arc::clone(&hook_drops));
     let (entered, started) = std::sync::mpsc::channel();
@@ -417,7 +417,7 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
 
 fn late_worker_failure_does_not_contaminate_completed_owner_custody() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let (entered, started) = std::sync::mpsc::channel();
     let (release, continue_hook) = std::sync::mpsc::channel();
     let continue_hook = std::sync::Mutex::new(continue_hook);

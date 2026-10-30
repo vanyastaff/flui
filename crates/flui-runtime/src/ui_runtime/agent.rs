@@ -956,7 +956,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             pipeline
                 .semantics_owner()
@@ -979,7 +979,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             pipeline
                 .semantics_owner()
@@ -1010,7 +1010,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         let (placement, point) = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             let placement = Placement::new(ratio, window);
             let point = pipeline
@@ -1088,7 +1088,7 @@ impl UiRuntime {
             .expect("BUG: a presentation id packs a non-zero generation");
         let before = if snapshot == Snapshot::Delta {
             Some(state.pipeline().with(|pipeline| {
-                let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                     .unwrap_or(DevicePixelRatio::ONE);
                 pipeline
                     .semantics_owner()
@@ -1147,7 +1147,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(state.id().as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         let placement = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             Placement::new(ratio, window)
         });

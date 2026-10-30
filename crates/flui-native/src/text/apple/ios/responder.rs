@@ -111,7 +111,7 @@ impl TextRange {
     }
 
     fn range(&self) -> Utf16Range {
-        Utf16Range::new(self.ivars().start.offset(), self.ivars().end.offset())
+        Utf16Range::try_new(self.ivars().start.offset(), self.ivars().end.offset())
             .expect("BUG: a range this view made starts first")
     }
 }
@@ -233,7 +233,7 @@ define_class!(
             os_entry("FluiTextInputView setMarkedText:selectedRange:", (), AfterPanic::Answer(|()| ()), || {
                 let units = marked.map(utf16).unwrap_or_default();
                 let end = selected.location.saturating_add(selected.length);
-                let selected = Utf16Range::new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
+                let selected = Utf16Range::try_new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
                     .expect("BUG: a saturating end is never before its start");
                 let edit = self.ivars().document.borrow_mut().set_marked(&units, selected);
                 self.announce("setMarkedText:selectedRange:", Some(edit));

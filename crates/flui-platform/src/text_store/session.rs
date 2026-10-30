@@ -36,7 +36,7 @@ impl Selection {
         } else {
             (self.active, self.anchor)
         };
-        Utf16Range::new(start, end).expect("BUG: an ordered pair is a valid range")
+        Utf16Range::try_new(start, end).expect("BUG: an ordered pair is a valid range")
     }
 
     /// Whether nothing is selected.

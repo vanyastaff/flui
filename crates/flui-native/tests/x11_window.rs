@@ -415,7 +415,7 @@ mod cases {
                 .ok()
                 .and_then(|cookie| cookie.reply().ok());
             let metrics = geometry.filter(|_| viewable).and_then(|geometry| {
-                WindowMetrics::new(
+                WindowMetrics::try_new(
                     Size::new(i32::from(geometry.width), i32::from(geometry.height)),
                     1.0,
                 )

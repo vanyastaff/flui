@@ -38,7 +38,7 @@ impl InputContext for Context {
 }
 
 fn span(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(Utf16Offset::new(start), Utf16Offset::new(end)).expect("an ordered span")
+    Utf16Range::try_new(Utf16Offset::new(start), Utf16Offset::new(end)).expect("an ordered span")
 }
 
 fn caret(at: usize) -> Selection {

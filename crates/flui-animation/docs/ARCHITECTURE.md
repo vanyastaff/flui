@@ -918,7 +918,7 @@ contract rather than introducing a repeat-specific special case. Pinned by
 `(f64::NEG_INFINITY, f64::INFINITY)` and is infallible: unboundedness is a
 configuration fact, never a bound value.
 
-`ValueRange::new` rejects any bound that is not finite, including a wide-open
+`ValueRange::try_new` rejects any bound that is not finite, including a wide-open
 `(NEG_INFINITY, INFINITY)` pair, AND reject a pair whose finite endpoints
 still overflow `f64` as a RANGE (`(-f64::MAX, f64::MAX)`; a bounded run's
 `target - value`/`target - start` arithmetic needs the SPAN to be finite,
@@ -1018,7 +1018,7 @@ with endpoints, controller bounds and a `RangeDefect`.** A `RepeatSpec` range
 is finite, ordered and of finite span by construction, so a NaN endpoint (which
 would reach `inner.value.clamp(lo, hi)` as the clamp's own bound and panic) and
 an overflowing span (which would make `repeat_sample` publish NaN or infinity)
-are refused by `ValueRange::new`, before any controller exists to refuse them.
+are refused by `ValueRange::try_new`, before any controller exists to refuse them.
 The controller refuses what only it can see: a range that collapses once
 clamped into its bounds (`RangeDefect::Inverted`), and, on an unbounded
 controller, a repeat given no range, which defaults to infinite bounds
@@ -1118,7 +1118,7 @@ round trips, unreachable queries and the remaining-glide rest.
   refuses NaN, infinite and non-positive inputs (an undamped spring never
   rests) and constants that overflow (`SimulationError`), the same in debug
   and release. `spring_constructors_refuse_outside_the_admitted_domain`.
-- `SpringSimulation::new` is the sole constructor and takes an explicit
+- `SpringSimulation::try_new` is the sole constructor and takes an explicit
   tolerance. Unrepresentable coefficients return `SimulationError::Overflow`;
   admission never substitutes a motion already resting at the target. Fling
   constructs its simulation before replacing any live source, direction or
@@ -1199,7 +1199,7 @@ they do not retain UI callback storage.
 ## Error Handling
 
 [`error.rs`](../src/error.rs) defines the authoritative public error variants.
-`ValueRange::new` returns the narrow `RangeDefect`; controller and animated-value
+`ValueRange::try_new` returns the narrow `RangeDefect`; controller and animated-value
 operations return `AnimationError`. `AnimationInput` identifies the refused
 value. Numeric fields, component indices and original `SimulationError` causes
 remain matchable without parsing a message. Construction of an already-validated

@@ -217,7 +217,7 @@ proptest! {
             .initial_value(if reverse { 1.0 } else { 0.0 })
             .build_on(Some(&Vsync::new()));
         let controller = owner.controller();
-        controller.set_playback_rate(PlaybackRate::new(rate).expect("finite positive rate"));
+        controller.set_playback_rate(PlaybackRate::try_new(rate).expect("finite positive rate"));
         let curve = Cubic::new(curve.0, curve.1, curve.2, curve.3);
         let _run = if reverse {
             controller.animate_back_curved(0.0, Some(duration), curve)
@@ -257,7 +257,7 @@ proptest! {
         let owner = AnimationController::builder(Duration::from_secs(1))
             .unbounded().build_on(Some(&Vsync::new()));
         let controller = owner.controller();
-        controller.set_playback_rate(PlaybackRate::new(playback).expect("positive rate"));
+        controller.set_playback_rate(PlaybackRate::try_new(playback).expect("positive rate"));
         let _old = controller.retarget(5.0, &old_motion.spec()).expect("old motion");
         controller.tick_at(Duration::ZERO);
         controller.tick_at(Duration::from_secs_f64(elapsed));
@@ -567,7 +567,7 @@ fn a_time_defined_spring_inherits_velocity() {
         SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3).unwrap();
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut owner = Owner::new(0.0, MotionSpec::Spring(description), Some(&registry)).unwrap();
+    let mut owner = Owner::try_new(0.0, MotionSpec::Spring(description), Some(&registry)).unwrap();
     let original = owner.animate_to(100.0).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
     registry.tick_all(&clock.frame(Duration::from_millis(50)));
@@ -1006,7 +1006,7 @@ fn controller_velocity_keeps_representable_products() {
             .unbounded()
             .build_on(Some(&Vsync::new()));
         let controller = owner.controller();
-        controller.set_playback_rate(PlaybackRate::new(playback).expect("finite playback"));
+        controller.set_playback_rate(PlaybackRate::try_new(playback).expect("finite playback"));
         let _run = controller
             .animate_to_curved(span, Some(duration), SuppliedSlope(slope))
             .expect("finite span");
@@ -1169,7 +1169,7 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
         let registry = Vsync::new();
         let mut clock = MotionClock::new();
         let owner = AnimationController::builder(Duration::from_secs(1))
-            .bounds(ValueRange::new(lower, upper).unwrap())
+            .bounds(ValueRange::try_new(lower, upper).unwrap())
             .initial_value(lower + (upper - lower) / 2.0)
             .build_on(Some(&registry));
         let controller = owner.controller();
@@ -1438,7 +1438,7 @@ fn a_retarget_inherits_the_reported_velocity_at_any_playback_rate() {
             let owner =
                 AnimationController::builder(Duration::from_secs(2)).build_on(Some(&Vsync::new()));
             let controller = owner.controller();
-            controller.set_playback_rate(PlaybackRate::new(rate).expect("finite rate"));
+            controller.set_playback_rate(PlaybackRate::try_new(rate).expect("finite rate"));
             let _old = start(controller);
             controller.tick_at(Duration::ZERO);
             controller.tick_at(Duration::from_secs_f64(local / rate));
@@ -1658,7 +1658,7 @@ fn a_failed_tick_preserves_a_pending_playback_rate() {
             )
             .expect("quadratic source");
         controller.tick_at(Duration::from_millis(250));
-        controller.set_playback_rate(PlaybackRate::new(2.0).expect("finite rate"));
+        controller.set_playback_rate(PlaybackRate::try_new(2.0).expect("finite rate"));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             controller.tick_at(Duration::from_millis(500));
         }));
@@ -1694,7 +1694,7 @@ impl Curve for RateChangingCurve {
             assert_eq!(self.controller.velocity(), 1.0);
             assert_eq!(self.controller.playback_rate(), PlaybackRate::NORMAL);
             self.controller
-                .set_playback_rate(PlaybackRate::new(3.0).expect("finite rate"));
+                .set_playback_rate(PlaybackRate::try_new(3.0).expect("finite rate"));
         }
         t
     }
@@ -1719,7 +1719,7 @@ fn a_rate_requested_by_a_source_remains_pending() {
             },
         )
         .expect("source can request a newer rate");
-    controller.set_playback_rate(PlaybackRate::new(2.0).expect("finite rate"));
+    controller.set_playback_rate(PlaybackRate::try_new(2.0).expect("finite rate"));
     controller.tick_at(Duration::from_millis(250));
     assert_eq!(controller.value(), 0.25);
     assert_eq!(controller.playback_rate().get(), 2.0);

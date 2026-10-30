@@ -22,7 +22,7 @@
 //!
 //! # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 //! let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.2)?;
-//! let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+//! let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 //!
 //! assert_eq!(sim.x(0.0), 0.0);
 //! assert!(sim.x(0.1) > 0.0);
@@ -212,10 +212,10 @@ fn before_start(time: f64) -> bool {
 /// ```
 /// use flui_animation::simulation::Tolerance;
 ///
-/// let precise = Tolerance::new(1e-4, 1e-4)?;
+/// let precise = Tolerance::try_new(1e-4, 1e-4)?;
 /// let screen = Tolerance::for_device_pixel_ratio(2.0)?; // a quarter logical pixel
 /// assert_ne!(precise, screen);
-/// assert!(Tolerance::new(f64::NAN, 1.0).is_err());
+/// assert!(Tolerance::try_new(f64::NAN, 1.0).is_err());
 /// # Ok::<(), flui_animation::simulation::SimulationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -247,10 +247,10 @@ impl Tolerance {
     /// ```
     /// use flui_animation::simulation::Tolerance;
     ///
-    /// assert!(Tolerance::new(0.5, f64::INFINITY).is_ok());
-    /// assert!(Tolerance::new(0.0, 1.0).is_err());
+    /// assert!(Tolerance::try_new(0.5, f64::INFINITY).is_ok());
+    /// assert!(Tolerance::try_new(0.0, 1.0).is_err());
     /// ```
-    pub fn new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
+    pub fn try_new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
         let distance = positive(SimulationParameter::Distance, distance)?;
         if velocity.is_nan() || velocity <= 0.0 {
             return Err(refused(SimulationParameter::Velocity, velocity));
@@ -276,13 +276,13 @@ impl Tolerance {
     ///
     /// assert_eq!(
     ///     Tolerance::for_device_pixel_ratio(2.0)?,
-    ///     Tolerance::new(0.25, f64::INFINITY)?,
+    ///     Tolerance::try_new(0.25, f64::INFINITY)?,
     /// );
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
     pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
         let ratio = positive(SimulationParameter::DevicePixelRatio, device_pixel_ratio)?;
-        Self::new(0.5 / ratio, f64::INFINITY)
+        Self::try_new(0.5 / ratio, f64::INFINITY)
             .map_err(|_| refused(SimulationParameter::DevicePixelRatio, device_pixel_ratio))
     }
 
@@ -365,7 +365,7 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 /// ```
 /// use flui_animation::simulation::SpringDescription;
 ///
-/// let spring = SpringDescription::new(1.0, 100.0, 20.0).unwrap();
+/// let spring = SpringDescription::try_new(1.0, 100.0, 20.0).unwrap();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpringDescription {
@@ -389,12 +389,12 @@ impl SpringDescription {
     /// ```
     /// use flui_animation::simulation::{SpringDescription, SpringType};
     ///
-    /// let spring = SpringDescription::new(1.0, 100.0, 20.0)?;
+    /// let spring = SpringDescription::try_new(1.0, 100.0, 20.0)?;
     /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
-    /// assert!(SpringDescription::new(1.0, 100.0, 0.0).is_err());
+    /// assert!(SpringDescription::try_new(1.0, 100.0, 0.0).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
+    pub fn try_new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
         let mass = positive(SimulationParameter::Mass, mass)?.sqrt();
         let stiffness = positive(SimulationParameter::Stiffness, stiffness)?.sqrt();
         let damping = positive(SimulationParameter::Damping, damping)?;
@@ -632,13 +632,13 @@ impl SpringSimulation {
     /// ```
     /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
     ///
-    /// let spring = SpringDescription::new(1.0, 100.0, 10.0)?;
-    /// let sim = SpringSimulation::new(spring, 0.0, 100.0, 0.0, Tolerance::new(0.5, f64::INFINITY)?)?;
+    /// let spring = SpringDescription::try_new(1.0, 100.0, 10.0)?;
+    /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::try_new(0.5, f64::INFINITY)?)?;
     /// assert!(!sim.is_done(0.1));
-    /// assert!(SpringSimulation::new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
+    /// assert!(SpringSimulation::try_new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn new(
+    pub fn try_new(
         spring: SpringDescription,
         start: f64,
         end: f64,
@@ -1100,15 +1100,15 @@ impl FrictionSimulation {
     /// ```
     /// use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
     ///
-    /// let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::new(0.5, f64::INFINITY)?)?;
+    /// let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::try_new(0.5, f64::INFINITY)?)?;
     /// let resting = sim.x(f64::INFINITY);
     /// assert!(resting > 0.0);
     /// assert!(sim.is_done(10.0));
     /// assert_eq!(sim.x(10.0), resting);
-    /// assert!(FrictionSimulation::new(1.0, 0.0, 1.0, Tolerance::DEFAULT).is_err());
+    /// assert!(FrictionSimulation::try_new(1.0, 0.0, 1.0, Tolerance::DEFAULT).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn new(
+    pub fn try_new(
         drag: f64,
         position: f64,
         velocity: f64,
@@ -1208,9 +1208,9 @@ impl Simulation for FrictionSimulation {
 /// ```
 /// use flui_animation::simulation::SimulationBounds;
 ///
-/// assert!(SimulationBounds::new(0.0, 100.0).is_ok());
-/// assert!(SimulationBounds::new(100.0, 0.0).is_err());
-/// assert!(SimulationBounds::new(0.0, f64::NAN).is_err());
+/// assert!(SimulationBounds::try_new(0.0, 100.0).is_ok());
+/// assert!(SimulationBounds::try_new(100.0, 0.0).is_err());
+/// assert!(SimulationBounds::try_new(0.0, f64::NAN).is_err());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimulationBounds {
@@ -1225,7 +1225,7 @@ impl SimulationBounds {
     ///
     /// [`SimulationError::InvalidBounds`] when either end is not finite or
     /// `min > max`.
-    pub fn new(min: f64, max: f64) -> Result<Self, SimulationError> {
+    pub fn try_new(min: f64, max: f64) -> Result<Self, SimulationError> {
         if min.is_finite() && max.is_finite() && min <= max {
             Ok(Self { min, max })
         } else {
@@ -1257,27 +1257,27 @@ impl BoundedFrictionSimulation {
     ///
     /// # Errors
     ///
-    /// As [`FrictionSimulation::new`].
+    /// As [`FrictionSimulation::try_new`].
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_animation::simulation::{BoundedFrictionSimulation, Simulation, SimulationBounds, Tolerance};
     ///
-    /// let bounds = SimulationBounds::new(0.0, 100.0)?;
-    /// let sim = BoundedFrictionSimulation::new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)?;
+    /// let bounds = SimulationBounds::try_new(0.0, 100.0)?;
+    /// let sim = BoundedFrictionSimulation::try_new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)?;
     /// assert!(sim.is_done(1.0));
     /// assert_eq!(sim.x(1.0), 100.0);
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn new(
+    pub fn try_new(
         drag: f64,
         position: f64,
         velocity: f64,
         bounds: SimulationBounds,
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
-        let friction = FrictionSimulation::new(drag, position, velocity, tolerance)?;
+        let friction = FrictionSimulation::try_new(drag, position, velocity, tolerance)?;
         let bound = if velocity > 0.0 {
             bounds.max
         } else {
@@ -1371,7 +1371,7 @@ impl BouncingScrollSimulation {
     ///
     /// # Errors
     ///
-    /// As [`FrictionSimulation::new`] and [`SpringSimulation::new`].
+    /// As [`FrictionSimulation::try_new`] and [`SpringSimulation::try_new`].
     ///
     /// # Examples
     ///
@@ -1381,15 +1381,15 @@ impl BouncingScrollSimulation {
     /// };
     ///
     /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
-    /// let bounds = SimulationBounds::new(0.0, 100.0)?;
-    /// let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
+    /// let bounds = SimulationBounds::try_new(0.0, 100.0)?;
+    /// let sim = BouncingScrollSimulation::try_new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
     /// let overscroll = (1..200).map(|i| sim.x(f64::from(i) * 0.01)).fold(f64::MIN, f64::max);
     /// assert!(overscroll > 100.0);
     /// assert!(sim.is_done(10.0));
     /// assert_eq!(sim.x(10.0), 100.0);
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn new(
+    pub fn try_new(
         spring: SpringDescription,
         drag: f64,
         position: f64,
@@ -1397,14 +1397,15 @@ impl BouncingScrollSimulation {
         bounds: SimulationBounds,
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
-        let edge_spring = |edge, from, v| SpringSimulation::new(spring, from, edge, v, tolerance);
+        let edge_spring =
+            |edge, from, v| SpringSimulation::try_new(spring, from, edge, v, tolerance);
         let position = finite(SimulationParameter::Position, position)?;
         let phase = if position < bounds.min {
             BouncingPhase::Spring(edge_spring(bounds.min, position, velocity)?)
         } else if position > bounds.max {
             BouncingPhase::Spring(edge_spring(bounds.max, position, velocity)?)
         } else {
-            let friction = FrictionSimulation::new(drag, position, velocity, tolerance)?;
+            let friction = FrictionSimulation::try_new(drag, position, velocity, tolerance)?;
             if bounds.contains(friction.final_x) {
                 BouncingPhase::Friction(friction)
             } else {

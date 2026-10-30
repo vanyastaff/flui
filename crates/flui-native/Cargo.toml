@@ -437,6 +437,10 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIEvent",
     "UIGestureRecognizer",
     "UIHoverGestureRecognizer",
+    # An iPad's trackpad: its two-finger scroll, pinch and rotation.
+    "UIPanGestureRecognizer",
+    "UIPinchGestureRecognizer",
+    "UIRotationGestureRecognizer",
     "UIGeometry",
     "UIKey",
     "UIResponder",
