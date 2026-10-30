@@ -599,6 +599,9 @@ impl Selections {
                 .and_then(|mut value| value.next())
                 .and_then(|size| usize::try_from(size).ok())
                 .unwrap_or(0);
+            // The header is let go before the room is taken: an owner may pad
+            // it to the read's limit.
+            drop(reply);
             if announced > MAX_TEXT {
                 // Deleting the property asked for the first chunk: it lands
                 // where no read looks.
