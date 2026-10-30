@@ -1632,6 +1632,7 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "user_drop_panic_inside_an_unwind_is_retained",
         "a_queued_command_outliving_a_teardown_failure_does_not_abort",
         "a_close_that_holds_a_failure_never_detaches",
+        "a_handler_capture_sending_on_drop_is_refused",
     ] {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
@@ -1924,6 +1925,9 @@ pub(crate) fn run_teardown_child(kind: &str) -> bool {
         "user_drop_panic_inside_an_unwind_is_retained" => {
             user_drop_panic_inside_an_unwind_is_retained
         }
+        "a_handler_capture_sending_on_drop_is_refused" => {
+            a_handler_capture_sending_on_drop_is_refused
+        }
         "a_close_that_holds_a_failure_never_detaches" => {
             a_close_that_holds_a_failure_never_detaches
         }
@@ -1992,4 +1996,56 @@ fn a_close_that_holds_a_failure_never_detaches() {
         "A left the forest"
     );
     drop(ui_runtime);
+}
+
+/// Whether [`SendsOnDrop`]'s write was refused.
+static WRITE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A frame-failure handler's capture whose destructor sends a signal write
+/// through a sender it kept, then fails.
+struct SendsOnDrop {
+    sender: UiCommandSender,
+    target: Option<flui_view::SignalSender<u32>>,
+}
+
+impl Drop for SendsOnDrop {
+    fn drop(&mut self) {
+        let target = self.target.take().expect("BUG: one drop");
+        let held = PanicsOnDrop("queued write capture failed");
+        if let Err(refused) = self.sender.send_signal_write(target, move |_, _| {
+            let _ = &held;
+        }) {
+            WRITE_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::mem::forget(refused);
+        }
+        panic!("handler capture failed");
+    }
+}
+
+/// The frame-failure handler's capture sends a write while the runtime
+/// drops and then fails: the inbox is already closed, so the write is
+/// refused rather than left for the drop glue to destroy inside the
+/// handler failure's unwind, and the process does not abort.
+fn a_handler_capture_sending_on_drop_is_refused() {
+    let ui_runtime = UiRuntime::for_test();
+    let id = ui_runtime.presentation_id();
+    let graph = ui_runtime
+        .presentation_widgets_for_test(id)
+        .with_build_owner(|owner| owner.signal_graph().clone());
+    let capture = SendsOnDrop {
+        sender: ui_runtime.command_sender(),
+        target: Some(graph.signal(0_u32).detach()),
+    };
+    ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+        move |_| {
+            let _ = &capture;
+        },
+    )));
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime)));
+    let payload = dropped.expect_err("the runtime's drop raised the capture's failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("handler capture failed")
+    );
+    assert!(WRITE_REFUSED.load(std::sync::atomic::Ordering::SeqCst));
 }
