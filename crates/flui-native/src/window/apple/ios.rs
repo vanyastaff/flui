@@ -754,10 +754,6 @@ impl FluiView {
         phase: TouchPhase,
         event: Option<&UIEvent>,
     ) {
-        // The buttons an indirect pointer holds (iOS 13.4); a finger has none.
-        let buttons = event
-            .filter(|event| event.respondsToSelector(sel!(buttonMask)))
-            .map_or(0, |event| event.buttonMask().0);
         let mut any = false;
         for touch in touches {
             let current_window = self.window();
@@ -775,11 +771,7 @@ impl FluiView {
                 }
                 continue;
             }
-            let events = self
-                .ivars()
-                .input
-                .borrow_mut()
-                .touch(&touch, phase, buttons);
+            let events = self.ivars().input.borrow_mut().touch(&touch, phase, event);
             for event in events {
                 let result = self.delivery().dispatch_input(event);
                 any |= result.default_prevented;
