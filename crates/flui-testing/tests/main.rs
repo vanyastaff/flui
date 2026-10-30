@@ -369,6 +369,10 @@ fn background_work() {
                 background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
             ),
             (
+                "background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked",
+                background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked as fn(),
+            ),
+            (
                 "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
                 background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
             ),

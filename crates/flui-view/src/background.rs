@@ -260,13 +260,19 @@ fn answer_of<T>(
 }
 
 /// Logs a panic where the work ran and keeps its payload, whose destructor
-/// may panic too, off the unwinding path.
+/// may panic too, off the unwinding path. A panicking log is contained and
+/// kept the same way, so reporting never stops the answer.
 fn panicked(payload: Box<dyn std::any::Any + Send>) -> BackgroundError {
-    tracing::error!(
-        message = flui_foundation::panic::payload_text(payload.as_ref()).unwrap_or("<opaque>"),
-        "background work panicked"
-    );
+    let report = catch_unwind(AssertUnwindSafe(|| {
+        tracing::error!(
+            message = flui_foundation::panic::payload_text(payload.as_ref()).unwrap_or("<opaque>"),
+            "background work panicked"
+        );
+    }));
     flui_foundation::panic::retain_opaque_payload(payload);
+    if let Err(diagnostic) = report {
+        flui_foundation::panic::retain_opaque_payload(diagnostic);
+    }
     BackgroundError::Panicked
 }
 

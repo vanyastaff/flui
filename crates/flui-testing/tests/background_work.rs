@@ -405,3 +405,48 @@ pub(crate) fn work_handed_to_on_complete_is_cancelled_when_its_runtime_ends() {
         "the retired runtime's work is cancelled"
     );
 }
+
+/// A log subscriber that panics on every background-work event, as a faulty
+/// one does.
+struct PanicsOnEvent;
+
+impl tracing::Subscriber for PanicsOnEvent {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event
+            .metadata()
+            .target()
+            .starts_with("flui_view::background")
+        {
+            panic!("log subscriber failed");
+        }
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+pub(crate) fn a_panicking_log_of_a_panicked_job_still_answers_panicked() {
+    let mut host = HeadlessHost::new(window());
+    let background = background(&mut host);
+    let mut task = background.compute(|| -> u8 { panic!("decode failed") });
+    let mut io = background.io(async { panic!("read failed") });
+    tracing::subscriber::with_default(PanicsOnEvent, || {
+        let _ = host.pump(Duration::ZERO);
+    });
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(task.poll(), Some(Err(BackgroundError::Panicked)));
+    assert_eq!(io.poll(), Some(Err::<(), _>(BackgroundError::Panicked)));
+}
