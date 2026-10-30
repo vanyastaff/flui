@@ -4567,6 +4567,32 @@ graph LR
   `a_header_out_of_its_stream_is_refused` и (с `native-capture`)
   `captured_streams_replay_to_what_the_session_delivered` таблицы `native_recording_contracts`.
 
+- [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
+  `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей
+  `testing`; headless-приёмник `HeadlessHaptics` в `flui-native` (не реэкспортируется, ничего не
+  записывает); `TestHost::haptic_actuator` отдаёт двойник комплекта; потребители включают
+  `flui-platform/testing` в dev-зависимостях. ADR-0264 заменяет ADR-0151 §7 (где живут двойники)
+  и последнюю фразу §6; D9, LY48 и LY50 переписаны. Проверки на Linux: clippy `--all-targets -D
+  warnings` и тесты `-p flui-platform -p flui-native -p flui-testing -p flui-runtime
+  -p flui-interaction` (`FLUI_HEADLESS=1`; `x11_window` требует openbox, в облачном контейнере
+  его нет), `xtask testing`, `xtask checks`.
+- [x] **LY47** и остаток **LY48** (`InMemoryTextStore`) — ветка `claude/project-thread-00ptwi` после #1983.
+  `LockArbiter` (из `lock.rs`, который теперь держит значения lock и `CommitGate`),
+  `CompositionLedger`, `committed_text`, `EditGeneration` → `flui_interaction::text_input`,
+  реэкспорт `flui_sdk::interaction::text_input` (строка в `tests/surface.rs`);
+  `InMemoryTextStore` → `flui_interaction::testing` (ADR-0264), реэкспорт
+  `flui_testing::text_store_kit::InMemoryTextStore`. `DEFERRED_LOCK_CAPACITY` остаётся в контракте:
+  его называет `TextStoreError::DeferredQueueFull`. Проверка границы `rg`: вне `flui-platform`
+  перенесённые типы зовут только `flui-widgets`, `flui-testing` и тесты; `flui-native` берёт
+  только `utf16::byte_range`, он остаётся в контракте. Тесты `lock_gate`, `composition_ledger` и
+  проекции IME (бывшие unit-тесты `projection.rs`) — модули `flui-interaction/tests/main.rs`;
+  у `flui-platform` больше нет dev-зависимости `proptest`. Проверки на Linux: clippy `--all-targets
+  -D warnings` по `flui-platform`, `flui-interaction`, `flui-testing`, `flui-runtime`,
+  `flui-app`, `flui-native`, `flui-widgets`, `flui-sdk`; тесты тех же crate'ов зелёные, кроме
+  строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
+  `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
+  --all-targets`; `xtask checks`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

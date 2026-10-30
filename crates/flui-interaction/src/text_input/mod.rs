@@ -75,9 +75,15 @@ use flui_platform::text_store::{
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::retain::Retain;
 
+mod arbiter;
 mod clipboard;
+mod composition_ledger;
+mod generation;
 
+pub use arbiter::LockArbiter;
 pub use clipboard::ClipboardHandle;
+pub use composition_ledger::{CompositionLedger, committed_text};
+pub use generation::EditGeneration;
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///
@@ -1406,7 +1412,7 @@ impl std::fmt::Debug for TextInputHandle {
 #[cfg(test)]
 mod tests {
 
-    use flui_platform::text_store::InMemoryTextStore;
+    use crate::testing::InMemoryTextStore;
     use parking_lot::Mutex;
 
     use super::*;

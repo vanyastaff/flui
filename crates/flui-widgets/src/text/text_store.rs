@@ -55,13 +55,16 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
+use flui_interaction::text_input::{
+    CompositionLedger, EditGeneration, LockArbiter, committed_text,
+};
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
-    LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
-    TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 

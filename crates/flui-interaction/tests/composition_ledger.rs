@@ -13,7 +13,7 @@
 
 use std::ops::Range;
 
-use flui_platform::text_store::{CompositionLedger, committed_text};
+use flui_interaction::text_input::{CompositionLedger, committed_text};
 use proptest::prelude::*;
 
 // ----------------------------------------------------------------------------

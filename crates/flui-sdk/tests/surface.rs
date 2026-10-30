@@ -88,6 +88,10 @@ mod measured {
         PointerId as _, PointerKind as _, PointerKindSet as _, PrimaryContact as _,
         RejectionReason as _, SequencedBranch as _, cancel_all as _,
     };
+    // What a text widget's store is built from (ADR-0151 §6).
+    use flui_sdk::interaction::text_input::{
+        CompositionLedger as _, EditGeneration as _, LockArbiter as _, committed_text as _,
+    };
     // The slot locks and the swipe the placement table puts in the SDK.
     use flui_sdk::interaction::{
         AxisLock as _, PhysicalEdge as _, SwipeDetails as _, SwipeGestureRecognizer as _,

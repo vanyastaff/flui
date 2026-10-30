@@ -13,7 +13,8 @@ use flui_painting::text_boundaries::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
-use flui_platform::text_store::{EditGeneration, RetainOnFailure, committed_text};
+use flui_interaction::text_input::{EditGeneration, committed_text};
+use flui_platform::text_store::RetainOnFailure;
 
 // ============================================================================
 // ControllerInner
