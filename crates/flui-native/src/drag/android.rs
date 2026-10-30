@@ -17,9 +17,9 @@
 //! the drag and reports its end, which reaches the request's end hook on the
 //! owner thread.
 //!
-//! What a clip offers, holds and answers is decided in [`clip`] with no JNI
-//! call, so every host compiles and checks it; the JNI side around it is
-//! Android's alone.
+//! What a clip offers, holds and answers is decided in [`clip`], and the
+//! offers, drops and their conclusions in [`drops`], with no JNI call, so every
+//! host compiles and checks them; the JNI side around them is Android's alone.
 
 /// The decidable half of the backend (ADR-0247, ADR-0211): how a
 /// `DragEvent`'s clip maps to an offer, what a drop answers, what a FLUI drag
@@ -332,23 +332,247 @@ mod clip {
     mod tests;
 }
 
+/// The drags over the view and the drops taken from them, as plain state:
+/// each `DragEvent` the view reports becomes the [`DragDropEvent`]s it queues
+/// and the answer it returns, a drop holds what its clip carried until the
+/// target concludes it, and a request reads what a taken drop holds. Every
+/// host checks it; the JNI side around it reports the events and moves the
+/// clip and the URI permissions across.
+///
+/// A drop the target has not concluded keeps its offer, so drops overlap: a
+/// new drag may enter, drop and conclude while an earlier drop is still being
+/// read, and each conclusion retires its own offer alone.
+#[cfg(any(target_os = "android", test))]
+#[forbid(unsafe_code)]
+mod drops {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use flui_foundation::{DataTransferId, geometry::Point};
+    use flui_platform::DragDropEvent;
+    use flui_platform::data_transfer::{
+        DataTransferOffer, DropFeedback, RepresentationDescriptor, RepresentationIndex,
+        TransferActions, TransferError,
+    };
+
+    use super::clip::{ClipSource, DroppedClip, Held, held, incoming_allowed, offered};
+    use crate::drag::offers::OfferTable;
+
+    /// `DragEvent.ACTION_DRAG_STARTED`.
+    pub(super) const ACTION_DRAG_STARTED: i32 = 1;
+    /// `DragEvent.ACTION_DRAG_LOCATION`.
+    pub(super) const ACTION_DRAG_LOCATION: i32 = 2;
+    /// `DragEvent.ACTION_DRAG_ENDED`.
+    pub(super) const ACTION_DRAG_ENDED: i32 = 4;
+    /// `DragEvent.ACTION_DRAG_ENTERED`.
+    pub(super) const ACTION_DRAG_ENTERED: i32 = 5;
+    /// `DragEvent.ACTION_DRAG_EXITED`.
+    pub(super) const ACTION_DRAG_EXITED: i32 = 6;
+
+    #[derive(Default)]
+    pub(super) struct Drops {
+        table: OfferTable,
+        /// The answer each live offer's target last cached.
+        feedback: HashMap<DataTransferId, DropFeedback>,
+        /// Where each representation of a hovering offer comes from at the drop.
+        sources: HashMap<DataTransferId, Vec<ClipSource>>,
+        /// What each dropped offer holds, by representation index.
+        held: HashMap<DataTransferId, Vec<Held>>,
+        /// The offer over the view and the actions its drag permits.
+        hover: Option<(DataTransferId, TransferActions)>,
+        /// The media types of the drag in progress, from `ACTION_DRAG_STARTED`.
+        description: Vec<String>,
+        /// What FLUI's own running drag advertised.
+        own: Option<TransferActions>,
+        /// The action FLUI's target took when FLUI's own drag dropped on it.
+        local_drop: Option<TransferActions>,
+    }
+
+    impl Drops {
+        fn mint(&mut self, mime_types: &[String]) -> DataTransferOffer {
+            let (sources, representations): (Vec<ClipSource>, Vec<RepresentationDescriptor>) =
+                offered(mime_types.iter().map(String::as_str))
+                    .into_iter()
+                    .unzip();
+            let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
+            let id = self.table.mint(Arc::clone(&representations));
+            self.feedback.insert(id, DropFeedback::default());
+            self.sources.insert(id, sources);
+            DataTransferOffer::new(id, representations)
+        }
+
+        fn close(&mut self, id: DataTransferId) {
+            let _ = self.table.retire(id);
+            self.feedback.remove(&id);
+            self.sources.remove(&id);
+            self.held.remove(&id);
+        }
+
+        /// The hovering offer leaves the view, if one is over it.
+        fn leave(&mut self, events: &mut Vec<DragDropEvent>) {
+            if let Some((id, _)) = self.hover.take() {
+                events.push(DragDropEvent::Exited { id });
+                self.close(id);
+            }
+        }
+
+        /// One `DragEvent` other than the drop: what the view answers, with
+        /// the events it queues for the owner. `position` is in logical
+        /// pixels; `local` is whether this activity started the drag.
+        pub(super) fn drag(
+            &mut self,
+            action: i32,
+            position: (f64, f64),
+            mime_types: &[String],
+            local: bool,
+            events: &mut Vec<DragDropEvent>,
+        ) -> bool {
+            match action {
+                ACTION_DRAG_STARTED => {
+                    self.description = mime_types.to_vec();
+                }
+                ACTION_DRAG_ENTERED => {
+                    self.leave(events);
+                    let types = if mime_types.is_empty() {
+                        self.description.clone()
+                    } else {
+                        mime_types.to_vec()
+                    };
+                    let allowed = incoming_allowed(self.own.filter(|_| local));
+                    let offer = self.mint(&types);
+                    self.hover = Some((offer.id(), allowed));
+                    events.push(DragDropEvent::Entered {
+                        offer,
+                        allowed,
+                        position: None,
+                    });
+                }
+                ACTION_DRAG_LOCATION => {
+                    if let Some((id, allowed)) = self.hover {
+                        events.push(DragDropEvent::Moved {
+                            id,
+                            allowed,
+                            position: Point::new(position.0, position.1),
+                        });
+                    }
+                }
+                ACTION_DRAG_EXITED => self.leave(events),
+                ACTION_DRAG_ENDED => {
+                    self.leave(events);
+                    self.description.clear();
+                }
+                _ => return false,
+            }
+            true
+        }
+
+        /// `ACTION_DROP`: the event the drop queues and the offer it is taken
+        /// as, from the target's cached feedback, or `None` for the offer when
+        /// it is refused; `None` altogether when no offer hovers. A taken drop
+        /// holds what `clip` carried until [`Self::conclude`].
+        pub(super) fn take_drop(
+            &mut self,
+            position: (f64, f64),
+            local: bool,
+            clip: &DroppedClip,
+        ) -> Option<(DragDropEvent, Option<DataTransferId>)> {
+            let (id, allowed) = self.hover.take()?;
+            let feedback = self.feedback.get(&id).copied().unwrap_or_default();
+            let Some(action) = feedback.resolve(allowed) else {
+                self.close(id);
+                return Some((DragDropEvent::Exited { id }, None));
+            };
+            let representations = self.table.get(id).map(Arc::clone);
+            let sources = self.sources.remove(&id).unwrap_or_default();
+            let values = representations
+                .iter()
+                .flat_map(|representations| representations.iter())
+                .zip(&sources)
+                .map(|(descriptor, source)| held(source, descriptor, clip))
+                .collect();
+            self.held.insert(id, values);
+            if local && self.own.is_some() {
+                self.local_drop = Some(action);
+            }
+            Some((
+                DragDropEvent::Dropped {
+                    id,
+                    action,
+                    position: Some(Point::new(position.0, position.1)),
+                },
+                Some(id),
+            ))
+        }
+
+        /// What representation `index` of the dropped offer `id` holds.
+        ///
+        /// # Errors
+        ///
+        /// [`TransferError::SourceGone`] before the drop, while the clip's data
+        /// is out of reach; [`TransferError::StaleOffer`] for a retired offer;
+        /// [`TransferError::UnknownRepresentation`] past the offer's.
+        pub(super) fn held(
+            &self,
+            id: DataTransferId,
+            index: RepresentationIndex,
+        ) -> Result<Held, TransferError> {
+            let Some(held) = self.held.get(&id) else {
+                return Err(if self.sources.contains_key(&id) {
+                    TransferError::SourceGone
+                } else {
+                    TransferError::StaleOffer(id)
+                });
+            };
+            held.get(usize::from(index.0))
+                .cloned()
+                .ok_or(TransferError::UnknownRepresentation { id, index })
+        }
+
+        /// The target's answer for the live offer `id`, cached for the drop.
+        pub(super) fn update_feedback(&mut self, id: DataTransferId, feedback: DropFeedback) {
+            if let Some(cached) = self.feedback.get_mut(&id) {
+                *cached = feedback;
+            }
+        }
+
+        /// The target is done with the drop of `id`: its offer retires, and
+        /// `true` when it was live, so its URI permissions are released; a
+        /// stale or repeated conclusion releases nothing.
+        pub(super) fn conclude(&mut self, id: DataTransferId) -> bool {
+            let live = self.table.get(id).is_some();
+            self.close(id);
+            live
+        }
+
+        /// FLUI's own drag started with `allowed`, or ended (`None`).
+        pub(super) fn set_own(&mut self, allowed: Option<TransferActions>) {
+            self.own = allowed;
+            self.local_drop = None;
+        }
+
+        /// The action FLUI's target took when FLUI's own drag dropped on it.
+        pub(super) fn take_local_drop(&mut self) -> Option<TransferActions> {
+            self.local_drop.take()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests;
+}
+
 // The JNI side, on Android alone.
 
 #[cfg(target_os = "android")]
-use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 
 #[cfg(target_os = "android")]
-use flui_foundation::{DataTransferId, geometry::Point};
+use flui_foundation::DataTransferId;
 #[cfg(target_os = "android")]
 use flui_platform::{
-    DragDropEvent, Unsupported, UnsupportedReason,
+    Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
-        RepresentationIndex, TransferActions, TransferError, TransferLimits, TransferPayload,
-        TransferRequest,
+        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
+        TransferError, TransferLimits, TransferPayload, TransferRequest,
     },
     drag::{DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -362,7 +586,6 @@ use parking_lot::Mutex;
 
 #[cfg(target_os = "android")]
 use crate::{
-    drag::offers::OfferTable,
     owner::android::java_view::{ActivityDragSource, JavaView, ViewEvent, ViewTransfer},
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
@@ -370,91 +593,25 @@ use crate::{
     version::gate::android::{AndroidApi, DragSource},
 };
 #[cfg(target_os = "android")]
-use clip::{
-    ClipSource, DroppedClip, Held, clip_parts, held, incoming_allowed, offered, source_end,
-    uri_bytes,
-};
-
-/// `DragEvent.ACTION_DRAG_STARTED`.
+use clip::{DroppedClip, Held, clip_parts, source_end, uri_bytes};
 #[cfg(target_os = "android")]
-const ACTION_DRAG_STARTED: i32 = 1;
-/// `DragEvent.ACTION_DRAG_LOCATION`.
-#[cfg(target_os = "android")]
-const ACTION_DRAG_LOCATION: i32 = 2;
-/// `DragEvent.ACTION_DRAG_ENDED`.
-#[cfg(target_os = "android")]
-const ACTION_DRAG_ENDED: i32 = 4;
-/// `DragEvent.ACTION_DRAG_ENTERED`.
-#[cfg(target_os = "android")]
-const ACTION_DRAG_ENTERED: i32 = 5;
-/// `DragEvent.ACTION_DRAG_EXITED`.
-#[cfg(target_os = "android")]
-const ACTION_DRAG_EXITED: i32 = 6;
+use drops::{ACTION_DRAG_ENDED, Drops};
 
 /// The size of the drag shadow, in logical pixels.
 #[cfg(target_os = "android")]
 const SHADOW: f64 = 48.0;
 
-#[derive(Default)]
-#[cfg(target_os = "android")]
-struct Offers {
-    table: OfferTable,
-    /// The answer each live offer's target last cached.
-    feedback: HashMap<DataTransferId, DropFeedback>,
-    /// Where each representation of a hovering offer comes from at the drop.
-    sources: HashMap<DataTransferId, Vec<ClipSource>>,
-    /// What each dropped offer holds, by representation index.
-    held: HashMap<DataTransferId, Vec<Held>>,
-    /// The offer over the view and the actions its drag permits.
-    hover: Option<(DataTransferId, TransferActions)>,
-    /// The media types of the drag in progress, from `ACTION_DRAG_STARTED`.
-    description: Vec<String>,
-    /// What FLUI's own running drag advertised.
-    own: Option<TransferActions>,
-    /// The action FLUI's target took when FLUI's own drag dropped on it.
-    local_drop: Option<TransferActions>,
-}
-
 /// The platform's drag-and-drop transport (see the module doc).
 #[cfg(target_os = "android")]
 pub struct AndroidTransfer {
     view: Weak<JavaView>,
-    offers: Mutex<Offers>,
+    drops: Mutex<Drops>,
 }
 
 #[cfg(target_os = "android")]
 impl std::fmt::Debug for AndroidTransfer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AndroidTransfer").finish_non_exhaustive()
-    }
-}
-
-#[cfg(target_os = "android")]
-impl AndroidTransfer {
-    fn new(view: Weak<JavaView>) -> Self {
-        Self {
-            view,
-            offers: Mutex::default(),
-        }
-    }
-
-    fn mint(offers: &mut Offers, mime_types: &[String]) -> DataTransferOffer {
-        let (sources, representations): (Vec<_>, Vec<_>) =
-            offered(mime_types.iter().map(String::as_str))
-                .into_iter()
-                .unzip();
-        let representations: Arc<[RepresentationDescriptor]> = Arc::from(representations);
-        let id = offers.table.mint(Arc::clone(&representations));
-        offers.feedback.insert(id, DropFeedback::default());
-        offers.sources.insert(id, sources);
-        DataTransferOffer::new(id, representations)
-    }
-
-    fn close(offers: &mut Offers, id: DataTransferId) {
-        let _ = offers.table.retire(id);
-        offers.feedback.remove(&id);
-        offers.sources.remove(&id);
-        offers.held.remove(&id);
     }
 }
 
@@ -474,61 +631,10 @@ impl ViewTransfer for AndroidTransfer {
         result: bool,
     ) -> bool {
         let mut events = Vec::new();
-        let answer = {
-            let mut offers = self.offers.lock();
-            match action {
-                ACTION_DRAG_STARTED => {
-                    offers.description = mime_types.to_vec();
-                    true
-                }
-                ACTION_DRAG_ENTERED => {
-                    if let Some((id, _)) = offers.hover.take() {
-                        events.push(DragDropEvent::Exited { id });
-                        Self::close(&mut offers, id);
-                    }
-                    let types = if mime_types.is_empty() {
-                        offers.description.clone()
-                    } else {
-                        mime_types.to_vec()
-                    };
-                    let allowed = incoming_allowed(offers.own.filter(|_| local));
-                    let offer = Self::mint(&mut offers, &types);
-                    offers.hover = Some((offer.id(), allowed));
-                    events.push(DragDropEvent::Entered {
-                        offer,
-                        allowed,
-                        position: None,
-                    });
-                    true
-                }
-                ACTION_DRAG_LOCATION => {
-                    if let Some((id, allowed)) = offers.hover {
-                        events.push(DragDropEvent::Moved {
-                            id,
-                            allowed,
-                            position: Point::new(position.0, position.1),
-                        });
-                    }
-                    true
-                }
-                ACTION_DRAG_EXITED => {
-                    if let Some((id, _)) = offers.hover.take() {
-                        events.push(DragDropEvent::Exited { id });
-                        Self::close(&mut offers, id);
-                    }
-                    true
-                }
-                ACTION_DRAG_ENDED => {
-                    if let Some((id, _)) = offers.hover.take() {
-                        events.push(DragDropEvent::Exited { id });
-                        Self::close(&mut offers, id);
-                    }
-                    offers.description.clear();
-                    true
-                }
-                _ => false,
-            }
-        };
+        let answer = self
+            .drops
+            .lock()
+            .drag(action, position, mime_types, local, &mut events);
         for event in events {
             view.push_drag(event);
         }
@@ -538,8 +644,10 @@ impl ViewTransfer for AndroidTransfer {
         answer
     }
 
-    /// `ACTION_DROP`: the [`java_key`] of the offer the drop is taken as
-    /// ([`Self::take_drop`]), 0 when it is refused.
+    /// `ACTION_DROP`: the [`java_key`] of the offer the drop is taken as,
+    /// 0 when it is refused. A taken drop holds what the clip carried until
+    /// the target concludes it; the view holds the drop's URI permissions
+    /// under the offer's key until then.
     fn drop_clip(
         &self,
         view: &JavaView,
@@ -550,18 +658,20 @@ impl ViewTransfer for AndroidTransfer {
         uris: Vec<String>,
     ) -> i64 {
         let clip = DroppedClip { text, html, uris };
-        self.take_drop(view, position, local, &clip)
-            .map_or(0, java_key)
+        let taken = self.drops.lock().take_drop(position, local, &clip);
+        let Some((event, taken)) = taken else {
+            return 0;
+        };
+        view.push_drag(event);
+        taken.map_or(0, java_key)
     }
 
     fn set_own(&self, allowed: Option<TransferActions>) {
-        let mut offers = self.offers.lock();
-        offers.own = allowed;
-        offers.local_drop = None;
+        self.drops.lock().set_own(allowed);
     }
 
     fn take_local_drop(&self) -> Option<TransferActions> {
-        self.offers.lock().local_drop.take()
+        self.drops.lock().take_local_drop()
     }
 
     fn drag_source(&self, view: Arc<JavaView>, api: AndroidApi) -> Arc<dyn ActivityDragSource> {
@@ -574,56 +684,10 @@ impl AndroidTransfer {
     /// The transport of `view`, which it reaches back weakly: the Android
     /// table's [`ViewTransfer`].
     pub(crate) fn for_view(view: Weak<JavaView>) -> Arc<dyn ViewTransfer> {
-        Arc::new(Self::new(view))
-    }
-
-    /// `ACTION_DROP`, on the Java main thread: the offer the drop is taken
-    /// as, from the target's cached feedback, or `None` when it is refused.
-    /// A taken drop holds what the clip carried until the target concludes
-    /// it; the view holds the drop's URI permissions under the offer's
-    /// [`java_key`] until then.
-    fn take_drop(
-        &self,
-        view: &JavaView,
-        position: (f64, f64),
-        local: bool,
-        clip: &DroppedClip,
-    ) -> Option<DataTransferId> {
-        let (event, taken) = {
-            let mut offers = self.offers.lock();
-            let (id, allowed) = offers.hover.take()?;
-            let feedback = offers.feedback.get(&id).copied().unwrap_or_default();
-            match feedback.resolve(allowed) {
-                None => {
-                    Self::close(&mut offers, id);
-                    (DragDropEvent::Exited { id }, None)
-                }
-                Some(action) => {
-                    let representations = offers.table.get(id).map(Arc::clone);
-                    let sources = offers.sources.remove(&id).unwrap_or_default();
-                    let values = representations
-                        .iter()
-                        .flat_map(|representations| representations.iter())
-                        .zip(&sources)
-                        .map(|(descriptor, source)| held(source, descriptor, clip))
-                        .collect();
-                    offers.held.insert(id, values);
-                    if local && offers.own.is_some() {
-                        offers.local_drop = Some(action);
-                    }
-                    (
-                        DragDropEvent::Dropped {
-                            id,
-                            action,
-                            position: Some(Point::new(position.0, position.1)),
-                        },
-                        Some(id),
-                    )
-                }
-            }
-        };
-        view.push_drag(event);
-        taken
+        Arc::new(Self {
+            view,
+            drops: Mutex::default(),
+        })
     }
 }
 
@@ -639,26 +703,10 @@ impl DataTransferSource for AndroidTransfer {
         representation: RepresentationIndex,
         limits: TransferLimits,
     ) -> TransferRequest {
-        let found = {
-            let offers = self.offers.lock();
-            let Some(held) = offers.held.get(&id) else {
-                // Before the drop the clip's data is out of reach; a retired
-                // offer is stale.
-                return TransferRequest::ready(Err(if offers.sources.contains_key(&id) {
-                    TransferError::SourceGone
-                } else {
-                    TransferError::StaleOffer(id)
-                }));
-            };
-            match held.get(usize::from(representation.0)) {
-                None => {
-                    return TransferRequest::ready(Err(TransferError::UnknownRepresentation {
-                        id,
-                        index: representation,
-                    }));
-                }
-                Some(found) => found.clone(),
-            }
+        let found = self.drops.lock().held(id, representation);
+        let found = match found {
+            Ok(found) => found,
+            Err(error) => return TransferRequest::ready(Err(error)),
         };
         match found {
             Held::Payload(payload) => {
@@ -694,18 +742,11 @@ impl DataTransferSource for AndroidTransfer {
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
-        if let Some(cached) = self.offers.lock().feedback.get_mut(&id) {
-            *cached = feedback;
-        }
+        self.drops.lock().update_feedback(id, feedback);
     }
 
     fn conclude_drop(&self, id: DataTransferId) {
-        let concluded = {
-            let mut offers = self.offers.lock();
-            let live = offers.table.get(id).is_some();
-            Self::close(&mut offers, id);
-            live
-        };
+        let concluded = self.drops.lock().conclude(id);
         if concluded && let Some(view) = self.view.upgrade() {
             let offer = java_key(id);
             view.post(move |env, view| {
