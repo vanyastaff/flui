@@ -380,9 +380,13 @@ impl super::SeatClipboard {
         let Some((current, text)) = text else {
             return;
         };
-        let sends: Vec<Request> = sends
+        // A place among the writers is taken before the selection is asked
+        // or encoded, so requests past them cost nothing: their descriptors
+        // close here, which ends their readers' reads.
+        let sends: Vec<(Request, transfer::Permit)> = sends
             .into_iter()
             .filter(|send| send.source == current)
+            .map_while(|send| Some((send, self.shared.writers.permit()?)))
             .collect();
         if sends.is_empty() {
             return;
@@ -392,19 +396,13 @@ impl super::SeatClipboard {
             return;
         };
         let mut encoded: Vec<(TextForm, Arc<[u8]>)> = Vec::new();
-        for Request { form, fd, .. } in sends {
+        for (Request { form, fd, .. }, permit) in sends {
             let bytes = if let Some((_, bytes)) = encoded.iter().find(|(held, _)| *held == form) {
                 Arc::clone(bytes)
             } else {
                 let bytes: Arc<[u8]> = form.encode(&text).into();
                 encoded.push((form, Arc::clone(&bytes)));
                 bytes
-            };
-            let Some(permit) = self.shared.writers.permit() else {
-                tracing::debug!(
-                    "a primary selection request past {MAX_WRITERS} at once was refused"
-                );
-                continue;
             };
             let spawned = std::thread::Builder::new()
                 .name("flui-wayland-primary".to_owned())
