@@ -179,10 +179,11 @@ impl<T: 'static> BackgroundTask<T> {
     /// no longer cancelled by dropping the task; the closure owns its
     /// answer.
     ///
-    /// `f` is an `FnMut` called at most once, as `Completion::on_complete`'s
-    /// is: if it panics, its captures are kept rather than dropped during
-    /// the unwind, so a capture whose `Drop` also panics cannot abort the
-    /// process.
+    /// `f` runs exactly once per answer: it is an `FnMut` only so that, as
+    /// with `Completion::on_complete`, a panic in it keeps its captures
+    /// rather than dropping them during the unwind, where a capture whose
+    /// `Drop` also panics would abort the process. A UI runtime that ended
+    /// before the answer settled has no turn to run it on.
     pub fn on_complete(mut self, mut f: impl FnMut(Result<T, BackgroundError>) + 'static) {
         let completion = self
             .completion
