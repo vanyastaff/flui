@@ -58,7 +58,20 @@ mod secondary_window;
     all(test, not(target_os = "android"), not(target_arch = "wasm32"))
 ))]
 mod session_controller;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod stand_in_renderer;
 mod terminal;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) mod window_renderer;
 // Unconditional, like `device_recovery` above: the seam's trait and outcome
 // are portable and its tests are host-run, so a `cfg(target_os = "android")`
 // here would hide the whole file from every gate this host can run.
@@ -421,6 +434,27 @@ pub use owner_dispatch::EXIT_CODE_HUNG;
     not(target_arch = "wasm32")
 ))]
 pub use owner_dispatch::TeardownStep;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use stand_in_renderer::StandInRenderer;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use stand_in_renderer::StandInRenderers;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use {host::loop_wake_deadline, window_renderer::WindowRenderers};
 
 #[cfg(test)]
 mod tests {

@@ -8,8 +8,10 @@
 //! platform's `run` returns once the application is up, so the test holds a
 //! [`HeadlessRunHandle`] while the loop lives: it turns the owner loop, closes
 //! a window as the user would and ends the session as the operating
-//! system would. [`HeadlessRunHandle::join`] tears the loop down as the end
-//! of [`Application::run`] does and reports how it ended.
+//! system would. The headless platform has no surface a GPU could present
+//! into, so every window renders with a [`StandInRenderer`], which the test
+//! reads and injects faults into. [`HeadlessRunHandle::join`] tears the loop
+//! down as the end of [`Application::run`] does and reports how it ended.
 //!
 //! One run at a time per thread: the runner keeps its loop in thread-local
 //! state, as it does on a desktop.
@@ -20,15 +22,18 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use flui_native::{
-    HeadlessHostEvents, HeadlessOpenWindows, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessOpenWindows, HeadlessOwnerTurns,
+    HeadlessPlatform, MockWindow,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use flui_view::View;
 
-use crate::app::runner::{StartedLoop, start_loop};
+use crate::app::runner::{
+    StandInRenderers, StartedLoop, WindowRenderers, loop_wake_deadline, start_loop,
+};
 use crate::app::{AppHandle, AppRunError, Application};
 
-pub use crate::app::runner::TeardownStep;
+pub use crate::app::runner::{StandInRenderer, TeardownStep};
 
 /// The process exit code of a run that ended with a panic: the code Rust's
 /// runtime gives a process whose main thread panicked.
@@ -64,12 +69,15 @@ impl HeadlessRun {
         let turns = platform.owner_turns();
         let host_events = platform.host_events();
         let windows = platform.open_windows();
+        let exit_reevaluation = platform.exit_reevaluation();
         let teardown = Rc::new(RefCell::new(Vec::new()));
+        let renderers = StandInRenderers::default();
         let started = catch_unwind(AssertUnwindSafe(|| {
             start_loop(
                 application,
                 || Ok(Box::new(platform) as Box<dyn flui_native::Platform>),
                 Rc::clone(&teardown),
+                WindowRenderers::StandIn(renderers.clone()),
             )
         }));
         let state = match started {
@@ -82,7 +90,9 @@ impl HeadlessRun {
             turns,
             host_events,
             windows,
+            exit_reevaluation,
             teardown,
+            renderers,
         }
     }
 }
@@ -103,7 +113,9 @@ pub struct HeadlessRunHandle {
     turns: HeadlessOwnerTurns,
     host_events: HeadlessHostEvents,
     windows: HeadlessOpenWindows,
+    exit_reevaluation: HeadlessExitReevaluation,
     teardown: Rc<RefCell<Vec<TeardownStep>>>,
+    renderers: StandInRenderers,
 }
 
 impl std::fmt::Debug for HeadlessRunHandle {
@@ -116,9 +128,11 @@ impl std::fmt::Debug for HeadlessRunHandle {
 
 impl HeadlessRunHandle {
     /// Run one turn of the owner loop: the work posted to it since the last
-    /// turn, a quit included.
+    /// turn, a quit included, then the exit question the turn asked the
+    /// platform to ask again, as a desktop loop does before it waits.
     pub fn run_owner_turn(&self) {
         self.turns.drive();
+        self.exit_reevaluation.drive();
     }
 
     /// Whether the platform still runs: `false` once the application quit.
@@ -127,12 +141,27 @@ impl HeadlessRunHandle {
         self.turns.is_running()
     }
 
+    /// The instant the application asks its loop to wake at, as a desktop
+    /// loop asks before it waits for the next event: `None` when nothing is
+    /// due and the loop would sleep until an event comes.
+    #[must_use]
+    pub fn wake_deadline(&self) -> Option<std::time::Instant> {
+        loop_wake_deadline()
+    }
+
     /// Every window the application holds open, in the order it opened: a
     /// test closes one as the user does with
     /// [`MockWindow::simulate_close`].
     #[must_use]
     pub fn open_windows(&self) -> Vec<MockWindow> {
         self.windows.all()
+    }
+
+    /// The renderer `window` presents with, while the run lasts and after:
+    /// `None` for a window that opened without one.
+    #[must_use]
+    pub fn renderer(&self, window: &MockWindow) -> Option<StandInRenderer> {
+        self.renderers.of(flui_platform::PlatformWindow::id(window))
     }
 
     /// Report one phase of the user's session ending, as the operating system

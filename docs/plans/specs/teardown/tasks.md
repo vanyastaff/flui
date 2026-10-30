@@ -198,6 +198,29 @@ graph LR
     `an_application_panic_never_leaves_a_handler`: headless не даёт внедрить панику приложения в
     `answer_session_end` и в подписчика системного уведомления; нужен шов (ответ сеанса через
     маршрут, как `route_quit`, и подписчик уведомлений в наборе раннера).
+- [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
+  `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
+  задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
+  изменения поведения, набор раннера — `StandInRenderer` (`flui_app::testing`: кадры,
+  `lose_device`, `fail_recoveries`, `is_released`). `HeadlessRunHandle::renderer`,
+  `HeadlessRunHandle::wake_deadline`; `run_owner_turn` задаёт вопрос выхода, который ход
+  попросил задать снова, как цикл рабочего стола. `flui_testing::DropLedger`/`DropSentinel`
+  (ADR-0261 §2). Таблица `runner_close` (`crates/flui-app/tests/runner_close.rs`, восемь
+  строк): R1 `last_window_close_releases_the_runtime_through_the_runner`; R2
+  `closing_with_a_pending_load_retires_the_future_once`; R4
+  `last_window_close_returns_ok_on_both_routes`; R10
+  `the_runner_sleeps_until_the_failure_retry_deadline`; R15
+  `close_requested_inside_a_frame_runs_once_on_the_next_turn`; R16
+  `a_late_completion_after_close_requests_no_frame`; R18
+  `a_second_close_request_tears_down_once`; R20
+  `device_loss_on_the_closing_frame_still_exits_ok`. Зубы: без `failure_retry_at` в
+  `UiRuntime::next_wake` падает R10; без вопроса выхода в `run_owner_turn` падает R15 (закрытие
+  из кадра закрывает окно, но цикл не выходит). Правки `frame_pacing.rs` не понадобилось.
+  - [ ] Находка: на headless потерянное устройство, чьё восстановление не удаётся, крутит
+    кадры синхронно без конца: `SubmitVerdict::DeviceLost` ставит повтор кадра сразу, а
+    headless доставляет запрос кадра в том же drain. На рабочем столе это кадр на каждый vsync
+    до восстановления. R20 закрывает окно в том же кадре и не зависит от этого; решение —
+    отдельно.
 - [ ] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
 - [ ] T11 — вето с причиной
 - [ ] T12 — обход #1165

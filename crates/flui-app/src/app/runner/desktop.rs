@@ -1,5 +1,4 @@
 use crate::app::hot_reload::WorkerReload;
-use flui_engine::Renderer;
 use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
@@ -94,19 +93,15 @@ where
     // dirty predicate like every other wake-deadline source here.
     let first_reveal = Arc::new(FirstReveal::new());
 
-    // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
-    // takes ownership of a `WindowTarget`: the window's
-    // surface target, which the raster side may hold on any thread, never
-    // the window itself (ADR-0254 §5).
+    // 2. Create the renderer directly (no DesktopEmbedder): the loop's
+    // `WindowRenderers` builds it on the window's surface target, which the
+    // raster side may hold on any thread, never the window itself
+    // (ADR-0254 §5).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
     let surface = window.surface_target();
-    let renderer = pollster::block_on(Renderer::with_surface_color(
-        Arc::clone(&surface),
-        config.surface_color,
-        super::host::display_color_of(window.as_ref()),
-    ));
-    let mut renderer = match renderer {
+    let renderers = APP_RUNTIME.with(|slot| slot.borrow().window_renderers.clone());
+    let mut renderer = match renderers.create(window.as_ref(), config) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("GPU init failed: {:?}", e);
@@ -384,7 +379,7 @@ where
 
 pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Arc<DesktopWakeDeadlines>,
-    lane: Arc<Mutex<crate::app::raster_lane::RasterLane<Renderer>>>,
+    lane: Arc<Mutex<crate::app::raster_lane::RasterLane<super::window_renderer::LaneRenderer>>>,
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
 }

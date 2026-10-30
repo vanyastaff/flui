@@ -636,6 +636,8 @@ pub(crate) fn install_owner_platform(
             ))]
             {
                 state.quit_notification = crate::app::runtime::QuitNotification::Active;
+                // A loop that wants other renderers says so after this install.
+                state.window_renderers = super::window_renderer::WindowRenderers::default();
                 state.pending_window_reservations =
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
             }
@@ -754,6 +756,23 @@ pub(super) fn route_wake_deadline(route: impl Fn() -> Option<web_time::Instant> 
         |routes| &mut routes.wake_deadline,
         Rc::new(route) as Rc<dyn Fn() -> Option<web_time::Instant>>,
     );
+}
+
+/// The instant the running loop is asked to wake at, as a desktop loop asks
+/// before it waits: the answer of the route [`route_wake_deadline`] set.
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn loop_wake_deadline() -> Option<web_time::Instant> {
+    let routes = APP_RUNTIME.with(|slot| {
+        let runs = &slot.borrow().run_routes;
+        runs.last().and_then(std::rc::Weak::upgrade)
+    })?;
+    let route = routes.borrow().wake_deadline.clone()?;
+    route()
 }
 
 /// The application handler `flui-app` runs a platform with: `ready` runs the
