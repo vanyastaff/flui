@@ -28,7 +28,7 @@ struct in `crates/`.
   still ship, but that ADR is Deprecated in favour of the typed router.
 - **`MaterialApp` is `WidgetsApp` plus theming.** `MaterialApp` wraps a `WidgetsApp`, resolves
   `ThemeMode` against the platform brightness, publishes the resolved `ThemeData` through
-  `Theme`, and installs a `ScaffoldMessenger`. `run_app(MaterialApp::new(home))` is the usual
+  `Theme`, and installs a `ScaffoldMessenger`. `run_app(MaterialApp::new(home), AppLaunch::new())` is the usual
   root; `Theme::new(ThemeData::light(), <root view>)` passed to `run_app`
   still works for an app that wants only the theme.
 - **`Layer` is a closed `enum`, not a class hierarchy** — see

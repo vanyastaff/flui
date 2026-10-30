@@ -67,6 +67,8 @@
 pub(crate) mod accessibility_slot;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod animation_frame;
 pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
@@ -205,6 +207,13 @@ impl OwnerPlatform {
     /// wait for. See [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known
@@ -399,6 +408,13 @@ impl SharedPlatform {
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known

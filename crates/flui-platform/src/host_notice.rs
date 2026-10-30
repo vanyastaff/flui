@@ -47,6 +47,27 @@ pub enum SessionEndAnswer {
     Block,
 }
 
+/// What the platform can do for the application when the user's session ends.
+///
+/// It decides whether a [`SessionEndAnswer::Block`] is read, and how long the
+/// application has to write what it keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionEndSupport {
+    /// The platform holds the session open while the application answers
+    /// [`SessionEndAnswer::Block`], and shows the user what blocks it (Windows'
+    /// `ShutdownBlockReason`, AppKit's terminate reply).
+    Hold,
+    /// The platform cannot be refused but waits up to `max` for the
+    /// application before the session goes on (logind's delay inhibitor).
+    Delay {
+        /// The longest the platform waits.
+        max: std::time::Duration,
+    },
+    /// The platform tells the application, if at all, and does not wait.
+    NotifyOnly,
+}
+
 /// A system event other than a session end, as the platform reports it to the
 /// application handler (`AppHandler::host_notice` in the core host).
 ///

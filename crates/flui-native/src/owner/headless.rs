@@ -250,6 +250,10 @@ pub(crate) struct HeadlessState {
     /// How many times the host told this platform it released a session end it
     /// had answered with a block.
     pub(crate) session_end_releases: usize,
+    /// How this platform stands in for the session's end: `Hold`, a desktop
+    /// that waits for a block, until
+    /// [`HeadlessPlatform::with_session_end_support`](crate::HeadlessPlatform::with_session_end_support).
+    pub(crate) session_end_support: flui_platform::SessionEndSupport,
     /// What `Platform::preferences` reports: unknown until
     /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
     pub(crate) preferences: flui_platform::SystemPreferences,
@@ -336,6 +340,7 @@ impl HeadlessLoop {
             devices: H::devices(),
             displays: H::displays(),
             session_end_releases: 0,
+            session_end_support: flui_platform::SessionEndSupport::Hold,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
             display_failure: None,

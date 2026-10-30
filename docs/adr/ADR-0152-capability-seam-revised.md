@@ -443,18 +443,19 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
 - **The registry.** `flui_runtime::capability::CapabilityRegistry::builder()` takes
   `overrides`, `built_ins` and each `plugin`; `build` answers `CapabilityConflict::Duplicate`
   (one capability twice in one tier, checked in every tier even where a higher one answers) or
-  `CapabilityConflict::SharedName`. `Application::capability::<C>(provider)` and
-  `Application::plugin(plugin)` register, and `Application::run` answers
-  `AppRunError::CapabilityConflict` before the platform is created. `Application` is the desktop
-  entry point; an app started on Android, iOS or the Web gets the built-in providers alone until
-  its entry point takes overrides and plugins too. `RuntimeHostServices` takes
+  `CapabilityConflict::SharedName`. An application registers through
+  `flui_app::AppCapabilities` (`capability::<C>(provider)`, `plugin(plugin)`), which every
+  platform's one entry point takes in its `AppLaunch` (`run_app`, `run_app_android`), and which
+  `Application::capability` and `Application::plugin` build on the desktop. The conflict is found
+  before the platform is created: the entry point answers `LaunchError::CapabilityConflict`,
+  `Application::run` answers `AppRunError::CapabilityConflict`. `RuntimeHostServices` takes
   the registry through `with_capabilities`; without one every acquisition answers
   `NotRegistered`.
 - **The core host's clipboard.** `flui_native::NativeClipboard` is owner-local and
   `OwnerPlatform::clipboard` hands it out; its read answers through a `Resolver`. Win32, AppKit,
   UIKit and `arboard` answer at once, the web when `navigator.clipboard.readText()` settles
-  (falling back to what the page wrote when the browser refuses). Android keeps an in-memory
-  clipboard until `ClipboardManager` is reached through JNI.
+  (falling back to what the page wrote when the browser refuses). Android reads and writes
+  `ClipboardManager` through JNI.
 - **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, drops or refuses
   reads and counts live handles; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin`
   mount a tree over another registry. `CompletionSource` is public, so the contract needs no

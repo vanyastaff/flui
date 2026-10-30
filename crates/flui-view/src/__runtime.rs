@@ -37,7 +37,7 @@ pub use crate::close_guard::{CloseGuardSource, SettledClose};
 use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
-    FlushWriter,
+    FlushWriter, SESSION_END_BUDGET,
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
