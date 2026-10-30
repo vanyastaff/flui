@@ -21,12 +21,14 @@
 //!   An accepted drop keeps the offer until the target concludes it, which
 //!   answers `XdndFinished` with the action.
 //! - **Fetching.** A request converts `XdndSelection` to the
-//!   representation's type at the drag's last time, into a property of a
-//!   window of the transfer's own, and reads it on the owner thread as the
+//!   representation's type at the drag's last time, into a window made for
+//!   that fetch alone and destroyed as it ends, so an answer a source writes
+//!   late reaches no later fetch. It is read on the owner thread as the
 //!   loop hands over the `SelectionNotify`, `INCR` a chunk at a time. At
 //!   most [`MAX_FETCHES`] run at once, more wait their turn; each is held to
 //!   its request's limit and gets [`TRANSFER_TIMEOUT`] between answers,
-//!   which the loop wakes for.
+//!   which the loop wakes for, rung when a request from another thread
+//!   starts a fetch.
 //!
 //! No method dispatches with the transfer's state locked, and no completer
 //! is completed under it: a window's handler, which may ask for the payload
@@ -367,14 +369,13 @@ struct Atoms {
     incr: xproto::Atom,
     messages: MessageAtoms,
     actions: model::ActionAtoms,
-    /// The fetches' properties on the requestor window, one per fetch
-    /// converting.
-    properties: [xproto::Atom; MAX_FETCHES],
+    /// The property a fetch's requestor window is converted into.
+    property: xproto::Atom,
 }
 
 impl Atoms {
     fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 19] = [
+        const NAMES: [&[u8]; 16] = [
             b"XdndAware",
             b"XdndEnter",
             b"XdndPosition",
@@ -390,10 +391,7 @@ impl Atoms {
             b"XdndActionLink",
             b"XdndActionAsk",
             b"INCR",
-            b"FLUI_XDND_0",
-            b"FLUI_XDND_1",
-            b"FLUI_XDND_2",
-            b"FLUI_XDND_3",
+            b"FLUI_XDND",
         ];
         let failed = |error: &dyn std::fmt::Display| crate::PlatformError::Init {
             message: format!("cannot intern the XDND atoms: {error}"),
@@ -424,10 +422,7 @@ impl Atoms {
             link,
             ask,
             incr,
-            first,
-            second,
-            third,
-            fourth,
+            property,
         ] = atoms;
         Ok(Self {
             aware,
@@ -449,7 +444,7 @@ impl Atoms {
                 link,
                 ask,
             },
-            properties: [first, second, third, fourth],
+            property,
         })
     }
 }
@@ -510,12 +505,12 @@ struct Wanted {
     completer: TransferCompleter,
 }
 
-/// A fetch converting into its property.
+/// A fetch converting into a requestor window of its own, destroyed as the
+/// fetch ends: a source that answers late, or goes on writing chunks, writes
+/// to no window, never into a later fetch.
 #[derive(Debug)]
 struct Fetch {
-    /// Tells this fetch from a later one in the same slot while the owner
-    /// thread reads with the lock let go.
-    serial: u64,
+    requestor: xproto::Window,
     wanted: Wanted,
     /// The bytes of an `INCR` transfer, once announced.
     incremental: Option<Vec<u8>>,
@@ -539,22 +534,23 @@ struct State {
     windows: HashMap<xproto::Window, InputTarget>,
     hover: Option<Hover>,
     offers: HashMap<DataTransferId, Offer>,
-    /// The fetch converting into each of [`Atoms::properties`].
-    fetches: [Option<Fetch>; MAX_FETCHES],
-    /// Requests waiting for a property.
+    /// The fetches converting, at most [`MAX_FETCHES`].
+    fetches: Vec<Fetch>,
+    /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
-    /// The next fetch's serial.
-    serial: u64,
     /// The name of each atom a source offered, as the server named it.
     names: HashMap<xproto::Atom, Option<String>>,
 }
 
 /// What a step leaves to do once the lock is let go: completers to resolve,
-/// conversions to ask for, and an event for a window.
+/// requestor windows to make and convert into or destroy, and an event for a
+/// window.
 #[derive(Default)]
 struct After {
     completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)>,
-    conversions: Vec<(xproto::Atom, xproto::Atom, xproto::Timestamp)>,
+    /// A fetch's requestor, the type it asks for and the time it asks at.
+    started: Vec<(xproto::Window, xproto::Atom, xproto::Timestamp)>,
+    ended: Vec<xproto::Window>,
     dispatch: Option<(InputTarget, DragDropEvent)>,
 }
 
@@ -563,18 +559,31 @@ impl After {
         self.completions
             .push((completer, Err(TransferError::SourceGone)));
     }
+
+    /// `fetch` ended with `outcome`: its requestor goes.
+    fn end(&mut self, fetch: Fetch, outcome: Result<TransferPayload, TransferError>) {
+        self.ended.push(fetch.requestor);
+        self.completions.push((fetch.wanted.completer, outcome));
+    }
 }
 
 impl State {
     /// Retire `id`: its fetches and waiting requests resolve as
-    /// [`TransferError::SourceGone`].
-    fn retire(&mut self, id: DataTransferId, after: &mut After) -> Option<Offer> {
+    /// [`TransferError::SourceGone`], and what waits for another offer
+    /// starts in the fetches it leaves.
+    fn retire(
+        &mut self,
+        id: DataTransferId,
+        connection: &X11Connection,
+        after: &mut After,
+    ) -> Option<Offer> {
         let _ = self.table.retire(id);
-        for slot in &mut self.fetches {
-            if slot.as_ref().is_some_and(|fetch| fetch.wanted.id == id) {
-                let fetch = slot.take().expect("BUG: the slot held a fetch");
-                after.gone(fetch.wanted.completer);
-            }
+        let (stale, kept): (Vec<Fetch>, Vec<Fetch>) = std::mem::take(&mut self.fetches)
+            .into_iter()
+            .partition(|fetch| fetch.wanted.id == id);
+        self.fetches = kept;
+        for fetch in stale {
+            after.end(fetch, Err(TransferError::SourceGone));
         }
         let (stale, kept): (VecDeque<Wanted>, VecDeque<Wanted>) = std::mem::take(&mut self.waiting)
             .into_iter()
@@ -583,50 +592,70 @@ impl State {
         for wanted in stale {
             after.gone(wanted.completer);
         }
+        self.start_waiting(connection, after);
         self.offers.remove(&id)
     }
 
     /// End the drag over a window: its offer, if minted and not dropped, is
     /// retired, and the window hears `Exited`.
-    fn end_hover(&mut self, after: &mut After) {
+    fn end_hover(&mut self, connection: &X11Connection, after: &mut After) {
         let Some(hover) = self.hover.take() else {
             return;
         };
         let Phase::Over(id) = hover.phase else {
             return;
         };
-        self.retire(id, after);
+        self.retire(id, connection, after);
         if let Some(target) = self.windows.get(&hover.window.xid) {
             after.dispatch = Some((target.clone(), DragDropEvent::Exited { id }));
         }
     }
 
-    /// Give the waiting requests the free properties.
-    fn start_waiting(&mut self, properties: &[xproto::Atom; MAX_FETCHES], after: &mut After) {
-        for (slot, property) in self.fetches.iter_mut().zip(properties) {
-            if slot.is_some() {
-                continue;
-            }
-            let wanted = loop {
-                match self.waiting.pop_front() {
-                    Some(wanted) if wanted.completer.is_cancelled() => after.gone(wanted.completer),
-                    next => break next,
-                }
-            };
-            let Some(wanted) = wanted else {
+    /// Start the waiting requests the fetches have room for, each with a
+    /// requestor of its own.
+    fn start_waiting(&mut self, connection: &X11Connection, after: &mut After) {
+        while self.fetches.len() < MAX_FETCHES {
+            let Some(wanted) = self.waiting.pop_front() else {
                 return;
             };
-            after
-                .conversions
-                .push((*property, wanted.target, wanted.time));
-            self.serial += 1;
-            *slot = Some(Fetch {
-                serial: self.serial,
+            if wanted.completer.is_cancelled() {
+                after.gone(wanted.completer);
+                continue;
+            }
+            // An id is the client's to number: no round trip but when its
+            // range runs out.
+            let requestor = match connection.xcb().generate_id() {
+                Ok(requestor) => requestor,
+                Err(error) => {
+                    tracing::debug!(%error, "no X id for an XDND requestor");
+                    after.gone(wanted.completer);
+                    continue;
+                }
+            };
+            after.started.push((requestor, wanted.target, wanted.time));
+            self.fetches.push(Fetch {
+                requestor,
                 wanted,
                 incremental: None,
                 deadline: Instant::now() + TRANSFER_TIMEOUT,
             });
         }
+    }
+
+    /// The fetch converting into `requestor`.
+    fn fetch(&mut self, requestor: xproto::Window) -> Option<&mut Fetch> {
+        self.fetches
+            .iter_mut()
+            .find(|fetch| fetch.requestor == requestor)
+    }
+
+    /// Take the fetch converting into `requestor` out.
+    fn take_fetch(&mut self, requestor: xproto::Window) -> Option<Fetch> {
+        let at = self
+            .fetches
+            .iter()
+            .position(|fetch| fetch.requestor == requestor)?;
+        Some(self.fetches.swap_remove(at))
     }
 }
 
@@ -634,53 +663,33 @@ impl State {
 pub(crate) struct X11Drag {
     connection: Arc<X11Connection>,
     atoms: Atoms,
-    /// The window `XdndSelection` is converted to, which hears only its own
-    /// property changes.
-    requestor: xproto::Window,
+    /// Wakes the owner's loop, which reads the deadline of a fetch a request
+    /// from another thread started.
+    wake: Box<dyn Fn() + Send + Sync>,
     state: Mutex<State>,
 }
 
 impl std::fmt::Debug for X11Drag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("X11Drag")
-            .field("requestor", &self.requestor)
-            .finish_non_exhaustive()
+        f.debug_struct("X11Drag").finish_non_exhaustive()
     }
 }
 
 impl X11Drag {
-    /// The transfer on `connection`, with its requestor window.
+    /// The transfer on `connection`, which calls `wake` to have the owner's
+    /// loop read its deadlines again.
     ///
     /// # Errors
-    /// [`PlatformError::Init`](crate::PlatformError::Init) when its atoms or
-    /// its window cannot be made.
+    /// [`PlatformError::Init`](crate::PlatformError::Init) when its atoms
+    /// cannot be interned.
     pub(crate) fn try_new(
         connection: &Arc<X11Connection>,
+        wake: Box<dyn Fn() + Send + Sync>,
     ) -> Result<Arc<Self>, crate::PlatformError> {
-        let atoms = Atoms::intern(connection)?;
-        let xcb = connection.xcb();
-        let failed = |error: &dyn std::fmt::Display| crate::PlatformError::Init {
-            message: format!("cannot make the XDND requestor window: {error}"),
-        };
-        let requestor = xcb.generate_id().map_err(|error| failed(&error))?;
-        xcb.create_window(
-            0,
-            requestor,
-            connection.root(),
-            -1,
-            -1,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            COPY_FROM_PARENT,
-            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-        )
-        .map_err(|error| failed(&error))?;
         Ok(Arc::new(Self {
             connection: Arc::clone(connection),
-            atoms,
-            requestor,
+            atoms: Atoms::intern(connection)?,
+            wake,
             state: Mutex::new(State::default()),
         }))
     }
@@ -700,15 +709,48 @@ impl X11Drag {
     /// Do what a step left, with no lock held, and flush what it sent.
     fn finish(&self, after: After) {
         let xcb = self.connection.xcb();
-        for (property, target, time) in after.conversions {
-            if let Err(error) =
-                xcb.convert_selection(self.requestor, self.atoms.selection, target, property, time)
-            {
+        for (requestor, target, time) in &after.started {
+            let started = xcb
+                .create_window(
+                    0,
+                    *requestor,
+                    self.connection.root(),
+                    -1,
+                    -1,
+                    1,
+                    1,
+                    0,
+                    WindowClass::INPUT_ONLY,
+                    COPY_FROM_PARENT,
+                    &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+                )
+                .map(drop)
+                .and_then(|()| {
+                    xcb.convert_selection(
+                        *requestor,
+                        self.atoms.selection,
+                        *target,
+                        self.atoms.property,
+                        *time,
+                    )
+                    .map(drop)
+                });
+            if let Err(error) = started {
+                // The fetch times out.
                 tracing::debug!(%error, "cannot ask the XDND source for its data");
+            }
+        }
+        for requestor in after.ended {
+            if let Err(error) = xcb.destroy_window(requestor) {
+                tracing::debug!(%error, "cannot destroy an XDND requestor");
             }
         }
         if let Err(error) = xcb.flush() {
             tracing::debug!(%error, "cannot send the XDND transfer's requests");
+        }
+        if !after.started.is_empty() {
+            // A fetch has a deadline the loop may not be waiting for.
+            (self.wake)();
         }
         if let Some((target, event)) = after.dispatch {
             target
@@ -792,7 +834,7 @@ impl X11Drag {
         let mut after = After::default();
         let entered = {
             let mut state = self.state.lock();
-            state.end_hover(&mut after);
+            state.end_hover(&self.connection, &mut after);
             match state.windows.get(&window) {
                 Some(target) if version >= model::OLDEST => {
                     let target = target.window;
@@ -975,6 +1017,15 @@ impl X11Drag {
         self.flush();
     }
 
+    /// Whether a fetch converts into `window`.
+    fn fetching(&self, window: xproto::Window) -> bool {
+        self.state
+            .lock()
+            .fetches
+            .iter()
+            .any(|fetch| fetch.requestor == window)
+    }
+
     fn flush(&self) {
         if let Err(error) = self.connection.xcb().flush() {
             tracing::debug!(%error, "cannot send an XDND message");
@@ -991,7 +1042,7 @@ impl X11Drag {
                 .as_ref()
                 .is_some_and(|hover| hover.source == source)
             {
-                state.end_hover(&mut after);
+                state.end_hover(&self.connection, &mut after);
             }
         }
         self.finish(after);
@@ -1038,7 +1089,7 @@ impl X11Drag {
                 ));
                 None
             } else {
-                state.end_hover(&mut after);
+                state.end_hover(&self.connection, &mut after);
                 Some(window)
             }
         };
@@ -1048,15 +1099,12 @@ impl X11Drag {
         self.finish(after);
     }
 
-    /// The fetch in `slot` (serial `serial`) read `read`, or failed.
-    fn fetched(&self, slot: usize, serial: u64, read: Result<Read, TransferError>) {
+    /// The fetch converting into `requestor` read `read`, or failed.
+    fn fetched(&self, requestor: xproto::Window, read: Result<Read, TransferError>) {
         let mut after = After::default();
         {
             let mut state = self.state.lock();
-            let Some(fetch) = state.fetches[slot]
-                .as_mut()
-                .filter(|fetch| fetch.serial == serial)
-            else {
+            let Some(fetch) = state.fetch(requestor) else {
                 return;
             };
             let limit = fetch.wanted.limit;
@@ -1096,11 +1144,11 @@ impl X11Drag {
                 }
             };
             if let Some(outcome) = outcome {
-                let fetch = state.fetches[slot]
-                    .take()
-                    .expect("BUG: the slot held a fetch");
-                after.completions.push((fetch.wanted.completer, outcome));
-                state.start_waiting(&self.atoms.properties, &mut after);
+                let fetch = state
+                    .take_fetch(requestor)
+                    .expect("BUG: the fetch was found under this lock");
+                after.end(fetch, outcome);
+                state.start_waiting(&self.connection, &mut after);
             }
         }
         self.finish(after);
@@ -1108,99 +1156,74 @@ impl X11Drag {
 
     /// The source answered a conversion.
     fn selection_notify(&self, event: &SelectionNotifyEvent) {
-        let found = {
-            let state = self.state.lock();
-            state.fetches.iter().enumerate().find_map(|(slot, fetch)| {
-                let fetch = fetch.as_ref()?;
-                let answers = fetch.incremental.is_none()
-                    && fetch.wanted.target == event.target
-                    && (event.property == NONE || event.property == self.atoms.properties[slot]);
-                answers.then_some((slot, fetch.serial, fetch.wanted.limit))
-            })
-        };
-        let Some((slot, serial, limit)) = found else {
-            return;
+        let limit = {
+            let mut state = self.state.lock();
+            let Some(fetch) = state.fetch(event.requestor) else {
+                return;
+            };
+            if fetch.incremental.is_some() || fetch.wanted.target != event.target {
+                return;
+            }
+            fetch.wanted.limit
         };
         let read = if event.property == NONE {
             // The source refuses a type it offered.
             Err(TransferError::SourceGone)
         } else {
-            self.read_property(slot, None, limit)
+            self.read_property(event.requestor, None, limit)
         };
-        self.fetched(slot, serial, read);
+        self.fetched(event.requestor, read);
     }
 
     /// The source wrote an `INCR` chunk.
     fn property_notify(&self, event: &PropertyNotifyEvent) {
-        if event.state != Property::NEW_VALUE {
+        if event.state != Property::NEW_VALUE || event.atom != self.atoms.property {
             return;
         }
-        let Some(slot) = self
-            .atoms
-            .properties
-            .iter()
-            .position(|property| *property == event.atom)
-        else {
-            return;
-        };
         let found = {
-            let state = self.state.lock();
-            state.fetches[slot].as_ref().and_then(|fetch| {
+            let mut state = self.state.lock();
+            state.fetch(event.window).and_then(|fetch| {
                 let held = fetch.incremental.as_ref()?.len();
-                Some((fetch.serial, held, fetch.wanted.limit))
+                Some((held, fetch.wanted.limit))
             })
         };
-        let Some((serial, held, limit)) = found else {
+        let Some((held, limit)) = found else {
             return;
         };
-        let read = self.read_property(slot, Some(held), limit);
-        self.fetched(slot, serial, read);
+        let read = self.read_property(event.window, Some(held), limit);
+        self.fetched(event.window, read);
     }
 
-    /// Read and delete the property of `slot`, refusing it when it would
-    /// take the fetch past `limit` bytes before it is read: the first answer
-    /// of a conversion, or an `INCR` chunk after the `held` bytes.
+    /// Read and delete the property of `requestor`, refusing it when it
+    /// would take the fetch past `limit` bytes before it is read: the first
+    /// answer of a conversion, or an `INCR` chunk after the `held` bytes.
     fn read_property(
         &self,
-        slot: usize,
+        requestor: xproto::Window,
         held: Option<usize>,
         limit: u64,
     ) -> Result<Read, TransferError> {
         let first = held.is_none();
         let xcb = self.connection.xcb();
-        let property = self.atoms.properties[slot];
+        let property = self.atoms.property;
         let failed = |error: &dyn std::fmt::Display| {
             tracing::debug!(%error, "cannot read the XDND source's data");
             TransferError::SourceGone
         };
         // Its size first, read without its value or deleting it.
         let size = xcb
-            .get_property(false, self.requestor, property, AtomEnum::ANY, 0, 0)
+            .get_property(false, requestor, property, AtomEnum::ANY, 0, 0)
             .map_err(|error| failed(&error))?
             .reply()
             .map_err(|error| failed(&error))?;
-        let incremental = first && size.type_ == self.atoms.incr;
-        let len = usize::try_from(size.bytes_after)
-            .unwrap_or(usize::MAX)
-            .saturating_add(held.unwrap_or_default());
-        if !incremental && let Some(error) = model::too_large(len, limit) {
-            drop(xcb.delete_property(self.requestor, property));
-            return Err(error);
-        }
-        let reply = xcb
-            .get_property(
-                true,
-                self.requestor,
-                property,
-                AtomEnum::ANY,
-                0,
-                size.bytes_after.div_ceil(4),
-            )
-            .map_err(|error| failed(&error))?
-            .reply()
-            .map_err(|error| failed(&error))?;
-        if incremental {
-            // Deleting the announcement asks for the first chunk.
+        if first && size.type_ == self.atoms.incr {
+            // The announcement is one word, whatever else the source wrote;
+            // deleting it asks for the first chunk.
+            let reply = xcb
+                .get_property(true, requestor, property, AtomEnum::ANY, 0, 1)
+                .map_err(|error| failed(&error))?
+                .reply()
+                .map_err(|error| failed(&error))?;
             let announced = reply
                 .value32()
                 .and_then(|mut words| words.next())
@@ -1209,7 +1232,26 @@ impl X11Drag {
                 usize::try_from(announced).unwrap_or(usize::MAX),
             ));
         }
-        let bytes = reply.value;
+        let len = usize::try_from(size.bytes_after)
+            .unwrap_or(usize::MAX)
+            .saturating_add(held.unwrap_or_default());
+        if let Some(error) = model::too_large(len, limit) {
+            drop(xcb.delete_property(requestor, property));
+            return Err(error);
+        }
+        let bytes = xcb
+            .get_property(
+                true,
+                requestor,
+                property,
+                AtomEnum::ANY,
+                0,
+                size.bytes_after.div_ceil(4),
+            )
+            .map_err(|error| failed(&error))?
+            .reply()
+            .map_err(|error| failed(&error))?
+            .value;
         Ok(if first || bytes.is_empty() {
             Read::Done(bytes)
         } else {
@@ -1254,7 +1296,7 @@ impl LoopDrag for X11Drag {
                 .as_ref()
                 .is_some_and(|hover| hover.window.id == window.id)
             {
-                state.end_hover(&mut after);
+                state.end_hover(&self.connection, &mut after);
             }
             removed
         };
@@ -1294,11 +1336,11 @@ impl LoopDrag for X11Drag {
                 }
                 true
             }
-            Event::SelectionNotify(notify) if notify.requestor == self.requestor => {
+            Event::SelectionNotify(notify) if self.fetching(notify.requestor) => {
                 self.selection_notify(notify);
                 true
             }
-            Event::PropertyNotify(property) if property.window == self.requestor => {
+            Event::PropertyNotify(property) if self.fetching(property.window) => {
                 self.property_notify(property);
                 true
             }
@@ -1311,42 +1353,28 @@ impl LoopDrag for X11Drag {
             .lock()
             .fetches
             .iter()
-            .flatten()
             .map(|fetch| fetch.deadline)
             .min()
     }
 
     fn expire(&self, now: Instant) {
         let mut after = After::default();
-        let mut stale = Vec::new();
         {
             let mut state = self.state.lock();
-            for (slot, property) in state.fetches.iter_mut().zip(self.atoms.properties) {
-                let ended = slot.as_ref().is_some_and(|fetch| {
-                    fetch.deadline <= now || fetch.wanted.completer.is_cancelled()
-                });
-                if ended {
-                    let fetch = slot.take().expect("BUG: the slot held a fetch");
-                    after.gone(fetch.wanted.completer);
-                    stale.push(property);
+            let (ended, live): (Vec<Fetch>, Vec<Fetch>) = std::mem::take(&mut state.fetches)
+                .into_iter()
+                .partition(|fetch| fetch.deadline <= now || fetch.wanted.completer.is_cancelled());
+            state.fetches = live;
+            if !ended.is_empty() {
+                for fetch in ended {
+                    after.end(fetch, Err(TransferError::SourceGone));
                 }
+                state.start_waiting(&self.connection, &mut after);
             }
-            if !stale.is_empty() {
-                state.start_waiting(&self.atoms.properties, &mut after);
-            }
-        }
-        for property in stale {
-            // What a late source writes there is no fetch's.
-            drop(
-                self.connection
-                    .xcb()
-                    .delete_property(self.requestor, property),
-            );
         }
         self.finish(after);
     }
 }
-
 impl DataTransferSource for X11Drag {
     /// The clipboard is the clipboard feature's.
     fn clipboard_offer(&self) -> Option<DataTransferOffer> {
@@ -1382,7 +1410,7 @@ impl DataTransferSource for X11Drag {
                 limit: limits.max_bytes,
                 completer,
             });
-            state.start_waiting(&self.atoms.properties, &mut after);
+            state.start_waiting(&self.connection, &mut after);
             request
         };
         self.finish(after);
@@ -1412,10 +1440,12 @@ impl DataTransferSource for X11Drag {
             {
                 hover.phase = Phase::Concluded;
             }
-            state.retire(id, &mut after).and_then(|offer| {
-                let action = offer.dropped?;
-                Some((offer.source, offer.window, action))
-            })
+            state
+                .retire(id, &self.connection, &mut after)
+                .and_then(|offer| {
+                    let action = offer.dropped?;
+                    Some((offer.source, offer.window, action))
+                })
         };
         if let Some((source, window, action)) = finished {
             let action = self.atoms.actions.atom_of(action);

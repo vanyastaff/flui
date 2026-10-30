@@ -6,6 +6,7 @@
 //! live cases skip without it. The model's cases need no server.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -278,6 +279,8 @@ struct Target {
     drag: Arc<X11Drag>,
     xid: xproto::Window,
     handler: Rc<RecordingWindowHandler>,
+    /// How often the transfer asked for the loop to wake.
+    wakes: Arc<AtomicUsize>,
 }
 
 impl Target {
@@ -289,7 +292,12 @@ impl Target {
             return None;
         }
         let connection = X11Connection::connect().expect("the X server answers");
-        let drag = X11Drag::try_new(&connection).expect("the transfer is made");
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let rung = Arc::clone(&wakes);
+        let wake = Box::new(move || {
+            rung.fetch_add(1, Ordering::SeqCst);
+        });
+        let drag = X11Drag::try_new(&connection, wake).expect("the transfer is made");
         let xcb = connection.xcb();
         let xid = xcb.generate_id().expect("an X id");
         xcb.create_window(
@@ -324,6 +332,7 @@ impl Target {
             drag,
             xid,
             handler,
+            wakes,
         })
     }
 
@@ -928,4 +937,106 @@ fn an_incr_answer_is_read_in_chunks_and_held_to_its_limit() {
             limit: 1000
         })
     );
+}
+
+/// The source's conversion requests, turning `target` until `count` came.
+fn conversions(target: &Target, source: &Source, count: usize) -> Vec<SelectionRequestEvent> {
+    let deadline = Instant::now() + STEP;
+    let mut asked = Vec::new();
+    while asked.len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "the source was asked {} times, not {count}",
+            asked.len()
+        );
+        target.deliver_events();
+        match source.poll() {
+            Some(Event::SelectionRequest(request)) => asked.push(request),
+            Some(_) => {}
+            None => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
+    asked
+}
+
+/// Requests past the fetches the transfer runs at once wait, and start as
+/// a retired offer frees its fetches; each fetch converts into a requestor
+/// of its own, so the answer a source writes late for a retired fetch
+/// reaches no later one. A request made off the loop wakes it.
+#[test]
+fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.answer(Some(TransferActions::COPY));
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    source.send(target.xid, atoms.drop, [source.window, 0, 11, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    while !target
+        .heard()
+        .iter()
+        .any(|event| matches!(event, DragDropEvent::Dropped { .. }))
+    {
+        assert!(Instant::now() < deadline, "the window heard no drop");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let dropped = entered(&target.heard());
+    // The dropped offer stays until concluded; a second drag over the
+    // window is a second offer.
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 12, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let hovering = match target.heard().last() {
+        Some(DragDropEvent::Entered { offer, .. }) => offer.id(),
+        other => panic!("the second drag was not offered: {other:?}"),
+    };
+
+    let woken = target.wakes.load(Ordering::SeqCst);
+    let held: Vec<TransferRequest> = (0..super::MAX_FETCHES)
+        .map(|_| {
+            target
+                .drag
+                .request(dropped, RepresentationIndex(0), TransferLimits::default())
+        })
+        .collect();
+    assert!(
+        target.wakes.load(Ordering::SeqCst) > woken,
+        "a fetch started off the loop wakes it"
+    );
+    let unanswered = conversions(&target, &source, super::MAX_FETCHES);
+    let waiting = target
+        .drag
+        .request(hovering, RepresentationIndex(0), TransferLimits::default());
+    target.drag.conclude_drop(dropped);
+    for request in held {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut request = request;
+        assert_same!(
+            std::pin::Pin::new(&mut request).poll(&mut context),
+            Poll::Ready(Err::<TransferPayload, _>(TransferError::SourceGone))
+        );
+    }
+
+    let read = target.resolve(&source, waiting, |source, asked| {
+        assert!(
+            unanswered
+                .iter()
+                .all(|late| late.requestor != asked.requestor),
+            "a fetch converts into a requestor of its own"
+        );
+        // Answers the retired fetches' requestors no longer exist to take.
+        for late in &unanswered {
+            source.answer_with(late, b"late");
+        }
+        source.answer_with(asked, b"fresh");
+    });
+    assert_same!(read, Ok(TransferPayload::Text("fresh".to_owned())));
 }

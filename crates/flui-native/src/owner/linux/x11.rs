@@ -232,11 +232,15 @@ pub(crate) trait X11Host: 'static {
     fn clipboard() -> Result<Arc<dyn host::SharedClipboard>, PlatformError>;
 
     /// The windows' drag and drop on `connection`: XDND drops on them, made
-    /// on the thread that builds the loop.
+    /// on the thread that builds the loop, ringing `doorbell` when work started
+    /// off the loop has a deadline for it.
     ///
     /// # Errors
-    /// [`PlatformError::Init`] when its atoms or window cannot be made.
-    fn drag(connection: &Arc<X11Connection>) -> Result<Arc<dyn LoopDrag>, PlatformError>;
+    /// [`PlatformError::Init`] when its atoms cannot be interned.
+    fn drag(
+        connection: &Arc<X11Connection>,
+        doorbell: &Doorbell,
+    ) -> Result<Arc<dyn LoopDrag>, PlatformError>;
 }
 
 /// The drag and drop of the X11 loop's windows, the drag feature's (ADR-0151
@@ -462,7 +466,7 @@ impl X11Loop {
         let displays = H::displays();
         let input = H::input(&connection);
         let clipboard = H::clipboard()?;
-        let drag = H::drag(&connection)?;
+        let drag = H::drag(&connection, &doorbell)?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
         let affinity = flui_foundation::OwnerAffinity::new();
         affinity.bind_current();

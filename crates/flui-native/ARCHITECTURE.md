@@ -3740,19 +3740,22 @@ feedback, and a refusal answers `XdndFinished` at once while the window hears
 `Exited`. Types map to representations in the pure `drag::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
-drag's last time into one of four properties of a window of the transfer's
-own, read on the owner thread as the loop hands over the answer, `INCR` a
-chunk at a time; more requests wait for a property, each is held to its
-limit before a byte is read and to five seconds between answers. Nothing is
-dispatched or completed under the transfer's lock, so a handler may fetch or
-conclude while it hears the drop. The drag source is not written yet.
+drag's last time into a window made for that fetch and destroyed as it ends,
+so a late answer reaches no later fetch; it is read on the owner thread as the
+loop hands over the answer, `INCR` a chunk at a time. At most four run at once
+and more wait their turn, starting as a fetch ends or its offer is retired;
+each is held to its limit before a byte is read and to five seconds between
+answers. Nothing is dispatched or completed under the transfer's lock, so a
+handler may fetch or conclude while it hears the drop. The drag source is not
+written yet.
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
 `bytes_make_their_payload`, …) and, against the X server CI starts, a source
 on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
-`a_drag_that_leaves_retires_its_offer` and
+`a_drag_that_leaves_retires_its_offer`,
+`a_retired_offer_frees_its_fetches_for_the_requests_waiting` and
 `an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine

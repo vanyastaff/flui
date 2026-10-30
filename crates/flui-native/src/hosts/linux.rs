@@ -170,7 +170,7 @@ mod x11 {
     use crate::host::SharedClipboard;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{
-        HostDisplays, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
+        Doorbell, HostDisplays, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
     };
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
@@ -235,8 +235,17 @@ mod x11 {
         }
 
         /// XDND drops on the windows, on the platform's connection.
-        fn drag(connection: &Arc<X11Connection>) -> Result<Arc<dyn LoopDrag>, PlatformError> {
-            Ok(X11Drag::try_new(connection)?)
+        fn drag(
+            connection: &Arc<X11Connection>,
+            doorbell: &Doorbell,
+        ) -> Result<Arc<dyn LoopDrag>, PlatformError> {
+            let doorbell = doorbell.clone();
+            let wake = Box::new(move || {
+                if let Err(error) = doorbell.ring() {
+                    tracing::debug!(%error, "cannot wake the X11 loop for a drop's transfer");
+                }
+            });
+            Ok(X11Drag::try_new(connection, wake)?)
         }
     }
 
