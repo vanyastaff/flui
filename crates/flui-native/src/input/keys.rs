@@ -41,6 +41,27 @@
 use flui_platform::keyboard::{Code, Key, Location, NamedKey};
 use flui_platform::pointer::PointerButton;
 
+#[cfg(any(
+    winit_host,
+    wayland_host,
+    x11_host,
+    target_os = "windows",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
+mod unplaced;
+#[cfg(any(
+    winit_host,
+    wayland_host,
+    x11_host,
+    target_os = "windows",
+    target_os = "macos",
+    target_arch = "wasm32",
+    test
+))]
+pub(crate) use unplaced::UnplacedKeys;
+
 // Virtual-key codes, from `winuser.h`. Raw `u16` rather than the `windows`
 // crate's `VIRTUAL_KEY` newtype so this module compiles on every host.
 mod vk {

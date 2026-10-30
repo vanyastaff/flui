@@ -538,7 +538,7 @@ mod keyboard {
     use super::{EVDEV_OFFSET, XkbModifier, code_of, key_of, modifiers_of};
     #[cfg(wayland_host)]
     use super::{group_names, keymap_text};
-    use crate::input::keys::location_for_code;
+    use crate::input::keys::{UnplacedKeys, location_for_code};
     #[cfg(x11_host)]
     use crate::owner::linux::x11::X11Connection;
 
@@ -706,6 +706,9 @@ mod keyboard {
         /// The XKB key codes pressed and not released, in order; at most
         /// [`MAX_HELD_KEYS`].
         held: Vec<u32>,
+        /// The keys of [`held`](Self::held) the kernel names no code for, with
+        /// the key each was pressed as.
+        unplaced: UnplacedKeys<u32>,
     }
 
     /// The keys a keyboard holds down at once. A full-size keyboard has 104
@@ -759,6 +762,7 @@ mod keyboard {
                 modifiers,
                 keycodes,
                 held: Vec::new(),
+                unplaced: UnplacedKeys::default(),
             })
         }
 
@@ -1053,16 +1057,15 @@ mod keyboard {
             };
             let key = composed.unwrap_or_else(|| key_of(keysym, &self.keysym_text(keysym)));
             let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
-            Some(
-                KeyEvent::new(state, key, code, time)
-                    .with_location(location_for_code(code))
-                    .with_modifiers(self.modifiers())
-                    .with_repeat(if repeat {
-                        KeyRepeat::AutoRepeat
-                    } else {
-                        KeyRepeat::First
-                    }),
-            )
+            let event = KeyEvent::new(state, key, code, time)
+                .with_location(location_for_code(code))
+                .with_modifiers(self.modifiers())
+                .with_repeat(if repeat {
+                    KeyRepeat::AutoRepeat
+                } else {
+                    KeyRepeat::First
+                });
+            Some(self.unplaced.settle(keycode, event))
         }
 
         /// The keyboard leaves its window: the compose sequence in progress
