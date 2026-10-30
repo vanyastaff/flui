@@ -137,12 +137,15 @@ impl<D: Document> Persisted<D> {
         } else {
             SaveStatus::Unavailable
         };
-        let registry = cx
-            .flush_registry_in_crate(CrateToken::new())
-            .map(|registry| {
-                let publisher = registry.publisher(D::NAME);
-                (registry, publisher)
-            });
+        // Writes go to the storage the document acquired, whichever
+        // provider that is.
+        let registry = storage.as_ref().ok().and_then(|handle| {
+            cx.flush_registry_in_crate(CrateToken::new())
+                .map(|registry| {
+                    let publisher = registry.publisher(D::NAME, Arc::clone(handle.store()));
+                    (registry, publisher)
+                })
+        });
         Self {
             document: Rc::new(OpenDocument {
                 storage,
@@ -266,8 +269,8 @@ impl<D: Document> Persisted<D> {
     /// The latest revision the storage confirmed, if any.
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
-        let (registry, _) = self.document.registry.as_ref()?;
-        registry.committed(D::NAME).map(|(revision, _)| revision)
+        let (_, publisher) = self.document.registry.as_ref()?;
+        publisher.committed().map(|(revision, _)| revision)
     }
 
     /// Where the document stands against its storage.
@@ -449,8 +452,8 @@ impl<D: Document> OpenDocument<D> {
     fn refresh(self: &Rc<Self>) {
         let (released, stale_watch, spawn) = {
             let mut state = self.state.borrow_mut();
-            if let (Some(_), Some((registry, _))) = (&state.published, &self.registry) {
-                let flush = registry.state(D::NAME);
+            if let (Some(_), Some((_, publisher))) = (&state.published, &self.registry) {
+                let flush = publisher.state();
                 match &flush {
                     FlushState::Clean => {
                         if matches!(state.failure, Some(PersistError::Storage(_))) {

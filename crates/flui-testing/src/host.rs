@@ -770,10 +770,9 @@ impl HeadlessHost {
         let needs_redraw = Arc::new(AtomicBool::new(false));
         let wake_flag = Arc::clone(&needs_redraw);
         let flush_writes = Arc::new(Mutex::new(Vec::new()));
-        let flush = storage.as_ref().map(|storage| {
+        let flush = storage.as_ref().map(|_| {
             let queued = Arc::clone(&flush_writes);
             FlushHost::new(
-                Arc::clone(storage),
                 Box::new(move |write| {
                     queued.lock().push(write);
                     Ok(())

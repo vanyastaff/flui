@@ -1287,7 +1287,6 @@ impl AppRuntime {
         let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
         let wake = self.frame_wake_callback();
         self.flush_host = Some(flui_view::__runtime::FlushHost::new(
-            Arc::clone(&storage),
             Box::new(move |write| {
                 // A write the pool refuses is dropped, which keeps its bytes
                 // owed for the flush at the end.
