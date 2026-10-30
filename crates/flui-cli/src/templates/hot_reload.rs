@@ -19,7 +19,7 @@ fn member_dep(sibling: &str) -> String {
     toml::Value::Table(dependency).to_string()
 }
 
-pub fn generate(name: &str, org: &str, source: &DependencySource) -> ProjectPlan {
+pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectPlan {
     let lib_name = name.replace('-', "_");
     let types_package = format!("{name}-types");
     let worker_package = format!("{name}-logic");
@@ -33,7 +33,7 @@ pub fn generate(name: &str, org: &str, source: &DependencySource) -> ProjectPlan
         )
         .file(
             "flui.toml",
-            flui_config(name, org, &host_package, &worker_package, &worker_lib),
+            flui_config(name, app_id, &host_package, &worker_package, &worker_lib),
         )
         .file(
             "README.md",
@@ -88,7 +88,7 @@ strip = "debuginfo"
 
 fn flui_config(
     name: &str,
-    org: &str,
+    app_id: &str,
     host_package: &str,
     worker_package: &str,
     worker_lib: &str,
@@ -101,7 +101,7 @@ fn flui_config(
         r#"[app]
 name = "{name}"
 version = "0.1.0"
-organization = "{org}"
+id = "{app_id}"
 
 [build]
 target_platforms = ["windows", "linux", "macos"]

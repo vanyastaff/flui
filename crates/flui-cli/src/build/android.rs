@@ -251,6 +251,9 @@ impl AndroidBuilder {
             )
         })?;
 
+        // The API level the NDK links against is the floor the APK declares,
+        // so the library calls nothing newer than the manifest promises.
+        let platform = ctx.floors.android_api().to_string();
         let mut rust_libs = Vec::new();
 
         for target in targets {
@@ -263,6 +266,8 @@ impl AndroidBuilder {
                 "ndk",
                 "-t",
                 target.as_str(),
+                "--platform",
+                platform.as_str(),
                 "-o",
                 jni_libs_str,
                 "build",
@@ -276,6 +281,7 @@ impl AndroidBuilder {
             process::run(
                 Command::new("cargo")
                     .args(&args)
+                    .envs(ctx.floors.cargo_env(rust_target(target)))
                     .current_dir(&self.workspace_root),
             )
             .await?;
@@ -333,6 +339,7 @@ impl AndroidBuilder {
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
         })?;
 
+        crate::build::gradle_floor::state_min_sdk(&android_dir, ctx.floors.android_api())?;
         let gradle_task = match ctx.profile {
             crate::build::platform::Profile::Debug => "assembleDebug",
             crate::build::platform::Profile::Release => "assembleRelease",
@@ -391,7 +398,7 @@ impl AndroidBuilder {
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
-        let package = config.app.app_id();
+        let package = config.app.id.android_package().to_owned();
         let manifest = self
             .workspace_root
             .join("platforms")
@@ -431,6 +438,7 @@ impl AndroidBuilder {
                 native_libs: &native_libs,
                 work_dir: &ctx.output_dir.join("apk-work"),
                 output: &output,
+                min_sdk: ctx.floors.android_api(),
             })
             .await?;
         let size_bytes = std::fs::metadata(&output)?.len();

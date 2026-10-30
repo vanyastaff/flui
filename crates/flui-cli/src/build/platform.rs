@@ -23,6 +23,9 @@ pub(crate) struct BuilderContext {
     /// application — the bundle a double-clickable, foreground-activatable app
     /// needs, and which a bare Mach-O cannot substitute for.
     pub(crate) bundle: Option<AppBundle>,
+    /// The floors the build packages and links with (ADR-0244 §10): FLUI's,
+    /// raised where `flui.toml` asks.
+    pub(crate) floors: crate::build::app_floor::AppFloors,
 }
 
 /// Identity an application bundle is staged under.
@@ -37,27 +40,14 @@ pub(crate) struct AppBundle {
 }
 
 impl AppBundle {
-    /// Create bundle metadata from a display name and an org id.
-    ///
-    /// The identifier is `{identifier_prefix}.{slug}` with the name slugged to
-    /// lowercase alphanumerics — the shape a bundle id may legally take, so a
-    /// name like `My App` does not produce an invalid plist value.
+    /// Bundle metadata for the application `name` (the `.app` stem and
+    /// `CFBundleName`) under `identifier`, which callers derive with
+    /// [`AppId::apple_bundle_id`](crate::app_id::AppId::apple_bundle_id).
     #[must_use]
-    pub(crate) fn new(name: &str, identifier_prefix: &str) -> Self {
-        let slug: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let slug = slug.trim_matches('-').to_string();
+    pub(crate) fn new(name: &str, identifier: String) -> Self {
         Self {
             name: name.to_string(),
-            identifier: format!("{identifier_prefix}.{slug}"),
+            identifier,
             version: "0.1.0".into(),
         }
     }

@@ -377,13 +377,17 @@ async fn collect_artifacts(child: &mut Child, target: &CargoTarget) -> BuildResu
     Ok(path)
 }
 
+/// Runs `cargo` with `args` and `env` in `dir` and answers the artifact of
+/// `target` it reports.
 pub(crate) async fn build_artifact(
     dir: &Path,
     args: &[String],
     target: &CargoTarget,
+    env: &[(&str, String)],
 ) -> BuildResult<PathBuf> {
     let mut child = Command::new("cargo")
         .args(args)
+        .envs(env.iter().map(|(name, value)| (*name, value.as_str())))
         .arg("--message-format=json-render-diagnostics")
         .current_dir(dir)
         .stdin(Stdio::null())

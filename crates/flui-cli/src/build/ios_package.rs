@@ -456,7 +456,10 @@ pub(crate) async fn package_application(
         let name = artifacts.metadata["package_name"].as_str().ok_or_else(|| {
             invalid("application bundle metadata or Cargo package metadata is required")
         })?;
-        let mut bundle = crate::build::AppBundle::new(name, "dev.flui");
+        let mut bundle = crate::build::AppBundle::new(
+            name,
+            crate::app_id::AppId::unconfigured(name).apple_bundle_id(),
+        );
         bundle.version = artifacts.metadata["package_version"]
             .as_str()
             .ok_or_else(|| invalid("Cargo package version is required"))?
@@ -702,7 +705,7 @@ mod tests {
         assert_eq!(state.load(Ordering::Acquire), COMMITTING);
     }
     fn info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer() {
-        let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo");
+        let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned());
         bundle.version = "1.2.3".into();
         for platform in ["IOS", "IOSSIMULATOR"] {
             let plist = application_info_plist(&bundle, "1.2.3", "15.0", platform);

@@ -76,6 +76,9 @@ impl PlatformTextInput for FakeTextInput {
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.state.lock().cursor_area_calls.push(area);
     }
+
+    /// No input method composes in a headless window.
+    fn discard_composition(&self) {}
 }
 
 impl super::TextInput for Arc<FakeTextInput> {

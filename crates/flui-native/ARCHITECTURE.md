@@ -198,7 +198,8 @@ trait depends on `flui-platform` instead.
   that hears the system's broadcasts (`broadcast`); `owner::apple` is
   `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
   `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
-  the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
+  the looper over `android-activity`, whose frames the choreographer paces
+  (`frame_clock`, ADR-0269), the JNI `FluiView` and the NDK lookup;
   `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
   host's loop over its libxcb connection and an eventfd doorbell;
   `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test
@@ -4496,7 +4497,8 @@ read limit and a base of another length decided without a value cursor (the
 stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
-`AppConfig::with_storage_dir` is the one switch.
+the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::with_storage_dir`
+is the one switch.
 
 ### Android samples its displays through JNI and refreshes them on announced change only
 

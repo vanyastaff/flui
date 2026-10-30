@@ -546,21 +546,6 @@ pub trait LifecycleContext: BuildContext {
     /// bare owner with no presentation behind it.
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry>;
 
-    /// The UI runtime's byte storage, which a
-    /// [`Persisted`](crate::persist::Persisted) document reads and writes
-    /// through.
-    ///
-    /// `None` when the UI runtime has none: a platform without files, an
-    /// application that configured no storage, or a bare owner in a unit
-    /// test. Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `text_input_handle` follows.
-    ///
-    /// A value written here directly is not flushed when the application or
-    /// the session ends: a write still in flight then may be lost. Only what
-    /// a [`Persisted`](crate::persist::Persisted) document publishes goes
-    /// through the host's flush registry, which the host writes at teardown.
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>>;
-
     /// The presentation's close guard: hold the window's close while work
     /// that must not be lost finishes.
     ///

@@ -214,6 +214,15 @@ impl ExternalBuildInbox {
         token
     }
 
+    /// Owe a frame for fresh work without waking now: the next
+    /// [`request_frame_if_needed`](Self::request_frame_if_needed) delivers
+    /// it, as it retries a wake that panicked.
+    pub(crate) fn owe_frame(&self, has_fresh_work: bool) {
+        if has_fresh_work && !self.is_closed() {
+            let _owed = self.request_token();
+        }
+    }
+
     fn pending_token(&self) -> Option<WakeToken> {
         self.current_wake
             .lock()

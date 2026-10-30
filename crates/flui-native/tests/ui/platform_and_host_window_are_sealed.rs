@@ -18,7 +18,7 @@ use flui_native::{
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
-    StorageName, SystemPreferences,
+    AppDataDir, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowHandler, WindowOptions, WindowState,
 };
@@ -122,7 +122,7 @@ impl Platform for OutsidePlatform {
         Ok(PathBuf::new())
     }
 
-    fn data_dirs(&self, _: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(&self, _: &AppDataDir) -> Option<DataDirs> {
         None
     }
 }

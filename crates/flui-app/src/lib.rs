@@ -182,7 +182,7 @@ pub use bindings::{
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.
-pub use flui_log::{AppIdentity, AppleBundleId};
+pub use flui_log::{AppId, AppIdentity};
 // Convenience re-exports from flui-view
 pub use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,

@@ -250,10 +250,6 @@ pub struct UiRuntime {
     /// Where providers' answers come back to the owner thread: drained after
     /// the command inbox at every Idle drain, retired when the UI runtime drops.
     owner_jobs: crate::capability::OwnerJobs,
-    /// The byte storage this UI runtime's presentations hand their widgets
-    /// (`LifecycleContext::storage`), if the host gave it one; installed
-    /// like [`Self::capabilities`].
-    storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What every presentation closes and persists through, installed like
     /// [`Self::capabilities`].
     close: crate::runtime_services::CloseServices,

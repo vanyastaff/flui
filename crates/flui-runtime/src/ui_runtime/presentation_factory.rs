@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use flui_interaction::InteractionDispatchHandle;
-use flui_platform::Storage;
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
 use flui_view::{BuildInProgress, GlobalKeyScope};
 
@@ -24,7 +23,6 @@ pub struct PresentationFactory {
     sender: UiCommandSender,
     capabilities: crate::capability::CapabilityRegistry,
     completions: flui_platform::capability::CompletionSource,
-    storage: Option<Arc<dyn Storage>>,
     close: crate::runtime_services::CloseServices,
     clock: ClockSource,
     text: flui_rendering::TextContextHandle,
@@ -53,7 +51,6 @@ impl UiRuntime {
             sender: self.sender_prototype.clone(),
             capabilities: self.capabilities.clone(),
             completions: self.owner_jobs.completions().clone(),
-            storage: self.storage.clone(),
             close: self.close.clone(),
             clock: self.clock.clone(),
             text: self.text.clone(),
@@ -114,7 +111,6 @@ impl PresentationFactory {
                 command_sender,
                 capabilities: self.capabilities.clone(),
                 completions: self.completions.clone(),
-                storage: self.storage.clone(),
                 close: self.close.clone(),
                 clock: &self.clock,
                 text: self.text.clone(),

@@ -783,3 +783,74 @@ pub(crate) fn back_keys_pop_the_enclosing_navigator_at_a_nested_root() {
         "nothing to go back to: the key reaches the host"
     );
 }
+
+/// A page whose build fails while `fails` is set, so the page is an error
+/// view with nothing focusable.
+#[derive(Clone)]
+struct FailingPage {
+    fails: bool,
+}
+
+impl flui_view::StatelessView for FailingPage {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        assert!(!self.fails, "the page failed");
+        SizedBox::new(40.0, 40.0)
+    }
+}
+
+impl flui_view::View for FailingPage {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// With nothing focusable on the page (an error view in place of a page
+/// whose build failed, or a page of plain content), focus rests on the
+/// route's own scope, and the back key still pops the page and Escape a
+/// dismissible popup.
+pub(crate) fn back_keys_leave_a_page_with_nothing_focusable() {
+    let counts = Rc::new(Cell::new(0));
+    let (navigator, mut harness) = home(&counts);
+    harness.tick();
+    let manager = harness.focus_manager();
+    let (back, modifiers) = back_chord();
+    let route_scope = || {
+        manager
+            .primary_focus()
+            .expect("the route's scope holds focus")
+            .debug_label()
+            .map(str::to_owned)
+    };
+
+    for (page, fails) in [("failed page", true), ("plain page", false)] {
+        drop(navigator.push(PageRoute::<i32>::new(move |_, _, _| {
+            FailingPage { fails }.into_view().boxed()
+        })));
+        settle(&mut harness);
+        let pushed = navigator.route_ids().len();
+        assert_eq!(pushed, 2, "{page}");
+        assert_eq!(
+            route_scope().as_deref(),
+            Some("ModalRoute Focus Scope"),
+            "{page}"
+        );
+        assert!(chord(&manager, &back, modifiers), "{page}: Back is handled");
+        settle(&mut harness);
+        assert_eq!(navigator.route_ids().len(), 1, "{page}: Back popped it");
+    }
+
+    drop(
+        navigator.push(
+            PopupRoute::<i32>::new(|_, _, _| FailingPage { fails: true }.into_view().boxed())
+                .barrier_dismissible(true),
+        ),
+    );
+    settle(&mut harness);
+    assert!(press(&manager, &Key::Named(NamedKey::Escape)));
+    settle(&mut harness);
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "Escape dismissed the failed popup"
+    );
+}

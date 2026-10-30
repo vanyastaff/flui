@@ -286,6 +286,19 @@ latch(es) would trade a real per-callsite invariant (every fresh inbox
 entry asks for a frame) for a saving with no measured cost — take it up
 only if a wake-count oracle ever shows the cost is real.
 
+**Decision 4 (a build pass owes its own wakes):**
+An entry the pass schedules through its `ElementOwner` (a provider notifying
+its dependents, a child scheduling itself during reconciliation, a lazy
+sliver mounting a child) does not run `on_build_scheduled` where it is
+scheduled: `FrameWake::AfterPass` records the wake as owed, and
+`drain_prepared_build_target` delivers it once every element is back in the
+tree. The hook is the binding's code; run inline, a failing wake unwound
+through the update of the element whose change scheduled the entry, and the
+per-child containment replaced that healthy subtree with an error view, so
+its state was lost. A failed owed wake still reaches the caller and stays
+owed for the next request to retry. Pinned by
+`a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree`.
+
 ### Render children adopt themselves at mount
 
 **Rule:** a render child enters the render tree by adopting ITSELF at mount
