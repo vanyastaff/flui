@@ -1080,6 +1080,26 @@ runtime parser.
 `animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
 `animated_icon::theme_and_direction_shape_the_icon` pin the three.
 
+### A symbol effect moves the painted box, never the layout or the label
+
+`SymbolEffect` wraps an icon's built content in a crate-private host that owns one controller
+and turns its progress into scale, turn and opacity tracks (`Keyframes` over a one-second
+cycle, stretched to the effect's duration and `Speed`), so an effect is a transform and an
+opacity on the icon's own box and layout never changes. What plays it is part of the type: a
+one-shot effect needs `on_change(u64)` and a repeating one `active(bool)`, so a bounce with no
+trigger does not compile. A one-shot or repeating effect ends at rest, which is where an
+inactive repeating effect stops: it runs the cycle in progress to its end. Transitions play
+when first applied, which keeps them declarative: an app toggles by switching `appear` and
+`disappear`. A replace keeps the outgoing content under an `ExcludeSemantics` until the fade
+ends, so assistive technology hears one label. A trim belongs to paths, so `PathEffect` is a
+method of `AnimatedIcon` only and a glyph icon cannot be handed one. `IconThemeData` carries
+an ambient effect for icons a container did not build itself, the way `NavigationBar` bounces
+whatever icon view a destination holds.
+
+`symbol_effect::each_effect_peaks_where_its_timing_says`,
+`symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard` and
+`symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end` pin the three.
+
 ### A carousel is a `Scrollable` over keylines, and every move goes through its position
 
 `Carousel` is a horizontal `Scrollable` whose viewport holds one `SliverCarousel`; the

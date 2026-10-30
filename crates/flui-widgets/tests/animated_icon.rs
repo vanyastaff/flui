@@ -195,11 +195,7 @@ pub(crate) fn the_frame_follows_the_progress() {
 pub(crate) fn theme_and_direction_shape_the_icon() {
     let red = Color::rgb(255, 0, 0);
     let laid = mount(IconTheme::new(
-        IconThemeData {
-            size: Some(24.0),
-            color: Some(red),
-            ..IconThemeData::default()
-        },
+        IconThemeData::default().size(24.0).color(red),
         icon_at(0.0),
     ));
     let (points, color) = drawn(&laid);

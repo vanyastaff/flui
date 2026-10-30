@@ -69,6 +69,23 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `draw_on`/`draw_off` через `Path::trim` для векторных; потребитель — `NavigationBar`
   (bounce выбранной иконки) и `IconButton` с переключением.
 - **Требования:** I4, I5, строка M1. **После:** T3.
+- **Сделано.** `SymbolEffect` (`bounce`, `wiggle`, `rotate`, `pulse`, `breathe`, `appear`,
+  `disappear`, `replace`; `repeat`, `speed(Speed)`, `animate_on_appear`) на `Icon` и
+  `AnimatedIcon`, `PathEffect` (`draw_on`/`draw_off`) только на `AnimatedIcon`. Отступления,
+  одобренные координатором: `Speed::try_new` вместо `Speed::new`; триггер `on_change(u64)`;
+  длительности — ассоциированные константы (`SymbolEffect::BOUNCE_DURATION` …); эффект
+  наследуется через `IconThemeData::symbol_effect`, а `IconThemeData` стал `#[non_exhaustive]`
+  с методом на каждое поле. Потребитель — `NavigationBar`: новая выбранная иконка
+  подпрыгивает, покинутая — нет. Переключаемый `IconButton` (`is_selected`/`selected_icon`,
+  `replace`) — отдельная задача: у `IconButton` ещё нет варианта-переключателя.
+  Тесты: `symbol_effect::*` в `widgets_it` (`each_effect_peaks_where_its_timing_says`,
+  `a_one_shot_effect_plays_per_change_and_repeat`,
+  `a_repeating_effect_finishes_its_cycle_when_turned_off`,
+  `a_replace_cross_fades_and_only_the_new_label_is_heard`, `transitions_play_when_first_applied`,
+  `reduced_motion_keeps_the_icon_still_or_at_its_end`,
+  `a_speed_is_positive_and_finite_and_scales_the_timing`,
+  `a_path_effect_draws_the_paths_on_and_off`); доктест `compile_fail` у `PathEffect` (у `Icon`
+  нет `path_effect`); `navigation_bar::a_newly_selected_icon_bounces` в `material_it`.
 
 ### T6 — движение перестановки (#1697)
 

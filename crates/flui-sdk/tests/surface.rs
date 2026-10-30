@@ -257,6 +257,10 @@ mod measured {
         DropCommands as _, DropHover as _, DropTarget as _, PasteTextIntent as _,
     };
     use flui_sdk::widgets::{
+        DiscreteEffect as _, IndefiniteEffect as _, PathEffect as _, RotateEffect as _, Speed as _,
+        SymbolEffect as _,
+    };
+    use flui_sdk::widgets::{
         DismissDirection as _, DismissSide as _, DismissSideCallback as _, DismissThreshold as _,
         DismissThresholdError as _, DismissUpdateCallback as _, DismissUpdateDetails as _,
         Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,

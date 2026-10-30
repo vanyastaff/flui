@@ -113,7 +113,8 @@ impl AnimatedIcon {
     }
 
     /// Moves the icon with `effect`; see [`SymbolEffect`]. A replace cross-fades when the
-    /// data changes to other data.
+    /// data changes to other data. It takes the place of the ambient
+    /// [`IconThemeData::symbol_effect`](super::IconThemeData::symbol_effect).
     #[must_use]
     pub fn symbol_effect(mut self, effect: SymbolEffect) -> Self {
         self.effect = Some(effect);
@@ -247,7 +248,7 @@ impl ViewState<AnimatedIcon> for AnimatedIconState {
                 .role(crate::SemanticsRole::Image);
         }
         let built = semantics.child(built).boxed();
-        match &view.effect {
+        match view.effect.as_ref().or(theme.symbol_effect.as_ref()) {
             Some(effect) => {
                 SymbolEffectHost::new(effect.clone(), ContentKey::Vector(view.data.clone()), built)
                     .boxed()

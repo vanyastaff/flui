@@ -112,9 +112,10 @@
 //!
 //! # Deferred (named, not silently dropped)
 //!
-//! - **Icon and label selection animation** — the icon swap and the
-//!   icon/label colour change snap; only the indicator animates (see the
-//!   "Indicator" section above).
+//! - **Icon and label colour animation** — the icon swap and the icon/label
+//!   colour change snap; the indicator animates (see the "Indicator" section
+//!   above) and a newly selected icon bounces through the destination's
+//!   `IconThemeData::symbol_effect`, which a deselected icon does not.
 //! - **`NavigationDestinationLabelBehavior`** (`alwaysHide`/`onlyShowSelected`)
 //!   — see the "Label behavior" section above.
 //! - **`shadow_color`/`surface_tint_color`** (widget, theme, and default
@@ -143,7 +144,7 @@ use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, MainAxisAlignment,
     MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
-    Stack, Text, WidgetState, WidgetStateProperty, WidgetStates,
+    Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty, WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -530,14 +531,13 @@ fn build_destination(
     } else {
         destination.icon.clone()
     };
-    let icon_themed = IconTheme::new(
-        IconThemeData {
-            size: Some(NAVIGATION_DESTINATION_ICON_SIZE),
-            color: Some(icon_color),
-            ..IconThemeData::default()
-        },
-        icon_child,
-    );
+    let icon_themed = SelectionBounce {
+        selected,
+        theme: IconThemeData::default()
+            .size(NAVIGATION_DESTINATION_ICON_SIZE)
+            .color(icon_color),
+        icon: icon_child,
+    };
 
     // Always reserved at full size; how much of it paints follows the
     // selection — see the module docs' "Indicator" section.
@@ -633,6 +633,55 @@ impl StatelessView for NavigationBar {
         Material::new(background_color)
             .elevation(elevation)
             .child(SafeArea::new().child(content))
+    }
+}
+
+/// One destination's icon theme, whose symbol effect bounces the icon each time the
+/// destination becomes selected, and not when it stops being selected.
+#[derive(Clone, StatefulView)]
+struct SelectionBounce {
+    selected: bool,
+    theme: IconThemeData,
+    icon: BoxedView,
+}
+
+impl std::fmt::Debug for SelectionBounce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectionBounce")
+            .field("selected", &self.selected)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How many times the destination has become selected, the bounce's trigger.
+#[derive(Debug)]
+struct SelectionBounceState {
+    selections: u64,
+}
+
+impl StatefulView for SelectionBounce {
+    type State = SelectionBounceState;
+
+    fn create_state(&self) -> Self::State {
+        SelectionBounceState { selections: 0 }
+    }
+}
+
+impl ViewState<SelectionBounce> for SelectionBounceState {
+    fn did_update_view(&mut self, old_view: &SelectionBounce, new_view: &SelectionBounce) {
+        if new_view.selected && !old_view.selected {
+            // Only a change matters, so a wrap after 2^64 selections still plays.
+            self.selections = self.selections.wrapping_add(1);
+        }
+    }
+
+    fn build(&self, view: &SelectionBounce, _ctx: &dyn BuildContext) -> impl IntoView {
+        IconTheme::new(
+            view.theme
+                .clone()
+                .symbol_effect(SymbolEffect::bounce().on_change(self.selections)),
+            view.icon.clone(),
+        )
     }
 }
 

@@ -523,6 +523,10 @@ fn navigation_and_layout_contracts() {
             navigation_bar::reduced_motion_shows_a_selection_change_on_its_first_frame,
         ),
         (
+            "navigation_bar::a newly selected icon bounces",
+            navigation_bar::a_newly_selected_icon_bounces,
+        ),
+        (
             "navigation_bar::an index at the destination count is rejected",
             navigation_bar::an_index_at_the_destination_count_is_rejected,
         ),

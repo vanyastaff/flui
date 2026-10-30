@@ -521,11 +521,9 @@ impl StatelessView for Chip {
 
         let avatar_view = self.avatar.clone().map(|avatar| {
             IconTheme::new(
-                IconThemeData {
-                    size: Some(CHIP_ICON_SIZE),
-                    color: Some(icon_color),
-                    ..IconThemeData::default()
-                },
+                IconThemeData::default()
+                    .size(CHIP_ICON_SIZE)
+                    .color(icon_color),
                 avatar,
             )
             .boxed()
@@ -533,11 +531,9 @@ impl StatelessView for Chip {
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
             let mut delete_button = InkWell::new(IconTheme::new(
-                IconThemeData {
-                    size: Some(CHIP_ICON_SIZE),
-                    color: Some(delete_icon_color),
-                    ..IconThemeData::default()
-                },
+                IconThemeData::default()
+                    .size(CHIP_ICON_SIZE)
+                    .color(delete_icon_color),
                 Icon::new(cancel_icon_data()),
             ))
             .shape(MaterialShape::Stadium);
@@ -810,11 +806,9 @@ impl StatelessView for FilterChip {
             ),
             FilterChipLeading::Avatar => self.avatar.clone().map(|avatar| {
                 IconTheme::new(
-                    IconThemeData {
-                        size: Some(CHIP_ICON_SIZE),
-                        color: Some(icon_color),
-                        ..IconThemeData::default()
-                    },
+                    IconThemeData::default()
+                        .size(CHIP_ICON_SIZE)
+                        .color(icon_color),
                     avatar,
                 )
                 .boxed()
@@ -824,11 +818,9 @@ impl StatelessView for FilterChip {
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
             let mut delete_button = InkWell::new(IconTheme::new(
-                IconThemeData {
-                    size: Some(CHIP_ICON_SIZE),
-                    color: Some(delete_icon_color),
-                    ..IconThemeData::default()
-                },
+                IconThemeData::default()
+                    .size(CHIP_ICON_SIZE)
+                    .color(delete_icon_color),
                 Icon::new(clear_icon_data()),
             ))
             .shape(MaterialShape::Stadium);

@@ -99,6 +99,7 @@ impl Icon {
     /// Moves the icon with `effect`: a bounce, a pulse, a cross-fade when its glyph
     /// changes; see [`SymbolEffect`]. A glyph has no paths to draw on, so an icon takes no
     /// [`PathEffect`](super::PathEffect); [`AnimatedIcon`](super::AnimatedIcon) does.
+    /// It takes the place of the ambient [`IconThemeData::symbol_effect`].
     #[must_use]
     pub fn symbol_effect(mut self, effect: SymbolEffect) -> Self {
         self.effect = Some(effect);
@@ -168,7 +169,7 @@ impl StatelessView for Icon {
                 .role(crate::SemanticsRole::Image);
         }
         let built = semantics.child(icon).boxed();
-        match &self.effect {
+        match self.effect.as_ref().or(theme.symbol_effect.as_ref()) {
             Some(effect) => {
                 SymbolEffectHost::new(effect.clone(), ContentKey::Glyph(self.data.clone()), built)
                     .boxed()
