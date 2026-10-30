@@ -726,7 +726,10 @@ pub(crate) fn route_quit(route: impl Fn() + 'static) {
 
 /// Send the user's reopen (AppKit's Dock click) to `route`.
 #[cfg_attr(
-    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    any(
+        target_arch = "wasm32",
+        all(not(test), any(target_os = "android", target_os = "ios"))
+    ),
     expect(dead_code, reason = "only the desktop main window reopens")
 )]
 pub(super) fn route_reopen(route: impl Fn() + 'static) {
