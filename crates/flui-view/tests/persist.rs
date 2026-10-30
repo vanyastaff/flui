@@ -753,3 +753,71 @@ fn two_runtimes_keep_independent_documents() {
     assert_eq!(right_notes.status(), SaveStatus::Clean);
     assert_eq!(right_notes.committed(), None);
 }
+
+/// An edit the replaced value's destructor makes is published after the
+/// edit that replaced it, so it is the one stored and loaded.
+#[test]
+fn an_edit_from_a_replaced_values_drop_wins() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    let (editor, nested) = (notes.clone(), Rc::new(RefCell::new(None)));
+    let (record, fired) = (Rc::clone(&nested), std::cell::Cell::new(false));
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            // Once: the nested edit replaces a value too.
+            if !fired.replace(true) {
+                let set = editor.set(Note("nested".into()));
+                *record.borrow_mut() = Some(set);
+            }
+        }));
+    });
+    let outer = notes.set(Note("outer".into()));
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    laid.pump();
+    laid.pump();
+
+    assert_eq!(outer.map(Revision::get), Ok(2));
+    assert_eq!(
+        nested.borrow_mut().take().map(|set| set.map(Revision::get)),
+        Some(Ok(3))
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(3, "nested")));
+    assert_eq!(notes.committed().map(Revision::get), Some(3));
+}
+
+/// A load that read the file before an edit is not applied over it: the
+/// edit stays the value, and the next edit takes the next revision.
+#[test]
+fn a_load_in_flight_is_not_applied_over_a_later_edit() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    let stale = notes.load();
+    assert_eq!(notes.set(Note("second".into())).map(Revision::get), Ok(2));
+    let read = drive(&mut laid, stale);
+    assert_eq!(read.as_deref(), Ok(&Note("first".into())), "returned");
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(notes.set(Note("third".into())).map(Revision::get), Ok(3));
+    laid.pump();
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(3, "third")));
+}
+
+/// A reload that fails after a save reports the load's failure, not the
+/// earlier save's `Clean`.
+#[test]
+fn a_failed_reload_after_a_save_reports_the_load() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    storage.put(&Note::NAME, b"no header".to_vec());
+    assert!(drive(&mut laid, notes.load()).is_err());
+    assert_eq!(
+        notes.status(),
+        SaveStatus::NotLoaded(Some(PersistError::Corrupt {
+            detail: "no header line".into(),
+        }))
+    );
+}

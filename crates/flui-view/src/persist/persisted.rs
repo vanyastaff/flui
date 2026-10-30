@@ -236,6 +236,9 @@ impl<D: Document> Persisted<D> {
         let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
         let replaced = {
             let mut state = document.state.borrow_mut();
+            // A load still in flight read the file before this edit: its
+            // result is not applied over it.
+            state.generation = state.generation.wrapping_add(1);
             let loaded = state
                 .loaded
                 .as_mut()
@@ -251,10 +254,12 @@ impl<D: Document> Persisted<D> {
             state.status = SaveStatus::Saving;
             replaced
         };
-        // The replaced value's drop is application code: no borrow is held.
-        drop(replaced);
         publisher.publish(bytes, mode, revision);
         document.refresh();
+        // The replaced value's drop is application code: it runs with no
+        // borrow held and after this edit is published, so an edit it makes
+        // is published after this one and wins.
+        drop(replaced);
         Ok(revision)
     }
 
@@ -342,6 +347,11 @@ impl<D: Document> OpenDocument<D> {
     ) -> Result<Rc<D>, PersistError> {
         let mut state = self.state.borrow_mut();
         let latest = state.generation == generation;
+        if latest {
+            // Bytes written before this load belong to the value it replaces:
+            // the status follows the load, not their write.
+            state.published = None;
+        }
         let (result, replaced) = match outcome {
             Ok(loaded) => {
                 let value = Rc::clone(&loaded.value);
