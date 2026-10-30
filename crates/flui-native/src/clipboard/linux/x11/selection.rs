@@ -325,9 +325,10 @@ impl Selections {
                 // Each waiting read is answered with a copy of the text: past
                 // a few, a read answers nothing rather than hold another.
                 if self.readers.len() + self.after_write.len() >= MAX_READERS {
-                    tracing::debug!("an X11 clipboard read past {MAX_READERS} waiting was refused");
-                    // A retired owner has nobody left to answer.
+                    // A retired owner has nobody left to answer. The read is
+                    // settled before the diagnostic, which runs user code.
                     let _ = answer.resolve(None);
+                    tracing::debug!("an X11 clipboard read past {MAX_READERS} waiting was refused");
                     return Ok(true);
                 }
                 // A read after a write answers what the write left: it waits
