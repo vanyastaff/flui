@@ -413,7 +413,6 @@ mod input {
     //! waits and runs, in order, when that call returns.
 
     use std::cell::{Cell, RefCell};
-    use std::collections::VecDeque;
     use std::rc::{Rc, Weak};
     use std::sync::Arc;
 
@@ -432,6 +431,7 @@ mod input {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::slot::OwnerSlot;
+    use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::{TextInput, WindowTextInput};
     use crate::version::gate::Since;
     use crate::version::gate::android::{AndroidApi, StylusHandwriting};
@@ -676,13 +676,6 @@ mod input {
         }
     }
 
-    /// A host request made while the host was already inside a call into a
-    /// store: applied, in order, when that call returns.
-    enum HostOp {
-        Focus(Option<Rc<dyn TextStore>>),
-        Complete(Rc<dyn TextStore>),
-    }
-
     /// How a published snapshot reaches the view.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Publish {
@@ -705,8 +698,7 @@ mod input {
         published: Rc<Cell<u32>>,
         /// What `requestCursorUpdates` last asked for.
         cursor_mode: Cell<i32>,
-        entry: Cell<u32>,
-        pending: RefCell<VecDeque<HostOp>>,
+        queue: HostQueue<MirrorHostOp>,
         retired: Cell<bool>,
         this: Weak<Self>,
     }
@@ -714,15 +706,6 @@ mod input {
     impl std::fmt::Debug for AndroidTextInput {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("AndroidTextInput").finish_non_exhaustive()
-        }
-    }
-
-    /// Counts one call into a store, however it ends.
-    struct Entered<'a>(&'a Cell<u32>);
-
-    impl Drop for Entered<'_> {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() - 1);
         }
     }
 
@@ -792,8 +775,7 @@ mod input {
                 focused: RefCell::new(None),
                 published: Rc::new(Cell::new(0)),
                 cursor_mode: Cell::new(0),
-                entry: Cell::new(0),
-                pending: RefCell::new(VecDeque::new()),
+                queue: HostQueue::new(),
                 retired: Cell::new(false),
                 this: this.clone(),
             })
@@ -802,17 +784,12 @@ mod input {
         /// The window closed: detach the focused field, if any, for good.
         pub(crate) fn retire(&self) {
             self.retired.set(true);
-            self.pending.borrow_mut().clear();
+            self.queue.clear();
             self.detach();
         }
 
         fn focused(&self) -> Option<Rc<dyn TextStore>> {
             self.focused.borrow().clone()
-        }
-
-        fn enter(&self) -> Entered<'_> {
-            self.entry.set(self.entry.get() + 1);
-            Entered(&self.entry)
         }
 
         fn next_generation(published: &Cell<u32>) -> u32 {
@@ -829,22 +806,21 @@ mod input {
 
         /// Run the requests queued while the host was inside a store call.
         fn drain(&self) {
-            if self.entry.get() > 0 {
-                return;
+            while let Some(op) = self.queue.next() {
+                self.run(op);
             }
-            loop {
-                let next = self.pending.borrow_mut().pop_front();
-                match next {
-                    Some(HostOp::Focus(store)) => self.refocus(store),
-                    Some(HostOp::Complete(store)) => {
-                        let focused = self
-                            .focused()
-                            .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
-                        if !focused || self.end_composition(&store) == CompositionEnd::Abandoned {
-                            let _ = flui_platform::text_store::commit_composition_in_place(&*store);
-                        }
+        }
+
+        fn run(&self, op: MirrorHostOp) {
+            match op {
+                MirrorHostOp::Focus(store) => self.refocus(store),
+                MirrorHostOp::Complete(store) => {
+                    let focused = self
+                        .focused()
+                        .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
+                    if !focused || self.end_composition(&store) == CompositionEnd::Abandoned {
+                        let _ = flui_platform::text_store::commit_composition_in_place(&*store);
                     }
-                    None => return,
                 }
             }
         }
@@ -882,7 +858,7 @@ mod input {
                 }
             });
             {
-                let _entered = self.enter();
+                let _entered = self.queue.enter();
                 if let Err(error) = store.request_lock(grant, LockTiming::Async) {
                     tracing::debug!(?error, "the focused store refused the input method's edit");
                     self.publish_now(Publish::Restart);
@@ -903,7 +879,7 @@ mod input {
                 let generation = Self::next_generation(&published);
                 publish(&view, Snapshot::read(session, generation), how, status);
             };
-            let _entered = self.enter();
+            let _entered = self.queue.enter();
             let sync = {
                 let grant = grant.clone();
                 store.request_lock(LockGrant::read(grant), LockTiming::Sync)
@@ -968,7 +944,7 @@ mod input {
                 );
             });
             let outcome = {
-                let _entered = self.enter();
+                let _entered = self.queue.enter();
                 store.request_lock(grant, LockTiming::Async)
             };
             match outcome {
@@ -1007,7 +983,7 @@ mod input {
                 );
             });
             {
-                let _entered = self.enter();
+                let _entered = self.queue.enter();
                 if let Err(error) = store.request_lock(grant, LockTiming::Async) {
                     tracing::debug!(
                         ?error,
@@ -1045,7 +1021,7 @@ mod input {
                 }
             });
             {
-                let _entered = self.enter();
+                let _entered = self.queue.enter();
                 if store.request_lock(grant, LockTiming::Sync).is_err() {
                     return;
                 }
@@ -1083,7 +1059,7 @@ mod input {
             let found: Rc<Cell<Option<Bounds<f64>>>> = Rc::default();
             let out = Rc::clone(&found);
             let grant = LockGrant::read(move |session| out.set(session.document_bounds().ok()));
-            let _entered = self.enter();
+            let _entered = self.queue.enter();
             let _granted = store.request_lock(grant, LockTiming::Sync).ok()?;
             found.get()
         }
@@ -1102,12 +1078,10 @@ mod input {
 
     impl TextStoreHost for AndroidTextInput {
         fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
-            if self.entry.get() > 0 {
-                self.pending.borrow_mut().push_back(HostOp::Focus(store));
-                return;
+            if let Some(op) = self.queue.defer(MirrorHostOp::Focus(store)) {
+                self.run(op);
+                self.drain();
             }
-            self.refocus(store);
-            self.drain();
         }
 
         fn complete_composition(
@@ -1127,18 +1101,15 @@ mod input {
                 )
                 .into());
             }
-            let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
-                HostOp::Focus(store) => Some(store.clone()),
-                HostOp::Complete(_) => None,
-            });
-            let focused = queued.unwrap_or_else(|| self.focused());
+            let focused = self.queue.focus_after_queue(|| self.focused());
             if !focused.is_some_and(|focused| Rc::ptr_eq(&focused, store)) {
                 return Err(TextStoreHostError::NotFocused);
             }
-            if self.entry.get() > 0 {
-                self.pending
-                    .borrow_mut()
-                    .push_back(HostOp::Complete(Rc::clone(store)));
+            if self
+                .queue
+                .defer(MirrorHostOp::Complete(Rc::clone(store)))
+                .is_none()
+            {
                 return Ok(CompositionEnd::Deferred);
             }
             let end = self.end_composition(store);
@@ -1185,6 +1156,8 @@ mod input {
 pub(crate) mod sizing {
     //! Java-main acquisition; owner-lane queries use only a private metrics copy.
 
+    #[cfg(target_os = "android")]
+    use crate::owner::panic_boundary::{contain_os_entry, contain_owner_callback};
     use crate::{
         CapturedTextSizing, TextSizingCaptureError as Error, TextSizingCaptureState as Capture,
         owner::signal::OwnerSignal, text::sizing::NativeTextSize,
@@ -1564,30 +1537,23 @@ pub(crate) mod sizing {
                 Admission::Dispatch(receipt) => receipt,
             };
             let activity = app.clone();
-            let posted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Dropping an unposted callback settles its owned receipt. If posting
+            // succeeded before a panic, its queued callback still owns the ticket.
+            contain_os_entry("android text sizing post", || {
                 app.run_on_java_main_thread(Box::new(move || {
                     let result =
-                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            capture(&activity)
-                        })) {
-                            Ok(result) => result.map(|snapshot| Arc::new(snapshot) as Native),
-                            Err(payload) => {
-                                std::mem::forget(payload);
+                        contain_os_entry("android text sizing capture", || capture(&activity))
+                            .unwrap_or_else(|| {
                                 Err(Error::Native {
                                     message: "Android text sizing capture panicked".into(),
                                 })
-                            }
-                        };
-                    crate::owner::panic_boundary::contain_owner_callback(|| {
+                            })
+                            .map(|snapshot| Arc::new(snapshot) as Native);
+                    contain_owner_callback(|| {
                         receipt.complete(result);
                     });
                 }));
-            }));
-            if let Err(payload) = posted {
-                // Dropping an unposted callback settles its owned receipt. If posting
-                // succeeded before panic, its queued callback still owns the ticket.
-                std::mem::forget(payload);
-            }
+            });
             // This is the remaining original flight deadline, not a reset from
             // posting completion. The owner will consume any immediate receipt
             // error/success on its next turn before testing that deadline.
