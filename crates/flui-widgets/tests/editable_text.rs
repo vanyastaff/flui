@@ -1745,6 +1745,56 @@ pub(crate) mod text_store {
         assert_eq!(controller.text(), "東京おおさか");
     }
 
+    /// The owner reads the controller from `on_changed` and from a listener,
+    /// after a key edit and after a platform session: neither runs while
+    /// the controller is borrowed.
+    ///
+    /// Red-check: notify the listeners, or call `on_changed`, while the
+    /// controller's state is still borrowed — the owner's read panics with
+    /// `BorrowError`.
+    pub(crate) fn the_owner_reads_the_controller_from_its_callbacks() {
+        use flui_foundation::Listenable as _;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("reading field");
+        let changed = Rc::new(RefCell::new(Vec::new()));
+        let (reader, sink) = (controller.clone(), Rc::clone(&changed));
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
+                move |_cx, text| {
+                    sink.borrow_mut()
+                        .push((text.to_owned(), reader.text(), reader.selection()));
+                },
+            ),
+        );
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let (listened, log) = (controller.clone(), Rc::clone(&heard));
+        let _listener = controller.add_listener(Rc::new(move || {
+            log.borrow_mut().push(listened.text());
+        }));
+        let _ = focus_node.request_focus();
+        harness.tick();
+
+        let handled = harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('a'))
+            .is_handled();
+        assert!(handled);
+        edit(&store(&harness), |session| {
+            session.insert_at_selection("b").expect("in range");
+        });
+
+        assert_eq!(
+            *changed.borrow(),
+            vec![
+                ("a".to_owned(), "a".to_owned(), 1..1),
+                ("ab".to_owned(), "ab".to_owned(), 2..2),
+            ],
+            "on_changed read the controller after each edit"
+        );
+        assert_eq!(*heard.borrow(), ["a", "ab"], "the listener read it too");
+    }
+
     /// A field that gains focus is the store the window's input-method host
     /// serves; losing focus ends its composition, then takes it away
     /// (ADR-0135, ADR-0142 item 4). The pull window is the one Windows

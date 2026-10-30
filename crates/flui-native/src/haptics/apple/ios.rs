@@ -20,7 +20,7 @@
 #![expect(unsafe_code)]
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use block2::RcBlock;
@@ -45,6 +45,7 @@ use crate::haptics::degradation::{
     CoreHapticsControl, CoreHapticsEngine, CoreHapticsEvent, CoreHapticsPart, IosGenerator,
     IosImpact, IosNotification, ios_feedback, ios_pattern, ios_pattern_parts,
 };
+use crate::haptics::engine_state::{Engine, EngineState};
 use crate::owner::apple::ios::NativeOwner;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
@@ -85,15 +86,10 @@ fn supports_core_haptics() -> bool {
     unsafe { CHHapticEngine::capabilitiesForHardware().supportsHaptics() }
 }
 
-const NOT_CREATED: u8 = 0;
-const RUNNING: u8 = 1;
-const RESTARTING: u8 = 2;
-const UNSUPPORTED: u8 = 3;
-
 /// The window's Core Haptics engine and its restart obligation.
 struct CoreHaptics {
     engine: NativeOwner<RefCell<Option<Retained<CHHapticEngine>>>>,
-    state: AtomicU8,
+    state: EngineState,
     restart_in_flight: AtomicBool,
 }
 
@@ -101,7 +97,7 @@ impl CoreHaptics {
     fn new(mtm: MainThreadMarker) -> Self {
         Self {
             engine: NativeOwner::new(RefCell::new(None), mtm),
-            state: AtomicU8::new(NOT_CREATED),
+            state: EngineState::new(),
             restart_in_flight: AtomicBool::new(false),
         }
     }
@@ -109,20 +105,20 @@ impl CoreHaptics {
     /// The engine's state, creating and starting it on first use, and
     /// scheduling a restart while one is owed.
     fn engine_state(self: &Arc<Self>, mtm: MainThreadMarker) -> CoreHapticsEngine {
-        match self.state.load(Ordering::Acquire) {
-            NOT_CREATED => self.create(mtm),
-            RUNNING => CoreHapticsEngine::Running,
-            RESTARTING => {
+        match self.state.get() {
+            Engine::NotCreated => self.create(mtm),
+            Engine::Running => CoreHapticsEngine::Running,
+            Engine::Restarting => {
                 Self::schedule_restart(Arc::downgrade(self));
                 CoreHapticsEngine::Restarting
             }
-            _ => CoreHapticsEngine::Unsupported,
+            Engine::Unsupported => CoreHapticsEngine::Unsupported,
         }
     }
 
     fn create(self: &Arc<Self>, mtm: MainThreadMarker) -> CoreHapticsEngine {
         if !supports_core_haptics() {
-            self.state.store(UNSUPPORTED, Ordering::Release);
+            self.state.set(Engine::Unsupported);
             return CoreHapticsEngine::Unsupported;
         }
         // SAFETY: `initAndReturnError:` takes a freshly allocated engine and
@@ -131,7 +127,7 @@ impl CoreHaptics {
             Ok(engine) => engine,
             Err(error) => {
                 tracing::warn!(%error, "the Core Haptics engine could not be created");
-                self.state.store(UNSUPPORTED, Ordering::Release);
+                self.state.set(Engine::Unsupported);
                 return CoreHapticsEngine::Unsupported;
             }
         };
@@ -165,13 +161,13 @@ impl CoreHaptics {
         let started = unsafe { engine.startAndReturnError() };
         *self.engine.get(mtm).borrow_mut() = Some(engine);
         match started {
-            Ok(()) => {
-                self.state.store(RUNNING, Ordering::Release);
-                CoreHapticsEngine::Running
-            }
+            // A stop its handlers reported while it started is owed a restart,
+            // which that handler already scheduled.
+            Ok(()) if self.state.started() => CoreHapticsEngine::Running,
+            Ok(()) => CoreHapticsEngine::Restarting,
             Err(error) => {
                 tracing::warn!(%error, "the Core Haptics engine did not start");
-                self.state.store(RESTARTING, Ordering::Release);
+                self.state.down();
                 Self::schedule_restart(Arc::downgrade(self));
                 CoreHapticsEngine::Restarting
             }
@@ -182,7 +178,7 @@ impl CoreHaptics {
     /// wake the owner, nothing else. They run on Core Haptics' own queue.
     fn engine_down(owner: &Weak<Self>) {
         if let Some(core) = owner.upgrade() {
-            core.state.store(RESTARTING, Ordering::Release);
+            core.state.down();
             Self::schedule_restart(Arc::downgrade(&core));
         }
     }
@@ -209,9 +205,13 @@ impl CoreHaptics {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        if self.state.load(Ordering::Acquire) != RESTARTING
-            || self.restart_in_flight.swap(true, Ordering::AcqRel)
-        {
+        // The ticket names the stop this restart answers: a stop that comes
+        // while it is in flight is a newer obligation its completion must not
+        // clear.
+        let Some(ticket) = self.state.restart_ticket() else {
+            return;
+        };
+        if self.restart_in_flight.swap(true, Ordering::AcqRel) {
             return;
         }
         let Some(engine) = self.engine.get(mtm).borrow().clone() else {
@@ -230,10 +230,14 @@ impl CoreHaptics {
                     let Some(core) = owner.upgrade() else {
                         return;
                     };
-                    if error.is_null() {
-                        core.state.store(RUNNING, Ordering::Release);
-                    }
+                    let outdated = error.is_null() && !core.state.restarted(ticket);
                     core.restart_in_flight.store(false, Ordering::Release);
+                    if outdated {
+                        // The engine stopped again while this restart ran; the
+                        // restart that stop scheduled found this one in flight
+                        // and returned, so it is scheduled again here.
+                        Self::schedule_restart(Arc::downgrade(&core));
+                    }
                     if !error.is_null() {
                         tracing::warn!(
                             "the Core Haptics engine did not restart; patterns fall back"
@@ -266,7 +270,7 @@ impl CoreHaptics {
             };
             if let Err(error) = started {
                 tracing::warn!(%error, "a Core Haptics pattern did not play; restarting the engine");
-                self.state.store(RESTARTING, Ordering::Release);
+                self.state.down();
                 Self::schedule_restart(Arc::downgrade(self));
                 return false;
             }
@@ -391,7 +395,7 @@ pub struct IOSHaptics {
 impl std::fmt::Debug for IOSHaptics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IOSHaptics")
-            .field("engine", &self.core.state.load(Ordering::Relaxed))
+            .field("engine", &self.core.state.get())
             .finish_non_exhaustive()
     }
 }
