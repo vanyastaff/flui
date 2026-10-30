@@ -948,3 +948,50 @@ pub(crate) fn an_empty_unknown_set_keeps_the_outer_size() {
         );
     }
 }
+
+/// Each lazy sliver names its own collection node: the list's or the grid's
+/// label is on the node that holds its members, and a second, unnamed sliver
+/// stays unnamed.
+pub(crate) fn a_lazy_sliver_names_its_collection() {
+    use flui_widgets::{GridView, SliverFixedExtentList};
+
+    let list = SliverList::new(2, 48.0, rows("a", 2)).semantics_label("Inbox");
+    let fixed =
+        SliverFixedExtentList::builder(48.0, 2, |i| (i < 2).then(|| labelled(format!("f{i}"))))
+            .semantics_label("Drafts");
+    let unnamed = SliverList::new(2, 48.0, rows("u", 2));
+    let laid = laid_out(vec![list.boxed(), fixed.boxed(), unnamed.boxed()]);
+    let lists_tree = tree(&laid);
+    let lists: Vec<Option<&str>> = lists_tree
+        .find_all(Role::List)
+        .iter()
+        .map(flui_testing::A11yNode::label)
+        .collect();
+    assert_eq!(
+        lists,
+        vec![Some("Inbox"), Some("Drafts"), None],
+        "{}",
+        lists_tree.describe()
+    );
+
+    let mut laid = lay_out(
+        GridView::count(
+            2,
+            (0..4)
+                .map(|i| labelled(format!("g{i}")))
+                .collect::<Vec<_>>(),
+        )
+        .semantics_label("Photos"),
+        tight(200.0, 480.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    laid.tick();
+    let grid_tree = tree(&laid);
+    let grids: Vec<Option<&str>> = grid_tree
+        .find_all(Role::Grid)
+        .iter()
+        .map(flui_testing::A11yNode::label)
+        .collect();
+    assert_eq!(grids, vec![Some("Photos")], "{}", grid_tree.describe());
+}

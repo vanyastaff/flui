@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
 use flui_rendering::delegates::{
@@ -77,6 +78,8 @@ pub struct GridView {
     builder_source: Option<SliverChildBuilderDelegate>,
     /// Wrap each tile in a `RepaintBoundary` (default `true`).
     add_repaint_boundaries: bool,
+    /// The grid's accessible name.
+    semantics_label: Option<Arc<str>>,
 }
 
 impl GridView {
@@ -98,6 +101,7 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
+            semantics_label: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
+            semantics_label: None,
         }
     }
 
@@ -147,6 +152,7 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
             add_repaint_boundaries: true,
+            semantics_label: None,
         }
     }
 
@@ -216,6 +222,13 @@ impl GridView {
         self.shrink_wrap = shrink_wrap;
         self
     }
+
+    /// Name the grid for assistive technology: the label of its grid node.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
+        self
+    }
 }
 
 impl fmt::Debug for GridView {
@@ -223,7 +236,8 @@ impl fmt::Debug for GridView {
         let mut s = f.debug_struct("GridView");
         s.field("scroll_direction", &self.scroll_direction)
             .field("offset_source", &self.offset_source)
-            .field("shrink_wrap", &self.shrink_wrap);
+            .field("shrink_wrap", &self.shrink_wrap)
+            .field("semantics_label", &self.semantics_label);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
         } else {
@@ -247,6 +261,10 @@ impl StatelessView for GridView {
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
 
+        let named = |sliver: SliverGrid| match &self.semantics_label {
+            Some(label) => sliver.semantics_label(Arc::clone(label)),
+            None => sliver,
+        };
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
             // Lazy variant: wire SliverGrid (element-owned request strategy).
             let builder = if self.add_repaint_boundaries {
@@ -254,7 +272,7 @@ impl StatelessView for GridView {
             } else {
                 Rc::clone(&delegate.builder)
             };
-            {
+            named({
                 let sliver = SliverGrid::with_config(
                     Rc::clone(&self.grid_delegate),
                     delegate.item_count,
@@ -267,7 +285,7 @@ impl StatelessView for GridView {
                     }
                     None => sliver,
                 }
-            }
+            })
             .boxed()
         } else {
             // Static children go through the same lazy path as a builder:
@@ -283,7 +301,7 @@ impl StatelessView for GridView {
             } else {
                 Rc::clone(&self.children)
             };
-            SliverGrid::over(Rc::clone(&self.grid_delegate), &children).boxed()
+            named(SliverGrid::over(Rc::clone(&self.grid_delegate), &children)).boxed()
         };
 
         if self.shrink_wrap {

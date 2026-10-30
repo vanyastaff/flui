@@ -1,6 +1,6 @@
 # ADR-0265: A pinned lazy child is laid out and announced outside the band, and a focusable list is one Tab stop that pins its row
 
-- **Status:** Accepted (2026-10-29). Not implemented: §3, the focusable list.
+- **Status:** Accepted (2026-10-29)
 - **Date:** 2026-10-29
 - **Supersedes:** [ADR-0056](ADR-0056-keep-alive-is-an-element-side-lease.md), "A parked child is
   not moved", for a pinned child only: a pinned child outside the band is laid out, where a held
@@ -90,6 +90,17 @@ holds a pin while the row has primary focus or is the list's remembered row; on 
 the new pin before it releases the old one. The bound on built rows is therefore the band, the
 cache and one pinned row.
 
+The list's accessible name is the label of the lazy sliver's own list node
+(`SliverMultiBoxAdaptor::semantics_label`, which `SliverGrid` and `GridView` take too), not a
+label node wrapped around it. While the list has rows its focus node publishes nothing; the rows
+are announced, each through its own focusable content. An empty list publishes one focusable list
+node named by `empty_label`, so Tab still stops on it and a screen reader can focus it. The row
+marker does not merge the row into a `ListItem` node: the list item and the button roles of a
+row's content conflict, and the row's position in the set comes from the sliver's collection.
+
+The focus state lives in the row markers and a controller the list provides; it does not read the
+`ListView` viewport, so a sliver inside a `CustomScrollView` can host the same markers later.
+
 ### Consequences
 
 - Good, because a focused row scrolled away stays in the accessibility tree at a current rect, and
@@ -114,7 +125,18 @@ cache and one pinned row.
   a pinned `ListView` row keeps its state and its node while scrolled away, and is evicted on the
   frame after the pin drops, with no scroll; it fails without the watcher notification or without
   the manager handing the pins to the render object.
-- §3 is confirmed by `focused_row_is_pinned_while_scrolled_away` once the focusable list lands.
+- `list_keyboard_navigation` (`crates/flui-widgets/tests/keyboard_focus/list.rs`): over 10 000
+  rows, Tab stops once, the arrows, Page Up/Down, Home and End move between rows, a held Page
+  Down never builds more rows than the pointer-scrolled list plus the pinned one, and Shift+Tab
+  returns to the remembered row; it fails with every row pinned or with Page Down skipping the
+  visible edge.
+- `focused_row_is_pinned_while_scrolled_away`: the focused row keeps focus while the pointer
+  scrolls 200 000 px away, the scroll stands, and the next arrow moves from that row; it fails
+  without the pin.
+- `the_list_node_carries_the_list_name`, `an_empty_list_is_a_tab_stop_with_its_empty_label` and
+  `a_lazy_sliver_names_its_collection` (`crates/flui-widgets/tests/collection_semantics.rs`):
+  the name is on the one list node, and an empty list is a focusable list node named by its
+  empty label.
 
 ## Pros and cons of the options
 

@@ -83,6 +83,8 @@ pub struct RenderSliverFixedExtentList {
     item_extent: f64,
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name, published on its list or grid node.
+    collection_label: Option<std::sync::Arc<str>>,
     /// Logical index → dense slot of every attached child, rebuilt each pass
     /// from the children's parent data.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -104,6 +106,19 @@ impl RenderSliverFixedExtentList {
         pinned: &std::collections::BTreeSet<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
         self.pinned.set(pinned)
+    }
+
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Overrides the accessible set size rather than deriving it from logical
@@ -137,6 +152,7 @@ impl RenderSliverFixedExtentList {
             item_extent,
             item_count,
             collection: None,
+            collection_label: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
@@ -397,6 +413,9 @@ impl RenderSliver for RenderSliverFixedExtentList {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(

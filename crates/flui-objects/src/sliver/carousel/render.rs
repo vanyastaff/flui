@@ -155,6 +155,8 @@ pub struct RenderSliverCarousel {
     warned_unbounded: bool,
     /// The accessible set the items announce, when it differs from the item count.
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name (`set_collection_label`).
+    collection_label: Option<std::sync::Arc<str>>,
     /// The pinned residents outside the window (`set_pinned_indices`).
     pinned: PinnedChildren,
 }
@@ -174,6 +176,7 @@ impl RenderSliverCarousel {
             axis: Axis::Horizontal,
             warned_unbounded: false,
             collection: None,
+            collection_label: None,
             pinned: PinnedChildren::default(),
         }
     }
@@ -221,6 +224,19 @@ impl RenderSliverCarousel {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// Names the collection for assistive technology: the label of the list
+    /// node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
         flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
@@ -311,6 +327,9 @@ impl RenderSliver for RenderSliverCarousel {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(
