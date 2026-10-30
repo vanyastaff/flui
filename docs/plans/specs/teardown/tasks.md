@@ -220,8 +220,11 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6, строки с паникой в
-  маршрутизации `flui-app`.
+  Остаток T9: R6 (ждёт persistence).
+  - [x] Строки с паникой в маршрутизации `flui-app`: 11 строк `routing: …` в
+    `an_application_panic_never_leaves_a_handler`, по одной на метод `AppHandler` и `WindowHandler`.
+    Паника самой маршрутизации вызывается занятым заимствованием (`WindowRoutes::jam` под
+    `cfg(test)`, занятые маршруты `RunnerHandler`). Зубы проверены: без catch метода строка падает.
   - [x] R11 `user_panic_exit_code_matrix` (`runner_teardown`, 7 строк): обычное закрытие, паника
     обработчика касания, post-frame, `build` и обработчика запроса закрытия дают 0 (каждая строка
     сначала доказывает, что отказ случился); `dispose` при закрытии последнего окна и деструктор
