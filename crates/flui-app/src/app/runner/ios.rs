@@ -185,9 +185,7 @@ where
     use flui_native::{IOSPlatform, Platform};
     let platform = IOSPlatform::try_new().map_err(|error| {
         tracing::error!(%error, "iOS initialization failed");
-        LaunchError::Platform {
-            source: std::sync::Arc::new(error),
-        }
+        LaunchError::from_platform(error)
     })?;
     // The loop makes a session's window, with its handler, before the
     // session connects; the connection names the session and its window, so
