@@ -775,7 +775,8 @@ mod rasterizer_tests {
         }
         // Keep the device limit small so the source-negative control cannot
         // allocate large textures while demonstrating unnecessary growth.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             apply_limit_buckets: false,
             ..Default::default()

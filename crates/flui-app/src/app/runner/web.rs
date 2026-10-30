@@ -406,6 +406,17 @@ impl WebFrameDriver {
                 return;
             }
             let Some(mut renderer) = renderer else {
+                if let Err(error) = &built
+                    && let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(error)
+                {
+                    // Neither WebGPU nor WebGL2 gave a device: the page is below
+                    // FLUI's floor, and asking again finds the same (ADR-0244
+                    // §3). The claim is settled, so no rebuild is owed and,
+                    // with no renderer, no frame runs.
+                    tracing::error!(%unsupported, "FLUI cannot run on this system");
+                    claim.complete();
+                    return;
+                }
                 if let Err(error) = built {
                     tracing::error!(%error, "GPU initialization failed; retried at the next frame");
                 }

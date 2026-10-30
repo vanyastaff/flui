@@ -328,7 +328,13 @@ where
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
+            // UIKit owns the process by now, so a refusal cannot reach
+            // `run_app`'s caller: it is logged as one, and the scene fails.
+            if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&e) {
+                tracing::error!(%unsupported, "this system cannot run FLUI");
+            } else {
+                tracing::error!("GPU init failed: {:?}", e);
+            }
             return Err(anyhow::anyhow!(e).context("GPU init failed"));
         }
     };

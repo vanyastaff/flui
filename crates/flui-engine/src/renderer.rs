@@ -50,7 +50,7 @@ use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
 use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
-use crate::window_target::WindowTarget;
+use crate::window_target::{TargetDisplay, WindowTarget};
 
 /// `DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: the statistics broke off (a mode
 /// change, a move to another output), so what came before does not compare.
@@ -627,7 +627,7 @@ mod new_probes_before_gpu_work_tests {
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
         ] {
             let capabilities = super::GpuCapabilities {
-                backend: wgpu::Backend::BrowserWebGpu,
+                backend: crate::GpuBackend::WebGpu,
                 adapter_name: String::new(),
                 vendor: String::new(),
                 features,
@@ -680,8 +680,9 @@ mod new_probes_before_gpu_work_tests {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GpuCapabilities {
-    /// The backend in use (Metal, DX12, Vulkan, WebGPU, …).
-    pub backend: wgpu::Backend,
+    /// The backend the renderer draws with: the preferred one, or the
+    /// fallback it took when the preferred one gave no device (ADR-0244 §1).
+    pub backend: crate::GpuBackend,
     /// Adapter name, vendor, and device type as wgpu reports them.
     pub adapter_name: String,
     /// Human-readable vendor name resolved from the PCI vendor id.
@@ -698,7 +699,7 @@ impl GpuCapabilities {
     pub fn detect(adapter: &wgpu::Adapter) -> Self {
         let info = adapter.get_info();
         Self {
-            backend: info.backend,
+            backend: crate::GpuBackend::of_adapter(&info),
             adapter_name: info.name,
             vendor: Self::vendor_name(info.vendor),
             features: adapter.features(),
@@ -1252,9 +1253,6 @@ impl Renderer {
         latency: FrameLatency,
         color: ColorRequest,
     ) -> EngineResult<WindowedGpuStack> {
-        let backends = Self::select_backend();
-        tracing::info!("Creating wgpu instance with backends: {:?}", backends);
-
         // DX12 presentation system: route through DirectComposition
         // (`CreateSwapChainForComposition` + an auto-created `IDCompositionVisual`)
         // instead of the default `CreateSwapChainForHwnd` redirection-bitmap path.
@@ -1278,51 +1276,30 @@ impl Renderer {
                 ..Default::default()
             }
         };
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            backend_options: wgpu::BackendOptions {
-                dx12: dx12_options,
-                ..Default::default()
-            },
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
 
-        // Create the surface through wgpu's SAFE owned-target path (issue
-        // #1043): `Arc<dyn WindowTarget>` satisfies wgpu's
-        // `DisplayAndWindowHandle + 'static` bound through raw-window-handle
-        // 0.6.2's `Arc<H: ?Sized>` blanket impls of `HasWindowHandle`/
-        // `HasDisplayHandle` plus wgpu's own `impl<T: DisplayAndWindowHandle>
-        // From<T> for SurfaceTarget`. wgpu queries `target.window_handle()`/
-        // `display_handle()` itself here — this is the "wgpu 29 multi-monitor
-        // fix" note's successor: that workaround extracted raw handles by
-        // hand to route the display handle around a lifetime issue; the safe
-        // path lets wgpu do that query on the retained `Arc` instead.
-        //
-        // No `unsafe` block: the old unsafe raw-handle surface-creation call
-        // and the newtype that narrowed its two handle fields are both gone
-        // from this crate, and its `deny(unsafe_code)` keeps them out.
-        let surface: wgpu::Surface<'static> = instance
-            .create_surface(Arc::clone(target))
-            .map_err(EngineError::surface_creation)?;
-
-        let adapter = instance
-            .request_adapter(&crate::adapter::trusted_adapter_options(
-                wgpu::PowerPreference::HighPerformance,
-                Some(&surface),
-            ))
-            .await
-            .map_err(EngineError::adapter_request)?;
-
-        let capabilities = GpuCapabilities::detect(&adapter);
-        tracing::info!(
-            "Selected GPU: {} ({}), LayerDispatcher: {:?}",
-            capabilities.adapter_name,
-            capabilities.vendor,
-            capabilities.backend
+        // The preferred backend, then its fallback, each in an instance of its
+        // own (ADR-0244 §1); `WGPU_BACKEND` keeps only the ones it names.
+        let attempts = crate::gpu_backend::attempts(
+            crate::gpu_backend::Family::CURRENT.order(),
+            wgpu::Backends::from_env(),
         );
-
-        let (device, queue) =
-            crate::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
+        let acquired = crate::gpu_backend::first_answering(&attempts, |attempt| {
+            let dx12_options = dx12_options.clone();
+            async move {
+                Self::acquire_on(attempt, dx12_options, target)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        })
+        .await;
+        let (backend, (instance, surface, adapter, capabilities, device, queue)) =
+            acquired.map_err(|tried| EngineError::NoSupportedGpu { tried })?;
+        tracing::info!(
+            %backend,
+            adapter = %capabilities.adapter_name,
+            vendor = %capabilities.vendor,
+            "GPU backend selected"
+        );
 
         let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         Self::install_device_diagnostics(
@@ -1553,60 +1530,96 @@ impl Renderer {
         Ok(())
     }
 
-    /// Select appropriate backend for the current platform
-    ///
-    /// One definition for every construction path in this module, so
-    /// backend selection is written in exactly one place rather than
-    /// re-derived per call site.
-    pub(super) fn select_backend() -> wgpu::Backends {
-        #[cfg(target_os = "macos")]
-        {
-            tracing::debug!("Platform: macOS, selecting Metal backend");
-            wgpu::Backends::METAL
-        }
+    /// One backend's instance, surface, adapter and device for `target`, or
+    /// the first of them that failed.
+    async fn acquire_on(
+        attempt: crate::gpu_backend::Attempt,
+        dx12_options: wgpu::Dx12BackendOptions,
+        target: &Arc<dyn WindowTarget>,
+    ) -> EngineResult<(
+        wgpu::Instance,
+        wgpu::Surface<'static>,
+        wgpu::Adapter,
+        GpuCapabilities,
+        wgpu::Device,
+        wgpu::Queue,
+    )> {
+        // EGL picks its display when the instance is created, so the GL
+        // backend presents to a Wayland or X11 window only when the instance
+        // is given that window's display; the other backends ignore it.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: attempt.backends,
+            backend_options: wgpu::BackendOptions {
+                dx12: dx12_options,
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(TargetDisplay(
+                Arc::clone(target),
+            )))
+        });
 
-        #[cfg(target_os = "ios")]
-        {
-            tracing::debug!("Platform: iOS, selecting Metal backend");
-            wgpu::Backends::METAL
+        // A canvas keeps the first context kind it hands out, so on the web
+        // WebGPU gets its device before it claims the canvas: a browser that
+        // exposes WebGPU but refuses the adapter or device leaves the canvas
+        // free for WebGL2. Elsewhere the surface comes first, so the adapter
+        // chosen is one that can present to it.
+        if attempt.backend == crate::gpu_backend::GpuBackend::WebGpu {
+            let (adapter, capabilities, device, queue) =
+                Self::adapter_and_device(&instance, attempt, None).await?;
+            let surface = Self::create_target_surface(&instance, target)?;
+            return Ok((instance, surface, adapter, capabilities, device, queue));
         }
+        let surface = Self::create_target_surface(&instance, target)?;
+        let (adapter, capabilities, device, queue) =
+            Self::adapter_and_device(&instance, attempt, Some(&surface)).await?;
+        Ok((instance, surface, adapter, capabilities, device, queue))
+    }
 
-        #[cfg(target_os = "windows")]
-        {
-            tracing::debug!("Platform: Windows, selecting DirectX 12 backend");
-            wgpu::Backends::DX12
-        }
+    /// The surface over `target` on `instance`.
+    fn create_target_surface(
+        instance: &wgpu::Instance,
+        target: &Arc<dyn WindowTarget>,
+    ) -> EngineResult<wgpu::Surface<'static>> {
+        // Create the surface through wgpu's SAFE owned-target path (issue
+        // #1043): `Arc<dyn WindowTarget>` satisfies wgpu's
+        // `DisplayAndWindowHandle + 'static` bound through raw-window-handle
+        // 0.6.2's `Arc<H: ?Sized>` blanket impls of `HasWindowHandle`/
+        // `HasDisplayHandle` plus wgpu's own `impl<T: DisplayAndWindowHandle>
+        // From<T> for SurfaceTarget`. wgpu queries `target.window_handle()`/
+        // `display_handle()` itself here, on the retained `Arc`.
+        //
+        // No `unsafe` block: the old unsafe raw-handle surface-creation call
+        // and the newtype that narrowed its two handle fields are both gone
+        // from this crate, and its `deny(unsafe_code)` keeps them out.
+        instance
+            .create_surface(Arc::clone(target))
+            .map_err(EngineError::surface_creation)
+    }
 
-        #[cfg(target_os = "linux")]
-        {
-            tracing::debug!("Platform: Linux, selecting Vulkan backend");
-            wgpu::Backends::VULKAN
-        }
+    /// The adapter `attempt` asks `instance` for, one that can present to
+    /// `surface` when one is given, and its device.
+    async fn adapter_and_device(
+        instance: &wgpu::Instance,
+        attempt: crate::gpu_backend::Attempt,
+        surface: Option<&wgpu::Surface<'static>>,
+    ) -> EngineResult<(wgpu::Adapter, GpuCapabilities, wgpu::Device, wgpu::Queue)> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                // WARP is asked for by name: the software adapter is this
+                // attempt, not a host's configuration.
+                force_fallback_adapter: attempt.software,
+                ..crate::adapter::trusted_adapter_options(
+                    wgpu::PowerPreference::HighPerformance,
+                    surface,
+                )
+            })
+            .await
+            .map_err(EngineError::adapter_request)?;
 
-        #[cfg(target_os = "android")]
-        {
-            tracing::debug!("Platform: Android, selecting Vulkan backend");
-            wgpu::Backends::VULKAN
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            tracing::debug!("Platform: Web, selecting WebGPU backend (with WebGL fallback)");
-            wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
-        }
-
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "windows",
-            target_os = "linux",
-            target_os = "android",
-            target_arch = "wasm32"
-        )))]
-        {
-            tracing::warn!("Unknown platform, using all available backends");
-            wgpu::Backends::all()
-        }
+        let capabilities = GpuCapabilities::detect(&adapter);
+        let (device, queue) =
+            crate::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
+        Ok((adapter, capabilities, device, queue))
     }
 
     /// Installs diagnostic callbacks on a freshly created device.
@@ -1709,9 +1722,9 @@ impl Renderer {
     /// with `LimitsExceeded` on that platform. Requesting a limit above the
     /// adapter's own can never succeed — the adapter's `Limits` are what
     /// `request_device` validates against — so the engine takes the adapter's
-    /// value wherever the default exceeds it. The `max_texture_dimension_2d`
-    /// clamp below has always worked this way; the rest of the struct simply
-    /// had not met an adapter small enough to need it.
+    /// value wherever the default exceeds it, as the GLES 3.0 and WebGL2
+    /// fallback adapters (ADR-0244 §1) do for every storage and compute
+    /// limit.
     pub(super) fn required_limits(
         capabilities: &GpuCapabilities,
         adapter_limits: &wgpu::Limits,
@@ -1726,15 +1739,11 @@ impl Renderer {
             limits.max_immediate_size = 128;
         }
 
-        // Never ask for more than the adapter offers. `min` per field rather
-        // than a whole-struct `min` so a future field added to `Limits` is
-        // covered by the default `..default()` and this line keeps the ones
-        // that matter honest.
-        limits.max_inter_stage_shader_variables = limits
-            .max_inter_stage_shader_variables
-            .min(adapter_limits.max_inter_stage_shader_variables);
-
-        limits
+        // Never ask for more than the adapter offers, field by field: a
+        // GLES 3.0 or WebGL2 adapter has no storage buffers, storage textures
+        // or compute, which the desktop default asks for, and the engine
+        // uses none of them.
+        limits.or_worse_values_from(adapter_limits)
     }
 
     /// Select present mode based on capabilities.
@@ -3057,7 +3066,8 @@ mod tests {
     fn a_lost_device_reaches_the_installed_hook() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
         ))
@@ -3149,7 +3159,8 @@ mod tests {
         Arc<crate::device_domain::DeviceDomain>,
         Arc<std::sync::atomic::AtomicBool>,
     ) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
         ))

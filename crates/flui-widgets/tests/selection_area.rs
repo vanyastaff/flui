@@ -1032,3 +1032,72 @@ pub(crate) fn the_highlight_colour_follows_the_area_style() {
         );
     }
 }
+
+/// An area's selection is offered as the primary selection and read when
+/// asked, so it answers with what the area holds selected then; another
+/// application selecting takes it, the next selection claims again, and a
+/// collapsed selection lets go.
+///
+/// Fails without the change: nothing claimed the primary selection.
+pub(crate) fn selection_area_offers_its_selection_as_the_primary_selection() {
+    let mut laid = mounted(SelectionArea::new(Column::new((
+        Text::new("Alpha beta"),
+        Text::new("Gamma delta"),
+    ))));
+    let (first, second) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Gamma delta")),
+        )
+    };
+    let primary = laid.primary_selection();
+    let mut select = |anchor: TextPosition, focus: TextPosition| {
+        laid.invoke_semantics_action(selection_request(first[0], anchor, focus))
+            .expect("the selection is accepted");
+        laid.tick();
+    };
+
+    select(at(first[0], 0), at(first[0], 5));
+    assert_eq!(primary.text().as_deref(), Some("Alpha"));
+    select(at(first[0], 6), at(second[0], 5));
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("beta\nGamma"),
+        "the claim reads the selection when asked"
+    );
+
+    primary.select("elsewhere");
+    assert!(!primary.is_claimed(), "another application selected");
+    select(at(second[0], 6), at(second[0], 11));
+    assert_eq!(primary.text().as_deref(), Some("delta"), "claimed again");
+
+    select(at(second[0], 2), at(second[0], 2));
+    assert!(!primary.is_claimed(), "a collapsed selection lets go");
+}
+
+/// A paragraph rebuilt with other text keeps the selection's stored ends,
+/// which may now split a character: the primary selection answers with the
+/// ends snapped against the text as it is, as the highlight paints it.
+pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
+    let mut laid = mounted(SelectionArea::new(Column::new((Text::new("Hello"),))));
+    let first = runs_of(&paragraph(consumer(&laid).state(), "Hello"));
+    let primary = laid.primary_selection();
+    laid.invoke_semantics_action(selection_request(
+        first[0],
+        at(first[0], 0),
+        at(first[0], 4),
+    ))
+    .expect("the selection is accepted");
+    laid.tick();
+    assert_eq!(primary.text().as_deref(), Some("Hell"));
+
+    laid.pump_widget(SelectionArea::new(Column::new((Text::new("東京"),))));
+    laid.tick();
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("東"),
+        "byte 4 splits 京, so the end moves down to the boundary before it"
+    );
+}

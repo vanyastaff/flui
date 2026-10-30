@@ -1,6 +1,7 @@
 // Sweep (Conic/Angular) Gradient Shader for FLUI
 //
-// Renders angular gradients around a center point with up to 8 color stops.
+// Renders angular gradients around a center point; the stops and their
+// interpolation are in `stops.wgsl`.
 // Uses atan2 to compute the angle, then maps to color stops.
 //
 // Common use cases:
@@ -32,13 +33,6 @@ struct InstanceInput {
 }
 
 // Gradient stop (same layout as linear/radial)
-struct GradientStop {
-    color: vec4<f32>,
-    position: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-}
 
 // Vertex output
 struct VertexOutput {
@@ -69,52 +63,9 @@ struct Viewport {
 @group(0) @binding(0)
 var<uniform> viewport: Viewport;
 
-@group(1) @binding(0)
-var<storage, read> gradient_stops: array<GradientStop>;
-
 // =============================================================================
 // SDF Functions
 // =============================================================================
-
-// =============================================================================
-// Gradient Interpolation (same as linear/radial)
-// =============================================================================
-
-fn interpolateGradient(t: f32, stop_count: u32, stop_offset: u32) -> vec4<f32> {
-    let t_clamped = clamp(t, 0.0, 1.0);
-
-    if (stop_count == 0u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    if (stop_count == 1u) {
-        return gradient_stops[stop_offset].color;
-    }
-
-    var prev_stop = gradient_stops[stop_offset];
-    var next_stop = gradient_stops[stop_offset + 1u];
-
-    if (t_clamped <= prev_stop.position) {
-        return prev_stop.color;
-    }
-
-    for (var i = 1u; i < stop_count; i++) {
-        next_stop = gradient_stops[stop_offset + i];
-
-        if (t_clamped <= next_stop.position) {
-            let range = next_stop.position - prev_stop.position;
-            if (range > 0.0) {
-                let local_t = (t_clamped - prev_stop.position) / range;
-                return mix(prev_stop.color, next_stop.color, local_t);
-            } else {
-                return next_stop.color;
-            }
-        }
-
-        prev_stop = next_stop;
-    }
-
-    return next_stop.color;
-}
 
 // =============================================================================
 // Vertex Shader
@@ -203,7 +154,10 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // the paint's alpha — see `common/coverage.wgsl`.
     // (`sdfToAlpha` takes derivatives, so it must be reached from uniform
     // control flow.)
-    let edge_alpha = gradientEdgeCoverage(in.stop_count, sdfToAlpha(dist));
+    let edge_alpha = gradientEdgeCoverage(
+        in.stop_count,
+        sdfToAlpha(dist, centered_pos, sdRoundedBoxNormal(centered_pos, in.rect_size * 0.5, in.corner_radii)),
+    );
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
         in.clip_position.xy,

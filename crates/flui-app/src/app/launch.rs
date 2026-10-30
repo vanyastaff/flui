@@ -1,5 +1,6 @@
 //! What a platform entry point starts a run with, and how starting fails.
 
+use flui_engine::BackendFailure;
 use flui_platform::{Environment, OsRelease};
 
 use super::{AppConfig, capability::AppCapabilities};
@@ -96,6 +97,18 @@ pub enum UnsupportedSystem {
         /// What was looked for.
         requirement: &'static str,
     },
+    /// No GPU backend gave a device: neither the one the target prefers nor
+    /// its fallback (GLES 3.0, or WebGL2 on the web). Each backend tried is
+    /// named with why it failed.
+    #[error(
+        "no supported GPU: {}",
+        tried.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")
+    )]
+    #[non_exhaustive]
+    NoSupportedGpu {
+        /// Each backend tried, in order, with why it failed.
+        tried: Vec<BackendFailure>,
+    },
 }
 
 impl UnsupportedSystem {
@@ -125,6 +138,19 @@ impl UnsupportedSystem {
                 requirement,
             }),
             other => Err(other),
+        }
+    }
+
+    /// The refusal a renderer failure is, when no GPU backend gave a device.
+    pub(crate) fn from_renderer(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        if let flui_engine::EngineError::NoSupportedGpu { tried } =
+            error.downcast_ref::<flui_engine::EngineError>()?
+        {
+            Some(Self::NoSupportedGpu {
+                tried: tried.clone(),
+            })
+        } else {
+            None
         }
     }
 }

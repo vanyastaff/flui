@@ -260,9 +260,18 @@ renderer's side.
 The Cargo features `vulkan`, `metal`, `dx12`, `webgpu`, `gles` are **additive
 pass-throughs to wgpu's own backend features, not selectors**. Nobody
 normally names them: the per-target dependency entries in `Cargo.toml` unify
-the right backend into every build (`dx12` on Windows, `metal` on macOS/iOS,
-`vulkan` on Linux/Android, `webgpu` + `gles` on wasm32), and
-`Renderer::select_backend()` picks at runtime per `target_os`. Enabling two
+the right backends into every build (`dx12` on Windows, `metal` on
+macOS/iOS, `vulkan` + `gles` on Linux/Android, `webgpu` + `gles` on wasm32),
+and `gpu_backend::Family::order` decides at runtime which to try, preferred
+first (ADR-0244 §1): Vulkan then GLES 3.0, WebGPU then WebGL2, Direct3D 12
+then WARP, Metal alone. Each attempt gets an instance of its own for that one
+backend, because a combined mask does not retry (on the web wgpu commits to
+WebGPU as soon as `navigator.gpu` exists). The chosen backend is logged once
+and reported as `GpuCapabilities::backend`; when none answers,
+`EngineError::NoSupportedGpu` names each one tried with its reason.
+`WGPU_BACKEND` narrows the order, which is how the suites run on the
+fallback. Gradient stops live in a texture, not a storage buffer, because
+GLES 3.0 and WebGL2 have no storage buffers in a fragment stage. Enabling two
 compiles both; no source in this crate cfg-gates on them. The two
 `compile_error!` guards in `lib.rs` cover the invalid pairs: wasm32 with
 atomics while `fragile-send-sync-non-atomic-wasm` is on, and wasm32 with
@@ -274,10 +283,12 @@ check` does not.
 `testing` gates the GPU readback/oracle suites and the bench scaffolding they
 share (`OffscreenRenderer`, `PathCache` re-exports). It is off
 by default, not part of the public API, and the same name and meaning as
-flui-layer's and flui-rendering's `testing`. The local `cargo xtask gpu-test`
-command sets `FLUI_REQUIRE_GPU=1` for both the engine and facade readback
-suites, so missing adapter/device initialization fails instead of silently
-skipping. Linux-only CI does not supply the native GPU runtime coverage.
+flui-layer's and flui-rendering's `testing`. `cargo xtask gpu-test` sets
+`FLUI_REQUIRE_GPU=1` for both the engine and facade readback suites, so
+missing adapter/device initialization fails instead of silently skipping, and
+`--backend` pins `WGPU_BACKEND`, which every test instance here reads. CI runs
+the suites on Mesa's lavapipe (Vulkan) and llvmpipe (GL); Metal, D3D12 and
+hardware drivers stay local runs.
 
 ---
 
