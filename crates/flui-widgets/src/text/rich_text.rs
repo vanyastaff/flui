@@ -147,11 +147,13 @@ impl StatelessView for RichText {
             links: None,
             link_focus: None,
             selectable: None,
+            highlight: None,
         };
         // Inside a selection area the text registers itself, which takes a
         // mounted state of its own.
-        if let Some(registry) = SelectionScope::registry_of(ctx) {
-            return SelectableParagraph::new(paragraph, self.on_link.clone(), registry).boxed();
+        if let Some((registry, color)) = SelectionScope::registry_of(ctx) {
+            return SelectableParagraph::new(paragraph, self.on_link.clone(), registry, color)
+                .boxed();
         }
         paragraph.linked(self.on_link.as_ref())
     }
@@ -183,6 +185,8 @@ pub(super) struct ResolvedParagraph {
     /// The anchor a selection area registered the text under, while it is
     /// selectable (ADR-0214).
     pub(super) selectable: Option<SemanticsAnchor>,
+    /// The selected bytes and the colour that highlights them.
+    pub(super) highlight: Option<super::selection_area::Highlight>,
 }
 
 impl RenderView for ResolvedParagraph {
@@ -199,6 +203,14 @@ impl RenderView for ResolvedParagraph {
                 .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
         let _ = paragraph.set_link_focus(self.link_focus);
         let _ = paragraph.set_selectable(self.selectable.clone());
+        let _ = paragraph.set_selection(
+            self.highlight
+                .as_ref()
+                .map(|highlight| highlight.range.clone()),
+        );
+        if let Some(highlight) = &self.highlight {
+            let _ = paragraph.set_selection_color(highlight.color);
+        }
         paragraph.set_shown_links_listener(self.shown_links_listener());
         paragraph
     }
@@ -220,6 +232,17 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_link_routes(routes)
             | render_object.set_link_focus(self.link_focus)
             | render_object.set_selectable(self.selectable.clone())
+            | render_object.set_selection(
+                self.highlight
+                    .as_ref()
+                    .map(|highlight| highlight.range.clone()),
+            )
+            | self
+                .highlight
+                .as_ref()
+                .map_or(flui_rendering::RenderUpdateImpact::NONE, |highlight| {
+                    render_object.set_selection_color(highlight.color)
+                })
     }
 
     fn did_unmount_render_object(
