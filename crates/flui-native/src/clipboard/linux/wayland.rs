@@ -366,7 +366,9 @@ pub(crate) struct DeviceData {
 /// A data offer's user data: the forms of text it offers, as its `offer`
 /// events name them, read on the owner thread alone.
 pub(crate) struct OfferData {
-    /// Each text form offered, with the MIME type it was offered under.
+    /// Each text form offered, once, with the MIME type it was first offered
+    /// under: at most one entry per [`TextForm`], however often the owner
+    /// repeats an `offer` event.
     forms: OwnerCell<Vec<(TextForm, String)>>,
 }
 
@@ -376,6 +378,19 @@ impl OfferData {
         Self {
             forms: OwnerCell::new(),
         }
+    }
+
+    /// Record an `offer` event: a text form not offered before, under the
+    /// MIME type named. Other types and repeats keep nothing.
+    fn offer(&self, mime_type: String) {
+        let Some(form) = TextForm::named(&mime_type) else {
+            return;
+        };
+        self.forms.with(|forms| {
+            if forms.iter().all(|(offered, _)| *offered != form) {
+                forms.push((form, mime_type));
+            }
+        });
     }
 
     /// The form a read asks the offer for, with the MIME type the owner
@@ -496,10 +511,8 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_data_offer::Event::Offer { mime_type } = event
-            && let Some(form) = TextForm::named(&mime_type)
-        {
-            data.forms.with(|forms| forms.push((form, mime_type)));
+        if let wl_data_offer::Event::Offer { mime_type } = event {
+            data.offer(mime_type);
         }
     }
 }
@@ -734,5 +747,28 @@ pub(crate) mod transfer {
                 "a closed reader ends the write before its deadline"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An owner that repeats its `offer` events grows nothing past one entry
+    /// per text form, and a read still asks for the spelling offered first.
+    #[test]
+    fn repeated_offers_keep_one_entry_per_form() {
+        let data = OfferData::new();
+        for _ in 0..10_000 {
+            data.offer("text/plain;charset=UTF-8".to_owned());
+            data.offer("text/plain;charset=utf-8".to_owned());
+            data.offer("UTF8_STRING".to_owned());
+            data.offer("image/png".to_owned());
+        }
+        assert_eq!(data.forms.with(|forms| forms.len()), Some(2));
+        assert_eq!(
+            data.preferred(),
+            Some((TextForm::PlainUtf8, "text/plain;charset=UTF-8".to_owned()))
+        );
     }
 }
