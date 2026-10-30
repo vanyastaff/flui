@@ -72,6 +72,12 @@ pub struct NotTreeBound;
 /// instead of merely absent. Reachability does not imply OS visibility:
 /// hidden nodes and transparent containers remain queryable in this raw
 /// snapshot, and adapters apply their own filtering.
+///
+/// # Announcements
+///
+/// The two nodes a presentation speaks announcements through are not
+/// authored content: queries and [`len`](Self::len) leave them out, and
+/// [`announcement`](Self::announcement) reads what they say.
 #[derive(Debug, Clone)]
 pub struct A11yTree {
     update: TreeUpdate,
@@ -79,6 +85,9 @@ pub struct A11yTree {
     order: Vec<usize>,
     /// Each reachable node's parent.
     parents: HashMap<NodeId, NodeId>,
+    /// The presentation's announcer nodes, which carry announcements rather
+    /// than authored content and so are not queryable nodes.
+    announcers: Vec<usize>,
 }
 
 impl A11yTree {
@@ -95,6 +104,7 @@ impl A11yTree {
         let mut order = Vec::with_capacity(update.nodes.len());
         let mut seen: HashSet<NodeId> = HashSet::with_capacity(update.nodes.len());
         let mut parents = HashMap::with_capacity(update.nodes.len());
+        let mut announcers = Vec::new();
 
         if let Some(tree) = update.tree.as_ref() {
             let mut stack = vec![tree.root];
@@ -106,9 +116,14 @@ impl A11yTree {
                 if !seen.insert(id) {
                     continue;
                 }
+                let node = &update.nodes[i].1;
+                if is_announcer(node) {
+                    announcers.push(i);
+                    continue;
+                }
                 order.push(i);
                 // Reversed, so popping yields children left-to-right.
-                for &child in update.nodes[i].1.children().iter().rev() {
+                for &child in node.children().iter().rev() {
                     parents.entry(child).or_insert(id);
                     stack.push(child);
                 }
@@ -119,6 +134,7 @@ impl A11yTree {
             update,
             order,
             parents,
+            announcers,
         }
     }
 
@@ -140,7 +156,21 @@ impl A11yTree {
     /// technology will ever announce — see [the type docs](Self#reachability).
     #[must_use]
     pub fn unreachable_count(&self) -> usize {
-        self.update.nodes.len() - self.order.len()
+        self.update.nodes.len() - self.order.len() - self.announcers.len()
+    }
+
+    /// What the announcer node of `urgency` says: the last announcement this
+    /// snapshot carries, without the mark a repeat appends. `None` when the
+    /// presentation keeps no announcer or has announced nothing.
+    #[must_use]
+    pub fn announcement(&self, urgency: flui_semantics::Urgency) -> Option<&str> {
+        self.announcers
+            .iter()
+            .map(|&i| &self.update.nodes[i].1)
+            .find(|node| node.author_id() == Some(urgency.announcer_identifier()))
+            .and_then(Node::value)
+            .map(|value| value.trim_end_matches('\u{200B}'))
+            .filter(|value| !value.is_empty())
     }
 
     /// Every queryable node, in pre-order.
@@ -644,6 +674,18 @@ pub(crate) fn invoke_semantics_action(
 
     invocation.invoke();
     Ok(())
+}
+
+/// Whether `node` is one of a presentation's announcer nodes.
+fn is_announcer(node: &Node) -> bool {
+    node.author_id().is_some_and(|id| {
+        [
+            flui_semantics::Urgency::Polite,
+            flui_semantics::Urgency::Assertive,
+        ]
+        .iter()
+        .any(|urgency| urgency.announcer_identifier() == id)
+    })
 }
 
 #[cfg(test)]

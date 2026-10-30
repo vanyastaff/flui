@@ -86,6 +86,7 @@ pub use audit::{AuditFinding, AuditParams, AuditReport, AuditRule, NotChecked};
 pub use capture::{BlobRef, CaptureMeta, CaptureParams, CaptureSource};
 pub use error::{ErrorCode, ErrorObject, HandleKind, Retry};
 pub use events::{
+    Announcement, AnnouncementEvent, AnnouncementJournal, AnnouncementUrgency, AnnouncementsParams,
     Event, EventFilter, EventKind, FrameEvent, GapEvent, InputEvent, SemanticsEvent,
     SubscribeParams, Subscription, WindowEvent,
 };

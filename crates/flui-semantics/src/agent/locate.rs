@@ -23,7 +23,7 @@
 
 use std::cmp::Reverse;
 
-use accesskit_consumer::{NodeRef, TreeState, common_filter};
+use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
     ElementRef, LocateParams, Locator, Match, Matches, Node, Pick, StateFilter, TextMatch,
     WindowId, outline,
@@ -97,6 +97,7 @@ impl SemanticsOwner {
             let flat = Flat::new(
                 state,
                 self.device_pixel_ratio(),
+                super::AgentFilter::of(self),
                 root_claims_focus,
                 placement,
             );
@@ -141,6 +142,7 @@ impl SemanticsOwner {
             let flat = Flat::new(
                 state,
                 self.device_pixel_ratio(),
+                super::AgentFilter::of(self),
                 root_claims_focus,
                 placement,
             );
@@ -211,6 +213,7 @@ impl Flat {
     fn new(
         state: &TreeState,
         published_ratio: f64,
+        filter: super::AgentFilter,
         root_claims_focus: bool,
         placement: Placement,
     ) -> Self {
@@ -235,7 +238,7 @@ impl Flat {
                 end: index,
             });
             stack.extend(
-                node.filtered_children(common_filter)
+                node.filtered_children(|child| filter.apply(child))
                     .rev()
                     .map(|child| (child, Some(index))),
             );
