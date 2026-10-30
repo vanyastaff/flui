@@ -367,7 +367,8 @@ impl Shared {
         let next = (current + 1..geometry.count())
             .find(|&index| geometry.rest_offset(index) > here)
             .unwrap_or(0);
-        controller.animate_to_item(next);
+        // Autoplay advances from its timer, never from a build.
+        let _ = controller.animate_to_item(next);
     }
 }
 
