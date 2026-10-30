@@ -1225,6 +1225,13 @@ impl WaylandInput for SeatInput {
         }
     }
 
+    fn seats(&self) -> Vec<WlSeat> {
+        self.shared
+            .objects
+            .with(|objects| objects.seats.iter().map(|held| held.seat.clone()).collect())
+            .unwrap_or_default()
+    }
+
     fn release(&self) {
         let windows = self.shared.windows.with(std::mem::take).unwrap_or_default();
         let callbacks = self
