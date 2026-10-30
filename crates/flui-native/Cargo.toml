@@ -30,6 +30,10 @@ accesskit = { workspace = true }
 # frame runtime can hold a window's bridge without linking a backend
 # (ADR-0082 §2).
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+# The host's fallback answer `fonts::system_fallback` gives (`SystemFallback`,
+# ADR-0271 §3), and the text stack (Parley, swash) the Wayland window's own
+# frame shapes and rasterizes its title with. `flui-app` links it already.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
@@ -256,6 +260,9 @@ ui-events = { workspace = true }
 keyboard-types = { workspace = true }
 android-activity = { workspace = true }
 jni.workspace = true
+# The system's fallback order below API 29, read from `fonts.xml`
+# (`fonts::android`).
+roxmltree.workspace = true
 
 # Every Unix: `_exit`, the exit watchdog's end of the process (ADR-0258 §7).
 [target.'cfg(unix)'.dependencies]
@@ -378,10 +385,6 @@ rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] 
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`. winit loads the same crate, so the tree gains none.
 wayland-cursor = { version = "0.31", optional = true }
-# The title a Wayland window draws in its own frame, shaped and rasterized
-# by the text stack the renderer draws text with (Parley, swash) over the
-# bundled and the host's fonts. `flui-app` links it already.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }
@@ -553,7 +556,6 @@ wayland = [
     "dep:rustix",
     "dep:xkbcommon-dl",
     "dep:wayland-cursor",
-    "dep:flui-painting",
 ]
 
 # winit fallback backend — the Linux host `current_platform` picks while it is
@@ -610,9 +612,8 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `text::apple::composition`'s rules, which run on every host.
 icu_segmenter.workspace = true
-# The Wayland window's own frame (`window::linux::wayland::client_frame`),
-# whose title and pixels are checked on every host.
-flui-painting = { path = "../flui-painting" }
+# `fonts::android`'s parse, which runs on every host over recorded files.
+roxmltree.workspace = true
 # The host's own test support, the `testing` module. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
 flui-native = { path = ".", features = ["testing"] }
@@ -836,6 +837,7 @@ features = [
     "haptics",
     "window",
     "input",
+    "fonts",
 ]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }

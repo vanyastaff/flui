@@ -77,8 +77,11 @@ impl SharedEngineServices {
         // add are announced like a registration's: the collection's
         // generation rises once, and every ui_runtime lays out again the text it
         // measured before. The scan is a value the feed drops once it has
-        // fed the collection; nothing process-global keeps it.
+        // fed the collection; nothing process-global keeps it. The feed asks
+        // the host which faces it falls back on, on its own thread, and puts
+        // that answer ahead of FLUI's tables (ADR-0271).
         let (fonts, feed) = FontCollection::with_host_feed();
+        let feed = feed.with_system_fallback(flui_native::fonts::system_fallback);
 
         Self {
             fonts,
