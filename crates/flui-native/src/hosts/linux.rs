@@ -5,7 +5,8 @@
 //! logind, the kernel's memory pressure) in the same shape
 //! (`owner::linux`). Both fill the input position: Wayland with its seats'
 //! input, X11 with XInput 2 and XKB. Wayland fills the clipboard position
-//! with its seats' selection. Text input, drag and drop and X11's clipboard
+//! with its seats' selection, X11 with the `CLIPBOARD` selection on a
+//! connection of its own. Text input, drag and drop and X11's primary selection
 //! are `Absent` until each host speaks their protocols; a desktop has no
 //! haptics and no system bars.
 
@@ -163,7 +164,9 @@ mod x11 {
         LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
         UserDataDirs, position,
     };
+    use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
+    use crate::host::SharedClipboard;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{HostDisplays, LoopInput, X11Connection, X11Host, X11Loop};
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
@@ -181,7 +184,7 @@ mod x11 {
         type Input = X11Loop;
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
-        type Clipboard = Absent<position::Clipboard>;
+        type Clipboard = X11Loop;
         type PrimarySelection = Absent<position::PrimarySelection>;
         type Drag = Absent<position::Drag>;
         // A desktop has no haptic hardware to drive.
@@ -221,6 +224,11 @@ mod x11 {
         /// platform's connection.
         fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput> {
             X11Input::new(connection)
+        }
+
+        /// The `CLIPBOARD` selection on a connection and a thread of its own.
+        fn clipboard() -> Result<Arc<dyn SharedClipboard>, PlatformError> {
+            Ok(Arc::new(X11Clipboard::start()?))
         }
     }
 

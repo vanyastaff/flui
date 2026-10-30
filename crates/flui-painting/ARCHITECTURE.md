@@ -776,7 +776,15 @@ then the common list (ADR-0270): the common lists reach a text face that maps
 emoji in monochrome first (unix's DejaVu Sans). The lists are FLUI's
 (`fallback_tables`, per platform, keyed by ISO 15924 code, ported from
 cosmic-text 0.19 and checked against lists recorded from it); the host locale (`sys-locale`) picks the Han
-list. `FontCollection::new()` stays bundled-only, for standalone contexts,
+list. The host's own answer goes ahead of those lists (ADR-0271): a
+`SystemFallback` the platform layer computes on the feed's thread
+(`HostFontFeed::with_system_fallback`) names faces per script, for emoji and
+for any script, by file or by family. Each script's order is then the host's
+list, FLUI's list, the host's common list, FLUI's common list and the
+sans-serif family. A face the host names with colour glyph tables enters the
+emoji generic only. The feed hands on the collection's one `FallbackOrder`,
+which installs a later answer (a new locale) and raises the generation once
+per change. `FontCollection::new()` stays bundled-only, for standalone contexts,
 tests and the hot-reload plugin, and falls back to Roboto for every script.
 
 **Why:** the app's text must find the host's faces. Over a bundled-only
@@ -837,6 +845,7 @@ host names exactly among them, never are),
 `fontique_fallbacks_follow_the_chain_in_order`,
 `the_sans_serif_family_ends_every_script_fallback`,
 `the_emoji_generic_starts_with_the_colour_faces`,
+`the_host_answer_precedes_the_tables`,
 `platform_tables_match_the_recorded_lists` and
 `a_platform_chain_picks_han_by_locale` (`src/text_layout/fallback_chain.rs`),
 `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`
@@ -847,8 +856,9 @@ first kept out of a Latin run),
 `a_missing_path_is_skipped_and_the_feed_completes` and
 `a_source_that_panics_is_skipped_and_the_collection_stays_usable`
 (`src/text_layout/context.rs`), and the table `host_feed_contract`
-(`tests/font_registration.rs`: one generation step per feed, and no host
-face added to a family held when the feed starts).
+(`tests/font_registration.rs`: one generation step per feed, no host
+face added to a family held when the feed starts, the host's answer reaching
+a script no table names, and a rescan swapping the order once per change).
 
 ### 18. Text crosses the display list as `ShapedParagraph`, with its own face table
 

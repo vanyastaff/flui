@@ -4,22 +4,27 @@ use std::cell::RefCell;
 use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
 
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
-use flui_platform::{StorageError, Stored, StoredVersion, Unsupported};
+use flui_platform::{
+    StorageError, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+};
 
 use super::{CodecStep, Document, PersistError, ReadOnlyReason, Revision, SaveStatus};
 use super::{StorageCapability, StorageHandle};
 use crate::context::CrateToken;
-use crate::flush_registry::FlushRegistry;
+use crate::flush_registry::{FlushPublisher, FlushRegistry, FlushState};
+use crate::{AsyncDriver, CloseGuard, CloseHold, TaskToken};
 use crate::{LifecycleContext, LifecycleContextExt};
 
 /// The first word of a stored document's header line.
 const HEADER_MAGIC: &str = "flui-document";
 
-/// What a write asks of storage until writing is wired.
-const NOT_WIRED: Unsupported = Unsupported::new(flui_platform::UnsupportedReason::NotRegistered);
+/// What a write meets when the UI runtime's storage has no flush registry
+/// beside it, as with a storage provider and no host behind it.
+const NO_REGISTRY: Unsupported = Unsupported::new(UnsupportedReason::NotRegistered);
 
 /// One [`Document`] kept for a widget: loaded from the UI runtime's storage,
 /// written on every [`set`](Self::set), with its [`SaveStatus`].
@@ -29,8 +34,13 @@ const NOT_WIRED: Unsupported = Unsupported::new(flui_platform::UnsupportedReason
 /// the status stay on the owner thread, and only bytes travel to the thread
 /// that does the IO.
 ///
-/// Writing is not wired yet: [`set`](Self::set) refuses every value, and
-/// nothing is ever [`committed`](Self::committed).
+/// While a write is in flight the document holds its presentation's close
+/// (a user's or the program's close waits; a session end goes through and
+/// the framework writes the published bytes), and after a failed write it
+/// requires a decision before any close the platform lets it refuse. Where
+/// the platform cannot wait (the web, Android, iOS), what changed after the
+/// last confirmed write is lost if the process is killed before the
+/// application is hidden.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
@@ -39,9 +49,14 @@ pub struct Persisted<D: Document> {
 struct OpenDocument<D> {
     /// The UI runtime's storage, or why it has none.
     storage: Result<StorageHandle, Unsupported>,
-    /// The host's flush registry, which `set` publishes into.
-    #[expect(dead_code, reason = "published into once set writes")]
-    registry: Option<FlushRegistry>,
+    /// The host's flush registry, which `set` publishes into, with this
+    /// document's publisher in it.
+    registry: Option<(FlushRegistry, FlushPublisher)>,
+    /// Where the watch over the registry runs.
+    driver: Option<AsyncDriver>,
+    /// The presentation's close guard, which a write in flight or a failed
+    /// one holds.
+    guard: Option<CloseGuard>,
     /// Borrowed only between codec calls, storage requests and wakes.
     state: RefCell<DocumentState<D>>,
 }
@@ -52,19 +67,45 @@ struct DocumentState<D> {
     /// The number of the latest load; an earlier load's result is not
     /// applied.
     generation: u64,
-    /// The value the last applied load produced.
+    /// The value the last applied load produced, and every value set since.
     loaded: Option<Loaded<D>>,
+    /// The latest bytes handed to the registry.
+    published: Option<Published>,
+    /// The first failure since the last write that succeeded; later ones
+    /// are logged.
+    failure: Option<PersistError>,
+    /// The close hold the status calls for.
+    hold: Option<(HoldKind, CloseHold)>,
+    /// The watch over the registry while a write is in flight, if one runs.
+    watch: Option<TaskToken>,
+    /// Whether the watch is still running.
+    watching: bool,
 }
 
 /// A loaded value and the stored file it came from.
 struct Loaded<D> {
     value: Rc<D>,
     /// The version of the stored bytes, which a data write is based on.
-    #[expect(dead_code, reason = "read by set once it writes")]
     base: StoredVersion,
-    /// The revision the stored header records; 0 when nothing is stored.
-    #[expect(dead_code, reason = "read by set once it writes")]
+    /// The revision of `value`: the stored header's when it was loaded, 0
+    /// when nothing was stored, the latest set's after that.
     revision: Revision,
+}
+
+/// Bytes handed to the registry, kept for a retry.
+struct Published {
+    bytes: Arc<[u8]>,
+    mode: WriteMode,
+    revision: Revision,
+}
+
+/// Which close hold a document keeps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HoldKind {
+    /// A write in flight: [`CloseGuard::hold`].
+    Work,
+    /// A failed write: [`CloseGuard::require_decision`].
+    Decision,
 }
 
 impl<D: Document> Clone for Persisted<D> {
@@ -96,14 +137,30 @@ impl<D: Document> Persisted<D> {
         } else {
             SaveStatus::Unavailable
         };
+        // Writes go to the storage the document acquired, whichever
+        // provider that is.
+        let registry = storage.as_ref().ok().and_then(|handle| {
+            cx.flush_registry_in_crate(CrateToken::new())
+                .map(|registry| {
+                    let publisher = registry.publisher(D::NAME, Arc::clone(handle.store()));
+                    (registry, publisher)
+                })
+        });
         Self {
             document: Rc::new(OpenDocument {
                 storage,
-                registry: cx.flush_registry_in_crate(CrateToken::new()),
+                registry,
+                driver: cx.async_driver(),
+                guard: cx.close_guard(),
                 state: RefCell::new(DocumentState {
                     status,
                     generation: 0,
                     loaded: None,
+                    published: None,
+                    failure: None,
+                    hold: None,
+                    watch: None,
+                    watching: false,
                 }),
             }),
         }
@@ -127,6 +184,7 @@ impl<D: Document> Persisted<D> {
     /// `std::pin::pin!`) before polling it by hand.
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static {
         let document = Rc::clone(&self.document);
+        document.refresh();
         let start = document.start_load();
         async move {
             let (generation, read) = start?;
@@ -140,34 +198,120 @@ impl<D: Document> Persisted<D> {
 
     /// Make `value` the document's value and hand it to the storage,
     /// returning the revision it will be stored as. Saving does not wait for
-    /// the write: [`committed`](Self::committed) reaches the returned
-    /// revision once the storage confirms it.
+    /// the write: the status is [`SaveStatus::Saving`] until the storage
+    /// confirms it, and [`committed`](Self::committed) then reaches the
+    /// returned revision.
+    ///
+    /// A data document is written only over the stored version it was
+    /// loaded from (or its own later writes), so another writer's change is
+    /// a [`StorageError::Conflict`]; a [machine-local](flui_platform::StorageName::machine_local)
+    /// one replaces whatever is stored.
     ///
     /// # Errors
     ///
-    /// Why the value was refused, with the status left as it was: no value
-    /// is loaded to base the write on, the stored file is read-only, the
-    /// revision counter is exhausted, or [`Document::encode`] panicked.
+    /// Why the value was refused: the UI runtime has no storage
+    /// ([`StorageError::Unsupported`]), no value is loaded to base the write
+    /// on ([`PersistError::NotLoaded`]), the stored file is read-only, the
+    /// revision counter is exhausted, or [`Document::encode`] panicked. The
+    /// value in memory and the file stay as they were; after an encode panic
+    /// the status is [`SaveStatus::Failed`] until a write succeeds.
     pub fn set(&self, value: D) -> Result<Revision, PersistError> {
-        drop(value);
-        Err(PersistError::Storage(NOT_WIRED.into()))
+        let document = &self.document;
+        let (revision, mode) = document.next_write()?;
+        let Some((_, publisher)) = &document.registry else {
+            return Err(PersistError::Storage(NO_REGISTRY.into()));
+        };
+        let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
+            Ok(body) => body,
+            Err(payload) => {
+                let message = payload_text(&*payload)
+                    .unwrap_or("a panic without a message")
+                    .to_owned();
+                retain_opaque_payload(payload);
+                let error = PersistError::Panicked {
+                    during: CodecStep::Encode,
+                    message,
+                };
+                document.fail(error.clone());
+                return Err(error);
+            }
+        };
+        let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
+        let replaced = {
+            let mut state = document.state.borrow_mut();
+            // A load still in flight read the file before this edit: its
+            // result is not applied over it.
+            state.generation = state.generation.wrapping_add(1);
+            let loaded = state
+                .loaded
+                .as_mut()
+                .expect("BUG: next_write found a loaded value");
+            loaded.revision = revision;
+            let replaced = std::mem::replace(&mut loaded.value, Rc::new(value));
+            state.failure = None;
+            state.published = Some(Published {
+                bytes: Arc::clone(&bytes),
+                mode,
+                revision,
+            });
+            state.status = SaveStatus::Saving;
+            replaced
+        };
+        publisher.publish(bytes, mode, revision);
+        document.refresh();
+        // The replaced value's drop is application code: it runs with no
+        // borrow held and after this edit is published, so an edit it makes
+        // is published after this one and wins.
+        drop(replaced);
+        Ok(revision)
     }
 
     /// The latest revision the storage confirmed, if any.
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
-        None
+        let (_, publisher) = self.document.registry.as_ref()?;
+        publisher.committed().map(|(revision, _)| revision)
     }
 
     /// Where the document stands against its storage.
     #[must_use]
     pub fn status(&self) -> SaveStatus {
+        self.document.refresh();
         self.document.state.borrow().status.clone()
     }
 
     /// After a failed write, write the latest value again; otherwise do
     /// nothing.
-    pub fn retry(&self) {}
+    pub fn retry(&self) {
+        let document = &self.document;
+        document.refresh();
+        let republish = {
+            let mut state = document.state.borrow_mut();
+            if !matches!(state.status, SaveStatus::Failed(_)) {
+                return;
+            }
+            state.failure = None;
+            let republish = state.published.as_ref().map(|published| {
+                (
+                    Arc::clone(&published.bytes),
+                    published.mode,
+                    published.revision,
+                )
+            });
+            state.status = if republish.is_some() {
+                SaveStatus::Saving
+            } else {
+                SaveStatus::Clean
+            };
+            republish
+        };
+        if let (Some((bytes, mode, revision)), Some((_, publisher))) =
+            (republish, &document.registry)
+        {
+            publisher.publish(bytes, mode, revision);
+        }
+        document.refresh();
+    }
 
     /// Give up on a stored file that cannot be decoded: keep its bytes under
     /// a free `<name>-corrupt-N` name, then store [`Document::initial`] in
@@ -206,6 +350,11 @@ impl<D: Document> OpenDocument<D> {
     ) -> Result<Rc<D>, PersistError> {
         let mut state = self.state.borrow_mut();
         let latest = state.generation == generation;
+        if latest {
+            // Bytes written before this load belong to the value it replaces:
+            // the status follows the load, not their write.
+            state.published = None;
+        }
         let (result, replaced) = match outcome {
             Ok(loaded) => {
                 let value = Rc::clone(&loaded.value);
@@ -240,6 +389,163 @@ impl<D: Document> OpenDocument<D> {
         drop(replaced);
         result
     }
+
+    /// The revision and write mode of the next value `set` writes, or why
+    /// none is written.
+    fn next_write(self: &Rc<Self>) -> Result<(Revision, WriteMode), PersistError> {
+        self.refresh();
+        let state = self.state.borrow();
+        match &state.status {
+            SaveStatus::Unavailable => {
+                let refusal = self.storage.as_ref().err().copied().unwrap_or(NO_REGISTRY);
+                return Err(PersistError::Storage(StorageError::Unsupported(refusal)));
+            }
+            SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion { found, supported }) => {
+                return Err(PersistError::NewerVersion {
+                    found: *found,
+                    supported: *supported,
+                });
+            }
+            SaveStatus::ReadOnly(ReadOnlyReason::LockUnsupported) => {
+                return Err(PersistError::Storage(StorageError::Unsupported(
+                    Unsupported::new(UnsupportedReason::NotOnThisDevice),
+                )));
+            }
+            _ => {}
+        }
+        let loaded = state.loaded.as_ref().ok_or(PersistError::NotLoaded)?;
+        let revision = loaded
+            .revision
+            .get()
+            .checked_add(1)
+            .map(Revision::new)
+            .ok_or(PersistError::Exhausted)?;
+        let mode = if D::NAME.is_machine_local() {
+            WriteMode::Replace
+        } else {
+            WriteMode::IfUnchanged(loaded.base)
+        };
+        Ok((revision, mode))
+    }
+
+    /// Record a failure that kept a value from being published.
+    fn fail(self: &Rc<Self>, error: PersistError) {
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(first) = &state.failure {
+                tracing::warn!(
+                    document = D::NAME.as_str(),
+                    %error,
+                    %first,
+                    "a document failed again; the first failure is kept"
+                );
+            } else {
+                state.failure = Some(error);
+            }
+        }
+        self.refresh();
+    }
+
+    /// Bring the status in line with the registry, keep the close hold the
+    /// status calls for, and keep the watch running while a write is in
+    /// flight.
+    fn refresh(self: &Rc<Self>) {
+        let (released, stale_watch, spawn) = {
+            let mut state = self.state.borrow_mut();
+            if let (Some(_), Some((_, publisher))) = (&state.published, &self.registry) {
+                let flush = publisher.state();
+                match &flush {
+                    FlushState::Clean => {
+                        if matches!(state.failure, Some(PersistError::Storage(_))) {
+                            state.failure = None;
+                        }
+                    }
+                    FlushState::Pending => {}
+                    FlushState::Failed(error) => {
+                        if state.failure.is_none() {
+                            state.failure = Some(PersistError::Storage(error.clone()));
+                        }
+                    }
+                }
+                state.status = match (&state.failure, flush) {
+                    (Some(failure), _) => SaveStatus::Failed(failure.clone()),
+                    (None, FlushState::Pending) => SaveStatus::Saving,
+                    (None, _) => SaveStatus::Clean,
+                };
+            } else if let Some(failure) = &state.failure {
+                state.status = SaveStatus::Failed(failure.clone());
+            }
+            let wanted = match state.status {
+                SaveStatus::Saving => Some(HoldKind::Work),
+                SaveStatus::Failed(_) => Some(HoldKind::Decision),
+                _ => None,
+            };
+            let released = if state.hold.as_ref().map(|(kind, _)| *kind) == wanted {
+                None
+            } else {
+                let taken = wanted.zip(self.guard.as_ref()).map(|(kind, guard)| {
+                    let hold = match kind {
+                        HoldKind::Work => guard.hold(),
+                        HoldKind::Decision => guard.require_decision(),
+                    };
+                    (kind, hold)
+                });
+                std::mem::replace(&mut state.hold, taken)
+            };
+            let saving = state.status == SaveStatus::Saving;
+            let spawn = saving && !state.watching && self.driver.is_some();
+            let stale_watch = if spawn {
+                state.watching = true;
+                state.watch.take()
+            } else {
+                None
+            };
+            (released, stale_watch, spawn)
+        };
+        // Released after the borrow: a hold's release signals the owner.
+        drop(released);
+        drop(stale_watch);
+        if spawn && let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) {
+            let token = driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())));
+            self.state.borrow_mut().watch = Some(token);
+        }
+    }
+}
+
+/// Follow the registry while `document` has a write in flight: each change
+/// the registry settles brings the status and the close hold in line.
+async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegistry) {
+    loop {
+        // Taken before the state is read, so a change in between resolves it.
+        let changed = registry.changed();
+        let Some(open) = document.upgrade() else {
+            return;
+        };
+        open.refresh();
+        {
+            let mut state = open.state.borrow_mut();
+            if state.status != SaveStatus::Saving {
+                state.watching = false;
+                return;
+            }
+        }
+        drop(open);
+        changed.await;
+    }
+}
+
+/// `body` under the header naming document `D` at `revision`.
+fn framed<D: Document>(revision: Revision, body: &[u8]) -> Vec<u8> {
+    let header = format!(
+        "{HEADER_MAGIC} {} {} {}\n",
+        D::NAME.as_str(),
+        D::VERSION,
+        revision.get()
+    );
+    let mut bytes = Vec::with_capacity(header.len() + body.len());
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend_from_slice(body);
+    bytes
 }
 
 /// The document a storage read holds: [`Document::initial`] when nothing is

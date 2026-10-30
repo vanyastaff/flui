@@ -175,7 +175,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         text_direction: _,
         custom_actions: _,
         scroll_position: _,
-        scroll_axis: _,
+        scroll_axis_direction: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
         collection: _,
@@ -345,7 +345,8 @@ fn every_published_attribute_reads_through_the_consumer() {
             "horizontal scroll",
             R::ScrollView,
             |a| {
-                a.scroll_axis = Some(flui_foundation::geometry::Axis::Horizontal);
+                a.scroll_axis_direction =
+                    Some(flui_foundation::geometry::AxisDirection::LeftToRight);
                 a.scroll_position = Some(20.0);
                 a.scroll_extent_max = Some(100.0);
             },
@@ -354,6 +355,46 @@ fn every_published_attribute_reads_through_the_consumer() {
                     && n.scroll_x_max() == Some(100.0)
                     && n.scroll_y().is_none()
             },
+        ),
+        Row::new(
+            "a list growing up is published from the top edge",
+            R::ScrollView,
+            |a| {
+                a.scroll_axis_direction =
+                    Some(flui_foundation::geometry::AxisDirection::BottomToTop);
+                a.scroll_position = Some(20.0);
+                a.scroll_extent_min = Some(0.0);
+                a.scroll_extent_max = Some(100.0);
+            },
+            |n| {
+                n.scroll_y() == Some(80.0)
+                    && n.scroll_y_min() == Some(0.0)
+                    && n.scroll_y_max() == Some(100.0)
+            },
+        ),
+        Row::new(
+            "a right-to-left scroll is published from the left edge",
+            R::ScrollView,
+            |a| {
+                a.scroll_axis_direction =
+                    Some(flui_foundation::geometry::AxisDirection::RightToLeft);
+                a.scroll_position = Some(30.0);
+                a.scroll_extent_min = Some(10.0);
+                a.scroll_extent_max = Some(110.0);
+            },
+            |n| n.scroll_x() == Some(90.0) && n.scroll_y().is_none(),
+        ),
+        Row::new(
+            "a reversed scroll with an unbounded extent has no position",
+            R::ScrollView,
+            |a| {
+                a.scroll_axis_direction =
+                    Some(flui_foundation::geometry::AxisDirection::BottomToTop);
+                a.scroll_position = Some(20.0);
+                a.scroll_extent_min = Some(0.0);
+                a.scroll_extent_max = Some(f64::INFINITY);
+            },
+            |n| n.scroll_y().is_none() && n.scroll_y_min() == Some(0.0),
         ),
         Row::new(
             "a terminal place in set is dropped",

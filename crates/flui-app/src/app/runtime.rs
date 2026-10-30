@@ -77,8 +77,11 @@ impl SharedEngineServices {
         // add are announced like a registration's: the collection's
         // generation rises once, and every ui_runtime lays out again the text it
         // measured before. The scan is a value the feed drops once it has
-        // fed the collection; nothing process-global keeps it.
+        // fed the collection; nothing process-global keeps it. The feed asks
+        // the host which faces it falls back on, on its own thread, and puts
+        // that answer ahead of FLUI's tables (ADR-0271).
         let (fonts, feed) = FontCollection::with_host_feed();
+        let feed = feed.with_system_fallback(flui_native::fonts::system_fallback);
 
         Self {
             fonts,
@@ -1287,7 +1290,6 @@ impl AppRuntime {
         let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
         let wake = self.frame_wake_callback();
         self.flush_host = Some(flui_view::__runtime::FlushHost::new(
-            Arc::clone(&storage),
             Box::new(move |write| {
                 // A write the pool refuses is dropped, which keeps its bytes
                 // owed for the flush at the end.

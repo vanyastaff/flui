@@ -22,11 +22,13 @@ mod fallback_recorded;
 mod fallback_tables;
 pub(crate) mod font_resolve;
 mod host;
+mod system_fallback;
 
 pub(crate) use context::FontsKey;
-pub use context::{FontCollection, HostFontFeed, TextContext};
+pub use context::{FallbackOrder, FontCollection, HostFontFeed, TextContext};
 pub use error::TextLayoutError;
 pub use host::HostFonts;
+pub use system_fallback::{FaceRef, ScriptCode, SystemFallback};
 
 /// The colour a style paints its glyphs with: `foreground` wins over
 /// `color`.

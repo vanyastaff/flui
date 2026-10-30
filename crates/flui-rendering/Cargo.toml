@@ -145,7 +145,7 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = 
 
 [features]
 default = []
-# serde: `AxisDirection` and `TableCellVerticalAlignment` derive it, and the
+# serde: `TableCellVerticalAlignment` derives it, and the
 # feature forwards to flui-painting's so the values they carry serialize too.
 serde = ["dep:serde", "flui-painting/serde"]
 

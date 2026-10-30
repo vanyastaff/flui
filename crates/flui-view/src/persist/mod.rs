@@ -165,6 +165,10 @@ pub enum PersistError {
     /// replace them.
     #[error("the document has unsaved changes")]
     UnsavedChanges,
+    /// No value is loaded, so a write has no stored version to be based on:
+    /// [`Persisted::set`] before a load succeeded.
+    #[error("the document is not loaded")]
+    NotLoaded,
     /// The revision counter has no next value; the document takes no more
     /// writes.
     #[error("the document's revision counter is exhausted")]

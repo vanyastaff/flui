@@ -36,6 +36,7 @@ struct State {
     hold: bool,
     held: Vec<Resolver<Option<String>>>,
     refusal: Option<Unsupported>,
+    fail_releases: bool,
     handles: Rc<()>,
 }
 
@@ -105,6 +106,12 @@ impl ScriptedPrimarySelection {
         self.state.borrow_mut().refusal = Some(refusal);
     }
 
+    /// Make every later release of a claim panic once the claim is
+    /// released, as a failing host backend does.
+    pub fn fail_releases(&self) {
+        self.state.borrow_mut().fail_releases = true;
+    }
+
     /// How many handles over this selection are alive.
     #[must_use]
     pub fn live_handles(&self) -> usize {
@@ -167,7 +174,12 @@ impl PrimarySelectionBackend for Backend {
     }
 
     fn release(&self, claim: PrimaryClaimId) -> Option<Rc<dyn SelectionText>> {
-        self.selection.state.borrow_mut().claims.release(claim)
+        let (released, fails) = {
+            let mut state = self.selection.state.borrow_mut();
+            (state.claims.release(claim), state.fail_releases)
+        };
+        assert!(!fails, "the primary selection backend failed to release");
+        released
     }
 
     fn is_current(&self, claim: PrimaryClaimId) -> bool {

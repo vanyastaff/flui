@@ -5,9 +5,9 @@
 //! a pumped frame, so a test decides with [`MemoryStorage::hold_writes`] and
 //! [`MemoryStorage::hold_commits`] when a write lands instead of racing an
 //! IO thread. The double follows [`Storage::publish`]'s acceptance contract
-//! (a newer value replaces one not yet started) but not a file's
-//! compare-and-swap: [`WriteMode::IfUnchanged`] is accepted like
-//! [`WriteMode::Replace`].
+//! (a newer value replaces one not yet started) and a file's compare and
+//! replace: a [`WriteMode::IfUnchanged`] write is refused with
+//! [`StorageError::Conflict`] when it commits over another version.
 //!
 //! ```
 //! use std::future::Future;
@@ -79,6 +79,7 @@ struct Write {
     id: u64,
     name: StorageName,
     bytes: Vec<u8>,
+    mode: WriteMode,
 }
 
 #[derive(Default)]
@@ -106,7 +107,20 @@ impl State {
         }
     }
 
+    /// Store `write`, unless it is based on a version the name no longer
+    /// holds, which refuses it with [`StorageError::Conflict`].
     fn commit(&mut self, write: Write) -> Option<Waker> {
+        if let WriteMode::IfUnchanged(base) = write.mode {
+            let stored = self
+                .values
+                .get(&write.name)
+                .map_or(StoredVersion::ABSENT, |bytes| {
+                    StoredVersion::of_bytes(bytes)
+                });
+            if stored != base {
+                return self.answer(write.id, Err(StorageError::Conflict));
+            }
+        }
         let version = StoredVersion::of_bytes(&write.bytes);
         self.values.insert(write.name, write.bytes);
         self.answer(write.id, Ok(version))
@@ -269,7 +283,7 @@ impl Storage for MemoryStorage {
         &self,
         name: &StorageName,
         bytes: Vec<u8>,
-        _mode: WriteMode,
+        mode: WriteMode,
     ) -> StorageFuture<StoredVersion> {
         let mut state = self.state.lock();
         state.live += 1;
@@ -280,6 +294,7 @@ impl Storage for MemoryStorage {
             id,
             name: *name,
             bytes,
+            mode,
         };
         let mut wakers = Vec::new();
         if let Some(error) = state.fail_next.pop_front() {

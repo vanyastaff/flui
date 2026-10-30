@@ -221,6 +221,14 @@ pub(crate) trait X11Host: 'static {
     /// The windows' input on `connection`: the pointers, the keyboard and
     /// the cursor, made on the thread that builds the loop.
     fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput>;
+
+    /// The clipboard: the `CLIPBOARD` selection, owned and read on a
+    /// connection and a thread of its own.
+    ///
+    /// # Errors
+    /// [`PlatformError::Init`] when its connection, window or thread cannot
+    /// be made.
+    fn clipboard() -> Result<Arc<dyn host::SharedClipboard>, PlatformError>;
 }
 
 /// The input of the X11 loop's windows, the input feature's (ADR-0151 §10):
@@ -287,6 +295,14 @@ impl WindowScale {
     /// The window is at `scale` now.
     pub(crate) fn set(&self, scale: f64) {
         self.0.store(scale.to_bits(), Ordering::Release);
+    }
+}
+
+/// The clipboard position is the loop's: the clipboard the table made, on
+/// its own connection.
+impl host::Clipboard<X11Loop> for X11Loop {
+    fn clipboard(owner: &X11Loop) -> Rc<dyn host::NativeClipboard> {
+        Rc::new(Arc::clone(&owner.clipboard))
     }
 }
 
@@ -365,6 +381,7 @@ pub struct X11Loop {
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
     input: Arc<dyn LoopInput>,
+    clipboard: Arc<dyn host::SharedClipboard>,
     start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
     start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
     background_executor: Arc<BackgroundExecutor>,
@@ -403,6 +420,7 @@ impl X11Loop {
         let notices = H::notices(&app);
         let displays = H::displays();
         let input = H::input(&connection);
+        let clipboard = H::clipboard()?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
         let affinity = flui_foundation::OwnerAffinity::new();
         affinity.bind_current();
@@ -415,6 +433,7 @@ impl X11Loop {
             displays,
             windows,
             input,
+            clipboard,
             start_preferences: H::preferences,
             start_host_notices: H::host_notices,
             background_executor: Arc::new(BackgroundExecutor::new()),
