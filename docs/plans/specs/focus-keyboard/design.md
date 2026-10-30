@@ -5,7 +5,7 @@
 - **База:** `main` @ `015315508`
 - **Требования:** [requirements.md](requirements.md); уровень 0 —
   [release/requirements.md](../release/requirements.md) R8; смежные — [text-ime](../text-ime/tasks.md)
-  (`editable_text.rs`), [send-flip](../send-flip/tasks.md) (T9: `TextEditingController`),
+  (`editable_text.rs`), [send-flip](https://github.com/vanyastaff/flui/blob/642ac6e75484985d042e4c522f561f60e0575ff6/docs/plans/specs/send-flip/tasks.md) (T9: `TextEditingController`),
   [flui-driver](../flui-driver/tasks.md) (FD11: лейн Windows для нативного сценария)
 
 ## Что уже построено
