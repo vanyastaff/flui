@@ -73,7 +73,17 @@ fn consumer_project(
     let project = tempfile::tempdir().expect("create external consumer directory");
     std::fs::create_dir(project.path().join("src")).expect("create source directory");
     let mut package = toml::Table::new();
-    package.insert("name".into(), "facade-consumer".into());
+    // Every consumer shares one target directory, and two consumers with the
+    // same name and dependencies get the same test binary path: a parallel
+    // case would run the other's binary. The directory's name keeps it apart.
+    let name = project
+        .path()
+        .file_name()
+        .expect("BUG: a temporary directory has a name")
+        .to_string_lossy()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    package.insert("name".into(), format!("facade-consumer-{name}").into());
     package.insert("version".into(), "0.1.0".into());
     package.insert("edition".into(), "2024".into());
     let mut manifest = toml::Table::new();
@@ -247,6 +257,63 @@ fn owner_local_values_fit_every_flip_position() {
             "{package}: the consumer's row did not run:\n{report}"
         );
     }
+}
+
+/// The handles meant to cross a thread stay `Send` through the facade. Only
+/// `flui` reaches the application handle and the host executors, so the
+/// consumer depends on `flui` alone.
+#[test]
+fn cross_thread_handles_stay_sendable() {
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), dependency("flui", root, false));
+    let output = run_consumer(
+        dependencies,
+        None,
+        include_str!("fixtures/cross_thread_handles.rs"),
+        "test",
+    );
+    assert!(
+        output.status.success(),
+        "cross-thread handles through flui:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        report.contains("cross_thread_handles_stay_sendable ... ok"),
+        "the consumer's row did not run:\n{report}"
+    );
+}
+
+/// An unannotated closure handed to each family of event setter writes a
+/// signal through the `cx` the framework passes (ADR-0086 §6), through the
+/// facade with both catalogs.
+#[test]
+fn event_setters_infer_cx_through_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert(
+        "flui".into(),
+        facade_with_features(root, &["material", "cupertino"]),
+    );
+    let output = run_consumer(
+        dependencies,
+        None,
+        include_str!("fixtures/event_setters.rs"),
+        "test",
+    );
+    assert!(
+        output.status.success(),
+        "event setters through flui:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        report.contains("event_setters_infer_cx_through_the_facade ... ok"),
+        "the consumer's row did not run:\n{report}"
+    );
 }
 
 /// The acceptance application, `tests/fixtures/acceptance_app/`, runs its rows
