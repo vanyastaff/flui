@@ -87,7 +87,7 @@ use crate::owner::watch::Watch;
 use flui_platform::PlatformInput;
 use flui_platform::{DisplayId, DisplaySnapshot, FrameRateHint};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::{UIHoverGestureRecognizer, UIScreen, UITouch, UIView};
+use objc2_ui_kit::{UIEvent, UIHoverGestureRecognizer, UIScreen, UITouch, UIView};
 
 /// What the iOS host's table names for its owner thread (ADR-0151 §10): the
 /// displays, the preference source and the notice channel the loop holds. The
@@ -160,9 +160,15 @@ pub(crate) enum TrackpadGesture {
 /// dispatches what they carry. Made with the view ([`IosHost::view_touches`])
 /// and dropped with it, so the contacts it admitted are the view's own.
 pub(crate) trait ViewTouches {
-    /// What `touch`, delivered in `phase`, carries; `buttons` is its event's
-    /// `buttonMask` (0 where UIKit reports none).
-    fn touch(&mut self, touch: &UITouch, phase: TouchPhase, buttons: isize) -> Vec<PlatformInput>;
+    /// What `touch`, delivered in `phase` with `event`, carries: the event
+    /// names an indirect pointer's buttons and the samples UIKit coalesced
+    /// into the touch and predicts after it.
+    fn touch(
+        &mut self,
+        touch: &UITouch,
+        phase: TouchPhase,
+        event: Option<&UIEvent>,
+    ) -> Vec<PlatformInput>;
 
     /// What the Pencil's hover over `view`, as `recognizer` reports it,
     /// carries. `stamp` is the uptime of the event UIKit last handed the

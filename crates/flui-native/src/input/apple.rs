@@ -1486,16 +1486,16 @@ pub(crate) mod ios {
     use objc2_foundation::NSObjectProtocol;
     use objc2_foundation::NSProcessInfo;
     use objc2_ui_kit::{
-        UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer, UITouch,
-        UITouchType, UITraitEnvironment, UIView,
+        UIEvent, UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer,
+        UITouch, UITouchType, UITraitEnvironment, UIView,
     };
 
     use crate::input::apple::indirect::IndirectGestures;
     use crate::input::assembly::{
         ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
-        GestureReading, NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface,
-        NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading,
-        decode,
+        GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact, NativeReading,
+        NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases,
+        ScrollReading, decode,
     };
     use crate::owner::apple::ios::{TouchPhase, TrackpadGesture, ViewTouches};
     use flui_platform::PlatformInput;
@@ -1506,9 +1506,9 @@ pub(crate) mod ios {
             &mut self,
             touch: &UITouch,
             phase: TouchPhase,
-            buttons: isize,
+            event: Option<&UIEvent>,
         ) -> Vec<PlatformInput> {
-            self.convert(touch, phase, buttons)
+            self.convert(touch, phase, event)
         }
 
         fn hover(
@@ -1554,6 +1554,8 @@ pub(crate) mod ios {
         indirect: IndirectGestures,
         /// The last translation the mouse wheel's recognizer reported.
         wheel: IndirectGestures,
+        /// The coalesced and predicted samples of the move being assembled.
+        batch: MoveBatch,
     }
 
     impl Default for TouchInputState {
@@ -1573,6 +1575,7 @@ pub(crate) mod ios {
                 scrolling: ScrollPhases::default(),
                 indirect: IndirectGestures::default(),
                 wheel: IndirectGestures::default(),
+                batch: MoveBatch::new(),
             }
         }
     }
@@ -1791,7 +1794,7 @@ pub(crate) mod ios {
             &mut self,
             touch: &UITouch,
             phase: TouchPhase,
-            buttons: isize,
+            event: Option<&UIEvent>,
         ) -> Vec<PlatformInput> {
             let address = std::ptr::from_ref(touch) as usize;
             let kind = pointer_kind(touch);
@@ -1810,11 +1813,14 @@ pub(crate) mod ios {
             if contact == PENCIL && matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
                 self.pencil_touch = None;
             }
-            // An indirect press is the button its event names; a finger or a
-            // Pencil is the primary one.
+            // An indirect press is the button its event names (iOS 13.4); a
+            // finger or a Pencil is the primary one.
             let pressed = if contact == CURSOR {
                 match phase {
                     TouchPhase::Down => {
+                        let buttons = event
+                            .filter(|event| event.respondsToSelector(sel!(buttonMask)))
+                            .map_or(0, |event| event.buttonMask().0);
                         let button = crate::input::apple::indirect::button(buttons);
                         self.cursor_button = Some(button);
                         button
@@ -1834,38 +1840,42 @@ pub(crate) mod ios {
                 TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
             };
             let view = touch.view();
-            let location = touch.locationInView(view.as_deref());
-            let is_pen = matches!(kind, PointerKind::Pen { .. });
-            let has_force = is_pen
+            let has_force = matches!(kind, PointerKind::Pen { .. })
                 || view.as_ref().is_some_and(|view| {
                     view.traitCollection().forceTouchCapability()
                         == UIForceTouchCapability::Available
                 });
-            let mut sensors = touch_sensors(
-                has_force,
-                touch.force(),
-                touch.maximumPossibleForce(),
-                touch.majorRadius(),
-            );
-            if is_pen {
-                sensors.angles = pen_angles(
-                    touch.altitudeAngle(),
-                    touch.azimuthAngleInView(view.as_deref()),
-                );
-            }
-            let reading = NativeReading::new(
-                contact,
-                kind,
-                action,
-                ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
-            )
-            .at(location.x, location.y, 1.0)
-            .with_sensors(sensors);
-            let reading = if contact == PENCIL || contact == CURSOR {
-                reading.with_primary(true)
-            } else {
-                reading
+            let read = |sample: &UITouch, action| {
+                touch_reading(sample, contact, kind, action, view.as_deref(), has_force)
             };
+            let reading = read(touch, action);
+            // A move carries the samples UIKit coalesced into it (a Pencil
+            // reports at 240 Hz, the display takes fewer) and the ones it
+            // predicts. The coalesced list ends with the touch itself.
+            if let (TouchPhase::Move, Some(event)) = (phase, event) {
+                let coalesced = event
+                    .coalescedTouchesForTouch(touch)
+                    .map(|samples| samples.to_vec())
+                    .unwrap_or_default();
+                let predicted = event
+                    .predictedTouchesForTouch(touch)
+                    .map(|samples| samples.to_vec())
+                    .unwrap_or_default();
+                let older = coalesced.split_last().map_or(&[][..], |(_, older)| older);
+                if !older.is_empty() || !predicted.is_empty() {
+                    for sample in older {
+                        self.batch.push_coalesced(read(sample, ReadingAction::Move));
+                    }
+                    for sample in &predicted {
+                        self.batch.push_predicted(read(sample, ReadingAction::Move));
+                    }
+                    return self
+                        .batch
+                        .decode(&mut self.contacts, &reading)
+                        .unwrap_or_else(DecodeError::into_inputs)
+                        .into_vec();
+                }
+            }
             self.assemble(&reading)
         }
 
@@ -1873,6 +1883,42 @@ pub(crate) mod ios {
             decode(&mut self.contacts, reading)
                 .unwrap_or_else(DecodeError::into_inputs)
                 .into_vec()
+        }
+    }
+
+    /// One UIKit sample of `contact` as a reading: its location in `view`,
+    /// its force where `has_force`, its radius and a Pencil's angles, on its
+    /// hardware uptime.
+    fn touch_reading(
+        touch: &UITouch,
+        contact: NativeContact,
+        kind: PointerKind,
+        action: ReadingAction,
+        view: Option<&UIView>,
+        has_force: bool,
+    ) -> NativeReading {
+        let location = touch.locationInView(view);
+        let mut sensors = touch_sensors(
+            has_force,
+            touch.force(),
+            touch.maximumPossibleForce(),
+            touch.majorRadius(),
+        );
+        if matches!(kind, PointerKind::Pen { .. }) {
+            sensors.angles = pen_angles(touch.altitudeAngle(), touch.azimuthAngleInView(view));
+        }
+        let reading = NativeReading::new(
+            contact,
+            kind,
+            action,
+            ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
+        )
+        .at(location.x, location.y, 1.0)
+        .with_sensors(sensors);
+        if contact == PENCIL || contact == CURSOR {
+            reading.with_primary(true)
+        } else {
+            reading
         }
     }
 
