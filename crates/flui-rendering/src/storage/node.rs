@@ -219,6 +219,16 @@ impl RenderNode {
 // ============================================================================
 
 impl RenderNode {
+    /// Whether this node's render object leaves its subtree out of the
+    /// semantics tree, as offstage content and `ExcludeSemantics` do.
+    #[inline]
+    pub fn excludes_semantics_subtree(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.render_object().excludes_semantics_subtree(),
+            Self::Sliver(entry) => entry.render_object().excludes_semantics_subtree(),
+        }
+    }
+
     /// Returns a reference to the Box entry, if this is a Box node.
     #[inline]
     pub fn as_box(&self) -> Option<&RenderEntry<BoxProtocol>> {

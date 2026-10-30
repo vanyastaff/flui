@@ -46,6 +46,7 @@ fn read_tree<R>(
             actions,
             rect,
             children: child_ids.clone(),
+            text_selection: None,
         }),
     )];
     for (&child, child_id) in children.iter().zip(&child_ids) {
@@ -57,6 +58,7 @@ fn read_tree<R>(
                 actions: 0,
                 rect,
                 children: SmallVec::new(),
+                text_selection: None,
             }),
         ));
     }
@@ -201,6 +203,10 @@ fn every_published_attribute_reads_through_the_consumer() {
         // Published as `TextRun` children, read through the consumer by
         // `tests/text_runs.rs`.
         text: _,
+        // Published as the text selection of a document, in the runs of the
+        // texts beneath it; read through the consumer by the widget rows of
+        // ADR-0214.
+        document_selection: _,
     } = SemanticsAttributes::default();
     let States {
         toggled: _,

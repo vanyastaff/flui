@@ -23,8 +23,7 @@
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
 use crate::action::{
-    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
-    UnroutedAction,
+    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, UnroutedAction,
 };
 use crate::applicability::prohibits_name;
 use crate::attributes::SemanticsAttributes;
@@ -50,6 +49,10 @@ pub(crate) struct PublishView<'a> {
     pub(crate) actions: u64,
     pub(crate) rect: flui_foundation::geometry::Rect<f64>,
     pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
+    /// The node's document selection resolved to runs published beneath it
+    /// (ADR-0214 §3), or `None` when it declares none or an end names no
+    /// current text there.
+    pub(crate) text_selection: Option<accesskit::TextSelection>,
 }
 
 /// Whether `bits` carries `action`.
@@ -533,13 +536,14 @@ pub fn semantics_action_request_for(
 }
 
 /// [`semantics_action_request_for`], with `text_selection` reading a
-/// selection's run positions into bytes of the target's value.
+/// selection's run positions into the call its target receives: bytes of
+/// a field's value, or a document's selection across its texts.
 pub(crate) fn decode_request(
     request: &accesskit::ActionRequest,
     text_selection: impl FnOnce(
         crate::AccessibilityNodeId,
         &accesskit::TextSelection,
-    ) -> Option<TextSelection>,
+    ) -> Option<ActionCall>,
 ) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
     use accesskit::ActionData;
 
@@ -568,10 +572,8 @@ pub(crate) fn decode_request(
             ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
         }
         (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
-            ActionCall::SetTextSelection(
-                text_selection(node_id, selection)
-                    .ok_or(ActionDecodeError::InvalidTextPosition { node_id })?,
-            )
+            text_selection(node_id, selection)
+                .ok_or(ActionDecodeError::InvalidTextPosition { node_id })?
         }
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
             ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
@@ -626,6 +628,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             actions: data.actions,
             rect: data.rect,
             children: data.children.clone(),
+            text_selection: data.text_selection,
         };
         &filtered
     } else {
@@ -679,6 +682,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         current_value_length: _,
         // Published as the `TextRun` children `text_run_nodes` builds.
         text: _,
+        // Resolved against the runs beneath the node by `publish_view`.
+        document_selection: _,
     } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
@@ -858,30 +863,50 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             });
         }
     }
+    // A document's selection lies in the runs of the texts beneath it; its
+    // own runs, if it had any, would already have set one.
+    if node.text_selection().is_none()
+        && let Some(selection) = data.text_selection
+    {
+        node.set_text_selection(selection);
+    }
 
     node
 }
 
-/// The text runs a node publishes, with their identities: only a text field
-/// publishes runs, and only once the pipeline has given them identities.
+/// The text runs a node publishes, with their identities: a text field's,
+/// and a selectable text's (ADR-0214), each only on a node whose role
+/// `accesskit_consumer` resolves text ranges on, and only once the pipeline
+/// has given the runs identities.
 pub(crate) fn published_text(
     attrs: &SemanticsAttributes,
 ) -> Option<(&crate::TextContent, &[AccessibilityNodeId])> {
     let content = attrs.text.as_deref()?;
-    if !attrs.effective_role().is_text_input() {
+    if !supports_text_ranges(attrs) {
         return None;
     }
     Some((content, content.run_identities()?))
 }
 
-/// Whether a text field declares runs it cannot publish for want of
+/// Whether the node publishes as a role `accesskit_consumer` reads text
+/// ranges on (`Node::supports_text_ranges`): a text input, a document, or
+/// static text, which a node with no role and a label publishes as
+/// ([`resolve_role`]).
+fn supports_text_ranges(attrs: &SemanticsAttributes) -> bool {
+    let role = attrs.effective_role();
+    role.is_text_input()
+        || role == SemanticsRole::Document
+        || (role == SemanticsRole::None && attrs.label.as_ref().is_some_and(|l| !l.is_empty()))
+}
+
+/// Whether a text declares runs it cannot publish for want of
 /// identities: the runs and the selection are withheld together.
 pub(crate) fn withholds_text(attrs: &SemanticsAttributes) -> bool {
     attrs
         .text
         .as_deref()
         .is_some_and(|content| content.run_identities().is_none())
-        && attrs.effective_role().is_text_input()
+        && supports_text_ranges(attrs)
 }
 
 /// The `TextRun` nodes of a field, in order. Runs of one visual line link to
@@ -1347,6 +1372,7 @@ pub(crate) mod coverage_matrix;
 mod tests {
 
     use super::*;
+    use crate::action::TextSelection;
     use crate::identity::AccessibilityNodeId;
     use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
@@ -1365,6 +1391,7 @@ mod tests {
             actions,
             rect: flui_foundation::geometry::Rect::ZERO,
             children: SmallVec::new(),
+            text_selection: None,
         })
     }
 
@@ -1438,10 +1465,10 @@ mod tests {
                 // A selection's run positions are read by the owner; any reading
                 // routes the action.
                 decode_request(&request, |_, _| {
-                    Some(TextSelection {
+                    Some(ActionCall::SetTextSelection(TextSelection {
                         anchor: 0,
                         focus: 0,
-                    })
+                    }))
                 })
                 .map(|request| request.action()),
                 Ok(action),

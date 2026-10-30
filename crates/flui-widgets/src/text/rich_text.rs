@@ -3,13 +3,15 @@
 use flui_objects::{RenderParagraph, TextLinkFocus};
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection, TextLink};
 use flui_rendering::protocol::BoxProtocol;
+use flui_rendering::semantics::SemanticsAnchor;
 use flui_view::element::ElementKind;
 use flui_view::{
-    BuildContext, EventCx, EventOutcome, IntoView, RenderView, StatelessView, View, ViewExt,
-    impl_render_view,
+    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, RenderView, StatelessView, View,
+    ViewExt, impl_render_view,
 };
 
 use super::linked_paragraph::{LinkRouting, LinkedParagraph};
+use super::selection_area::{SelectableParagraph, SelectionScope};
 use crate::MediaQuery;
 use crate::support::{RefCallback, ref_callback};
 
@@ -66,7 +68,7 @@ pub struct RichText {
     align: TextAlign,
     direction: TextDirection,
     max_lines: Option<u32>,
-    on_link: Option<RefCallback<TextLink>>,
+    pub(super) on_link: Option<RefCallback<TextLink>>,
 }
 
 impl std::fmt::Debug for RichText {
@@ -144,12 +146,25 @@ impl StatelessView for RichText {
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             links: None,
             link_focus: None,
+            selectable: None,
         };
-        match &self.on_link {
+        // Inside a selection area the text registers itself, which takes a
+        // mounted state of its own.
+        if let Some(registry) = SelectionScope::registry_of(ctx) {
+            return SelectableParagraph::new(paragraph, self.on_link.clone(), registry).boxed();
+        }
+        paragraph.linked(self.on_link.as_ref())
+    }
+}
+
+impl ResolvedParagraph {
+    /// This paragraph, with its links activated by `on_link` when set.
+    pub(super) fn linked(self, on_link: Option<&RefCallback<TextLink>>) -> BoxedView {
+        match on_link {
             // Links need recognizers built against the arena scope, which
             // only a mounted state can acquire.
-            Some(on_link) => LinkedParagraph::new(paragraph, on_link.clone()).boxed(),
-            None => paragraph.boxed(),
+            Some(on_link) => LinkedParagraph::new(self, on_link.clone()).boxed(),
+            None => self.boxed(),
         }
     }
 }
@@ -165,6 +180,9 @@ pub(super) struct ResolvedParagraph {
     pub(super) links: Option<LinkRouting>,
     /// The link holding the primary keyboard focus.
     pub(super) link_focus: Option<TextLinkFocus>,
+    /// The anchor a selection area registered the text under, while it is
+    /// selectable (ADR-0214).
+    pub(super) selectable: Option<SemanticsAnchor>,
 }
 
 impl RenderView for ResolvedParagraph {
@@ -180,6 +198,7 @@ impl RenderView for ResolvedParagraph {
                 .with_font_weight_adjustment(self.font_weight_adjustment)
                 .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
         let _ = paragraph.set_link_focus(self.link_focus);
+        let _ = paragraph.set_selectable(self.selectable.clone());
         paragraph.set_shown_links_listener(self.shown_links_listener());
         paragraph
     }
@@ -200,6 +219,7 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
             | render_object.set_link_routes(routes)
             | render_object.set_link_focus(self.link_focus)
+            | render_object.set_selectable(self.selectable.clone())
     }
 
     fn did_unmount_render_object(

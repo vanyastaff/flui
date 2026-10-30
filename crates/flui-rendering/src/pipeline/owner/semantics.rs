@@ -1055,22 +1055,24 @@ fn assembly_decisions(
     config: &SemanticsConfiguration,
     context: SemanticsAssemblyContext,
 ) -> NodeAssemblyDecisions {
-    let contributes =
-        context.is_root || config.is_semantics_boundary() || config.has_been_annotated();
+    let boundary = config.is_semantics_boundary() || config.is_merge_boundary();
+    let contributes = context.is_root || boundary || config.has_been_annotated();
     // A node that merges its own descendants is a unit a screen reader stops
     // on, even inside an outer merge: the outer one takes it as a child rather
-    // than absorbing it (ADR-0206, decision 4).
-    let nested_merger = context.merge_into_ancestor && config.is_merging_semantics_of_descendants();
+    // than absorbing it (ADR-0206, decision 4). A merge boundary stops the
+    // outer merge the same way but merges nothing itself (ADR-0214 §3).
+    let nested_merger = context.merge_into_ancestor
+        && (config.is_merging_semantics_of_descendants() || config.is_merge_boundary());
     let forms_node = nested_merger
         || (!context.merge_into_ancestor
             && (context.is_root
-                || config.is_semantics_boundary()
+                || boundary
                 || (contributes && context.parent_requires_explicit_node)));
     let children_require_explicit_node = context.is_root
         || config.explicit_child_nodes()
         || (!contributes && context.parent_requires_explicit_node);
-    let children_merge_into_ancestor =
-        context.merge_into_ancestor || config.is_merging_semantics_of_descendants();
+    let children_merge_into_ancestor = (context.merge_into_ancestor && !config.is_merge_boundary())
+        || config.is_merging_semantics_of_descendants();
 
     NodeAssemblyDecisions {
         contributes,
@@ -1166,7 +1168,7 @@ fn build_semantics_fragments_impl(
         blocks_user_actions,
         regions,
     );
-    if !node_excludes_semantics_subtree(node) {
+    if !node.excludes_semantics_subtree() {
         // The generation this node's last layout stamped onto the children it
         // laid out; anything else was not part of that pass.
         let parent_generation = node.layout_generation();
@@ -1380,8 +1382,13 @@ fn merge_child_fragments(
     for (index, fragment) in fragments.into_iter().enumerate() {
         match fragment {
             SemanticsFragment::Formed(node) => children.push(node),
+            // Runs are the synthetic children of the one node declaring them,
+            // so a merge never drops a second text's runs for the first's:
+            // that text keeps its node and its runs (ADR-0214 §2).
             SemanticsFragment::Pending(pending)
-                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index]) =>
+                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index])
+                    || (pending.config.text_content().is_some()
+                        && config.text_content().is_some()) =>
             {
                 children.push(pending.form());
             }
@@ -1607,7 +1614,7 @@ fn assembly_inputs_for(
         let mut config = describe_semantics_configuration(id, node, regions);
         blocks_user_actions = blocks_user_actions || config.blocks_user_actions();
         config.set_blocks_user_actions(blocks_user_actions);
-        if node_excludes_semantics_subtree(node) {
+        if node.excludes_semantics_subtree() {
             return None;
         }
         // The clip this node imposes on the chain's next link. The child's
@@ -1872,13 +1879,6 @@ fn apply_lazy_child_semantic_index(
     };
     if !item_declares_position(config, children) {
         stamp_position(host, config, index);
-    }
-}
-
-fn node_excludes_semantics_subtree(node: &RenderNode) -> bool {
-    match node {
-        RenderNode::Box(entry) => entry.render_object().excludes_semantics_subtree(),
-        RenderNode::Sliver(entry) => entry.render_object().excludes_semantics_subtree(),
     }
 }
 

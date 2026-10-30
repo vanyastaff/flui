@@ -11,7 +11,7 @@
 //! | `RenderErrorBox` | `harness_render_error_box_*` | yes | — | — | yes | — |
 //! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order, paint size, poison |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
-//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
+//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | semantics runs |
 //! | `RenderIcon` | `harness_icon_*` | yes | — | yes | yes | — |
 //! | `RenderEditable` | `harness_editable_*` | yes | yes | yes | yes | — |
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
@@ -1698,6 +1698,42 @@ fn harness_paragraph_paints_text_frame() {
     .run_frame();
 
     assert!(run.painted());
+}
+
+/// A selectable paragraph merges its descendants, declares its anchor and
+/// publishes its laid-out text as runs; the same paragraph not selectable
+/// publishes none (ADR-0214).
+fn harness_paragraph_publishes_runs_only_while_selectable() {
+    use flui_rendering::semantics::SemanticsAnchor;
+
+    let anchor = SemanticsAnchor::new();
+    for (selectable, expected_runs) in [(Some(anchor.clone()), 2_usize), (None, 0)] {
+        let mut paragraph = RenderParagraph::new(TextSpan::new("one\ntwo"), TextDirection::Ltr);
+        let _ = paragraph.set_selectable(selectable.clone());
+        let run = RenderTester::mount(box_node(paragraph))
+            .with_constraints(loose(200.0))
+            .with_semantics_enabled()
+            .run_to_semantics();
+        let owner = run.semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("one\ntwo"))
+            .expect("the paragraph is published");
+        let config = node.config();
+        assert_eq!(
+            config
+                .text_content()
+                .map_or(0, |content| content.runs().len()),
+            expected_runs,
+            "one run per line while selectable, none otherwise"
+        );
+        assert_eq!(
+            config.is_merging_semantics_of_descendants(),
+            selectable.is_some()
+        );
+        assert_eq!(config.anchors().contains(&anchor), selectable.is_some());
+    }
 }
 
 fn harness_icon_resolves_square_and_optional_glyph_together() {
@@ -12900,6 +12936,10 @@ fn family_text_and_image() {
             (
                 "paragraph_paints_text_frame",
                 harness_paragraph_paints_text_frame,
+            ),
+            (
+                "paragraph_publishes_runs_only_while_selectable",
+                harness_paragraph_publishes_runs_only_while_selectable,
             ),
             (
                 "icon_resolves_square_and_optional_glyph_together",
