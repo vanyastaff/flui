@@ -176,7 +176,7 @@ impl Feature {
 
 /// A closed outline of cubic Béziers: a polygon with rounded corners.
 ///
-/// Built by [`new`](Self::new) from vertices and one rounding, by
+/// Built by [`try_new`](Self::try_new) from vertices and one rounding, by
 /// [`with_roundings`](Self::with_roundings) with a rounding per vertex, or by the
 /// [`star`](Self::star), [`circle`](Self::circle) and [`rectangle`](Self::rectangle) factories.
 /// Every coordinate of the outline, and its extent, is finite. Draw it with
@@ -206,7 +206,7 @@ impl RoundedPolygon {
     /// # Errors
     ///
     /// [`ShapeError::RoundingCountMismatch`] unless there is one rounding per vertex, and the
-    /// errors of [`new`](Self::new).
+    /// errors of [`try_new`](Self::try_new).
     pub fn with_roundings(
         vertices: &[Point<f64>],
         roundings: &[CornerRounding],
@@ -227,7 +227,7 @@ impl RoundedPolygon {
     ///
     /// [`ShapeError::TooFewVertices`] for fewer than three points;
     /// [`ShapeError::InvalidRadius`] unless `0 < inner_radius < radius`, both finite; and the
-    /// errors of [`new`](Self::new).
+    /// errors of [`try_new`](Self::try_new).
     pub fn star(
         points: usize,
         radius: f64,
@@ -287,7 +287,7 @@ impl RoundedPolygon {
     /// # Errors
     ///
     /// [`ShapeError::ZeroArea`] for an empty rectangle, inverted ones included, and the errors
-    /// of [`new`](Self::new), such as [`ShapeError::NonFiniteVertex`] for a non-finite one.
+    /// of [`try_new`](Self::try_new), such as [`ShapeError::NonFiniteVertex`] for a non-finite one.
     pub fn rectangle(rect: Rect<f64>, rounding: CornerRounding) -> Result<Self, ShapeError> {
         let (left, top, right, bottom) = (rect.left(), rect.top(), rect.right(), rect.bottom());
         let finite = [left, top, right, bottom].iter().all(|v| v.is_finite());
