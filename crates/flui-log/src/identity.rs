@@ -102,6 +102,18 @@ const JAVA_RESERVED: &[&str] = &[
     "while",
 ];
 
+/// Whether `label` is a name Windows reserves for a device in every
+/// directory, in any case: the first label names the data directory, and
+/// Windows refuses `con.example` as a file name as it refuses `con`.
+fn is_windows_device(label: &str) -> bool {
+    let label = label.to_ascii_lowercase();
+    match label.as_bytes() {
+        b"con" | b"prn" | b"aux" | b"nul" => true,
+        [b'c', b'o', b'm', digit] | [b'l', b'p', b't', digit] => digit.is_ascii_digit(),
+        _ => false,
+    }
+}
+
 /// Reasons an [`AppIdentity`] or [`AppId`] cannot be built.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
@@ -147,7 +159,8 @@ pub enum IdentityError {
     },
 
     /// A label was a word Java reserves, which Android refuses in a package
-    /// name.
+    /// name, or the first label was a name Windows reserves for a device
+    /// (`con`, `aux`, `com1`, any case), which cannot name the data directory.
     #[error("application identifier `{identifier}` uses the reserved word `{label}` as a label")]
     ReservedLabel {
         /// The rejected identifier.
@@ -230,7 +243,7 @@ impl AppId {
                     position,
                 });
             }
-            if JAVA_RESERVED.contains(label) {
+            if JAVA_RESERVED.contains(label) || (position == 0 && is_windows_device(label)) {
                 let label = (*label).to_owned();
                 return Err(IdentityError::ReservedLabel { identifier, label });
             }

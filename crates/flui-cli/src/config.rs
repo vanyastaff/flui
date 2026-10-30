@@ -143,6 +143,10 @@ pub(crate) const APP_ID_ENV: &str = "FLUI_APP_ID";
 /// Where cargo reads the project's `[env]`, relative to the project root.
 pub(crate) const CARGO_CONFIG: &str = ".cargo/config.toml";
 
+/// The extensionless name cargo still reads first: when it exists, cargo
+/// ignores [`CARGO_CONFIG`].
+const LEGACY_CARGO_CONFIG: &str = ".cargo/config";
+
 /// `existing` (a `.cargo/config.toml`, or `None` when there is none) with
 /// `[env] FLUI_APP_ID` set to `app_id`; `None` when it already says so.
 ///
@@ -190,15 +194,23 @@ pub(crate) fn cargo_config_with_app_id(
     Ok(Some(document.to_string()))
 }
 
-/// Keep `<root>/.cargo/config.toml` naming `config`'s application identifier,
-/// so that every cargo invocation in the project, an editor's included, builds
-/// the application with it; written only when the value changed.
+/// Keep the project's cargo configuration naming `config`'s application
+/// identifier, so that every cargo invocation in the project, an editor's
+/// included, builds the application with it; written only when the value
+/// changed. The file is the one cargo reads: `.cargo/config` when it exists,
+/// since cargo then ignores `.cargo/config.toml`, otherwise
+/// `.cargo/config.toml`.
 ///
 /// # Errors
 ///
 /// The file cannot be read or written, or is not valid TOML.
 pub(crate) fn sync_app_id_env(root: &Path, config: &FluiConfig) -> CliResult<()> {
-    let path = root.join(CARGO_CONFIG);
+    let legacy = root.join(LEGACY_CARGO_CONFIG);
+    let path = if legacy.is_file() {
+        legacy
+    } else {
+        root.join(CARGO_CONFIG)
+    };
     let existing = match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -369,5 +381,37 @@ mod tests {
             FluiConfig::load_from(&path).is_err(),
             "a refused identifier"
         );
+    }
+
+    #[test]
+    fn the_identifier_goes_into_the_cargo_configuration_cargo_reads() {
+        for legacy in [false, true] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            std::fs::create_dir(dir.path().join(".cargo")).expect("create .cargo");
+            if legacy {
+                std::fs::write(
+                    dir.path().join(LEGACY_CARGO_CONFIG),
+                    "[term]\nverbose = true\n",
+                )
+                .expect("write .cargo/config");
+            }
+            sync_app_id_env(dir.path(), &sample()).expect("synced");
+            let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).ok();
+            let (written, untouched) = if legacy {
+                (LEGACY_CARGO_CONFIG, CARGO_CONFIG)
+            } else {
+                (CARGO_CONFIG, LEGACY_CARGO_CONFIG)
+            };
+            let text = read(written).expect("the file cargo reads is written");
+            assert!(
+                text.contains("FLUI_APP_ID = \"com.example.my_app\""),
+                "{written}: {text}"
+            );
+            assert_eq!(
+                read(untouched),
+                None,
+                "legacy {legacy}: {untouched} stays absent"
+            );
+        }
     }
 }

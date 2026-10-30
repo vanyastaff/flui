@@ -1622,4 +1622,25 @@ mod tests {
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
         reached.get()
     }
+
+    /// An identifier the application may declare always names a data
+    /// directory, so the run's default storage directory never refuses one.
+    #[test]
+    fn every_app_id_names_a_data_dir() {
+        let long = format!("com.{}", "a".repeat(251));
+        for id in [
+            "com.example.notes",
+            "com.aux.notes",
+            "con1.example",
+            "Lpt.example",
+            "comx.app",
+            long.as_str(),
+        ] {
+            let app_id = crate::AppId::try_new(id).expect("an accepted identifier");
+            assert!(
+                flui_platform::AppDataDir::try_new(app_id.as_str()).is_ok(),
+                "{id}"
+            );
+        }
+    }
 }

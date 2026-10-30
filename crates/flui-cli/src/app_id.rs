@@ -157,6 +157,17 @@ impl AppId {
     }
 }
 
+/// Whether `label` is a name Windows reserves for a device in every
+/// directory, in any case.
+fn is_windows_device(label: &str) -> bool {
+    let label = label.to_ascii_lowercase();
+    match label.as_bytes() {
+        b"con" | b"prn" | b"aux" | b"nul" => true,
+        [b'c', b'o', b'm', digit] | [b'l', b'p', b't', digit] => digit.is_ascii_digit(),
+        _ => false,
+    }
+}
+
 /// Why `id` is not an [`AppId`], if it is not.
 fn refusal(id: &str) -> Option<String> {
     if id.len() > MAX_LEN {
@@ -168,7 +179,7 @@ fn refusal(id: &str) -> Option<String> {
             "it needs at least two dot-separated labels, for example `com.example.app`".into(),
         );
     }
-    for label in labels {
+    for (position, label) in labels.into_iter().enumerate() {
         let Some(first) = label.chars().next() else {
             return Some("it has an empty label".into());
         };
@@ -183,6 +194,12 @@ fn refusal(id: &str) -> Option<String> {
         if !first.is_ascii_alphabetic() {
             return Some(format!(
                 "label `{label}` does not start with an ASCII letter"
+            ));
+        }
+        if position == 0 && is_windows_device(label) {
+            return Some(format!(
+                "label `{label}` is a name Windows reserves for a device, so it cannot name the \
+                 data directory"
             ));
         }
         if JAVA_RESERVED.contains(&label) {
@@ -237,6 +254,10 @@ mod tests {
             "com.example._notes",
             "com.example.new",
             "com.example.Ünïcode",
+            "con.example",
+            "Aux.notes",
+            "lpt1.notes",
+            "com.con.app",
         ];
         for id in cases {
             assert_eq!(

@@ -8,7 +8,7 @@ use flui_log::{AppId, AppIdentity, IdentityError, UNIDENTIFIED_APPLE_SUBSYSTEM};
 fn an_app_id_is_a_reverse_dns_name_every_platform_accepts() {
     let long = format!("com.{}", "a".repeat(251));
     let too_long = format!("com.{}", "a".repeat(252));
-    let cases: [(&str, Option<IdentityError>); 11] = [
+    let cases: [(&str, Option<IdentityError>); 14] = [
         ("com.example.notes", None),
         ("com.example.my_app", None),
         ("dev.Flui.App2", None),
@@ -53,6 +53,21 @@ fn an_app_id_is_a_reverse_dns_name_every_platform_accepts() {
             }),
         ),
         (&too_long, Some(IdentityError::TooLong(too_long.clone()))),
+        (
+            "Aux.notes",
+            Some(IdentityError::ReservedLabel {
+                identifier: "Aux.notes".to_owned(),
+                label: "Aux".to_owned(),
+            }),
+        ),
+        (
+            "com1.example",
+            Some(IdentityError::ReservedLabel {
+                identifier: "com1.example".to_owned(),
+                label: "com1".to_owned(),
+            }),
+        ),
+        ("com.aux.notes", None),
     ];
     for (identifier, refusal) in cases {
         match (AppId::try_new(identifier), refusal) {
