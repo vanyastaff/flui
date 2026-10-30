@@ -6,6 +6,7 @@ mod default_text_style;
 mod linked_paragraph;
 mod rich_text;
 mod selection_area;
+mod selection_style;
 mod text;
 
 pub mod controller;
@@ -19,5 +20,6 @@ pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{EditableText, EditableTextState, SubmitCallback};
 pub use rich_text::RichText;
 pub use selection_area::{SelectedText, SelectionArea, SelectionContainer};
+pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;
 pub use text_field::{RawTextField, RawTextFieldState};

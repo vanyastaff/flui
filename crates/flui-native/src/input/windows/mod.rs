@@ -1511,7 +1511,7 @@ mod raw {
             time,
         )
         .on(SURFACE)
-        .at(
+        .at_device(
             screen.0 + f64::from(client_offset.x),
             screen.1 + f64::from(client_offset.y),
             scale,
@@ -1929,7 +1929,7 @@ mod raw {
             ReadingTime::epoch(EventTime::from_nanos(time)),
         )
         .on(SURFACE)
-        .at(
+        .at_device(
             f64::from(get_x_lparam(lparam)),
             f64::from(get_y_lparam(lparam)),
             scale_factor,

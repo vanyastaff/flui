@@ -662,7 +662,6 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -985,7 +984,6 @@ fn prepared_runtime(
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

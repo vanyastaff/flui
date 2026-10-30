@@ -51,7 +51,7 @@ use flui_objects::{
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
-use flui_platform::{EventTime, InMemoryClipboard};
+use flui_platform::EventTime;
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::storage::IntrinsicDimension;
@@ -473,9 +473,9 @@ impl LaidOut {
             .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
 
-    /// The clipboard this tree's widgets reach through
-    /// `LifecycleContext::clipboard_handle`.
-    pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
+    /// The clipboard this tree's widgets acquire through
+    /// `cx.capability::<ClipboardCapability>()`.
+    pub fn clipboard(&self) -> crate::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 

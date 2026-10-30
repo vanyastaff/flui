@@ -6,11 +6,11 @@ use std::sync::{Arc, Weak};
 use android_activity::AndroidApp;
 
 use crate::accessibility::android::AndroidAccessibility;
-use crate::clipboard::android::MockClipboard;
 use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::Host;
+use crate::host::{MemoryClipboard, SharedClipboard};
 use crate::input::android::AndroidInput;
 use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
@@ -60,8 +60,8 @@ impl AndroidHost for Android {
 
     /// An in-process stand-in until the system clipboard is reached through
     /// JNI.
-    fn clipboard() -> Arc<dyn flui_platform::Clipboard> {
-        Arc::new(MockClipboard::new())
+    fn clipboard() -> Arc<dyn SharedClipboard> {
+        Arc::new(MemoryClipboard::new())
     }
 
     /// `FluiView`'s drag and drop.
