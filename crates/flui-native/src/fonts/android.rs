@@ -1,11 +1,12 @@
-//! Android's answer below API 29 (ADR-0271 §3): the system's own fallback
-//! order, read from `/system/etc/fonts.xml`.
+//! Android's answer (ADR-0271 §3): from API 29 the system's font matcher,
+//! `AFontMatcher`, per script; below it the system's own fallback order,
+//! read from `/system/etc/fonts.xml`.
 //!
 //! The file lists the fallback families in the order Android itself tries
 //! them, each tagged with the languages it serves. That format is frozen for
-//! API 23 to 28; from API 29 the platform warns against parsing it and
-//! `AFontMatcher` answers instead. The parse is pure, so its tests run on
-//! the Linux CI host over files recorded from AOSP.
+//! API 23 to 28; from API 29 the platform warns against parsing it, and the
+//! matcher answers instead. The parse is pure, so its tests run on the Linux
+//! CI host over files recorded from AOSP.
 
 use std::path::Path;
 
@@ -17,21 +18,31 @@ const FONTS_XML: &str = "/system/etc/fonts.xml";
 #[cfg(target_os = "android")]
 const FONTS_DIR: &str = "/system/fonts";
 
-/// The host's answer for `locale`: below API 29 the system's fallback
-/// order, or none where the file cannot be read or parsed (logged at
-/// debug). From API 29 none until `AFontMatcher` answers (`docs/gaps.md`,
-/// entry 35), and none where the level cannot be read.
+/// The host's answer for `locale`: the font matcher's from API 29, the
+/// system's fallback order below it, and none where the level cannot be
+/// read or the file cannot be read or parsed (logged at debug).
 #[cfg(target_os = "android")]
 pub(crate) fn system_fallback(locale: &str) -> SystemFallback {
-    use crate::owner::android::ndk::LoadedLibraries;
-    use crate::version::gate::android::{AndroidApi, FontMatcher};
+    use std::sync::Arc;
 
-    let api = AndroidApi::detect(&LoadedLibraries::open());
-    if api.is_none_or(|api| api.since::<FontMatcher>().is_some()) {
+    use crate::owner::android::ndk::{FontMatching, LoadedLibraries, SymbolSource};
+    use crate::version::gate::android::AndroidApi;
+
+    let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
+    let Some(api) = AndroidApi::detect(library.as_ref()) else {
         tracing::debug!(
-            ?api,
-            "no fonts.xml from API 29; the fallback order is FLUI's tables alone"
+            "the API level could not be read; the fallback order is FLUI's tables alone"
         );
+        return SystemFallback::none(locale);
+    };
+    if let Some(matching) = FontMatching::resolve(&library, api) {
+        return matcher::ask(&matching, locale);
+    }
+    if api
+        .since::<crate::owner::android::ndk::FontMatcherMatch>()
+        .is_some()
+    {
+        tracing::debug!(%api, "the font matcher is missing a function; FLUI's tables alone");
         return SystemFallback::none(locale);
     }
     match std::fs::read_to_string(FONTS_XML) {
@@ -39,6 +50,99 @@ pub(crate) fn system_fallback(locale: &str) -> SystemFallback {
         Err(error) => {
             tracing::debug!(%error, "no {FONTS_XML}; the fallback order is FLUI's tables alone");
             SystemFallback::none(locale)
+        }
+    }
+}
+
+/// The font matcher's answer, from API 29.
+#[cfg(target_os = "android")]
+mod matcher {
+    // This module calls the NDK directly, which has no safe wrapper: the
+    // workspace lint `unsafe_code = "warn"` is opted out here, at the module
+    // boundary, rather than for the whole crate (see `lib.rs`).
+    #![expect(unsafe_code)]
+
+    use std::ffi::{CStr, CString};
+    use std::path::PathBuf;
+
+    use flui_painting::{FaceRef, SystemFallback};
+
+    use crate::owner::android::ndk::FontMatching;
+
+    /// The face the matcher picks for each script's sample, and for an
+    /// emoji, in `locale`. The matcher keeps no common list.
+    pub(super) fn ask(matching: &FontMatching, locale: &str) -> SystemFallback {
+        // SAFETY: `AFontMatcher_create` takes nothing and returns a matcher
+        // the caller destroys, which `Matcher`'s `Drop` does once.
+        let Some(raw) = std::ptr::NonNull::new(unsafe { (matching.create.get())() }) else {
+            return SystemFallback::none(locale);
+        };
+        let matcher = Matcher { matching, raw };
+        let tags = CString::new(locale).unwrap_or_else(|_| c"und".to_owned());
+        // SAFETY: a live matcher and a NUL-terminated tag list, which the
+        // matcher copies.
+        unsafe { (matching.set_locales.get())(raw.as_ptr(), tags.as_ptr()) };
+
+        let mut answer = SystemFallback::none(locale);
+        for (script, sample) in SystemFallback::queries() {
+            if let Some(face) = matcher.face_for(sample) {
+                answer = answer.with_script(script, vec![face]);
+            }
+        }
+        let emoji = matcher.face_for(SystemFallback::EMOJI_SAMPLE);
+        answer.with_emoji(emoji.into_iter().collect::<Vec<FaceRef>>())
+    }
+
+    /// A matcher, destroyed when dropped.
+    struct Matcher<'a> {
+        matching: &'a FontMatching,
+        raw: std::ptr::NonNull<crate::owner::android::ndk::AFontMatcher>,
+    }
+
+    impl Matcher<'_> {
+        /// The file and collection index of the face the matcher picks for
+        /// the start of `sample` in sans-serif.
+        fn face_for(&self, sample: &str) -> Option<FaceRef> {
+            let text: Vec<u16> = sample.encode_utf16().collect();
+            let length = u32::try_from(text.len()).ok()?;
+            let mut run = 0;
+            // SAFETY: a live matcher, a NUL-terminated family, `length` UTF-16
+            // units at `text`, and a live out-pointer; the matcher returns a
+            // font the caller closes, which is done below.
+            let font = unsafe {
+                (self.matching.matches.get())(
+                    self.raw.as_ptr(),
+                    c"sans-serif".as_ptr(),
+                    text.as_ptr(),
+                    length,
+                    &raw mut run,
+                )
+            };
+            let font = std::ptr::NonNull::new(font)?;
+            // SAFETY: a live font; the path is a NUL-terminated string the
+            // font owns, copied before the font is closed.
+            let path = unsafe {
+                let path = (self.matching.file_path.get())(font.as_ptr());
+                (!path.is_null())
+                    .then(|| PathBuf::from(CStr::from_ptr(path).to_string_lossy().into_owned()))
+            };
+            // SAFETY: a live font.
+            let index = unsafe { (self.matching.collection_index.get())(font.as_ptr()) };
+            // SAFETY: the font was returned by `AFontMatcher_match` and is
+            // closed once, here, after its last use.
+            unsafe { (self.matching.close.get())(font.as_ptr()) };
+            Some(FaceRef::File {
+                path: path?,
+                index: u32::try_from(index).ok()?,
+            })
+        }
+    }
+
+    impl Drop for Matcher<'_> {
+        fn drop(&mut self) {
+            // SAFETY: the matcher was created by `AFontMatcher_create` and is
+            // destroyed once, here.
+            unsafe { (self.matching.destroy.get())(self.raw.as_ptr()) };
         }
     }
 }

@@ -1,6 +1,6 @@
 # ADR-0271: The host font feed asks the platform which faces fall back, and FLUI's tables follow
 
-- **Status:** Accepted (2026-10-30). Not implemented: the answer of Android from API 29 (§3), and the locale-change trigger (§4).
+- **Status:** Accepted (2026-10-30). Not implemented: the locale-change trigger (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §7 only for its clause that
   FLUI's tables are the whole fallback order: the platform's answer now comes first, and the

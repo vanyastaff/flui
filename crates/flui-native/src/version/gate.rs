@@ -479,17 +479,6 @@ pub(crate) mod android {
         const SINCE: u64 = 31;
     }
 
-    /// `AFontMatcher` (API 29), the supported way to ask which system face draws a text. Below it
-    /// the fallback order is read from `fonts.xml`, whose format is frozen there; from it the file
-    /// is not to be parsed (ADR-0271 §3).
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct FontMatcher;
-
-    impl Gate for FontMatcher {
-        type Version = AndroidApi;
-        const SINCE: u64 = 29;
-    }
-
     /// `ViewConfiguration.getScaledHorizontalScrollFactor` and its vertical twin (API 26). Without
     /// them the scroll factor is read from the theme's `listPreferredItemHeight`.
     #[derive(Debug, Clone, Copy)]
@@ -707,10 +696,9 @@ pub(crate) mod testing {
 mod tests {
     use super::android::{
         AndroidApi, BackgroundBlur, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects,
-        FontMatcher, GestureExclusion, HapticComposition, InMemoryDex, InsetsByType,
-        InsetsController, LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor,
-        SegmentFeedback, StylusHandwriting, SystemContrast, TextWeight, TouchpadGestures,
-        VibrationTouchUsage,
+        GestureExclusion, HapticComposition, InMemoryDex, InsetsByType, InsetsController,
+        LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
+        StylusHandwriting, SystemContrast, TextWeight, TouchpadGestures, VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -761,7 +749,6 @@ mod tests {
             unknown,
         ));
         failures.extend(row::<DragSource>("DragSource", api(23), api(24), unknown));
-        failures.extend(row::<FontMatcher>("FontMatcher", api(28), api(29), unknown));
         failures.extend(row::<InMemoryDex>("InMemoryDex", api(25), api(26), unknown));
         failures.extend(row::<PointerIcons>(
             "PointerIcons",

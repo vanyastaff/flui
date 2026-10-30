@@ -424,7 +424,8 @@ trait depends on `flui-platform` instead.
   `SystemFallback::none`, never a panic. `fonts::linux` opens fontconfig with
   `dlopen` for the query and closes it after; `fonts::android` reads
   `fonts.xml` below API 29 (its parse runs on every host over AOSP's recorded
-  files) and gives none from API 29 until `AFontMatcher` answers.
+  files) and asks `AFontMatcher` from API 29, looked up like the other NDK
+  functions (`owner::android::ndk::FontMatching`, all seven or none).
   `fonts::windows` hands DirectWrite the sample through an
   `IDWriteTextAnalysisSource` of its own, whose methods cross `os_entry`;
   `fonts::apple` looks `CTFontCreateForStringWithLanguage` up at run time,
