@@ -437,14 +437,11 @@ fn listener_panic_reaches_the_realm_report() {
     let effects = Effects { notifier };
     let dispatcher = owner.frame_dispatcher(address).expect("dispatcher");
 
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        dispatcher
-            .deliver(crate::VSYNC, &effects)
-            .expect("frame admitted");
-    }))
-    .expect_err("the listener's panic leaves the owner turn");
+    // ADR-0258 §1: the owner turn contains the panic instead of unwinding.
+    dispatcher
+        .deliver(crate::VSYNC, &effects)
+        .expect("frame admitted");
 
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"listener failed"));
     assert_eq!(later.get(), 1, "the round finished: the next listener ran");
     assert_eq!(
         *reports.lock().expect("reports"),
