@@ -240,7 +240,7 @@ impl Curve for PiecewiseLinear {
 impl TryFrom<Vec<LinearStop>> for PiecewiseLinear {
     type Error = PiecewiseLinearError;
     fn try_from(stops: Vec<LinearStop>) -> Result<Self, Self::Error> {
-        Self::new(&stops)
+        Self::try_new(&stops)
     }
 }
 
