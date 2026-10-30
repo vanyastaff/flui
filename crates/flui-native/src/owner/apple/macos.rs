@@ -493,6 +493,12 @@ impl LifecycleHooks for MacOSLoop {
     fn release_session_end(&self) {
         self.loop_control.session_end_released();
     }
+
+    /// `applicationShouldTerminate:` answered `NSTerminateLater` holds the
+    /// session until the reply.
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::Hold
+    }
 }
 
 impl Drop for MacOSLoop {

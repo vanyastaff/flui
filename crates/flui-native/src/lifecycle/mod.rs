@@ -46,6 +46,10 @@ impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
         owner.release_session_end();
     }
 
+    fn session_end_support(owner: &L) -> flui_platform::SessionEndSupport {
+        owner.session_end_support()
+    }
+
     fn activate(_: &L, _: bool) {
         // None of these hosts brings the application forward on request:
         // AppKit's is activated once, as its loop starts; UIKit and Android

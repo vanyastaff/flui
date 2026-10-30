@@ -58,6 +58,9 @@ pub(crate) trait LifecycleHooks {
     /// A loop whose host cannot be asked to wait holds no end open, and this
     /// does nothing.
     fn release_session_end(&self);
+
+    /// What the loop's host does for the application when the session ends.
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport;
 }
 
 /// The notice channel the loops' tests give a loop that hears nothing.

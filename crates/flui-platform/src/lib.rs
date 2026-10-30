@@ -160,7 +160,7 @@ pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
-    SessionEndPhase, SessionEndRequest, SystemNotice,
+    SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
 };
 pub use ime::ImeEvent;
 pub use input::{

@@ -385,6 +385,9 @@ pub trait Lifecycle<O> {
     /// [`Platform::release_session_end`].
     fn release_session_end(owner: &O);
 
+    /// [`Platform::session_end_support`].
+    fn session_end_support(owner: &O) -> flui_platform::SessionEndSupport;
+
     /// [`Platform::activate`].
     fn activate(owner: &O, ignoring_other_apps: bool);
 }
@@ -607,6 +610,10 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
 
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
     fn release_session_end(_: &O) {}
+
+    fn session_end_support(_: &O) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::NotifyOnly
+    }
 
     fn activate(_: &O, _: bool) {}
 }

@@ -726,6 +726,10 @@ impl host::Lifecycle<WebLoop> for WebLoop {
         // read and no session end is held open.
     }
 
+    fn session_end_support(_: &WebLoop) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::NotifyOnly
+    }
+
     fn activate(_: &WebLoop, _: bool) {
         // A page cannot bring its tab to the front.
     }

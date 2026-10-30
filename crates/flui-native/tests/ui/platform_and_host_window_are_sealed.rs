@@ -103,6 +103,10 @@ impl Platform for OutsidePlatform {
 
     fn release_session_end(&self) {}
 
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::NotifyOnly
+    }
+
     fn window_capabilities(&self) -> WindowCapabilities {
         WindowCapabilities::NONE
     }

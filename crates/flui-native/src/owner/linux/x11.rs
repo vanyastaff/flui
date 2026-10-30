@@ -834,6 +834,10 @@ impl SessionLoop for X11Loop {
 /// asked to wait for the user, so no session end is held open.
 impl LifecycleHooks for X11Loop {
     fn release_session_end(&self) {}
+
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        crate::lifecycle::linux::SESSION_END_SUPPORT
+    }
 }
 
 /// The displays position is the loop's: the source the table made.

@@ -529,17 +529,29 @@ impl CloseRequestRouter {
     }
 
     /// Every registered presentation, in registration order.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
     pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
         self.entries
             .lock()
             .iter()
             .map(|entry| entry.address)
             .collect()
+    }
+
+    /// Withdraw the close recorded for `reason` on the guard of the
+    /// presentation at `address`, if one is: the platform cancelled it, as a
+    /// cancelled log-off does. Closes recorded for other reasons stay.
+    pub(crate) fn withdraw(&self, address: PresentationAddress, reason: CloseReason) {
+        // Cloned out from under the lock: the withdrawal signals the owner.
+        let guard = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|entry| entry.address == address)
+                .and_then(|entry| entry.guard.clone())
+        };
+        if let Some(guard) = guard {
+            guard.withdraw(reason);
+        }
     }
 
     #[cfg(any(

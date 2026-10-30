@@ -12,6 +12,10 @@ impl LifecycleHooks for WinitLoop {
     fn release_session_end(&self) {
         // Linux cannot hold a shutdown for the user, so no block is ever held.
     }
+
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        crate::lifecycle::linux::SESSION_END_SUPPORT
+    }
 }
 
 impl WinitLoop {

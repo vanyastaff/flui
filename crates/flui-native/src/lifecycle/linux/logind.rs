@@ -44,7 +44,7 @@ const RETRY: Duration = Duration::from_secs(10);
 /// How long to hold the machine for the owner. logind's own limit is
 /// `InhibitDelayMaxSec`, 5 s unless configured; this stays inside it.
 #[cfg(linux_host)]
-const DELIVERY_BUDGET: Duration = Duration::from_secs(4);
+pub(super) const DELIVERY_BUDGET: Duration = Duration::from_secs(4);
 
 /// Listen to logind until the task is aborted, reconnecting when the bus goes.
 #[cfg(linux_host)]

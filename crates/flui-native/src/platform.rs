@@ -389,6 +389,11 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// nothing to undo.
     fn release_session_end(&self);
 
+    /// What this platform does for the application when the user's session
+    /// ends: whether it holds the session for a [`SessionEndAnswer::Block`],
+    /// waits a bounded time, or only tells.
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport;
+
     /// Which window commands and observations this platform's windows have,
     /// known before any window exists.
     ///
@@ -682,6 +687,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn release_session_end(&self) {
         H::Lifecycle::release_session_end(&self.owner);
+    }
+
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        H::Lifecycle::session_end_support(&self.owner)
     }
 
     fn window_capabilities(&self) -> WindowCapabilities {

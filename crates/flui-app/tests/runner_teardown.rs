@@ -97,7 +97,8 @@ pub(crate) fn joining_a_running_loop_tears_it_down() {
 }
 
 /// A session end the application has no reason to hold up proceeds, and
-/// the loop is torn down after it as after any other end.
+/// the loop is asked to quit (ADR-0260 §6) and torn down as after any other
+/// end.
 pub(crate) fn a_session_end_with_nothing_to_save_proceeds() {
     let handle = Rc::new(RefCell::new(None));
     let run = HeadlessRun::start(one_window_app(Rc::clone(&handle)));
@@ -106,6 +107,8 @@ pub(crate) fn a_session_end_with_nothing_to_save_proceeds() {
         SessionEndAnswer::Proceed
     );
     run.end_session(SessionEndPhase::Ending);
+    run.run_owner_turn();
+    assert!(!run.is_running(), "the session's end quit the loop");
 
     let report = run.join().expect("teardown after a session end returns Ok");
     assert_eq!(report.teardown, TEARDOWN_ORDER);
@@ -179,6 +182,18 @@ fn runner_teardown() {
             (
                 "closing_during_composition_commits_before_detached",
                 closing_during_composition_commits_before_detached,
+            ),
+            (
+                "a_session_end_query_asks_each_window_guard",
+                a_session_end_query_asks_each_window_guard,
+            ),
+            (
+                "a_cancelled_logoff_withdraws_only_the_session_entry",
+                a_cancelled_logoff_withdraws_only_the_session_entry,
+            ),
+            (
+                "a_session_end_with_a_checked_out_runtime_calls_no_user_code",
+                a_session_end_with_a_checked_out_runtime_calls_no_user_code,
             ),
         ],
     );
@@ -430,4 +445,215 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
         "Detached saw the composition committed, its text kept"
     );
     run.join().expect("the close returns Ok");
+}
+
+/// Which hold a [`GuardedView`] takes on its window's close.
+#[derive(Clone, Copy, Debug)]
+enum HoldOn {
+    Nothing,
+    /// [`flui_view::CloseGuard::hold`]: work that finishes by itself.
+    Work,
+    /// [`flui_view::CloseGuard::require_decision`]: a state only the user
+    /// resolves.
+    Decision,
+}
+
+/// What a [`GuardedView`] shares with its test.
+#[derive(Default)]
+struct Guarded {
+    guard: Option<flui_view::CloseGuard>,
+    hold: Option<flui_view::CloseHold>,
+    rebuild: Option<flui_view::RebuildHandle>,
+    /// Run once from the next `build`, while the window's UI runtime is
+    /// checked out to its frame.
+    during_build: Option<Box<dyn FnOnce()>>,
+}
+
+/// A window root that takes its close guard and the hold `hold_on` names.
+#[derive(Clone)]
+struct GuardedView {
+    hold_on: HoldOn,
+    shared: Rc<RefCell<Guarded>>,
+}
+
+struct GuardedViewState(GuardedView);
+
+impl flui_view::StatefulView for GuardedView {
+    type State = GuardedViewState;
+
+    fn create_state(&self) -> Self::State {
+        GuardedViewState(self.clone())
+    }
+}
+
+impl flui_view::ViewState<GuardedView> for GuardedViewState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let guard = ctx
+            .close_guard()
+            .expect("a runner window has a close guard");
+        let hold = match self.0.hold_on {
+            HoldOn::Nothing => None,
+            HoldOn::Work => Some(guard.hold()),
+            HoldOn::Decision => Some(guard.require_decision()),
+        };
+        let mut shared = self.0.shared.borrow_mut();
+        shared.guard = Some(guard);
+        shared.hold = hold;
+        shared.rebuild = Some(ctx.rebuild_handle());
+    }
+
+    fn build(
+        &self,
+        _view: &GuardedView,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let during = self.0.shared.borrow_mut().during_build.take();
+        if let Some(during) = during {
+            during();
+        }
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for GuardedView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A run whose main window is a [`GuardedView`] holding `hold_on`, mounted,
+/// with the platform's session-end reports.
+fn guarded_run(
+    hold_on: HoldOn,
+) -> (
+    flui_app::testing::HeadlessRunHandle,
+    flui_native::HeadlessHostEvents,
+    Rc<RefCell<Guarded>>,
+) {
+    let shared = Rc::new(RefCell::new(Guarded::default()));
+    let view = GuardedView {
+        hold_on,
+        shared: Rc::clone(&shared),
+    };
+    let application = Application::new(move |_| view.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let platform = flui_native::HeadlessPlatform::new();
+    let events = platform.host_events();
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    assert!(shared.borrow().guard.is_some(), "the window is mounted");
+    (run, events, shared)
+}
+
+/// The reason of the close the window's guard has recorded first, if any.
+fn pending_reason(shared: &RefCell<Guarded>) -> Option<flui_view::CloseReason> {
+    shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .map(|pending| pending.reason())
+}
+
+/// A session-end query asks every window's guard with
+/// `CloseReason::SessionEnd` (ADR-0260 §1): a hold for work that finishes by
+/// itself lets the session end, since the flush writes what it protects; a
+/// hold that waits for the user's decision blocks it and records the close.
+///
+/// Red-check: answer the query from the notice alone — the decision hold's
+/// row proceeds and records nothing.
+pub(crate) fn a_session_end_query_asks_each_window_guard() {
+    for (hold_on, answer, recorded) in [
+        (HoldOn::Nothing, SessionEndAnswer::Proceed, None),
+        (HoldOn::Work, SessionEndAnswer::Proceed, None),
+        (
+            HoldOn::Decision,
+            SessionEndAnswer::Block,
+            Some(flui_view::CloseReason::SessionEnd),
+        ),
+    ] {
+        let (run, _events, shared) = guarded_run(hold_on);
+        assert_eq!(
+            run.end_session(SessionEndPhase::Query),
+            answer,
+            "{hold_on:?}"
+        );
+        assert_eq!(pending_reason(&shared), recorded, "{hold_on:?}");
+        run.end_session(SessionEndPhase::Cancelled);
+        let hold = shared.borrow_mut().hold.take();
+        drop(hold);
+        run.join().expect("the run returns Ok");
+    }
+}
+
+/// A cancelled log-off withdraws the session-end close the query recorded,
+/// and nothing else: a close the user asked for earlier stays pending
+/// (ADR-0260 §2).
+pub(crate) fn a_cancelled_logoff_withdraws_only_the_session_entry() {
+    let (run, _events, shared) = guarded_run(HoldOn::Decision);
+    let windows = run.open_windows();
+    assert!(!windows[0].simulate_close(), "the decision hold keeps it");
+    run.run_owner_turn();
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.run_owner_turn();
+
+    let pending = shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .expect("the user's close stays pending");
+    assert_eq!(pending.reason(), flui_view::CloseReason::User);
+    pending.stay_open().expect("the user's close is current");
+    assert_eq!(
+        pending_reason(&shared),
+        None,
+        "the session end's close was withdrawn"
+    );
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A session end that arrives while a window's UI runtime is checked out (a
+/// nested native loop inside its frame) asks none of its code: the runtime
+/// counts as letting the session end, and its guard records nothing
+/// (ADR-0260 §1). Asked again once the frame is over, the same hold blocks.
+///
+/// Red-check: ask a checked-out runtime as well — the query from inside the
+/// frame blocks and records the session end.
+pub(crate) fn a_session_end_with_a_checked_out_runtime_calls_no_user_code() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    let inside = Rc::new(RefCell::new(None));
+    let answered = Rc::clone(&inside);
+    let state = Rc::clone(&shared);
+    shared.borrow_mut().during_build = Some(Box::new(move || {
+        let answer = events.session_end(SessionEndPhase::Query);
+        answered.replace(Some((answer, pending_reason(&state))));
+    }));
+    let rebuild = shared.borrow().rebuild.clone().expect("mounted");
+    rebuild.schedule(flui_view::RebuildReason::StateChange);
+    run.run_owner_turn();
+    assert_eq!(
+        inside.take(),
+        Some((SessionEndAnswer::Proceed, None)),
+        "the checked-out runtime was not asked"
+    );
+
+    run.end_session(SessionEndPhase::Cancelled);
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "back in its slot, the runtime is asked"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
 }

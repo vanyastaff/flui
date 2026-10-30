@@ -1937,6 +1937,10 @@ mod event_loop {
     /// application held has nothing to release.
     impl LifecycleHooks for WaylandLoop {
         fn release_session_end(&self) {}
+
+        fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+            crate::lifecycle::linux::SESSION_END_SUPPORT
+        }
     }
 
     #[cfg(test)]

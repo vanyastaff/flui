@@ -40,6 +40,12 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
         owner.with_state(|state| state.session_end_releases += 1);
     }
 
+    /// The headless platform stands in for a desktop that waits for a block:
+    /// a test reads the answer and releases it as Windows does.
+    fn session_end_support(_: &HeadlessLoop) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::Hold
+    }
+
     fn activate(_: &HeadlessLoop, _: bool) {
         // Nothing is shown, so nothing comes to the front.
     }

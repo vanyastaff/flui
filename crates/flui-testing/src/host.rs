@@ -617,7 +617,7 @@ impl std::fmt::Debug for HeadlessDevAgent {
 }
 /// How long [`HeadlessHost::end_session`]'s `Ending` phase writes what the
 /// documents published (ADR-0260).
-pub const SESSION_END_BUDGET: Duration = Duration::from_secs(3);
+pub use flui_view::__runtime::SESSION_END_BUDGET;
 
 /// A [`UiRuntime`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
