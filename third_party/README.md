@@ -1,10 +1,13 @@
 # Vendored crates
 
-A crate here is a published crate with a change FLUI needs before upstream has it. Each one is
-built through `[patch.crates-io]` in the root `Cargo.toml`, is excluded from the workspace (its own
-lints, not FLUI's), and keeps its sources as published except for the change its `.patch` file
-holds. To drop one: delete its directory, its `.patch` file and its `[patch.crates-io]` entry,
-bump the dependency to the upstream release that has the change, and run `cargo update -p <crate>`.
+A crate here is a published crate with a change FLUI needs before upstream has it. Its dependent
+names it by `path` beside the published `version`, never through a root `[patch.crates-io]`: a
+patch binds only this workspace, so an app that depends on FLUI by path or git would build the
+published crate without the change. A vendored crate is excluded from the workspace (its own
+lints, not FLUI's) and keeps its sources as published except for the change its `.patch` file
+holds. To drop one: delete its directory and its `.patch` file, remove the `path` key from the
+dependency, bump the `version` to the upstream release that has the change, and run
+`cargo update -p <crate>`.
 
 ## accesskit_ios 0.2.2
 
