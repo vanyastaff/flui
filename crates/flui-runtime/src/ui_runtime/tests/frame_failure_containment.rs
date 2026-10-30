@@ -39,6 +39,9 @@ enum SeenKind {
     RecoveredPanic {
         hook: flui_view::LifecycleHook,
     },
+    DeviceLost {
+        recovery: crate::frame_failure::DeviceRecovery,
+    },
     CallbackPanic {
         message: PanicText,
         internal_invariant: bool,
@@ -84,6 +87,9 @@ fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<StdMutex<Vec<SeenFa
             } => SeenKind::CallbackPanic {
                 message: message.clone(),
                 internal_invariant: *internal_invariant,
+            },
+            FrameFailureKind::DeviceLost { recovery } => SeenKind::DeviceLost {
+                recovery: *recovery,
             },
         };
         sink.lock().expect("handler mutex").push(SeenFailure {
@@ -398,6 +404,7 @@ pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not
             FrameFailureKind::Pipeline { .. } => "pipeline",
             FrameFailureKind::RecoveredPanic { .. } => "recovered_panic",
             FrameFailureKind::CallbackPanic { .. } => "callback_panic",
+            FrameFailureKind::DeviceLost { .. } => "device_lost",
         });
         panic!("FrameFailureHandler — intentional embedder-bug test panic");
     })));

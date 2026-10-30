@@ -65,7 +65,8 @@ pub enum SubmitVerdict {
     /// and retains the frame's input epochs.
     SurfaceStale,
     /// The GPU device was lost. Recovery is the runner's job; the caller
-    /// arms a retry and retains the frame's input epochs.
+    /// retries the frame after the dropped-frame backoff and retains its input
+    /// epochs (ADR-0266).
     DeviceLost,
     /// The frame failed in a way no retry can fix this frame (a generic
     /// render error, or a refused submit). No retry is armed.

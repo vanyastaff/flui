@@ -398,6 +398,15 @@ pub enum FrameFailureKind {
         /// Classification computed from the raw payload at the recovery seam.
         internal_invariant: bool,
     },
+    /// The presentation's frame reached the raster backend and could not be
+    /// shown because the GPU device is lost. The frame is retried after the
+    /// same backoff as any dropped frame, while the renderer's owner rebuilds
+    /// the device on its own schedule; `recovery` says how far that rebuild is.
+    #[non_exhaustive]
+    DeviceLost {
+        /// Where the device rebuild stands when this frame was dropped.
+        recovery: DeviceRecovery,
+    },
     /// An application callback run on the UI runtime's owner turn panicked
     /// outside any frame: an input or gesture handler, a post-frame
     /// callback, a lifecycle observer, a command. The panic was contained at
@@ -412,6 +421,43 @@ pub enum FrameFailureKind {
         /// `docs/PANIC-POLICY.md`'s invariant convention.
         internal_invariant: bool,
     },
+}
+
+/// How far the rebuild of a lost GPU device stands, as a
+/// [`FrameFailureKind::DeviceLost`] report carries it (ADR-0266).
+///
+/// The renderer's owner rebuilds the device on a backoff that grows to about
+/// a second, and gives up after a bounded run of failed rebuilds at that
+/// ceiling. A presentation whose rebuild was given up attempts no more frames
+/// until the application asks for a rebuild again
+/// (`flui_app::AppHandle::retry_render_device`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum DeviceRecovery {
+    /// No rebuild has failed yet: the device was just lost, or its rebuild
+    /// waits for its first attempt.
+    #[default]
+    Pending,
+    /// The last `attempts` rebuilds failed in a row; another one is scheduled.
+    Failed {
+        /// Consecutive failed rebuilds.
+        attempts: u32,
+    },
+    /// The rebuild was given up after `attempts` consecutive failures: the
+    /// presentation attempts no frames until the application asks for a new
+    /// rebuild. Reported once, when the rebuild is given up.
+    Abandoned {
+        /// Consecutive failed rebuilds when the rebuild was given up.
+        attempts: u32,
+    },
+}
+
+impl DeviceRecovery {
+    /// Whether the rebuild was given up.
+    #[must_use]
+    pub fn is_abandoned(self) -> bool {
+        matches!(self, Self::Abandoned { .. })
+    }
 }
 
 impl FrameFailureKind {
@@ -429,7 +475,9 @@ impl FrameFailureKind {
                     FailureDisposition::Contained
                 }
             }
-            Self::SegmentPanic { .. } | Self::Pipeline { .. } => FailureDisposition::FrameDropped,
+            Self::SegmentPanic { .. } | Self::Pipeline { .. } | Self::DeviceLost { .. } => {
+                FailureDisposition::FrameDropped
+            }
             Self::RecoveredPanic { .. } | Self::CallbackPanic { .. } => {
                 FailureDisposition::Contained
             }

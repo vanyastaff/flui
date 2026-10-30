@@ -95,6 +95,8 @@ mod error_view;
 
 #[path = "contracts/announce.rs"]
 mod announce;
+#[path = "contracts/device_loss.rs"]
+mod device_loss;
 #[path = "contracts/display_timing.rs"]
 mod display_timing;
 #[path = "contracts/frame_rate_demand.rs"]
