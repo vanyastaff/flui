@@ -843,15 +843,24 @@ impl FocusState {
             return;
         }
         self.did_autofocus = true;
-        let scope = self
-            .parent
-            .as_ref()
-            .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
-            .unwrap_or_else(|| Rc::clone(self.manager().root_scope()));
-        let provisional = scope.take_provisional_first_focus();
-        if provisional || scope.focused_child().is_none() {
-            let _ = self.node.request_focus();
-        }
+        request_autofocus(self.parent.as_ref(), self.manager(), &self.node);
+    }
+}
+
+/// The one-shot autofocus request of a control whose node hangs under
+/// `parent`: it lands when the enclosing scope has nothing focused yet, or
+/// holds only the route's provisional first focus, which it replaces.
+pub(crate) fn request_autofocus(
+    parent: Option<&Rc<FocusNode>>,
+    manager: &FocusManager,
+    node: &Rc<FocusNode>,
+) {
+    let scope = parent
+        .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
+        .unwrap_or_else(|| Rc::clone(manager.root_scope()));
+    let provisional = scope.take_provisional_first_focus();
+    if provisional || scope.focused_child().is_none() {
+        let _ = node.request_focus();
     }
 }
 

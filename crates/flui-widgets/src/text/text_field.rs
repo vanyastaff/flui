@@ -81,6 +81,8 @@ pub struct RawTextField {
     input_purpose: TextInputPurpose,
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
+    /// Forwarded to [`EditableText::autofocus`].
+    autofocus: bool,
     /// Forwarded to [`EditableText::invalid`].
     invalid: bool,
     /// Forwarded to [`EditableText::identifier`].
@@ -106,6 +108,7 @@ impl std::fmt::Debug for RawTextField {
             .field("obscure_text", &self.obscure_text)
             .field("input_purpose", &self.input_purpose)
             .field("enabled", &self.enabled)
+            .field("autofocus", &self.autofocus)
             .field("invalid", &self.invalid)
             .field("identifier", &self.identifier)
             .field("on_changed", &self.on_changed.is_some())
@@ -127,6 +130,7 @@ impl RawTextField {
             obscure_text: false,
             input_purpose: TextInputPurpose::Text,
             enabled: true,
+            autofocus: false,
             invalid: false,
             identifier: None,
             on_changed: None,
@@ -197,6 +201,14 @@ impl RawTextField {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Take the focus when the field mounts; forwards to
+    /// [`EditableText::autofocus`], whose doc says when it lands.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
         self
     }
 
@@ -277,6 +289,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
             .obscure_text(view.obscure_text)
             .input_purpose(view.input_purpose)
             .enabled(view.enabled)
+            .autofocus(view.autofocus)
             .invalid(view.invalid)
             .identifier_if(view.identifier.as_ref());
         if let Some(height) = view.caret_height {

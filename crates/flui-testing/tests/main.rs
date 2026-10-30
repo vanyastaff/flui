@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "close_guard.rs"]
+mod close_guard;
 #[path = "controller_restart.rs"]
 mod controller_restart;
 #[path = "first_frame_deferral.rs"]

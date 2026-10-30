@@ -11,7 +11,7 @@ use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
     icon_import, key_vocabulary, markers, module_dag, panic_boundary, perf, platform_floor,
-    recording_vocabulary, testing, toolchain, wgsl, workspace,
+    recording_vocabulary, send_impls, testing, toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -101,7 +101,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 32] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 34] {
     [
         (
             if strict {
@@ -135,6 +135,10 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 32] {
         ("panic-boundary", |args| {
             panic_boundary::panic_boundary(&parsed(args)?)
         }),
+        ("send-impls --self-test", |args| {
+            send_impls::send_impls(&parsed(args)?)
+        }),
+        ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
         }),
@@ -219,6 +223,8 @@ mod tests {
                 "globals",
                 "panic-boundary --self-test",
                 "panic-boundary",
+                "send-impls --self-test",
+                "send-impls",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",

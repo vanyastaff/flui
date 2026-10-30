@@ -136,6 +136,15 @@ deny = [
         "winit",
         "convert_case",
     ], reason = "FLUI segments text through ICU4X (ADR-0092 §6)" },
+
+    # UI state is owner-local (ADR-0136): a value crosses a thread because the
+    # compiler proves it may, never through a wrapper that asserts it or checks
+    # it at run time. `cargo xtask send-impls` lists the hand-written impls.
+    { crate = "send_wrapper", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "fragile", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "send-cell", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "unsend", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "force-send-sync", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
 ]
 
 # Crates whose job std or core now does (once_cell → OnceLock/LazyLock,

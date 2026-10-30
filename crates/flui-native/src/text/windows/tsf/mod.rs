@@ -13,7 +13,7 @@
 //! store can reach application code that moves focus or ends a composition;
 //! doing that inline would pop or release the very document whose method is
 //! still on the stack. Every COM entry and every host operation counts in
-//! `entry_depth`; an operation that arrives while it is non-zero is queued
+//! the services' `HostQueue`; an operation that arrives while one runs is queued
 //! and runs when the outermost entry returns (explicitly, after its body).
 //! A queued completion keeps the store it was asked for, and commits that
 //! store's composition in place whenever TSF cannot end it.
@@ -52,7 +52,6 @@ mod tests;
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
@@ -78,6 +77,7 @@ use self::document::{DocumentState, TsfStore};
 use crate::owner::windows::WindowRef;
 use crate::owner::windows::WindowScale;
 use crate::owner::windows::com_apartment::ComApartment;
+use crate::text::host_queue::{Entered, HostQueue};
 
 #[cfg(test)]
 thread_local! {
@@ -158,8 +158,7 @@ pub struct TextServices {
     client_id: u32,
     empty: ITfDocumentMgr,
     serving: RefCell<Serving>,
-    entry_depth: Cell<u32>,
-    pending: RefCell<VecDeque<HostOp>>,
+    queue: HostQueue<HostOp>,
     poisonings: Cell<u8>,
     /// The first panic application code raised under a host operation (a
     /// store's observer retirement or destruction, a commit in place),
@@ -175,16 +174,6 @@ pub struct TextServices {
     /// are released: declared last, so it drops after them, and it may be
     /// the apartment's last holder when the platform went first.
     _apartment: Rc<ComApartment>,
-}
-
-/// Resets `entry_depth` by one when a host operation's frame ends, unwinding
-/// included; the queue itself is drained explicitly, never from here.
-struct Depth<'a>(&'a Cell<u32>);
-
-impl Drop for Depth<'_> {
-    fn drop(&mut self) {
-        self.0.set(self.0.get().saturating_sub(1));
-    }
 }
 
 /// Associate `manager` with `hwnd` and release the manager it replaces.
@@ -283,8 +272,7 @@ impl TextServices {
             client_id,
             empty,
             serving: RefCell::new(Serving::Nothing),
-            entry_depth: Cell::new(0),
-            pending: RefCell::new(VecDeque::new()),
+            queue: HostQueue::new(),
             poisonings: Cell::new(0),
             failure: RefCell::new(None),
             recovery: RefCell::new(Vec::new()),
@@ -340,7 +328,7 @@ impl TextServices {
     /// The store the host was last told to focus: the newest queued focus
     /// change, else the open document's.
     fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
-        let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
+        let queued = self.queue.newest(|op| match op {
             HostOp::Focus(store) => Some(store.clone()),
             HostOp::CompleteComposition(_)
             | HostOp::DropPoisoned(_)
@@ -354,7 +342,7 @@ impl TextServices {
     /// handed to [`Self::leave`], or dropped as a panic its entry did not
     /// contain unwinds to the entry's boundary, so the depth never stays
     /// raised and the queue is drained by the next host operation.
-    fn enter(&self) -> Depth<'_> {
+    fn enter(&self) -> Entered<'_> {
         self.enter_host_op()
     }
 
@@ -363,10 +351,10 @@ impl TextServices {
     /// it is logged, not raised. The log runs a user-installed subscriber,
     /// so it is contained too: nothing unwinds into TSF, and the failure's
     /// payload is retained whatever the subscriber does.
-    fn leave(&self, entered: Depth<'_>) {
+    fn leave(&self, entered: Entered<'_>) {
         drop(entered);
         self.drain_pending();
-        if self.entry_depth.get() == 0
+        if !self.queue.is_entered()
             && let Some((payload, recovery)) = self.take_failure()
         {
             log_failure(payload);
@@ -471,7 +459,7 @@ impl TextServices {
     /// other operation or COM entry is still running under it; the commits
     /// held back behind it run during its unwind.
     fn raise_failure(&self) {
-        if self.entry_depth.get() == 0
+        if !self.queue.is_entered()
             && let Some((payload, recovery)) = self.take_failure()
         {
             let _recovery = recovery;
@@ -484,9 +472,7 @@ impl TextServices {
     /// input to TSF altogether.
     fn document_poisoned(&self, state: &Rc<DocumentState>) {
         self.poisonings.set(self.poisonings.get().saturating_add(1));
-        self.pending
-            .borrow_mut()
-            .push_back(HostOp::DropPoisoned(Rc::clone(state)));
+        self.queue.push(HostOp::DropPoisoned(Rc::clone(state)));
     }
 
     /// `state`'s store changed its protection. TSF reads a document's static
@@ -504,16 +490,14 @@ impl TextServices {
         self.raise_failure();
     }
 
-    fn enter_host_op(&self) -> Depth<'_> {
-        self.entry_depth.set(self.entry_depth.get() + 1);
-        Depth(&self.entry_depth)
+    fn enter_host_op(&self) -> Entered<'_> {
+        self.queue.enter()
     }
 
     fn run_host_op(&self, op: HostOp) {
-        if self.entry_depth.get() > 0 {
-            self.pending.borrow_mut().push_back(op);
+        let Some(op) = self.queue.defer(op) else {
             return;
-        }
+        };
         let depth = self.enter_host_op();
         self.apply_contained(op);
         drop(depth);
@@ -521,10 +505,7 @@ impl TextServices {
     }
 
     fn drain_pending(&self) {
-        while self.entry_depth.get() == 0 {
-            let Some(op) = self.pending.borrow_mut().pop_front() else {
-                return;
-            };
+        while let Some(op) = self.queue.next() {
             let depth = self.enter_host_op();
             self.apply_contained(op);
             drop(depth);
@@ -855,10 +836,11 @@ impl TextStoreHost for TextServices {
         {
             return Err(TextStoreHostError::NotFocused);
         }
-        if self.entry_depth.get() > 0 {
-            self.pending
-                .borrow_mut()
-                .push_back(HostOp::CompleteComposition(Rc::clone(store)));
+        if self
+            .queue
+            .defer(HostOp::CompleteComposition(Rc::clone(store)))
+            .is_none()
+        {
             return Ok(CompositionEnd::Deferred);
         }
         let depth = self.enter_host_op();
@@ -869,7 +851,7 @@ impl TextStoreHost for TextServices {
             });
         drop(depth);
         self.drain_pending();
-        if self.entry_depth.get() == 0 && self.failure.borrow().is_some() {
+        if !self.queue.is_entered() && self.failure.borrow().is_some() {
             // The answer does not reach the caller: what TSF did not commit
             // is committed in place as the failure is raised, behind it.
             if end != Some(CompositionEnd::Committed) {

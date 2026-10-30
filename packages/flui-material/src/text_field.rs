@@ -137,6 +137,8 @@ pub struct TextField {
     external_focus_node: Option<Rc<FocusNode>>,
     decoration: InputDecoration,
     enabled: Option<bool>,
+    /// Forwarded to [`EditableText::autofocus`].
+    autofocus: bool,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
     /// Forwarded to [`EditableText::input_purpose`].
@@ -174,6 +176,7 @@ impl std::fmt::Debug for TextField {
             .field("external_focus_node", &self.external_focus_node)
             .field("decoration", &self.decoration)
             .field("enabled", &self.enabled)
+            .field("autofocus", &self.autofocus)
             .field("obscure_text", &self.obscure_text)
             .field("input_purpose", &self.input_purpose)
             .field("required", &self.required)
@@ -242,6 +245,7 @@ impl TextField {
             external_focus_node: None,
             decoration: InputDecoration::default(),
             enabled: None,
+            autofocus: false,
             obscure_text: false,
             input_purpose: TextInputPurpose::Text,
             required: false,
@@ -276,6 +280,14 @@ impl TextField {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = Some(enabled);
+        self
+    }
+
+    /// Take the focus when the field mounts; forwards to
+    /// [`EditableText::autofocus`], whose doc says when it lands.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
         self
     }
 
@@ -483,6 +495,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // tree so they are not announced twice.
         let mut editable = EditableText::new(self.controller.clone(), Rc::clone(&self.focus_node))
             .enabled(effective_enabled)
+            .autofocus(view.autofocus)
             .caret_color(caret_color)
             .obscure_text(view.obscure_text)
             .input_purpose(view.input_purpose)

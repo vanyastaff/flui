@@ -826,16 +826,15 @@ fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
         .cast_object_ref::<TsfStore>()
         .expect("the document's own object");
     store.fail_lock.set(true);
-    let queue = services.pending.borrow();
+    let queue = services.queue.hold();
     let answer = catch_unwind(AssertUnwindSafe(|| {
         document.RequestLock(TS_LF_READ.0 | TS_LF_SYNC)
     }));
     drop(queue);
     let answer = answer.expect("no panic leaves the COM entry");
     assert_eq!(answer.map_err(|error| error.code()), Err(E_UNEXPECTED));
-    assert_eq!(
-        services.entry_depth.get(),
-        0,
+    assert!(
+        !services.queue.is_entered(),
         "the entry left no depth behind"
     );
     services.focus_store(None);
