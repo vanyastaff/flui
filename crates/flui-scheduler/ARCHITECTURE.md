@@ -167,6 +167,14 @@ The regression test
 `post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` pins
 tail survival, registration FIFO, and consumption of the failed entry.
 
+### Owner frame drops retire their queues before they raise
+
+`OwnerFrame` and `PresentationFrameScope` are the scheduler's only `Drop` implementations that
+resume a failure. Each retires its post-frame callbacks and tasks first, under its own catch, so
+the queues its fields still reference are empty when the failure unwinds through the drop glue:
+no application capture is destroyed inside that unwind (#1165). During an unwind already running,
+the failure is retained instead of raised.
+
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
 A caller catching a panic from `OwnerFrame::drive_frame` observes closed

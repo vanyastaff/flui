@@ -1151,6 +1151,23 @@ retiring container retains every envelope clone it holds, since a thread-shared
 clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
 binding's other fields, are outside this contract.
 
+### A dropping UI runtime destroys its application values before it raises a failure
+
+**Rule:** `UiRuntime::drop` raises its first failure only once no field it still owns holds an
+application value. A failure raised from `Drop::drop` unwinds through the field drop glue that
+follows; a capture whose destructor panics there is a second panic in one unwind, and aborts
+(#1165).
+
+**Choice:** after the presentations and the owner-local frame work retire, the drop takes the
+queued commands (a cross-thread signal write carries the application's closure) and the
+frame-failure handler, and destroys them under the same catch, first failure kept. Once a failure
+is held, or the thread is already unwinding, it retains them instead (ADR-0127). Every other field
+holds framework values, or values already contained where they run: the input tap's calls and
+retirement, and the presentations' trees, whose `dispose` and pending futures are contained per
+element. Tested by `a_queued_command_outliving_a_teardown_failure_does_not_abort`,
+`a_failing_dispose_and_future_drop_do_not_abort` and `user_drop_panic_inside_an_unwind_is_retained`,
+each run in a child process because the broken shape aborts.
+
 ### A presentation's frame-rate demand is decided here and delivered as an owner effect
 
 **Rule:** the runtime has no platform edge (ADR-0083), so it decides what a
