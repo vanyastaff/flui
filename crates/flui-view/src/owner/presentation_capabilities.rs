@@ -42,6 +42,10 @@ pub struct PresentationCapabilities {
     /// tree, or `None` for the default [`ErrorView`](crate::ErrorView). It
     /// applies from the next recovery on.
     pub error_view_builder: Option<crate::view::ErrorViewBuilder>,
+    /// The presentation's close guard, which holds the window's close while
+    /// work that must not be lost finishes. One per presentation, so a guard
+    /// outlives every remount of the presentation's root.
+    pub close_guard: Option<crate::CloseGuard>,
 }
 
 impl BuildOwner {
@@ -77,6 +81,16 @@ impl std::fmt::Debug for PresentationCapabilities {
             .field("textures", &self.textures.is_some())
             .field("storage", &self.storage.is_some())
             .field("error_view_builder", &self.error_view_builder.is_some())
+            .field("close_guard", &self.close_guard.is_some())
             .finish()
+    }
+}
+
+impl BuildOwner {
+    /// Hand this owner's documents the host's flush registry, which a
+    /// [`Persisted`](crate::persist::Persisted) document publishes into.
+    /// Called once, at presentation assembly.
+    pub fn set_flush_registry(&mut self, registry: crate::flush_registry::FlushRegistry) {
+        self.flush_registry = Some(registry);
     }
 }

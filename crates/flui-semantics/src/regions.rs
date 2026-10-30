@@ -112,6 +112,13 @@ impl SemanticsIdentitySource {
         self.next = end;
         Ok(ids)
     }
+
+    /// Spends every remaining identity, so the next reservation fails: how a
+    /// test reaches exhaustion, which no practical run does.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn exhaust(&mut self) {
+        self.next = u64::from(u32::MAX) + 1;
+    }
 }
 
 #[cfg(test)]

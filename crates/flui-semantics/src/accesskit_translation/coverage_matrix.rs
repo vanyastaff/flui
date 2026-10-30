@@ -191,13 +191,16 @@ fn every_published_attribute_reads_through_the_consumer() {
         sort_key: _,
         hint_overrides: _,
         scroll_index: _,
-        // Unpublished: AccessKit has no adjacent-value or platform-view
-        // property, and FLUI publishes no text runs that text lengths describe.
+        // Unpublished: AccessKit has no adjacent-value, platform-view or
+        // text-length property.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
+        // Published as `TextRun` children, read through the consumer by
+        // `tests/text_runs.rs`.
+        text: _,
     } = SemanticsAttributes::default();
     let States {
         toggled: _,

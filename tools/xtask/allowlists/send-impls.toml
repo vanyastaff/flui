@@ -1,0 +1,94 @@
+# Every `unsafe impl Send`/`Sync` in the workspace (ADR-0136), written by
+# `cargo xtask send-impls --seed`. The list only shrinks: the scan fails on an impl it
+# does not name and on an entry the code no longer has.
+reason = "an OS handle or a plugin library the platform lets another thread hold; each impl carries its SAFETY comment"
+
+[[allow]]
+crate = "flui-desktop-mcp"
+type = "KillOnExitJob"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-hot-reload"
+type = "BuildPtr"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-hot-reload"
+type = "DynLib"
+traits = ["Send"]
+
+[[allow]]
+crate = "flui-native"
+type = "ApartmentHold"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "KeptView"
+traits = ["Send"]
+
+[[allow]]
+crate = "flui-native"
+type = "LoadedLibraries"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "MacOSLoop"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "MacOSTextInput"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "MacosAccessibility"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "MainRetainedView"
+traits = ["Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebClipboard"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebDragSource"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebExecutor"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebLoop"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebSurface"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WebTransfer"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WindowsAccessibility"
+traits = ["Send", "Sync"]
+
+[[allow]]
+crate = "flui-native"
+type = "WindowsLoop"
+traits = ["Send", "Sync"]
