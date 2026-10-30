@@ -1,7 +1,7 @@
 # flui-animation / catalog-components — задачи
 
-- **Статус:** в работе. Влиты T1, T2, T9, T10, T13; T3 сделан (`AnimatedIcon`, 14 пар
-  `AnimatedIcons` в `flui-material`, `xtask icon-import`); дальше T7.
+- **Статус:** в работе. Влиты T1, T2, T3, T9, T10, T13; T7 сделан (`Carousel`, `KeylineSnap`,
+  `CarouselController`, `CarouselAutoplay`, `RenderSliverCarousel`); дальше T8.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -49,7 +49,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   переносится. Потребитель — T9.
 - **Требования:** G3. **После:** T1.
 
-### T3 — `AnimatedIcon` (#1694) — сделано
+### T3 — `AnimatedIcon` (#1694) — влито
 
 - **Что:** `AnimatedIconData`, `AnimatedIcon` в `flui-widgets::icon` (RTL, `IconTheme`,
   семантика); `cargo xtask icon-import` (AVD XML, пары SVG); четырнадцать Material-пар в
@@ -78,7 +78,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   тестами.
 - **Требования:** R1–R4, строка M1. **После:** T33 полноты ввода.
 
-### T7 — карусель (#1698)
+### T7 — карусель (#1698) — сделано
 
 - **Что:** модель ключевых линий, `RenderSliverCarousel` (ленивый, маска; строка
   `RENDER_OBJECT_TYPES` и `harness_*`), фаллибельный `CarouselLayout` с
@@ -86,6 +86,11 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `CarouselController` и автопрокрутка через `NestedScrollDispatcher` с причиной
   `Programmatic`, гарантии остановки.
 - **Требования:** C1–C6, строка M1. **После:** T21, T23 полноты ввода.
+- **Проверка:** модуль `carousel` в `flui-widgets` (16 тестов: маски между линиями, тап только по видимой
+  части, `SingleAdvance` на ±1 от начала жеста, контроллер и `on_index_changed`, автопрокрутка с
+  паузой и переходом с последнего на первый, reduced motion, семантика и кнопка паузы, RTL,
+  свойства `CarouselGeometry` для всех раскладок); `harness_sliver_carousel_geometry_and_frames`.
+  Пауза по фокусу вспомогательной технологии невозможна: сигнала нет (`docs/gaps.md`, пункт 36).
 
 ### T8 — `CarouselView` (#1699)
 

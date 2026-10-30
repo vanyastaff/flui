@@ -11,6 +11,7 @@
 //! visual position indicator.
 
 mod anchored_drag;
+mod carousel;
 #[cfg(test)]
 pub(crate) use anchored_drag::anchor_keys;
 #[cfg(test)]
@@ -55,6 +56,11 @@ pub use anchored_drag::{
     DraggableAnchors, DraggableAnchorsBuilder,
 };
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
+pub use carousel::{
+    Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
+    CarouselLayout, CarouselLayoutError, CarouselState, KeylineSnap, MAX_ITEM_EXTENT,
+    MIN_AUTOPLAY_PERIOD,
+};
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
