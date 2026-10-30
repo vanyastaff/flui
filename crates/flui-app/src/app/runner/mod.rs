@@ -609,6 +609,7 @@ pub(in crate::app) use main_window::run_application;
     not(target_arch = "wasm32")
 ))]
 pub(crate) use main_window::{StartedLoop, start_loop};
+pub use owner_dispatch::EXIT_CODE_HUNG;
 #[cfg(all(
     feature = "testing",
     not(target_os = "android"),

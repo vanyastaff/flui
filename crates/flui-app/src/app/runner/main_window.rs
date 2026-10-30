@@ -8,7 +8,7 @@ use super::{
         APP_RUNTIME, OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform,
         install_platform_quit_hook, runtime_wake_callback, with_owner_platform,
     },
-    owner_dispatch::{TeardownStep, teardown_platform_ui_runtime_logged},
+    owner_dispatch::{ExitWatchdog, TeardownStep, teardown_platform_ui_runtime_logged},
 };
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
@@ -618,15 +618,24 @@ pub(super) fn shutdown_main_window() {
 /// that created them. On unwind each step is contained, so a second panic
 /// cannot abort the first one's unwind; that first panic stays the one raised.
 /// Each step that ends is written to its log.
+///
+/// It starts the exit watchdog first and leaves it in `watchdog`, whose
+/// holder ends the watch once the exit's outcome is known (ADR-0258 §7).
 #[derive(Default)]
 struct LoopTeardown {
     log: Rc<RefCell<Vec<TeardownStep>>>,
+    watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
 }
 
 impl Drop for LoopTeardown {
     fn drop(&mut self) {
+        let watchdog = Rc::new(ExitWatchdog::start());
+        self.watchdog.replace(Some(Rc::clone(&watchdog)));
         let log = Rc::clone(&self.log);
-        let mut record = move |step| log.borrow_mut().push(step);
+        let mut record = move |step| {
+            watchdog.reached(step);
+            log.borrow_mut().push(step);
+        };
         if std::thread::panicking() {
             contain(shutdown_main_window);
             record(TeardownStep::MainWindow);
@@ -687,6 +696,9 @@ pub(crate) struct StartedLoop {
     // lives.
     teardown: LoopTeardown,
     owner_guard: OwnerHostClearGuard,
+    // Last: the watch the teardown started ends once the owner platform is
+    // gone too.
+    watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
     fatal: Rc<RefCell<Option<AppRunError>>>,
     result: Result<(), flui_native::PlatformError>,
 }
@@ -698,11 +710,13 @@ impl StartedLoop {
         let Self {
             teardown,
             owner_guard,
+            watchdog,
             fatal,
             result,
         } = self;
         drop(teardown);
         drop(owner_guard);
+        drop(watchdog);
         let failure = fatal.borrow_mut().take();
         if let Some(error) = failure {
             return Err(error);
@@ -729,11 +743,16 @@ where
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
+    // Declared before the owner guard, so the watch outlives it on unwind.
+    let watchdog = Rc::default();
     let owner_guard = OwnerHostClearGuard::arm();
     // Declared after the owner guard, so it drops first: the main window and
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
-    let teardown = LoopTeardown { log: teardown_log };
+    let teardown = LoopTeardown {
+        log: teardown_log,
+        watchdog: Rc::clone(&watchdog),
+    };
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
         let Application {
             mut factory,
@@ -848,6 +867,7 @@ where
     Ok(StartedLoop {
         teardown,
         owner_guard,
+        watchdog,
         fatal,
         result,
     })

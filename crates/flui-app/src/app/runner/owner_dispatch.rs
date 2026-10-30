@@ -966,6 +966,89 @@ impl ExitDeadline {
     }
 }
 
+/// How long the whole exit may take, from the main window's shutdown to the
+/// exit code, application code included; past it the exit watchdog ends the
+/// process with [`EXIT_CODE_HUNG`] (ADR-0258 §7).
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub(crate) const EXIT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The exit code of an application whose exit the watchdog ended, after
+/// [`EXIT_WATCHDOG`]: the code GNU `timeout` returns for a command that ran
+/// out of time, so a supervisor reads a hung exit apart from a panic (101) and
+/// a crash.
+pub const EXIT_CODE_HUNG: i32 = 124;
+
+/// Bounds the whole exit: started when the exit order begins, it ends the
+/// process with [`EXIT_CODE_HUNG`] if the exit order has not ended
+/// [`EXIT_WATCHDOG`] later. Dropping it ends the watch.
+///
+/// Before it ends the process it logs the last exit step that ended and
+/// writes the flush registry itself, from its own thread, for a second: the
+/// registry is shared across threads and runs no application code
+/// (ADR-0259 §5).
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub(super) struct ExitWatchdog {
+    // Dropped with the watchdog: its thread sees the channel close and ends.
+    _stop: std::sync::mpsc::Sender<std::convert::Infallible>,
+    reached: std::sync::Arc<std::sync::Mutex<Option<TeardownStep>>>,
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+impl ExitWatchdog {
+    /// Start watching the exit this thread is beginning.
+    pub(super) fn start() -> Self {
+        let flush = APP_RUNTIME.with(|slot| {
+            slot.try_borrow()
+                .ok()
+                .and_then(|state| state.flush_host.clone())
+        });
+        let reached = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (stop, stopped) = std::sync::mpsc::channel::<std::convert::Infallible>();
+        let watched = std::sync::Arc::clone(&reached);
+        let spawned = std::thread::Builder::new()
+            .name("flui-exit-watchdog".into())
+            .spawn(move || {
+                if stopped.recv_timeout(EXIT_WATCHDOG)
+                    != Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                {
+                    return;
+                }
+                let reached = *watched
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                crate::app::lifecycle::contain_lifecycle_diagnostic(|| {
+                    tracing::error!(
+                        after = ?reached,
+                        "the exit did not end within its watchdog; ending the process"
+                    );
+                });
+                if let Some(flush) = flush {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        flush.flush_within(
+                            std::time::Instant::now() + std::time::Duration::from_secs(1),
+                        )
+                    }));
+                }
+                flui_native::end_process(EXIT_CODE_HUNG)
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "the exit watchdog did not start; the exit is unbounded");
+        }
+        Self {
+            _stop: stop,
+            reached,
+        }
+    }
+
+    /// Note that `step` of the exit order ended.
+    pub(super) fn reached(&self, step: TeardownStep) {
+        *self
+            .reached
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(step);
+    }
+}
+
 /// One step of the loop's exit teardown, in the order it runs.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -991,10 +1074,7 @@ pub enum TeardownStep {
 }
 
 /// [`teardown_platform_ui_runtime_logged`] for a loop that keeps no log.
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(test, target_os = "android", target_os = "ios")
-))]
+#[cfg(all(not(target_arch = "wasm32"), any(test, target_os = "ios")))]
 pub(super) fn teardown_platform_ui_runtime() {
     teardown_platform_ui_runtime_logged(&mut |_| {});
 }

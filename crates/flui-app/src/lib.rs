@@ -106,6 +106,7 @@ pub use app::{
     PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
 };
 // The app's font registration door (ADR-0092 §2).
+pub use app::EXIT_CODE_HUNG;
 pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
 #[cfg(not(target_os = "ios"))]

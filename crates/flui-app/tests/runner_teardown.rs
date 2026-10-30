@@ -171,3 +171,94 @@ fn runner_teardown() {
         ],
     );
 }
+
+/// Names the row a child process of this test binary runs.
+const CHILD_CASE: &str = "FLUI_RUNNER_CHILD_CASE";
+
+/// Blocks forever when dropped, as an application destructor that waits on
+/// something that never comes.
+struct BlocksForever;
+
+impl Drop for BlocksForever {
+    fn drop(&mut self) {
+        loop {
+            std::thread::park();
+        }
+    }
+}
+
+/// An application destructor that never returns cannot hold the process: the
+/// exit watchdog ends it with `EXIT_CODE_HUNG` (ADR-0258 §7). Runs in the
+/// child; the parent reads the code.
+fn a_blocking_destructor_ends_the_process_with_the_hung_code() {
+    let blocker = BlocksForever;
+    let ready = Rc::new(RefCell::new(None));
+    let installed = Rc::clone(&ready);
+    let application = Application::new(move |_| -> flui_widgets::Text {
+        let _held = &blocker;
+        panic!("no main window is opened")
+    })
+    .with_startup_window(StartupWindow::None)
+    .on_ready(move |handle| {
+        installed.replace(Some(handle.clone()));
+    });
+    let run = HeadlessRun::start(application);
+    // The main window's shutdown drops the factory, and with it the blocker.
+    let _ = run.join();
+    panic!("the exit returned past a destructor that never returns");
+}
+
+/// Rows whose outcome is the process's exit code, each run in a child
+/// process of this test binary.
+#[test]
+fn runner_exit_codes() {
+    if let Ok(case) = std::env::var(CHILD_CASE) {
+        match case.as_str() {
+            "a_blocking_destructor_ends_the_process_with_the_hung_code" => {
+                a_blocking_destructor_ends_the_process_with_the_hung_code();
+            }
+            other => panic!("no child row named {other}"),
+        }
+        return;
+    }
+    let started = Instant::now();
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "runner_teardown::runner_exit_codes",
+            "--nocapture",
+        ])
+        .env(
+            CHILD_CASE,
+            "a_blocking_destructor_ends_the_process_with_the_hung_code",
+        )
+        .env("RUST_BACKTRACE", "0")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the child test process starts");
+    // Past this the child is taken as hung: the old exit never ended.
+    let limit = Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child's status") {
+            break status;
+        }
+        if started.elapsed() > limit {
+            child.kill().expect("the hung child is killed");
+            child.wait().expect("the killed child is reaped");
+            panic!("the child's exit still ran after {limit:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let took = started.elapsed();
+    assert_eq!(
+        status.code(),
+        Some(flui_app::EXIT_CODE_HUNG),
+        "the child ended {status:?} after {took:?}"
+    );
+    // Fifteen seconds of watchdog, one of slack and the child's start.
+    assert!(
+        took < Duration::from_secs(18),
+        "the watchdog ended the exit after {took:?}"
+    );
+}

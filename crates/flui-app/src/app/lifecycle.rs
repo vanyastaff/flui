@@ -171,7 +171,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 
 // Diagnostics are user code too. A reporting failure cannot erase completion
 // evidence or strand a worker's accepted tail.
-fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
+pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
         flui_foundation::panic::retain_opaque_payload(payload);
     }
