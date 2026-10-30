@@ -101,7 +101,7 @@ struct SeatDevice {
 impl SeatDevice {
     fn release(self) {
         for offer in [self.selection, self.dragged].into_iter().flatten() {
-            destroy_offer(offer);
+            offer.destroy();
         }
         // `release` exists from version 2; below it the proxy is just
         // dropped.
@@ -124,14 +124,6 @@ impl Owned {
         if let Some(source) = self.source {
             source.destroy();
         }
-    }
-}
-
-/// Lets go of an offer: `destroy` exists from version 3, below it the proxy
-/// is just dropped.
-fn destroy_offer(offer: WlDataOffer) {
-    if offer.version() >= 3 {
-        offer.destroy();
     }
 }
 
@@ -488,7 +480,7 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
             })
             .flatten();
         if let Some(offer) = replaced {
-            destroy_offer(offer);
+            offer.destroy();
         }
     }
 
