@@ -2017,6 +2017,27 @@ mod tests {
         assert_eq!(events.try_next(), None);
     }
 
+    /// R19: a worker outliving its execution services refuses a submission
+    /// with `ShuttingDown`, and holds nothing that keeps them alive.
+    fn worker_handle_refuses_after_the_services_drop() {
+        let (services, _deterministic) = deterministic_services();
+        let gone = Arc::downgrade(&services);
+        let mut worker = TaskSpawner::new(&services)
+            .spawn_worker("stale", |input: u32, _context| input)
+            .expect("worker must be created");
+        drop(services);
+        assert_eq!(gone.strong_count(), 0, "the worker holds no services");
+        assert_eq!(worker.submit(1), Err(SpawnError::ShuttingDown));
+        assert_eq!(worker.try_latest(), None);
+    }
+
+    /// R19: a publisher outliving its receiver refuses with `OwnerGone`.
+    fn service_publisher_refuses_after_the_receiver_drops() {
+        let (publisher, events) = service_events::<u32>("positions", 3);
+        drop(events);
+        assert_eq!(publisher.publish(1), Err(PublishError::OwnerGone));
+    }
+
     // ── Service registry: lifetime policy, staged shutdown, deadlines ───────
 
     fn until_cancelled_service(
@@ -2114,6 +2135,14 @@ mod tests {
                 (
                     "service_events_ring_drops_oldest_and_never_blocks",
                     service_events_ring_drops_oldest_and_never_blocks as fn(),
+                ),
+                (
+                    "stale_handles_refuse_after_the_runtime_drops::worker_handle",
+                    worker_handle_refuses_after_the_services_drop as fn(),
+                ),
+                (
+                    "stale_handles_refuse_after_the_runtime_drops::service_publisher",
+                    service_publisher_refuses_after_the_receiver_drops as fn(),
                 ),
                 (
                     "shutdown_cancels_then_joins_and_the_flush_window_is_real",

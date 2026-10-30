@@ -496,7 +496,20 @@ impl Drop for UiRuntime {
         // abort (#1165). Queued commands carry cross-thread signal writes'
         // closures; the frame-failure handler is the embedder's. After a
         // failure they are retained, as every other application value here.
-        let commands: Vec<UiCommand> = self.rx.try_iter().collect();
+        //
+        // The inbox closes before any of them runs: a destructor that sends
+        // through a retained sender is refused with `OwnerGone` instead of
+        // queueing a capture that only the drop glue would reach. A command a
+        // worker thread queued between the drain and the close is dropped
+        // with the receiver, under the same catch.
+        let rx = std::mem::replace(&mut self.rx, crossbeam_channel::never());
+        let commands: Vec<UiCommand> = rx.try_iter().collect();
+        let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(rx))).err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            closed,
+            "ui_runtime command inbox close",
+        );
         let handler = self.frame_failure_handler.borrow_mut().take();
         let preserving = first.is_some() || std::thread::panicking();
         if preserving {
