@@ -462,6 +462,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.render_tree.get(id)?.as_box()?.state().geometry()
     }
 
+    /// The constraints a **sliver** node was last laid out under and the
+    /// geometry it committed, or `None` if `id` is missing, is a box, or has
+    /// not been laid out yet. The sliver twin of [`Self::box_size`]: its
+    /// painted region is `paint_extent` along `constraints.axis()` by
+    /// `cross_axis_extent`, at its own origin.
+    #[must_use]
+    pub fn sliver_layout(
+        &self,
+        id: RenderId,
+    ) -> Option<(
+        crate::constraints::SliverConstraints,
+        crate::constraints::SliverGeometry,
+    )> {
+        let state = self.render_tree.get(id)?.as_sliver()?.state();
+        Some((*state.constraints()?, state.geometry()?))
+    }
+
     /// The matrix mapping points in `descendant`'s local coordinate space into
     /// `ancestor`'s.
     ///

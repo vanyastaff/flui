@@ -5,13 +5,21 @@ use std::fmt;
 
 use flui_foundation::geometry::Axis;
 use flui_painting::paint::Clip;
-use flui_rendering::view::SliverPaintOrder;
+use flui_rendering::view::{ScrollPosition, SliverPaintOrder};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ShrinkWrappingViewport, Viewport};
+
+/// Where the composed viewport gets its scroll offset from, as in
+/// [`GridView`](crate::GridView).
+#[derive(Clone, Debug)]
+enum OffsetSource {
+    Fixed(f64),
+    Position(ScrollPosition),
+}
 
 /// A scrollable area whose scroll body is composed from an arbitrary list of
 /// **sliver** widgets.
@@ -46,7 +54,7 @@ use crate::scroll::{ShrinkWrappingViewport, Viewport};
 #[derive(Clone, StatelessView)]
 pub struct CustomScrollView {
     scroll_direction: Axis,
-    offset: f64,
+    offset_source: OffsetSource,
     shrink_wrap: bool,
     center: Option<usize>,
     anchor: f64,
@@ -60,7 +68,7 @@ impl CustomScrollView {
     pub fn new(slivers: impl ViewSeq) -> Self {
         Self {
             scroll_direction: Axis::Vertical,
-            offset: 0.0,
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             center: None,
             anchor: 0.0,
@@ -77,10 +85,23 @@ impl CustomScrollView {
         self
     }
 
-    /// Set the programmatic scroll offset in logical pixels.
+    /// Set the programmatic scroll offset in logical pixels. Mutually
+    /// exclusive with [`CustomScrollView::position`]: whichever is called last
+    /// wins.
     #[must_use]
     pub fn offset(mut self, offset: f64) -> Self {
-        self.offset = offset;
+        self.offset_source = OffsetSource::Fixed(offset);
+        self
+    }
+
+    /// Inject a shared [`ScrollPosition`] as the composed viewport's offset,
+    /// as [`ListView::position`](crate::ListView::position) does: a
+    /// [`Scrollable`] drives it, and the viewport flushes its committed
+    /// content extents back into it. Mutually exclusive with
+    /// [`CustomScrollView::offset`]: whichever is called last wins.
+    #[must_use]
+    pub fn position(mut self, position: ScrollPosition) -> Self {
+        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -141,7 +162,7 @@ impl fmt::Debug for CustomScrollView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CustomScrollView")
             .field("scroll_direction", &self.scroll_direction)
-            .field("offset", &self.offset)
+            .field("offset_source", &self.offset_source)
             .field("shrink_wrap", &self.shrink_wrap)
             .field("center", &self.center)
             .field("anchor", &self.anchor)
@@ -161,21 +182,27 @@ impl StatelessView for CustomScrollView {
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
         if self.shrink_wrap {
-            ShrinkWrappingViewport::new(self.slivers.clone())
+            let viewport = ShrinkWrappingViewport::new(self.slivers.clone())
                 .axis_direction(axis_direction)
-                .offset(self.offset)
                 .paint_order(self.paint_order)
-                .clip_behavior(self.clip_behavior)
-                .boxed()
+                .clip_behavior(self.clip_behavior);
+            match &self.offset_source {
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         } else {
-            Viewport::new(self.slivers.clone())
+            let viewport = Viewport::new(self.slivers.clone())
                 .axis_direction(axis_direction)
-                .offset(self.offset)
                 .center(self.center)
                 .anchor(self.anchor)
                 .paint_order(self.paint_order)
-                .clip_behavior(self.clip_behavior)
-                .boxed()
+                .clip_behavior(self.clip_behavior);
+            match &self.offset_source {
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         }
     }
 }

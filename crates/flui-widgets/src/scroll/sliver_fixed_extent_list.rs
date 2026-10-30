@@ -159,8 +159,9 @@ impl fmt::Debug for SliverFixedExtentList {
     }
 }
 
-impl StatelessView for SliverFixedExtentList {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+impl SliverFixedExtentList {
+    /// The lazy adaptor this list mounts.
+    pub(crate) fn adaptor(&self) -> flui_view::element::SliverFixedExtentList {
         let adaptor = match &self.source {
             Source::Static(children) => {
                 flui_view::element::SliverFixedExtentList::over(self.item_extent, children)
@@ -185,5 +186,11 @@ impl StatelessView for SliverFixedExtentList {
             Some(label) => adaptor.semantics_label(std::sync::Arc::clone(label)),
             None => adaptor,
         }
+    }
+}
+
+impl StatelessView for SliverFixedExtentList {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.adaptor()
     }
 }

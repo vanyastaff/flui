@@ -72,8 +72,8 @@ pub use proxy::{
     RenderColoredBox, RenderCustomPaint, RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer,
     RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel,
     RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
-    RenderShimmerMask, RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry,
-    SubtreeAnchor, TransformMotion,
+    RenderShimmerMask, RenderSkeleton, RenderSliverSubtreeAnchor, RenderSubtreeAnchor,
+    RenderVisibility, RoundedClipGeometry, SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,

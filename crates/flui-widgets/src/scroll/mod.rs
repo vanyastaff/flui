@@ -22,6 +22,7 @@ mod animated_list;
 mod collapsing_header;
 mod custom_scroll_view;
 mod drag_autoscroll;
+mod focusable_sliver;
 mod grid_view;
 mod interactive_viewer;
 mod list_focus;
@@ -67,6 +68,7 @@ pub use collapsing_header::{
 };
 pub use custom_scroll_view::CustomScrollView;
 pub use flui_objects::InvalidSliverCrossAxisExtent;
+pub use focusable_sliver::{FocusableSliver, FocusableSliverParts, IntoFocusableSliver};
 pub use grid_view::GridView;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,

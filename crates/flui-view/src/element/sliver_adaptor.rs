@@ -195,6 +195,9 @@ fn delegate_changed<R: LazyMultiBoxRender>(
 // STATIC CHILDREN — the delegate behind every `list` constructor
 // ============================================================================
 
+/// A per-item wrapper applied as a child is built, given its logical index.
+type ChildMap = Rc<dyn Fn(usize, BoxedView) -> BoxedView>;
+
 /// A fixed `Vec<BoxedView>` served by index, with the key → index map that
 /// lets a keyed child whose data moved be found without a callback.
 ///
@@ -209,7 +212,7 @@ pub struct StaticChildren {
     /// Applied to each child as it is built (a per-item repaint boundary,
     /// say). The key map reads the raw children, so a wrapper that salts
     /// the key stays matchable through the unsalted callback key.
-    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    map: Option<ChildMap>,
     /// The builder and key callback handed to adaptors, created once: two
     /// adaptors built over one delegate carry the same `Rc`s, which is what
     /// the adaptor's update compares to decide whether the residents need
@@ -220,7 +223,7 @@ pub struct StaticChildren {
 /// Outgoing independent envelopes stay owned until their own retirement starts.
 struct RetiringStaticChildren {
     children: Vec<BoxedView>,
-    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    map: Option<ChildMap>,
     delegate_pair: Option<(ItemBuilder, FindIndexByKey)>,
 }
 
@@ -278,7 +281,7 @@ impl StaticChildren {
         Rc::new(Self {
             children,
             key_to_index: std::cell::OnceCell::new(),
-            map: Some(Rc::new(map)),
+            map: Some(Rc::new(move |_index, child| map(child))),
             delegate_pair: std::cell::OnceCell::new(),
         })
     }
@@ -307,7 +310,7 @@ impl StaticChildren {
     pub fn build(&self, index: usize) -> Option<BoxedView> {
         let child = self.children.get(index).cloned()?;
         Some(match &self.map {
-            Some(map) => map(child),
+            Some(map) => map(index, child),
             None => child,
         })
     }
@@ -524,9 +527,10 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             .unwrap_or_else(|| SemanticSetMapping::one_to_one(self.item_count))
     }
 
-    /// The item count to build a render object with, probing the builder when
-    /// the caller declared [`ItemCount::Unknown`].
-    fn resolved_item_count(&self) -> usize {
+    /// The number of items: the declared count, or, for
+    /// [`ItemCount::Unknown`], the builder probed for it (`2·log₂(n)` calls).
+    #[must_use]
+    pub fn resolved_item_count(&self) -> usize {
         match self.item_count {
             ItemCount::Exact(count) => count,
             ItemCount::Unknown => probe_item_count(&*self.builder),
@@ -543,6 +547,38 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
         find: impl Fn(&dyn ViewKey) -> Option<usize> + 'static,
     ) -> Self {
         self.find_index_by_key = Some(Rc::new(find));
+        self
+    }
+
+    /// Wrap every child this sliver builds: `wrap` receives the child's
+    /// logical index and the child, and returns the view the sliver mounts
+    /// in its place.
+    ///
+    /// A low-level hook for widgets that decorate a sliver they do not own
+    /// (a focus marker per row, say). The wrapper must keep the child's key
+    /// (salted, as `RepaintBoundary` does) so the reconcile still matches
+    /// keyed rows, and must answer for exactly the children the sliver
+    /// builds: it cannot add or drop children. Over static children the
+    /// wrapped delegate is a new one, so call this once per value, not on
+    /// every rebuild, or the residents are refreshed each time.
+    #[must_use]
+    pub fn map_children(mut self, wrap: impl Fn(usize, BoxedView) -> BoxedView + 'static) -> Self {
+        let wrap: ChildMap = Rc::new(wrap);
+        if let Some(children) = self.static_children.take() {
+            let map: ChildMap = match children.map.clone() {
+                Some(inner) => Rc::new(move |index, child| wrap(index, inner(index, child))),
+                None => wrap,
+            };
+            let mapped = Rc::new(StaticChildren {
+                children: children.children.clone(),
+                key_to_index: std::cell::OnceCell::new(),
+                map: Some(map),
+                delegate_pair: std::cell::OnceCell::new(),
+            });
+            return self.over_static_children(&mapped);
+        }
+        let inner = Rc::clone(&self.builder);
+        self.builder = Rc::new(move |index| inner(index).map(|child| wrap(index, child)));
         self
     }
 }

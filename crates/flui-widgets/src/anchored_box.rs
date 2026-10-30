@@ -1,7 +1,7 @@
 //! [`AnchoredBox`]: the render node a view publishes so others can name it.
 
-use flui_objects::{RenderSubtreeAnchor, SubtreeAnchor};
-use flui_rendering::protocol::BoxProtocol;
+use flui_objects::{RenderSliverSubtreeAnchor, RenderSubtreeAnchor, SubtreeAnchor};
+use flui_rendering::protocol::{BoxProtocol, SliverProtocol};
 use flui_view::prelude::*;
 use flui_view::{Child, RenderView, impl_render_view};
 
@@ -61,3 +61,46 @@ impl RenderView for AnchoredBox {
 }
 
 impl_render_view!(AnchoredBox);
+
+/// [`AnchoredBox`] for a sliver child: publishes the sliver proxy's render
+/// node id into a [`SubtreeAnchor`] while mounted.
+#[derive(Debug, Clone)]
+pub(crate) struct AnchoredSliver {
+    anchor: SubtreeAnchor,
+    child: Child,
+}
+
+impl AnchoredSliver {
+    /// Anchor the sliver `child` into `anchor`.
+    pub(crate) fn new(anchor: SubtreeAnchor, child: impl IntoView) -> Self {
+        Self {
+            anchor,
+            child: Child::some(child.into_view()),
+        }
+    }
+}
+
+impl RenderView for AnchoredSliver {
+    type Protocol = SliverProtocol;
+    type RenderObject = RenderSliverSubtreeAnchor;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSliverSubtreeAnchor::new(self.anchor.clone())
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        render_object.set_anchor(self.anchor.clone());
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+
+    flui_view::single_child_view_children!();
+}
+
+impl_render_view!(AnchoredSliver);

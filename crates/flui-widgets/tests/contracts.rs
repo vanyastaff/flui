@@ -453,6 +453,14 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::list::list_keyboard_navigation,
             ),
             (
+                "keyboard_focus::list::sliver_keyboard_navigation",
+                crate::keyboard_focus::list::sliver_keyboard_navigation,
+            ),
+            (
+                "keyboard_focus::list::grid_keyboard_navigation",
+                crate::keyboard_focus::list::grid_keyboard_navigation,
+            ),
+            (
                 "keyboard_focus::list::focused_row_is_pinned_while_scrolled_away",
                 crate::keyboard_focus::list::focused_row_is_pinned_while_scrolled_away,
             ),
