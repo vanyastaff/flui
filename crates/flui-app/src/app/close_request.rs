@@ -354,10 +354,13 @@ impl PreparedCloseRequest {
 
     /// Answer the window's close requests with the presentation's close guard
     /// first: a close its holds refuse is recorded and kept open.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+    #[cfg(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
     ))]
     pub(crate) fn with_guard(mut self, guard: flui_view::__runtime::CloseGuardSource) -> Self {
         self.0.guard = Some(guard);

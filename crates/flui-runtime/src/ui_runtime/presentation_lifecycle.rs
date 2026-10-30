@@ -241,7 +241,7 @@ impl UiRuntime {
     /// Nothing happens when no guard signalled since the last settle.
     ///
     /// A waiter whose wake panics is reported as a
-    /// [`CallbackPanic`](crate::FrameFailureKind::CallbackPanic) of its
+    /// [`CallbackPanic`](crate::frame_failure::FrameFailureKind::CallbackPanic) of its
     /// presentation and loses neither the due closes nor the waiters after
     /// it.
     pub fn settle_close_guards(&self) -> Vec<(PresentationId, flui_view::CloseReason)> {
