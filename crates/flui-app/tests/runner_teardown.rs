@@ -404,7 +404,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     let run = HeadlessRun::start_on(application, platform);
     run.run_owner_turn();
     let composing = Composition {
-        range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
         hides_caret: false,
     };
     assert_eq!(
