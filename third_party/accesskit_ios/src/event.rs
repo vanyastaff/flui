@@ -30,6 +30,8 @@ pub(crate) enum QueuedEvent {
         notification: UIAccessibilityNotifications,
     },
     NodeDestroyed(FullNodeId),
+    /// VoiceOver's cursor was on a node the update removed.
+    PlatformFocusLost,
     Announcement {
         text: String,
         assertive: bool,
@@ -56,6 +58,9 @@ impl QueuedEvent {
                 unsafe {
                     UIAccessibilityPostNotification(notification, argument.as_deref());
                 }
+            }
+            Self::PlatformFocusLost => {
+                context.action_handler.platform_focus_changed(None);
             }
             Self::NodeDestroyed(node_id) => {
                 context.remove_platform_node(node_id);
@@ -177,6 +182,7 @@ impl EventGenerator {
         self.insert_layout_changed_event_if_needed();
         if self.platform_focus == Some(id) {
             *self.context.platform_focus.borrow_mut() = None;
+            self.events.push(QueuedEvent::PlatformFocusLost);
             self.platform_focus = None;
         }
         self.events.push(QueuedEvent::NodeDestroyed(id));

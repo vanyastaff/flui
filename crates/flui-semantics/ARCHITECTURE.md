@@ -486,8 +486,9 @@ the chain `false` and then the new ones `true`, each once, after the pipeline bo
 released. A node the owner no longer holds, or no owner at all, leaves every subtree, so each
 `true` is followed by a `false`. Handlers are compared by `Rc` identity: `Semantics` keeps one
 handler per mount, so a rebuild does not count as leaving. Deactivating the adapter moves the
-cursor off the tree. Every native adapter reports `Unreported` (gap 36); the headless test host
-reports it and moves it with `move_assistive_focus`.
+cursor off the tree. iOS reports the cursor through the hook FLUI adds to `accesskit_ios`
+(`third_party/README.md`); the other native adapters say `Unreported` (gap 36). The headless
+test host reports it and moves it with `move_assistive_focus`.
 
 **Why.** Input focus is the application's; the screen reader's cursor is the platform's and
 moves without it, so it is never written into the tree. Keeping the told handlers on the
@@ -498,7 +499,8 @@ left.
 `a_panicking_handler_does_not_silence_the_others` in `tests/assistive_focus.rs`;
 `the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler` and
 `the_screen_reader_entering_the_carousel_pauses_autoplay` in `crates/flui-widgets/tests`;
-`no_native_adapter_reports_the_assistive_cursor_yet` in `flui-native`.
+`each_native_adapter_says_whether_it_reports_the_assistive_cursor` and
+`the_assistive_cursor_reaches_the_listener_on_flui_s_tree_only` in `flui-native`.
 
 ### A text field's text is published as runs under pipeline identities
 

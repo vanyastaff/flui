@@ -42,7 +42,7 @@ use std::rc::{Rc, Weak};
 use std::{ffi::c_void, ptr::null_mut};
 
 use crate::{
-    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
+    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context, PlatformFocusHandler},
     event::{EventGenerator, QueuedEvents, layout_event, screen_changed_event},
     filters::filter,
     node::PlatformNode,
@@ -347,13 +347,45 @@ impl Adapter {
         action_handler: impl 'static + ActionHandler,
         deactivation_handler: impl 'static + DeactivationHandler,
     ) -> Self {
+        let action_handler = Rc::new(ActionHandlerWrapper::new(action_handler));
+        unsafe { Self::with_handlers(view, activation_handler, action_handler, deactivation_handler) }
+    }
+
+    /// Create a new iOS adapter, as [`Adapter::new`] does, whose
+    /// `platform_focus_handler` is told each time VoiceOver's cursor moves to
+    /// a node of the tree or leaves it, on the main thread, outside every
+    /// borrow of the adapter.
+    ///
+    /// # Safety
+    ///
+    /// `view` must be a valid, unreleased pointer to a `UIView`.
+    pub unsafe fn with_platform_focus_handler(
+        view: *mut c_void,
+        activation_handler: impl 'static + ActivationHandler,
+        action_handler: impl 'static + ActionHandler,
+        deactivation_handler: impl 'static + DeactivationHandler,
+        platform_focus_handler: impl 'static + PlatformFocusHandler,
+    ) -> Self {
+        let action_handler = Rc::new(ActionHandlerWrapper::with_platform_focus_handler(
+            action_handler,
+            platform_focus_handler,
+        ));
+        unsafe { Self::with_handlers(view, activation_handler, action_handler, deactivation_handler) }
+    }
+
+    unsafe fn with_handlers(
+        view: *mut c_void,
+        activation_handler: impl 'static + ActivationHandler,
+        action_handler: Rc<dyn ActionHandlerNoMut>,
+        deactivation_handler: impl 'static + DeactivationHandler,
+    ) -> Self {
         let view = unsafe { Retained::retain(view as *mut UIView) }.unwrap();
         let view = WeakId::from_retained(&view);
         let mtm = MainThreadMarker::new().unwrap();
 
         let state = Rc::new(RefCell::new(State::Inactive {
             view,
-            action_handler: Rc::new(ActionHandlerWrapper::new(action_handler)),
+            action_handler,
             mtm,
         }));
         let activation_handler: Rc<ActivationHandlerCell> =

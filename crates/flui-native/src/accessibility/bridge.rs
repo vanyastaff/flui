@@ -14,12 +14,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
+use accesskit::{ActionHandler, ActionRequest, ActivationHandler, NodeId, TreeId, TreeUpdate};
 use parking_lot::Mutex;
 
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
+    platform::AssistiveFocusListener,
 };
 
 // Each handler runs the composition root's listener inside the adapter's
@@ -114,6 +115,7 @@ pub(crate) struct BridgeShared {
     latest: Mutex<Option<TreeUpdate>>,
     activation_listener: Mutex<Option<AccessibilityActivationListener>>,
     action_listener: Mutex<Option<AccessibilityActionListener>>,
+    assistive_focus_listener: Mutex<Option<AssistiveFocusListener>>,
 }
 
 impl BridgeShared {
@@ -158,6 +160,21 @@ impl BridgeShared {
         }
     }
 
+    /// Tell the composition root where the assistive technology's cursor
+    /// moved (clone-and-release, as above). A node of a tree other than the
+    /// one FLUI publishes, `TreeId::ROOT`, is off FLUI's tree.
+    #[cfg_attr(
+        not(any(target_os = "ios", test)),
+        expect(dead_code, reason = "only iOS's adapter reports the cursor")
+    )]
+    pub(crate) fn notify_assistive_focus(&self, node: Option<(NodeId, TreeId)>) {
+        let node = node.and_then(|(node, tree)| (tree == TreeId::ROOT).then_some(node));
+        let listener = self.assistive_focus_listener.lock().clone();
+        if let Some(listener) = listener {
+            listener(node);
+        }
+    }
+
     /// Retain `update` for late activations **iff it is self-contained**
     /// (carries tree metadata). A fragment must never become the answer to
     /// a fresh screen reader — see the `latest` field doc.
@@ -186,6 +203,15 @@ impl BridgeShared {
     /// Register the inbound-action listener, replacing any previous one.
     pub(crate) fn set_action_listener(&self, listener: AccessibilityActionListener) {
         let _prev = self.action_listener.lock().replace(listener);
+    }
+
+    /// Register the assistive-technology cursor listener, replacing any previous one.
+    #[cfg_attr(
+        not(any(target_os = "ios", test)),
+        expect(dead_code, reason = "only iOS's adapter reports the cursor")
+    )]
+    pub(crate) fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
+        let _prev = self.assistive_focus_listener.lock().replace(listener);
     }
 }
 
@@ -237,5 +263,24 @@ mod tests {
             1,
             "the next activation is told"
         );
+    }
+
+    /// The cursor reaches the composition root as a node of FLUI's tree; a
+    /// node of another tree is off it.
+    #[test]
+    fn the_assistive_cursor_reaches_the_listener_on_flui_s_tree_only() {
+        use accesskit::{NodeId, TreeId, Uuid};
+        use parking_lot::Mutex;
+
+        let shared = BridgeShared::new();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&heard);
+        shared.set_assistive_focus_listener(Arc::new(move |node| record.lock().push(node)));
+
+        let foreign = TreeId(Uuid::from_u128(7));
+        shared.notify_assistive_focus(Some((NodeId(3), TreeId::ROOT)));
+        shared.notify_assistive_focus(Some((NodeId(3), foreign)));
+        shared.notify_assistive_focus(None);
+        assert_eq!(*heard.lock(), [Some(NodeId(3)), None, None]);
     }
 }

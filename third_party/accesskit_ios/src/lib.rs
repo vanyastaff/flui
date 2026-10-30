@@ -31,6 +31,7 @@ mod util;
 
 mod adapter;
 pub use adapter::Adapter;
+pub use context::PlatformFocusHandler;
 
 mod event;
 pub use event::QueuedEvents;

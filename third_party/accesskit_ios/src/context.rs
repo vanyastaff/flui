@@ -3,7 +3,7 @@
 // the LICENSE-APACHE file) or the MIT license (found in
 // the LICENSE-MIT file), at your option.
 
-use accesskit::{ActionHandler, ActionRequest};
+use accesskit::{ActionHandler, ActionRequest, NodeId, TreeId};
 use accesskit_consumer::{FullNodeId, Tree};
 use hashbrown::HashMap;
 use objc2::rc::{Retained, WeakId};
@@ -14,21 +14,73 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::node::PlatformNode;
 
-pub(crate) trait ActionHandlerNoMut {
-    fn do_action(&self, request: ActionRequest);
+/// Told when the assistive technology's own cursor (VoiceOver's) moves to a
+/// node of the tree or leaves it. This is not the tree's focus, which the
+/// application owns and publishes.
+pub trait PlatformFocusHandler {
+    /// The cursor moved to `node`, or left the tree for `None`.
+    fn platform_focus_changed(&mut self, node: Option<(NodeId, TreeId)>);
 }
 
-pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>);
+pub(crate) trait ActionHandlerNoMut {
+    fn do_action(&self, request: ActionRequest);
+
+    /// Tell the platform focus handler, if there is one.
+    fn platform_focus_changed(&self, _node: Option<(NodeId, TreeId)>) {}
+}
+
+/// The platform focus handler, with the moves made while it runs: those are
+/// told in order once it returns, so a re-entrant move is neither lost nor
+/// told inside the handler.
+struct PlatformFocusCell {
+    handler: RefCell<Box<dyn PlatformFocusHandler>>,
+    pending: RefCell<Vec<Option<(NodeId, TreeId)>>>,
+}
+
+pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>, Option<PlatformFocusCell>);
 
 impl<H: 'static + ActionHandler> ActionHandlerWrapper<H> {
     pub(crate) fn new(inner: H) -> Self {
-        Self(RefCell::new(inner))
+        Self(RefCell::new(inner), None)
+    }
+
+    pub(crate) fn with_platform_focus_handler(
+        inner: H,
+        handler: impl 'static + PlatformFocusHandler,
+    ) -> Self {
+        Self(
+            RefCell::new(inner),
+            Some(PlatformFocusCell {
+                handler: RefCell::new(Box::new(handler)),
+                pending: RefCell::new(Vec::new()),
+            }),
+        )
     }
 }
 
 impl<H: ActionHandler> ActionHandlerNoMut for ActionHandlerWrapper<H> {
     fn do_action(&self, request: ActionRequest) {
         self.0.borrow_mut().do_action(request)
+    }
+
+    fn platform_focus_changed(&self, node: Option<(NodeId, TreeId)>) {
+        let Some(cell) = &self.1 else {
+            return;
+        };
+        cell.pending.borrow_mut().push(node);
+        let Ok(mut handler) = cell.handler.try_borrow_mut() else {
+            return;
+        };
+        loop {
+            let next = {
+                let mut pending = cell.pending.borrow_mut();
+                if pending.is_empty() {
+                    break;
+                }
+                pending.remove(0)
+            };
+            handler.platform_focus_changed(next);
+        }
     }
 }
 

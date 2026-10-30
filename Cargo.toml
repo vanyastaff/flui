@@ -59,6 +59,9 @@ members = [
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
+# A vendored crate is built by the members that depend on it, under its own
+# lints, not as a member of FLUI's (third_party/README.md).
+exclude = ["third_party"]
 
 # No `default-members`: a bare `cargo build` at the root builds the `flui`
 # facade alone; `--workspace` builds everything. cargo-hack drives each package
@@ -678,6 +681,12 @@ struct_excessive_bools = "allow"
 # no runtime difference. Keep the trait implementation family consistent;
 # this also applies to custom Asset implementations with immediately ready data.
 unused_async_trait_impl = "allow"
+
+[patch.crates-io]
+# VoiceOver's cursor reaches FLUI through a hook the published adapter does not
+# have yet (gap 36); the change is listed in third_party/README.md, and the
+# entry goes once the hook is upstream.
+accesskit_ios = { path = "third_party/accesskit_ios" }
 
 [package]
 publish = ["crates-io"]

@@ -419,19 +419,29 @@ declare_class!(
 
         #[method(accessibilityElementDidBecomeFocused)]
         fn element_did_become_focused(&self) {
-            self.resolve_with_context(|node, _, context| {
+            let moved = self.resolve_with_context(|node, _, context| {
                 *context.platform_focus.borrow_mut() = Some(node.id());
+                (Rc::clone(context), node.locate())
             });
+            // Told once the tree is no longer borrowed: the handler may update it.
+            if let Some((context, node)) = moved {
+                context.action_handler.platform_focus_changed(Some(node));
+            }
         }
 
         #[method(accessibilityElementDidLoseFocus)]
         fn element_did_lose_focus(&self) {
-            self.resolve_with_context(|node, _, context| {
+            let left = self.resolve_with_context(|node, _, context| {
                 let mut platform_focus = context.platform_focus.borrow_mut();
                 if *platform_focus == Some(node.id()) {
                     *platform_focus = None;
+                    return Some(Rc::clone(context));
                 }
+                None
             });
+            if let Some(context) = left.flatten() {
+                context.action_handler.platform_focus_changed(None);
+            }
         }
 
         #[method_id(accessibilityIdentifier)]
