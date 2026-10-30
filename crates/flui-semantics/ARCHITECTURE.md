@@ -492,7 +492,11 @@ still reads. A platform `SetTextSelection` names run positions, so the owner dec
 (`SemanticsOwner::semantics_action_request_for`, `PipelineOwner::decode_semantics_action`):
 both ends must lie in the target field's current runs, else `ActionDecodeError::InvalidTextPosition`,
 and the handler receives a `TextSelection` in bytes of the value. A request on a run goes to its
-field. An agent reads the value, not the runs.
+field. An agent reads the value, not the runs. `RenderEditable` builds the runs from
+`TextPainter::line_layouts`, cutting a cluster longer than 255 bytes into pieces and a run at 256
+characters, with the word starts the caret steps between (`text_boundaries::word_starts`);
+`EditableText` takes a selection or a replacement through its keyboard edit path, on the source
+behind its mask.
 
 **Why.** AccessKit reads text only through `TextRun` children, and a `TextPosition` is a bare
 node id: a reissued identity would point an old selection at other text. Separate types for run
@@ -504,7 +508,9 @@ positions and editor bytes make a mix-up a type error.
 `runs_without_identities_are_withheld_and_reported`,
 `a_run_is_checked_against_accesskits_model` in `tests/text_runs.rs`;
 `a_fields_runs_keep_their_identities_until_their_text_changes` in
-`crates/flui-widgets/tests/semantics.rs`.
+`crates/flui-widgets/tests/semantics.rs`; for `EditableText`, `a_screen_reader_moves_by_word_where_the_caret_steps`,
+`a_screen_reader_types_into_an_empty_field_and_selects_in_it`, `a_long_cluster_and_a_long_line_read_whole` and
+`a_password_field_publishes_only_its_mask` in `crates/flui-widgets/tests/editable_text.rs`.
 
 ### A header publishes AccessKit's `Heading` at its level
 
