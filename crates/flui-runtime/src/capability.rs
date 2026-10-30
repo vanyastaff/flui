@@ -263,13 +263,44 @@ impl OwnerJobs {
         }
         ran
     }
+
+    /// Whether a job waits for the next drain.
+    pub(crate) fn has_queued(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
+    /// The UI runtime retires: its pending completions end, then the jobs
+    /// still queued are dropped unrun, each under its own catch. Returns the
+    /// first panic for the runtime's teardown to keep with its own first
+    /// failure; after it, or while the thread unwinds, a queued job is
+    /// leaked rather than dropped.
+    #[must_use = "the first panic of a retirement belongs to the runtime's teardown"]
+    pub(crate) fn retire(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        let mut first = self.pending.retire();
+        while let Ok(job) = self.rx.try_recv() {
+            if first.is_some() || std::thread::panicking() {
+                std::mem::forget(job);
+            } else if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(job)))
+            {
+                first = Some(payload);
+            }
+        }
+        first
+    }
 }
 
 impl Drop for OwnerJobs {
     fn drop(&mut self) {
-        // Retire first: a resolver answering now learns the owner is gone,
-        // and every closure still waiting is dropped unrun.
-        self.pending.retire();
+        // The UI runtime's teardown retires the queue before it resumes its
+        // first failure; this is the backstop for a queue dropped without it.
+        if let Some(payload) = self.retire() {
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }
 

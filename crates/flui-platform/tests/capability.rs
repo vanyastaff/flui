@@ -58,7 +58,9 @@ impl Owner {
     /// completions end.
     fn retire(&self) {
         drop(self.queue.lock().expect("queue").take());
-        self.pending.retire();
+        if let Some(payload) = self.pending.retire() {
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -287,4 +289,153 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
     let refusal = acquire(false).expect_err("absent");
     assert_eq!(refusal.capability(), Some("vibration"));
     assert_eq!(refusal.reason, UnsupportedReason::NotOnThisDevice);
+}
+
+/// Panics when dropped, as a capture with a faulty `Drop` does.
+struct PanicOnDrop(&'static str);
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        panic!("{}", self.0);
+    }
+}
+
+/// Counts its wakes.
+struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for CountingWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_capture_panicking_at_retirement_leaves_the_others_retired() {
+    let owner = Owner::new();
+    let (first, _first_answer) = owner.source.pending::<u32>();
+    let capture = PanicOnDrop("capture dropped at retirement");
+    first.on_complete(move |_| {
+        let _ = &capture;
+    });
+    let (polled, _polled_answer) = owner.source.pending::<u32>();
+    let (last, _last_answer) = owner.source.pending::<u32>();
+    let dropped = Rc::new(Cell::new(false));
+    let flag = DropFlag(Rc::clone(&dropped));
+    last.on_complete(move |_| {
+        let _ = &flag;
+    });
+
+    let woken = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&woken));
+    let mut future = pin!(polled.into_future());
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    );
+
+    let payload = owner
+        .pending
+        .retire()
+        .expect("the capture's panic is handed back");
+    assert_eq!(
+        payload.downcast_ref::<String>().map(String::as_str),
+        Some("capture dropped at retirement")
+    );
+    assert_eq!(
+        woken.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a later completion's future is still woken"
+    );
+    assert!(dropped.get(), "a later closure is still dropped unrun");
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Ready(Err(Abandoned::OwnerRetired))
+    );
+}
+
+thread_local! {
+    /// What a [`ReenterOnDrop`] waker runs when its last clone drops.
+    static ON_WAKER_DROP: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// A waker whose destructor runs user code, as an executor's may.
+struct ReenterOnDrop;
+
+#[expect(
+    clippy::manual_noop_waker,
+    reason = "the waker's Drop re-enters the owner; Waker::noop has none"
+)]
+impl std::task::Wake for ReenterOnDrop {
+    fn wake(self: Arc<Self>) {}
+}
+
+impl Drop for ReenterOnDrop {
+    fn drop(&mut self) {
+        if let Some(hook) = ON_WAKER_DROP.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+#[test]
+fn a_replaced_waker_may_reenter_the_owner_when_it_drops() {
+    let owner = Rc::new(Owner::new());
+    let (completion, resolver) = owner.source.pending::<u32>();
+    let mut future = pin!(completion.into_future());
+
+    let reentering = Waker::from(Arc::new(ReenterOnDrop));
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&reentering)),
+        Poll::Pending
+    );
+    // The completion now holds the last clone.
+    drop(reentering);
+    resolver.resolve(5).expect("owner live");
+    let turning = Rc::clone(&owner);
+    ON_WAKER_DROP.with(|hook| *hook.borrow_mut() = Some(Box::new(move || turning.turn())));
+
+    let woken = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let next = Waker::from(Arc::clone(&woken));
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&next)),
+        Poll::Pending,
+        "the answer settles in the replaced waker's drop, after this poll's check"
+    );
+    assert!(
+        ON_WAKER_DROP.with(|hook| hook.borrow().is_none()),
+        "the replaced waker dropped"
+    );
+    assert_eq!(
+        woken.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the settle woke the newly registered waker"
+    );
+    assert_eq!(
+        future.as_mut().poll(&mut Context::from_waker(&next)),
+        Poll::Ready(Ok(5))
+    );
+}
+
+#[test]
+fn a_panicking_callback_keeps_a_panicking_capture_and_the_owner_goes_on() {
+    let owner = Owner::new();
+    let (completion, resolver) = owner.source.pending::<u32>();
+    let capture = PanicOnDrop("capture dropped during the callback's unwind");
+    completion.on_complete(move |_| {
+        let _ = &capture;
+        panic!("callback");
+    });
+    resolver.resolve(1).expect("owner live");
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.turn()))
+        .expect_err("the callback's panic reaches the owner");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"callback"));
+
+    let (next, answer) = owner.source.pending::<u32>();
+    let seen = Rc::new(Cell::new(None));
+    let sink = Rc::clone(&seen);
+    next.on_complete(move |outcome| sink.set(Some(outcome)));
+    answer.resolve(2).expect("owner live");
+    owner.turn();
+    assert_eq!(seen.get(), Some(Ok(2)), "the owner keeps settling");
 }

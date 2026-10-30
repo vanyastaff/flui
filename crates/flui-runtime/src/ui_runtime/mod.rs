@@ -493,6 +493,14 @@ impl Drop for UiRuntime {
             self.owner_frame.retire(),
             "ui_runtime owner-local frame retirement",
         );
+        // Its capability completions end next, under the same rule: a
+        // waiting closure's captures and a future's waker run here, contained,
+        // and never after the first failure resumes (ADR-0152).
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            self.owner_jobs.retire(),
+            "ui_runtime capability completion retirement",
+        );
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

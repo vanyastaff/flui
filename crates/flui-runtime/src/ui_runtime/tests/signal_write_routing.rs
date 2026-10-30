@@ -280,6 +280,48 @@ pub(crate) fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
     assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
 }
 
+pub(crate) fn stale_signal_command_disposal_panic_rearms_a_queued_owner_job() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("stale command capture destructor probe");
+        }
+    }
+
+    let (wake, wake_count) = counting_wake();
+    let mut ui_runtime = new_runtime(wake).expect("runtime");
+    let closed = ui_runtime.install_second_presentation_for_test();
+    let stale = graph_of(&ui_runtime, closed).signal(1u32);
+    assert!(ui_runtime.close_presentation_entered(closed));
+    let capture = DropBomb;
+    ui_runtime
+        .command_sender()
+        .send_signal_write(stale.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+        })
+        .expect("stale command enqueues");
+    // A provider's answer, queued behind the command and nothing else.
+    let (completion, resolver) = ui_runtime.owner_jobs.completions().pending::<u32>();
+    let settled = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = std::rc::Rc::clone(&settled);
+    completion.on_complete(move |outcome| sink.set(Some(outcome)));
+    resolver.resolve(5).expect("owner live");
+    let wakes_after_answer = wake_count.load(Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| ui_runtime.drain_commands()));
+
+    outcome.expect_err("the capture destructor panic must propagate");
+    assert_eq!(settled.get(), None, "the answer is still queued");
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_answer + 1,
+        "the panic must leave the queued answer a later owner turn"
+    );
+    let _ = ui_runtime.drain_owner_inbox();
+    assert_eq!(settled.get(), Some(Ok(5)));
+}
+
 pub(crate) fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
     let panic_on_wake = Arc::new(AtomicBool::new(false));
     let panic_on_wake_in_callback = Arc::clone(&panic_on_wake);

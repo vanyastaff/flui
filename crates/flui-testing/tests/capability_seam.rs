@@ -305,3 +305,56 @@ pub(crate) fn an_override_answers_in_place_of_the_built_in() {
     assert_eq!(chosen.text().as_deref(), Some("overridden"));
     assert_eq!(built_in.text(), None);
 }
+
+/// Panics when dropped, as a capture with a faulty `Drop` does.
+struct PanicOnDrop;
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        panic!("capture dropped at teardown");
+    }
+}
+
+/// Counts its wakes.
+struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for CountingWaker {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
+    use std::task::{Context, Poll, Waker};
+
+    let mut host = HeadlessHost::new(window());
+    host.clipboard().hold_reads();
+    let clipboard = acquire(&mut host).expect("provided");
+    let capture = PanicOnDrop;
+    clipboard.read_text().on_complete(move |_| {
+        let _ = &capture;
+    });
+    let woken = std::sync::Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let waker = Waker::from(std::sync::Arc::clone(&woken));
+    let mut later = std::pin::pin!(clipboard.read_text().into_future());
+    assert_eq!(
+        later.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    );
+
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host)))
+        .expect_err("the capture's panic reaches whoever drops the runtime");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"capture dropped at teardown")
+    );
+    assert_eq!(
+        woken.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the read after the panicking one is still woken"
+    );
+    assert_eq!(
+        later.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Ready(Err(Abandoned::OwnerRetired))
+    );
+}

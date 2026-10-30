@@ -247,6 +247,11 @@ fn capability_seam() {
                 "capability_seam::an_override_answers_in_place_of_the_built_in",
                 capability_seam::an_override_answers_in_place_of_the_built_in as fn(),
             ),
+            (
+                "capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner",
+                capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner
+                    as fn(),
+            ),
         ],
     );
 }

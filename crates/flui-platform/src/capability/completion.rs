@@ -5,6 +5,7 @@ use std::{
     cell::{Cell, RefCell},
     fmt,
     future::Future,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     pin::Pin,
     rc::Rc,
     sync::Arc,
@@ -29,7 +30,10 @@ pub enum Abandoned {
 
 type Outcome<T> = Result<T, Abandoned>;
 type Shared<T> = Arc<Mutex<Option<Outcome<T>>>>;
-type Waiting<T> = Box<dyn FnOnce(Outcome<T>)>;
+// `FnMut`, called at most once: a panic in it leaves its captures in the box,
+// which is then kept rather than destroyed mid-unwind, where a capture whose
+// `Drop` panics too would abort the process.
+type Waiting<T> = Box<dyn FnMut(Outcome<T>)>;
 
 /// The owner side of one completion.
 struct Local<T> {
@@ -63,9 +67,14 @@ impl<T: 'static> Settle for Local<T> {
             .or_else(|| self.shared.lock().take());
         let Some(outcome) = outcome else { return };
         let on_complete = self.on_complete.borrow_mut().take();
-        if let Some(on_complete) = on_complete {
+        if let Some(mut on_complete) = on_complete {
             self.taken.set(true);
-            on_complete(outcome);
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| on_complete(outcome))) {
+                // Kept, not destroyed during this unwind (see `Waiting`).
+                std::mem::forget(on_complete);
+                resume_unwind(payload);
+            }
+            drop(on_complete);
         } else {
             *self.settled.borrow_mut() = Some(outcome);
             let waker = self.waker.borrow_mut().take();
@@ -237,11 +246,15 @@ pub struct Completion<T: 'static> {
 }
 
 impl<T: 'static> Completion<T> {
-    /// Runs `f` with the outcome at an owner turn boundary.
+    /// Runs `f` once, with the outcome, at an owner turn boundary.
+    ///
+    /// `f` is an `FnMut` called at most once: if it panics, its captures are
+    /// kept rather than dropped during the unwind, so a capture whose `Drop`
+    /// also panics cannot abort the process.
     ///
     /// When the outcome has already settled, `f` runs at the owner's next
     /// turn, not inside this call.
-    pub fn on_complete(mut self, f: impl FnOnce(Result<T, Abandoned>) + 'static) {
+    pub fn on_complete(mut self, f: impl FnMut(Result<T, Abandoned>) + 'static) {
         let Some(inner) = self.inner.take() else {
             return;
         };
@@ -328,7 +341,10 @@ impl<T: 'static> Future for CompletionFuture<T> {
         if let Some(outcome) = inner.take() {
             return Poll::Ready(outcome);
         }
-        *inner.local.waker.borrow_mut() = Some(cx.waker().clone());
+        // The replaced waker drops after the borrow ends: its `Drop` may re-enter
+        // the owner and settle this completion.
+        let replaced = inner.local.waker.replace(Some(cx.waker().clone()));
+        drop(replaced);
         Poll::Pending
     }
 }

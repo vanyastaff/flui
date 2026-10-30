@@ -46,16 +46,33 @@ impl WebClipboard {
     }
 }
 
+/// The page's Navigator Clipboard API, or `None` where it lacks `method`:
+/// an insecure context or an older browser leaves `navigator.clipboard`
+/// undefined, and calling into it would throw before any promise exists.
+fn system_clipboard(method: &str) -> Option<web_sys::Clipboard> {
+    let navigator = web_sys::window()?.navigator();
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).ok()?;
+    if clipboard.is_undefined() || clipboard.is_null() {
+        return None;
+    }
+    // Firefox long had the object without `readText`.
+    let callable = js_sys::Reflect::get(&clipboard, &method.into()).ok()?;
+    if !callable.is_function() {
+        return None;
+    }
+    Some(wasm_bindgen::JsCast::unchecked_into(clipboard))
+}
+
 impl NativeClipboard for WebClipboard {
     fn read_text(&self, answer: Resolver<Option<String>>) {
         let fallback = Arc::clone(&self.fallback);
-        let Some(window) = web_sys::window() else {
+        let Some(clipboard) = system_clipboard("readText") else {
             let text = fallback.lock().clone();
             // A retired owner has nobody left to answer.
             let _ = answer.resolve(text);
             return;
         };
-        let promise = window.navigator().clipboard().read_text();
+        let promise = clipboard.read_text();
         wasm_bindgen_futures::spawn_local(async move {
             let text = match JsFuture::from(promise).await {
                 Ok(value) => value.as_string(),
@@ -72,10 +89,10 @@ impl NativeClipboard for WebClipboard {
     }
 
     fn write_text(&self, text: String) {
-        if let Some(window) = web_sys::window() {
+        if let Some(clipboard) = system_clipboard("writeText") {
             // The promise settles later; a refused write still leaves the
             // fallback, which the next refused read answers.
-            let _ = window.navigator().clipboard().write_text(&text);
+            let _ = clipboard.write_text(&text);
         }
         *self.fallback.lock() = Some(text);
     }

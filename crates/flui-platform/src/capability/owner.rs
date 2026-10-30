@@ -1,5 +1,7 @@
 //! The way back to the owner thread.
 
+use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 /// The owner has retired: it runs nothing more, and what was posted to it is
@@ -131,7 +133,14 @@ impl PendingCompletions {
     /// [`Abandoned::OwnerRetired`](super::Abandoned::OwnerRetired), and the
     /// closures waiting on them are dropped unrun. A completion that settled
     /// before keeps its value.
-    pub fn retire(&self) {
+    ///
+    /// Each completion is retired under its own catch, so a capture whose
+    /// `Drop` panics, or a waker that panics, leaves the others retired and
+    /// woken. The first such panic is returned for the owner to resume with
+    /// its own first failure; while the thread is already unwinding, what is
+    /// left is leaked instead, as a second panic would abort.
+    #[must_use = "the first panic of a retirement belongs to the owner's teardown"]
+    pub fn retire(&self) -> Option<Box<dyn Any + Send>> {
         let pending: Vec<_> = {
             let mut state = self.inner.borrow_mut();
             state.retired = true;
@@ -142,11 +151,19 @@ impl PendingCompletions {
                 .filter_map(|slot| slot.settle)
                 .collect()
         };
-        // Dropped with no borrow held: a waiting closure's captures may run
-        // user code in their `Drop`.
+        // Run with no borrow held: a waiting closure's captures and a waker
+        // may run user code that re-enters this table.
+        let mut first = None;
         for settle in pending {
-            settle.abandon_on_retire();
+            if std::thread::panicking() {
+                std::mem::forget(settle);
+                continue;
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.abandon_on_retire())) {
+                first.get_or_insert(payload);
+            }
         }
+        first
     }
 
     /// Whether the owner has retired.
