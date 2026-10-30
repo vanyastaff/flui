@@ -435,7 +435,12 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
                 >= SESSION_END_USER_CODE_THRESHOLD
             {
                 deliver_contained(&HostNotice::SessionEnded);
-                if ends_application {
+                // The notice's subscribers may have spent the margin: the
+                // close delivery runs application code too, so it asks again.
+                if ends_application
+                    && deadline.saturating_duration_since(std::time::Instant::now())
+                        >= SESSION_END_USER_CODE_THRESHOLD
+                {
                     deliver_session_end_close();
                 }
             }

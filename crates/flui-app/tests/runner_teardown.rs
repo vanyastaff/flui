@@ -204,12 +204,20 @@ fn runner_teardown() {
                 a_refused_session_end_is_released_when_its_window_closes,
             ),
             (
+                "a_refused_session_end_is_released_when_an_earlier_close_carries_out",
+                a_refused_session_end_is_released_when_an_earlier_close_carries_out,
+            ),
+            (
                 "session_end_commits_composition_before_the_flush",
                 session_end_commits_composition_before_the_flush,
             ),
             (
                 "a_notify_only_session_end_leaves_the_application_running",
                 a_notify_only_session_end_leaves_the_application_running,
+            ),
+            (
+                "session_end_skips_detached_once_the_notice_spent_the_margin",
+                session_end_skips_detached_once_the_notice_spent_the_margin,
             ),
         ],
     );
@@ -358,12 +366,15 @@ struct ComposingField {
         flui_native::HeadlessOwnerTurns,
         Rc<std::cell::Cell<Option<bool>>>,
     )>,
+    /// How long the field's session-end notice subscriber blocks.
+    notice_delay: Duration,
 }
 
 struct ComposingFieldState {
     field: ComposingField,
     token: Option<flui_interaction::ClientToken>,
     subscription: Option<flui_view::LifecycleSubscription>,
+    notices: Option<flui_view::HostNoticeSubscription>,
 }
 
 impl flui_view::StatefulView for ComposingField {
@@ -374,6 +385,7 @@ impl flui_view::StatefulView for ComposingField {
             field: self.clone(),
             token: None,
             subscription: None,
+            notices: None,
         }
     }
 }
@@ -402,6 +414,17 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
             })
             .expect("the lifecycle is open");
         self.subscription = Some(subscription);
+        let delay = self.field.notice_delay;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                        std::thread::sleep(delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
     }
 
     fn build(
@@ -436,6 +459,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
         store: Rc::clone(&store),
         seen: Rc::clone(&seen),
         loop_at_detached: None,
+        notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
         .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
@@ -765,6 +789,39 @@ pub(crate) fn a_refused_session_end_is_released_when_its_window_closes() {
     run.join().expect("the run returns Ok");
 }
 
+/// A window whose user close was already pending when it refused the
+/// session end releases the session when its decision carries that earlier
+/// close out: the window is gone, whichever record the guard reports
+/// (ADR-0260 §1).
+///
+/// Red-check: release a refusal only for a close reported as `SessionEnd` —
+/// the platform stays held after the window closed.
+pub(crate) fn a_refused_session_end_is_released_when_an_earlier_close_carries_out() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    let windows = run.open_windows();
+    assert!(
+        !windows[0].simulate_close(),
+        "the decision keeps the window"
+    );
+    assert_eq!(pending_reason(&shared), Some(flui_view::CloseReason::User));
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.run_owner_turn();
+    assert_eq!(events.session_end_releases(), 0, "the window still refuses");
+
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.run_owner_turn();
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the user's close carried out released the session end"
+    );
+    run.join().expect("the run returns Ok");
+}
+
 /// The session's end commits a field's composition and tells its Detached
 /// observers before the flush writes, so what they publish holds the
 /// preedit as text (ADR-0260 §3).
@@ -787,6 +844,7 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
         store: Rc::clone(&store),
         seen: Rc::clone(&seen),
         loop_at_detached: Some((platform.owner_turns(), Rc::clone(&running))),
+        notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
         .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
@@ -834,6 +892,7 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
         store: flui_interaction::testing::InMemoryTextStore::new("ab"),
         seen: Rc::clone(&seen),
         loop_at_detached: None,
+        notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
         .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
@@ -863,4 +922,43 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
     run.run_owner_turn();
     run.join()
         .expect("closing the window afterwards returns Ok");
+}
+
+/// How long the session end's notice subscriber blocks in
+/// [`session_end_skips_detached_once_the_notice_spent_the_margin`]: past the
+/// moment less than one second of the budget remains.
+const SPENT_MARGIN: Duration = Duration::from_millis(2_500);
+
+/// A session-end notice subscriber that spends the margin for application code
+/// keeps the close delivery from starting: the flush still has the rest of
+/// the budget (ADR-0260 §3).
+///
+/// Red-check: check the margin only before the notice — the field's Detached
+/// observer runs while the loop still runs.
+pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::RecordingTextStoreHost::new()
+            as Rc<dyn flui_platform::text_store::TextStoreHost>
+    });
+    let running = Rc::new(std::cell::Cell::new(None));
+    let field = ComposingField {
+        store: flui_interaction::testing::InMemoryTextStore::new("ab"),
+        seen: Rc::clone(&seen),
+        loop_at_detached: Some((platform.owner_turns(), Rc::clone(&running))),
+        notice_delay: SPENT_MARGIN,
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+
+    run.end_session(SessionEndPhase::Ending);
+    assert_eq!(
+        running.get(),
+        Some(false),
+        "Detached came only from the teardown the quit started, not from the \
+         session end's delivery"
+    );
+    run.join().expect("the session end returns Ok");
 }
