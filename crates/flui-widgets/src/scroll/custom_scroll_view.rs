@@ -96,7 +96,7 @@ impl CustomScrollView {
 
     /// Inject a shared [`ScrollPosition`] as the composed viewport's offset,
     /// as [`ListView::position`](crate::ListView::position) does: a
-    /// [`Scrollable`] drives it, and the viewport flushes its committed
+    /// [`Scrollable`](crate::Scrollable) drives it, and the viewport flushes its committed
     /// content extents back into it. Mutually exclusive with
     /// [`CustomScrollView::offset`]: whichever is called last wins.
     #[must_use]
