@@ -14,13 +14,13 @@ costs no clone.
 
 ## Current ADR-0027 shape
 
-`HitTestEntry` is data-only:
+`HitTestEntry` carries no callbacks:
 
 - `target: RenderId`
 - `transform: Option<Matrix4>` (global-to-local)
 - `pointer_target: Option<PointerTarget>`
 - `scroll_target: Option<ScrollTarget>` and `pan_zoom_target: Option<PanZoomTarget>`
-- `metadata: Option<Arc<dyn Any + Send + Sync>>`
+- `metadata: Option<HitMetadata>` (an owner-local, type-erased value)
 - `cursor: CursorRequest` and `mouse_annotation: Option<MouseTrackerAnnotation>`
 
 Executable pointer callbacks do not live in render storage or hit-test entries.

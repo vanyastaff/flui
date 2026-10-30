@@ -702,7 +702,7 @@ fn rejected_viewport_resize_preserves_the_fractional_page() {
 }
 
 fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
-    use flui_animation::{MotionClock, Vsync, curve::ArcCurve, curves};
+    use flui_animation::{MotionClock, Vsync, curve::SharedCurve, curves};
     use flui_objects::{RenderAnimatedSize, SizeMotion};
     use flui_painting::{Alignment, paint::Clip};
     use std::time::Duration;
@@ -712,7 +712,7 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let size = SizeMotion::new(
         flui_animation::MotionSpec::Curve {
             duration: Duration::from_secs(1),
-            curve: ArcCurve::new(curves::LINEAR),
+            curve: SharedCurve::new(curves::LINEAR),
         },
         Some(&registry),
     );

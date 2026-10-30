@@ -66,7 +66,7 @@ Implicit opacity, padding and rotation consume that observed motion directly.
 Programmatic scroll commands retarget their existing driver, synchronizing only
 external position writes. A moving position asked to stop where it currently is
 retains its incoming velocity and brakes; equality is an immediate fast path only
-at rest. Scroll and page methods use `ArcCurve`, matching the motion contract.
+at rest. Scroll and page methods use `SharedCurve`, matching the motion contract.
 
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the

@@ -22,8 +22,8 @@ use crate::retarget::{Reversal, Segment, eased_progress};
 use crate::simulation::Simulation;
 use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
-    Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus, ArcCurve,
-    DrivenController, MotionSpec, Vsync, VsyncRegistrationError, curves,
+    Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus,
+    DrivenController, MotionSpec, SharedCurve, Vsync, VsyncRegistrationError, curves,
 };
 
 mod sealed {
@@ -179,14 +179,14 @@ impl<T> Admission<T> {
 /// and unregisters the run.
 ///
 /// ```
-/// use flui_animation::{AnimatedValue, ArcCurve, curves, MotionClock, MotionSpec, Vsync};
+/// use flui_animation::{AnimatedValue, SharedCurve, curves, MotionClock, MotionSpec, Vsync};
 /// use std::time::Duration;
 ///
 /// let registry = Vsync::new();
 /// let mut clock = MotionClock::new();
 /// let motion = MotionSpec::Curve {
 ///     duration: Duration::from_millis(200),
-///     curve: ArcCurve::new(curves::EASE_IN_OUT),
+///     curve: SharedCurve::new(curves::EASE_IN_OUT),
 /// };
 /// let mut value = AnimatedValue::new(0.0_f64, motion, Some(&registry)).expect("finite value");
 /// let old = value.animate_to(1.0).expect("finite target");
@@ -531,7 +531,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         if matches!(change, Change::Snap) {
             segment_motion = Terminal::new(MotionSpec::Curve {
                 duration: Duration::ZERO,
-                curve: ArcCurve::new(curves::LINEAR),
+                curve: SharedCurve::new(curves::LINEAR),
             });
         } else if !target_changed {
             if let (

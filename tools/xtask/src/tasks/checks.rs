@@ -10,7 +10,7 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
-    key_vocabulary, markers, module_dag, panic_boundary, perf, platform_floor,
+    icon_import, key_vocabulary, markers, module_dag, panic_boundary, perf, platform_floor,
     recording_vocabulary, testing, toolchain, wgsl, workspace,
 };
 
@@ -101,7 +101,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 31] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 32] {
     [
         (
             if strict {
@@ -142,6 +142,10 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 31] {
         // offline, no archive built
         ("font-assets --package-list", |args| {
             fonts::font_assets(&parsed(args)?)
+        }),
+        // the Material animated icon constants against their committed key frames
+        ("icon-import material", |args| {
+            icon_import::icon_import(&parsed(args)?)
         }),
         ("file-length --self-test", |args| {
             file_length::file_length(&parsed(args)?)
@@ -217,6 +221,7 @@ mod tests {
                 "panic-boundary",
                 "paths-filter",
                 "font-assets --package-list",
+                "icon-import material",
                 "file-length --self-test",
                 "file-length",
                 "markers --self-test",

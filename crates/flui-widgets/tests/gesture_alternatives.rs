@@ -1451,7 +1451,7 @@ impl ViewState<PageButtons> for PageButtonsState {
                     .child(SizedBox::new(48.0, 48.0)),
             )
             .on_press(move |_cx| {
-                let curve = flui_animation::ArcCurve::new(flui_animation::curves::EASE_IN_OUT);
+                let curve = flui_animation::SharedCurve::new(flui_animation::curves::EASE_IN_OUT);
                 if forward {
                     pager.next_page(Duration::from_millis(300), curve);
                 } else {

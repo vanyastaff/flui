@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flui_animation::{
     Animatable, Animation, AnimationController, AnimationError, AnimationRunFuture,
-    AnimationStatus, ArcCurve, CurvedAnimation, DrivenController, StatusSubscription,
+    AnimationStatus, CurvedAnimation, DrivenController, SharedCurve, StatusSubscription,
 };
 use flui_foundation::panic::{PanicRecovery, RecoveryScope};
 use flui_objects::{ShimmerSweep, TranslationFraction};
@@ -107,7 +107,7 @@ impl Choreography {
 
     /// The easing of the widget's own progress: none for a timeline, whose
     /// entries ease themselves along real time.
-    fn curve(&self) -> Option<ArcCurve> {
+    fn curve(&self) -> Option<SharedCurve> {
         match self {
             Self::Effects(_) => None,
             Self::Transition(transition) => Some(transition.run_curve()),

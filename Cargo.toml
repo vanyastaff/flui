@@ -408,6 +408,8 @@ glam = { version = "0.34", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
+# XML for `cargo xtask icon-import` (SVG and Android AnimatedVectorDrawable files).
+roxmltree = "0.20"
 # Private sRGB/Oklab conversions; FLUI owns admission and interpolation policy.
 color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.

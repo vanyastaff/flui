@@ -1,12 +1,12 @@
 # text-ime — задачи (уровень 1)
 
-- **Статус:** Утверждена владельцем 2026-10-28; исполнение
+- **Статус:** Утверждена владельцем 2026-10-28; исполнение, ждут T11 (P10) и T10 (FD11)
 - **Design:** [design.md](design.md) (W1–W11; решения владельца 2026-10-28 — в шапке);
   [requirements.md](requirements.md); закрытие во время композиции — [teardown/tasks.md](../teardown/tasks.md)
   T13; приложение приёмки — [persistence/tasks.md](../persistence/tasks.md) P10
-- **Итог:** из 10 задач прежнего плана сделаны T1, T2a, T2b, T4, T6; T5, T9 сделаны в части;
-  T7 и T8 устарели. Осталось пять задач: T3, T5 и T9 можно начинать сейчас, параллельно; новая
-  T11 (строки IME на приложении приёмки) после P10, T3, T5; T10 — нативное доказательство после
+- **Итог:** из 10 задач прежнего плана сделаны T1, T2a, T2b, T3, T4, T5, T6, T9;
+  T7 и T8 устарели. Осталось две задачи: новая
+  T11 (строки IME на приложении приёмки) после persistence P10; T10 — нативное доказательство после
   flui-driver.
 
 ## Правила исполнения
@@ -157,6 +157,6 @@ graph LR
   `a_reset_mid_composition_removes_the_preedit` (в `crates/flui-widgets/tests/form.rs`, рядом с
   остальными строками композиции формы). Красные по assert на `df3d56dd6`, зелёные после;
   проверено на Windows 2026-10-28
-- [ ] T9 — остаток: реконверсия; L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` написана (кейс «reconversion requests» в `tsf/tests.rs`, clippy под Windows чистый), ждёт прогона `-p flui-native` на Windows
+- [x] T9 — остаток: реконверсия; #1965, #1977. L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` (кейс «reconversion requests» в `tsf/tests.rs`) зелёная на Windows на `51030c2` 2026-10-29: 13/13 кейсов TSF, `QueryRange` и `Reconvert` отвечают Ok, документ не меняется. Ручная проверка 変換 с Microsoft IME ja-JP — у Вани
 - [ ] T11 — строки IME на приложении приёмки
 - [ ] T10 — нативное доказательство (после flui-driver FD11)

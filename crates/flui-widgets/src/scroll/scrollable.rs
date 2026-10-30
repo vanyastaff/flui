@@ -63,7 +63,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
@@ -608,7 +607,7 @@ impl StatefulView for Scrollable {
         ScrollableState {
             _key_cancel: key_cancel,
             recognizer_owner: Rc::new(()),
-            default_physics: Arc::new(ClampingScrollPhysics::new()),
+            default_physics: Rc::new(ClampingScrollPhysics::new()),
             focus: Rc::clone(&focus),
             reveal: Rc::new(ScrollReveal::new(focus)),
             scroll_controller: self.controller.clone().unwrap_or_default(),

@@ -46,7 +46,7 @@ fn list_at_the_top_of_a_springing_list(
             top.connection(),
             Scrollable::new()
                 .controller(outer.clone())
-                .physics(Arc::new(flui_widgets::BouncingScrollPhysics::new()))
+                .physics(std::rc::Rc::new(flui_widgets::BouncingScrollPhysics::new()))
                 .child(content),
         )
         .boxed(),
