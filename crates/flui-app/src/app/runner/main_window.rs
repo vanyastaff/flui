@@ -565,7 +565,7 @@ pub(super) fn drive_main_window() {
 }
 /// Ask every presentation whether the quit the application asked for
 /// ([`AppHandle::request_quit`](crate::app::AppHandle::request_quit)) may go
-/// ahead, as a close for [`CloseReason::Program`]: its guard first, then its
+/// ahead, as a close for [`CloseReason::Program`](crate::app::CloseReason::Program): its guard first, then its
 /// handler. A presentation the deferred quit waits on and that is gone
 /// consents. Runs on the owner's turn, outside every runtime lease.
 pub(super) fn drive_program_quit() {
