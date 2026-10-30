@@ -19,3 +19,5 @@ mod incremental_flush;
 mod locate;
 #[path = "text_runs.rs"]
 mod text_runs;
+#[path = "wait.rs"]
+mod wait;

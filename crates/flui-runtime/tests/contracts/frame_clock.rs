@@ -315,7 +315,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
 
     let mut clock = ManualClock::new();
     let fonts = flui_painting::FontCollection::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -560,7 +560,7 @@ fn unknown_background_deadline_keeps_healthy_progress_once() {
 
 fn background_deadline_case(unknown: bool) {
     let mut clock = ManualClock::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -745,7 +745,7 @@ fn background_deadline_case(unknown: bool) {
 
 fn delivery_case(delivery: Delivery) {
     let mut clock = ManualClock::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -1088,7 +1088,7 @@ fn run_source(
 
 fn source_failure_case(failure: SourceFailure) {
     let mut clock = ManualClock::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -1292,7 +1292,7 @@ impl FrameSink for Sink {
 #[test]
 fn one_pump_shares_its_selected_time_across_parent_and_child() {
     let host = ManualClock::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -1358,7 +1358,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
 }
 
 fn manual_frame_runtime(host: &ManualClock) -> UiRuntime {
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(

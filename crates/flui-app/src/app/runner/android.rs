@@ -217,7 +217,7 @@ where
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
-        // `UiRuntime::new` applies the DPR to the freshly built pipeline
+        // `UiRuntime::try_new` applies the DPR to the freshly built pipeline
         // before returning.
         let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {

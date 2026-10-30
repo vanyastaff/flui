@@ -81,7 +81,7 @@ where
         let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
 
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
-        // transform maps to the physical canvas. `UiRuntime::new` applies the
+        // transform maps to the physical canvas. `UiRuntime::try_new` applies the
         // DPR to the freshly built pipeline before returning.
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let scale_factor = geometry.scale;

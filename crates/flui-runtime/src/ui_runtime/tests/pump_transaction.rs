@@ -88,8 +88,8 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
 }
 
 /// A UI runtime on its own manual-clock source over a headless test window.
-fn manual_clock_ui_runtime(clock: &ManualClock) -> UiRuntime {
-    UiRuntime::new(
+pub(super) fn manual_clock_ui_runtime(clock: &ManualClock) -> UiRuntime {
+    UiRuntime::try_new(
         test_window(),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(

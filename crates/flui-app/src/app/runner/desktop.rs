@@ -119,7 +119,7 @@ where
 
     // 3. Mount root widget at the LOGICAL size; the framework lays out
     // in logical pixels and the paint root's DPR transform maps to the
-    // physical surface. `UiRuntime::new` applies the DPR to the freshly
+    // physical surface. `UiRuntime::try_new` applies the DPR to the freshly
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
     let scale_factor = geometry.scale;
