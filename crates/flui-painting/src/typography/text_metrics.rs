@@ -615,3 +615,56 @@ impl LineMetrics {
         self.ascent + self.descent
     }
 }
+
+/// One extended grapheme cluster where it is painted: its bytes of the text
+/// and the horizontal span its glyphs cover.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextCharacter {
+    /// The cluster's bytes of the text.
+    pub range: std::ops::Range<usize>,
+    /// The x of its left edge in the painted box.
+    pub left: f64,
+    /// The x of its right edge in the painted box.
+    pub right: f64,
+}
+
+/// A stretch of one line laid out in one direction: its characters in logical
+/// order, covering a contiguous range of the text.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextLineRun {
+    /// The direction its characters are laid out in.
+    pub direction: super::TextDirection,
+    /// Its characters, in logical order; never empty.
+    pub characters: Vec<TextCharacter>,
+}
+
+impl TextLineRun {
+    /// The bytes of the text the run covers.
+    #[must_use]
+    pub fn range(&self) -> std::ops::Range<usize> {
+        let start = self.characters.first().map_or(0, |first| first.range.start);
+        let end = self.characters.last().map_or(start, |last| last.range.end);
+        start..end
+    }
+}
+
+/// One laid-out line: its vertical extent and its runs in logical order.
+///
+/// A line holds its hard break as its last character. An empty line, such
+/// as the one empty text lays out or the one after a trailing break, has no
+/// runs and starts at `start`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextLineLayout {
+    /// The y of the line box's top in the painted box.
+    pub top: f64,
+    /// The y of the line box's bottom in the painted box.
+    pub bottom: f64,
+    /// Where the line's text starts.
+    pub start: usize,
+    /// The line's runs, in logical order, each starting where the one before
+    /// it ends.
+    pub runs: Vec<TextLineRun>,
+}

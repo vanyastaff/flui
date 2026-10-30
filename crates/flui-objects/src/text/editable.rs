@@ -35,6 +35,8 @@
 
 use std::ops::Range;
 
+mod runs;
+
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
@@ -53,6 +55,7 @@ use flui_rendering::{
         PaintCx,
     },
     parent_data::BoxParentData,
+    semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -331,8 +334,8 @@ impl RenderEditable {
     }
 
     /// Replaces the selected range and returns the invalidation level —
-    /// always paint-only: a selection changes what gets a highlight, never
-    /// glyph shaping or the box's size.
+    /// paint and semantics: a selection changes what gets a highlight and the
+    /// selection the field publishes, never glyph shaping or the box's size.
     pub fn set_selection(
         &mut self,
         range: Option<Range<usize>>,
@@ -343,6 +346,7 @@ impl RenderEditable {
         } else {
             self.selection = clamped;
             flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
         }
     }
 
@@ -842,6 +846,16 @@ impl RenderBox for RenderEditable {
             self.painter
                 .compute_distance_to_actual_baseline(painter_baseline)
         }))
+    }
+
+    /// The field's text as runs, with its selection, for the field node the
+    /// enclosing semantics boundary forms: the value itself is the
+    /// boundary's to declare, so a field that hides its input publishes the
+    /// mask its render object holds and nothing else.
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        if let Some(content) = self.semantics_text_content() {
+            config.set_text_content(content);
+        }
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {

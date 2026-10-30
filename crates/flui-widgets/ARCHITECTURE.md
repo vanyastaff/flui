@@ -2459,8 +2459,8 @@ enclosing word, via
 [`TextPainter::get_word_boundary`](#19-word-and-grapheme-movement-use-icu4x-uax-29-not-dictionary-segmentation)
 — ICU4X word segmentation, over the same segments Ctrl/Alt+Arrow word-jump
 walks, and NOT the same function: the keyboard
-path's `next_word_boundary`/`prev_word_boundary`
-(`crates/flui-widgets/src/text/controller.rs`) answer a directional
+path's `next_word_start`/`previous_word_start`
+(`flui_painting::text_boundaries`, the stops a field also publishes) answer a directional
 "next/previous stop" query with their own asymmetric tie-break, while
 `get_word_boundary` answers "which segment is under this exact
 position" with a different one — see decision #19's own tie-break note.

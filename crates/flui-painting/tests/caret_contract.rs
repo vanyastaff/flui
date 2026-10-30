@@ -275,6 +275,45 @@ pub(crate) fn mixed_bidi_boxes_carry_their_run_direction() {
     );
 }
 
+/// Each line's runs of one direction come in logical order, each a
+/// contiguous range that starts where the one before it ends; the clusters
+/// of a right-to-left run are painted right to left, and the empty line a
+/// trailing break opens has no run and starts at the end of the text.
+pub(crate) fn line_layouts_split_lines_by_direction_in_logical_order() {
+    let text = "abc \u{05D0}\u{05D1}\u{05D2} def\nZ\n";
+    let painter = ltr(text);
+    let lines = painter.line_layouts();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    let first = &lines[0];
+    let directions: Vec<_> = first.runs.iter().map(|run| run.direction).collect();
+    assert_eq!(
+        directions,
+        [TextDirection::Ltr, TextDirection::Rtl, TextDirection::Ltr],
+        "{first:?}"
+    );
+    let mut at = first.start;
+    for run in &first.runs {
+        assert_eq!(run.range().start, at, "{first:?}");
+        for pair in run.characters.windows(2) {
+            assert_eq!(pair[0].range.end, pair[1].range.start, "{run:?}");
+        }
+        at = run.range().end;
+    }
+    assert_eq!(at, lines[1].start, "the first line holds its break");
+    let hebrew = &first.runs[1];
+    assert_eq!(hebrew.range(), 4..10);
+    for pair in hebrew.characters.windows(2) {
+        assert!(
+            pair[0].left >= pair[1].right - EPS,
+            "right to left: {hebrew:?}"
+        );
+    }
+    assert!(lines[1].top >= first.bottom - EPS, "{lines:?}");
+    assert!(
+        lines[2].runs.is_empty() && lines[2].start == text.len(),
+        "{lines:?}"
+    );
+}
 /// After a trailing newline the caret is on the empty line it starts.
 pub(crate) fn a_trailing_newline_puts_the_caret_on_the_empty_line() {
     let painter = ltr("A\n");

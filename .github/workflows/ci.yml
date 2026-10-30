@@ -648,6 +648,18 @@ jobs:
           cargo xtask api-closure
           cargo xtask api-closure --self-test
 
+      # Every place the facade's public API names `Send` or `Sync` is listed,
+      # and the list only shrinks (ADR-0136, ADR-0089 §6). Same loader, private
+      # items included; its self-test reads a built-in document and also runs
+      # in `cargo test -p xtask`.
+      - name: cargo xtask send-positions (+ --self-test)
+        env:
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -euo pipefail
+          cargo xtask send-positions
+          cargo xtask send-positions --self-test
+
       # The contract rides the release train until cargo-semver-checks shows it
       # stable for two trains in a row (ADR-0153). A report, not a gate: before
       # the first publication every change to the contract is a break.

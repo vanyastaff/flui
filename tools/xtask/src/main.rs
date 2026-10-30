@@ -35,6 +35,7 @@ mod platform_floor;
 mod ratchet;
 mod recording_vocabulary;
 mod send_impls;
+mod send_positions;
 mod testing;
 mod toolchain;
 mod wasm;
@@ -117,6 +118,9 @@ enum Command {
     PanicBoundary(panic_boundary::PanicBoundaryArgs),
     /// Check that every `unsafe impl Send`/`Sync` is listed and the list only shrinks (ADR-0136).
     SendImpls(send_impls::SendImplsArgs),
+    /// Check that every place the public API names `Send` or `Sync` is listed and the list
+    /// only shrinks (ADR-0136).
+    SendPositions(send_positions::SendPositionsArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -199,6 +203,7 @@ fn main() -> ExitCode {
         Command::Globals(args) => globals::globals(&args),
         Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
         Command::SendImpls(args) => send_impls::send_impls(&args),
+        Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
