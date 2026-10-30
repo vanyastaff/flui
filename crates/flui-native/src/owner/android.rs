@@ -12,6 +12,8 @@
 //!   each;
 //! - [`ndk`]: the API level and the NDK functions that exist only from a given
 //!   level on, found by name when the platform is built;
+//! - [`frame_clock`]: the choreographer's next frame, which paces the frames
+//!   (ADR-0269);
 //! - [`poll`]: how long one turn of the loop may block (ADR-0249).
 //!
 //! The window is the window feature's (`window::android`): the loop holds it as
@@ -26,6 +28,7 @@
 pub(crate) mod activity;
 pub(crate) mod activity_callbacks;
 pub(crate) mod bridge_slot;
+pub(crate) mod frame_clock;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]
