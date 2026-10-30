@@ -681,6 +681,17 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// The smart zoom counterpart of [`scroll_target`](Self::scroll_target):
+    /// every pointer target on the path observes the platform's smart zoom,
+    /// but only the first (leaf-most) smart zoom target whose handler returns
+    /// `EventPropagation::Stop` acts on it (`HitTestResult::dispatch_smart_zoom`).
+    ///
+    /// Default `None`; a `RenderListener` configured with a claiming handler
+    /// overrides it.
+    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+        None
+    }
+
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Defaults to deferring; `RenderMouseRegion` overrides this so

@@ -55,7 +55,7 @@ use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 use flui_platform::{EventTime, PlatformInput, WindowId};
 use flui_runtime::HostInput;
@@ -237,6 +237,17 @@ pub struct ScriptedPanZoom {
     pub phase: PinchPhase,
 }
 
+/// A trackpad smart zoom: the platform's two-finger double-tap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScriptedSmartZoom {
+    /// Virtual time from the start of the script.
+    pub at: Duration,
+    /// The gesture's pointer.
+    pub pointer: PointerId,
+    /// The point to zoom about.
+    pub position: Offset<f64>,
+}
+
 /// Where a scripted trackpad pinch is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PinchPhase {
@@ -263,6 +274,8 @@ pub enum ScriptStep {
     Scroll(ScriptedScroll),
     /// A trackpad pinch or rotation.
     PanZoom(ScriptedPanZoom),
+    /// A trackpad smart zoom (two-finger double-tap).
+    SmartZoom(ScriptedSmartZoom),
     /// A frame, its vsync at `at`.
     Frame {
         /// Virtual time from the start of the script.
@@ -278,6 +291,7 @@ impl ScriptStep {
             Self::Pointer(step) => step.at,
             Self::Scroll(step) => step.at,
             Self::PanZoom(step) => step.at,
+            Self::SmartZoom(step) => step.at,
             Self::Frame { at } => *at,
         }
     }
@@ -330,6 +344,14 @@ impl ScriptStep {
                     ),
                 )))
             }
+            Self::SmartZoom(step) => HostInput::Platform(PlatformInput::Pointer(
+                PointerEvent::SmartZoom(SmartZoomEvent::new(
+                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        .with_role(PointerRole::Primary),
+                    base + step.at,
+                    position(step.position),
+                )),
+            )),
             Self::Frame { at } => HostInput::Frame {
                 vsync: base + at,
                 target_present: None,
@@ -645,6 +667,11 @@ impl fmt::Display for PointerScript {
                     }
                     PinchPhase::End => writeln!(f, "trackpad pinch end")?,
                 },
+                ScriptStep::SmartZoom(zoom) => writeln!(
+                    f,
+                    "trackpad smart zoom at ({}, {})",
+                    zoom.position.dx, zoom.position.dy
+                )?,
                 ScriptStep::Frame { .. } => writeln!(f, "frame")?,
             }
         }
@@ -1191,6 +1218,23 @@ impl TrackpadScript {
         }
         self.timeline.pinching = false;
         self.pan_zoom(PinchPhase::End)
+    }
+
+    /// A smart zoom (the platform's two-finger double-tap) where the cursor
+    /// rests. It is one discrete event, so it may not fall inside a pinch.
+    pub fn smart_zoom(mut self) -> Self {
+        if self.timeline.pinching {
+            self.timeline.fail(ScriptError::UnpairedPinch);
+        }
+        let at = self.timeline.now;
+        self.timeline
+            .steps
+            .push(ScriptStep::SmartZoom(ScriptedSmartZoom {
+                at,
+                pointer: contact(CURSOR),
+                position: self.at,
+            }));
+        self
     }
 
     fn pan_zoom(mut self, phase: PinchPhase) -> Self {

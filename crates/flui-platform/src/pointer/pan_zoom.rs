@@ -149,3 +149,53 @@ impl PanZoomEvent {
         &self.pointer
     }
 }
+
+/// The platform's "zoom to what is under the pointer" gesture: a two-finger double-tap on a
+/// macOS trackpad (AppKit's `smartMagnifyWithEvent:`).
+///
+/// One discrete event, not a session: the content under [`position`](Self::position) decides
+/// how far to zoom (to fit, or back out). It is offered to the innermost claiming target, so an
+/// image inside a zoomable page answers it before the page does.
+///
+/// Built with [`SmartZoomEvent::new`] and [`with_modifiers`](Self::with_modifiers).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct SmartZoomEvent {
+    pointer: PointerInfo,
+    /// When the platform observed the event.
+    pub time: EventTime,
+    /// Where the pointer rests: the point to zoom about.
+    pub position: PointerPosition,
+    /// The modifiers held.
+    pub modifiers: Modifiers,
+}
+
+impl SmartZoomEvent {
+    /// A smart zoom at `position` with no modifiers. The pointer's kind is set to
+    /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad) whatever `pointer` carried, as
+    /// [`PanZoomEvent::new`] does.
+    #[must_use]
+    pub const fn new(pointer: PointerInfo, time: EventTime, position: PointerPosition) -> Self {
+        let mut pointer = pointer;
+        pointer.kind = super::PointerKind::Trackpad;
+        Self {
+            pointer,
+            time,
+            position,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// This event with `modifiers` held.
+    #[must_use]
+    pub const fn with_modifiers(self, modifiers: Modifiers) -> Self {
+        Self { modifiers, ..self }
+    }
+
+    /// The gesture's pointer; its kind is always
+    /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
+    #[must_use]
+    pub const fn pointer(&self) -> &PointerInfo {
+        &self.pointer
+    }
+}

@@ -529,6 +529,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The data-only arbitrated smart zoom target this box contributes to its
+    /// hit entry. Default `None`; see [`RenderObject::smart_zoom_target`].
+    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+        None
+    }
+
     /// The mouse cursor this box contributes to its hit entry.
     fn mouse_cursor(&self) -> CursorRequest {
         CursorRequest::Defer
@@ -916,6 +922,10 @@ where
 
     fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
         <T as RenderBox>::pan_zoom_target(self)
+    }
+
+    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+        <T as RenderBox>::smart_zoom_target(self)
     }
 
     fn mouse_cursor(&self) -> CursorRequest {

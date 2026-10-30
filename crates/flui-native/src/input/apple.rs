@@ -645,6 +645,7 @@ pub(crate) mod macos {
         use flui_platform::pointer::{
             PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
             PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollPhase,
+            SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
@@ -821,6 +822,19 @@ pub(crate) mod macos {
                         pressure,
                         ..RawSensors::default()
                     })
+                } else if event_type == NSEventType::SmartMagnify {
+                    let Ok(position) =
+                        PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+                    else {
+                        return Vec::new();
+                    };
+                    let pointer = self
+                        .contacts
+                        .pointer(NativeSurface::default(), None, GESTURE)
+                        .unwrap_or_else(mouse_info);
+                    return vec![PlatformInput::Pointer(PointerEvent::SmartZoom(
+                        SmartZoomEvent::new(pointer, time, position).with_modifiers(modifiers),
+                    ))];
                 } else if event_type == NSEventType::ScrollWheel {
                     return self.scroll(event, time, x, y, modifiers);
                 } else if let Some((component, delta)) = gesture_component(event, event_type) {

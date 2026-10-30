@@ -175,7 +175,7 @@ pub use pointer::{
     PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,

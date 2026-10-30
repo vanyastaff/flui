@@ -7,7 +7,7 @@ use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
-use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
+use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, SmartZoomDispatch};
 use flui_interaction::{
     GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, PointerEvent,
     PointerEventExt, PointerKind, cancel_all,
@@ -248,6 +248,7 @@ pub struct RawGestureDetector {
     /// `pan_zoom_claim`'s leaf-first walk instead.
     contact_input: bool,
     pan_zoom_claim: Option<PanZoomClaim>,
+    smart_zoom_claim: Option<SmartZoomClaim>,
     admission: Option<ContactAdmission>,
     child: Child,
 }
@@ -256,6 +257,10 @@ pub struct RawGestureDetector {
 /// recognizers.
 type PanZoomClaim = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation>;
 
+/// The arbitrated smart zoom handler a detector registers beside its
+/// recognizers; it writes through the owner's writer.
+type SmartZoomClaim = Rc<dyn Fn(SmartZoomDispatch, &WriterSource) -> EventPropagation>;
+
 impl Default for RawGestureDetector {
     fn default() -> Self {
         Self {
@@ -263,6 +268,7 @@ impl Default for RawGestureDetector {
             behavior: HitTestBehavior::DeferToChild,
             contact_input: false,
             pan_zoom_claim: None,
+            smart_zoom_claim: None,
             admission: None,
             child: Child::empty(),
         }
@@ -333,6 +339,17 @@ impl RawGestureDetector {
         claim: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Self {
         self.pan_zoom_claim = Some(Rc::new(claim));
+        self
+    }
+
+    /// Take part in the platform smart zoom's leaf-first walk through
+    /// `claim`, which writes through the detector's writer.
+    #[must_use]
+    pub(crate) fn smart_zoom_claim(
+        mut self,
+        claim: impl Fn(SmartZoomDispatch, &WriterSource) -> EventPropagation + 'static,
+    ) -> Self {
+        self.smart_zoom_claim = Some(Rc::new(claim));
         self
     }
 
@@ -512,6 +529,11 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
         }
         if let Some(claim) = view.pan_zoom_claim.clone() {
             listener = listener.on_pointer_pan_zoom_claim(move |dispatch| claim(dispatch));
+        }
+        // Without a context (no lane yet) there is no writer to answer with.
+        if let (Some(claim), Some(cx)) = (view.smart_zoom_claim.clone(), &self.context) {
+            let writer = cx.writer().clone();
+            listener = listener.on_smart_zoom_claim(move |dispatch| claim(dispatch, &writer));
         }
         let listener = self.slots.iter().fold(listener, |listener, slot| {
             slot.live.attach(listener, view.admission.as_ref())
