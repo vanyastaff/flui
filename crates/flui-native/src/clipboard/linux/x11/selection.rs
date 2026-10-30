@@ -62,6 +62,10 @@ const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// property holds one until its timeout, and more are refused.
 const MAX_WRITERS: usize = 4;
 
+/// The most reads waiting at once: each is answered with its own copy of
+/// the text, so more are answered nothing at once.
+pub(super) const MAX_READERS: usize = 4;
+
 /// The most bytes the `INCR` writes hold at once, each shared buffer counted
 /// once: room for one text past a chunk in both its UTF-8 and ISO 8859-1
 /// forms, which a transfer keeps after the ownership it began under ends.
@@ -326,6 +330,14 @@ impl Selections {
                 )?;
             }
             Command::Read(answer) => {
+                // Each waiting read is answered with a copy of the text: past
+                // a few, a read answers nothing rather than hold another.
+                if self.readers.len() + self.after_write.len() >= MAX_READERS {
+                    tracing::debug!("an X11 clipboard read past {MAX_READERS} waiting was refused");
+                    // A retired owner has nobody left to answer.
+                    let _ = answer.resolve(None);
+                    return Ok(true);
+                }
                 // A read after a write answers what the write left: it waits
                 // for the write to own the selection or fail to.
                 if self.pending.is_some() {

@@ -189,6 +189,85 @@ fn a_read_after_a_write_answers_the_write() {
     }
 }
 
+/// A client that owns `CLIPBOARD` and never answers, so reads of it wait;
+/// it owns the selection while the connection lives.
+fn silent_owner() -> RustConnection {
+    let (owner, screen) = RustConnection::connect(None).expect("the X server answers");
+    let root = owner.setup().roots[screen].root;
+    let window = owner.generate_id().expect("an id");
+    owner
+        .create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_ONLY,
+            x11rb::COPY_FROM_PARENT,
+            &x11rb::protocol::xproto::CreateWindowAux::new(),
+        )
+        .expect("the request is sent");
+    let clipboard_atom = owner
+        .intern_atom(false, b"CLIPBOARD")
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .atom;
+    owner
+        .set_selection_owner(window, clipboard_atom, x11rb::CURRENT_TIME)
+        .expect("the request is sent");
+    owner
+        .get_selection_owner(clipboard_atom)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    owner
+}
+
+/// Past [`MAX_READERS`](super::selection::MAX_READERS) reads waiting, a
+/// read answers nothing at once rather than wait for another copy of the
+/// text; the reads waiting go on waiting.
+#[test]
+fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let _owner = silent_owner();
+    let answers = Answers::new();
+    let reader = X11Clipboard::start().expect("the X server answers");
+    let mut waiting: Vec<Completion<Option<String>>> = Vec::new();
+    for _ in 0..super::selection::MAX_READERS {
+        let (completion, resolver) = answers.source.pending::<Option<String>>();
+        reader.read_text(resolver);
+        waiting.push(completion);
+    }
+    let (mut past, resolver) = answers.source.pending::<Option<String>>();
+    reader.read_text(resolver);
+    let deadline = Instant::now() + super::selection::TRANSFER_TIMEOUT / 2;
+    let outcome = loop {
+        let jobs = std::mem::take(&mut *answers.queue.lock().expect("the answers"));
+        let scope = OwnerScope::new(&answers.pending);
+        for job in jobs {
+            job.run(&scope);
+        }
+        if let Some(outcome) = past.poll() {
+            break outcome;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the read past the limit waited with the others"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(outcome.expect("the read is answered"), None);
+    for completion in &mut waiting {
+        assert!(completion.poll().is_none(), "a waiting read was answered");
+    }
+}
+
 /// Set in the child process a teardown case runs in.
 const CHILD: &str = "FLUI_X11_CLIPBOARD_TEARDOWN_CHILD";
 
@@ -222,40 +301,7 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
         return;
     };
     in_child("reads_waiting_at_the_end_are_each_abandoned", || {
-        // An owner that never answers, so the reads wait.
-        let (owner, screen) = RustConnection::connect(None).expect("the X server answers");
-        let root = owner.setup().roots[screen].root;
-        let window = owner.generate_id().expect("an id");
-        owner
-            .create_window(
-                x11rb::COPY_DEPTH_FROM_PARENT,
-                window,
-                root,
-                0,
-                0,
-                1,
-                1,
-                0,
-                x11rb::protocol::xproto::WindowClass::INPUT_ONLY,
-                x11rb::COPY_FROM_PARENT,
-                &x11rb::protocol::xproto::CreateWindowAux::new(),
-            )
-            .expect("the request is sent");
-        let clipboard_atom = owner
-            .intern_atom(false, b"CLIPBOARD")
-            .expect("the request is sent")
-            .reply()
-            .expect("the server answers")
-            .atom;
-        owner
-            .set_selection_owner(window, clipboard_atom, x11rb::CURRENT_TIME)
-            .expect("the request is sent");
-        owner
-            .get_selection_owner(clipboard_atom)
-            .expect("the request is sent")
-            .reply()
-            .expect("the server answers");
-
+        let _owner = silent_owner();
         let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&posts);
         let poster = OwnerPoster::new(move |_| {
