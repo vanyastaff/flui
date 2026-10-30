@@ -1,6 +1,6 @@
 # ADR-0271: The host font feed asks the platform which faces fall back, and FLUI's tables follow
 
-- **Status:** Accepted (2026-10-30). Not implemented: the answers of Windows, Apple and Android from API 29 (§3), and the locale-change trigger (§4).
+- **Status:** Accepted (2026-10-30). Not implemented: the answer of Android from API 29 (§3), and the locale-change trigger (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §7 only for its clause that
   FLUI's tables are the whole fallback order: the platform's answer now comes first, and the
@@ -134,7 +134,7 @@ emoji faces:
 | Target | Per script | Common | Emoji |
 |--------|------------|--------|-------|
 | Windows | `IDWriteFontFallback::MapCharacters` over the sample, with the locale; one face per script | none | `MapCharacters("😀")` |
-| macOS, iOS | `CTFontCreateForStringWithLanguage`, as a URL | `CTFontCopyDefaultCascadeListForLanguages` for the locale | `CTFontCreateForString("😀")` |
+| macOS, iOS | `CTFontCreateForStringWithLanguage`, looked up at run time since macOS 10.13 and 10.14 lack it, else `CTFontCreateForString`; the face's file, or its family where the file is a collection, whose index CoreText does not give | `CTFontCopyDefaultCascadeListForLanguages` for the locale | the same call with `😀` |
 | Linux, BSD | `FcFontSort` with the script's charset and the locale's langset; files whose charset covers the sample, in fontconfig's order | none | `FcFontSort` with `color=true` and the emoji charset |
 | Android, API 23 to 28 | `fonts.xml` fallback families whose `lang` names the script or implies it (`ja`, `ko`, `zh`), as files, in file order; among the Han families the locale's own first | untagged fallback families | the `und-Zsye` family |
 | Android, `Since<Api29>` | `AFontMatcher_match` over the sample, with the locale | none | `AFontMatcher_match("😀")` |
