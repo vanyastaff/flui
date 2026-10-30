@@ -1929,6 +1929,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     .unwrap_or_else(no_op_semantics_update_callback);
                 let mut owner = flui_semantics::SemanticsOwner::new(callback);
                 owner.set_device_pixel_ratio(self.device_pixel_ratio);
+                if let Some(announcements) = self.semantics_regions.existing_announcements() {
+                    owner.set_announcements(announcements.clone());
+                }
                 self.semantics_owner = Some(owner);
             }
             self.notifier.read().fire_semantics_owner_created();
@@ -1984,6 +1987,29 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(root_id) = self.root_id {
             self.mark_needs_semantics(root_id);
         }
+    }
+
+    /// The presentation's announcement queue (ADR-0204 §4), created on first
+    /// request and installed in every semantics owner this pipeline creates,
+    /// so messages and announcer identities survive accessibility being
+    /// turned off and on. `None` once the synthetic identity space is
+    /// exhausted.
+    pub fn announcements(&mut self) -> Option<flui_semantics::Announcements> {
+        let created = self.semantics_regions.existing_announcements().is_none();
+        let announcements = self.semantics_regions.announcements()?;
+        if created && let Some(owner) = self.semantics_owner.as_mut() {
+            owner.set_announcements(announcements.clone());
+        }
+        Some(announcements)
+    }
+
+    /// Whether the semantics owner holds an announcement that the next
+    /// frame's semantics phase publishes, though no node is dirty.
+    #[must_use]
+    pub fn has_pending_announcements(&self) -> bool {
+        self.semantics_owner
+            .as_ref()
+            .is_some_and(flui_semantics::SemanticsOwner::has_undelivered_announcements)
     }
 
     /// Returns the semantics owner, if semantics is currently enabled.

@@ -363,6 +363,9 @@ pub struct SemanticsOwner {
     /// for as long as it lasts (debug builds only).
     #[cfg(debug_assertions)]
     reported_clashes: Vec<DuplicateIdentifier>,
+    /// The presentation's announcement queue and announcer nodes, published
+    /// as the last children of the root (ADR-0204 §4).
+    announcements: Option<crate::Announcements>,
 }
 
 /// An author error a publication found: published as declared, or left out,
@@ -742,6 +745,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -768,6 +772,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -788,6 +793,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -814,13 +820,10 @@ impl SemanticsOwner {
     /// its adapter holds, so action resolution keeps checking against it.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
         if self.enabled
-            && let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
-                &self.tree,
-                None,
-                self.device_pixel_ratio,
-            )
+            && let Some((update, announced)) = self.full_update(None)
         {
             callback(&update);
+            self.commit_announcements(announced.as_ref(), self.revision);
             let mut mirror = PublishedState::mirror_of(update);
             mirror.record_offers(&self.tree);
             self.published = Some(mirror);
@@ -847,6 +850,9 @@ impl SemanticsOwner {
     /// Enables semantics.
     pub fn enable(&mut self) {
         self.enabled = true;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(true);
+        }
     }
 
     /// Disables semantics.
@@ -854,6 +860,9 @@ impl SemanticsOwner {
     /// When disabled, no updates are sent to the platform.
     pub fn disable(&mut self) {
         self.enabled = false;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(false);
+        }
     }
 
     // ========== Tree Access ==========
@@ -881,11 +890,7 @@ impl SemanticsOwner {
         &self,
         focus: Option<SemanticsId>,
     ) -> Option<accesskit::TreeUpdate> {
-        crate::accesskit_translation::tree_to_scaled_update(
-            &self.tree,
-            focus,
-            self.device_pixel_ratio,
-        )
+        self.full_update(focus).map(|(update, _)| update)
     }
 
     /// Returns a mutable reference to the semantics tree.
@@ -1279,6 +1284,9 @@ impl SemanticsOwner {
         self.tree.clear();
         self.callback = None;
         self.enabled = false;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(false);
+        }
         self.published = None;
         self.full_publish_pending = false;
         self.focus_claimants.clear();
@@ -1305,7 +1313,100 @@ impl SemanticsOwner {
     /// frame loop consulting a narrower one would never deliver the
     /// reconnect update.
     pub fn needs_flush(&self) -> bool {
-        self.enabled && (self.tree.has_dirty_nodes() || self.full_publish_pending)
+        self.enabled
+            && (self.tree.has_dirty_nodes()
+                || self.full_publish_pending
+                || self.has_pending_announcements())
+    }
+
+    // ========== Announcements ==========
+
+    /// Installs the presentation's announcement queue: its two nodes publish
+    /// as the last children of the root from the next flush, which is a full
+    /// one so the adapter receives them.
+    pub fn set_announcements(&mut self, announcements: crate::Announcements) {
+        announcements.set_listening(self.enabled);
+        self.announcements = Some(announcements);
+        self.full_publish_pending = true;
+    }
+
+    /// Queues `message` for the next flush, which speaks it through the
+    /// announcer node of `urgency`. Use from inside a frame; application code
+    /// holds an [`Announcer`](crate::Announcer), which also requests the frame.
+    ///
+    /// # Errors
+    /// [`AnnounceError::PresentationClosed`](crate::AnnounceError::PresentationClosed)
+    /// when no announcement queue is installed: there is no node to speak
+    /// through.
+    pub fn announce(
+        &mut self,
+        message: &str,
+        urgency: crate::Urgency,
+    ) -> Result<(), crate::AnnounceError> {
+        let announcements = self
+            .announcements
+            .as_ref()
+            .ok_or(crate::AnnounceError::PresentationClosed)?;
+        announcements.enqueue(message, urgency);
+        Ok(())
+    }
+
+    /// Whether an accepted announcement waits for a flush that can deliver
+    /// it: the owner is enabled and has a root to publish under. A frame
+    /// scheduler reads it to produce the frame an idle presentation needs.
+    #[must_use]
+    pub fn has_undelivered_announcements(&self) -> bool {
+        self.enabled && self.tree.root().is_some() && self.has_pending_announcements()
+    }
+
+    /// The announcer nodes' identities, when an announcement queue is
+    /// installed: published for assistive technology, which speaks their
+    /// value changes, and not part of the interface an agent reads.
+    pub(crate) fn announcer_node_ids(&self) -> Option<[AccessibilityNodeId; 2]> {
+        self.announcements.as_ref().map(|announcements| {
+            [crate::Urgency::Polite, crate::Urgency::Assertive]
+                .map(|urgency| announcements.node_id(urgency))
+        })
+    }
+    fn has_pending_announcements(&self) -> bool {
+        self.announcements
+            .as_ref()
+            .is_some_and(crate::Announcements::has_pending)
+    }
+
+    /// The announcer nodes for `prepared`, polite then assertive: static text
+    /// whose value is the message, live at its urgency, with no area, named
+    /// by [`Urgency::announcer_identifier`](crate::Urgency::announcer_identifier).
+    fn announcer_nodes(
+        announcements: &crate::Announcements,
+        prepared: &crate::announce::PreparedAnnouncements,
+    ) -> [(accesskit::NodeId, accesskit::Node); 2] {
+        let node = |urgency: crate::Urgency, value: &str| {
+            let mut node = accesskit::Node::new(accesskit::Role::Label);
+            node.set_live(match urgency {
+                crate::Urgency::Assertive => accesskit::Live::Assertive,
+                crate::Urgency::Polite => accesskit::Live::Polite,
+            });
+            node.set_live_atomic();
+            node.set_value(value);
+            node.set_bounds(accesskit::Rect::ZERO);
+            node.set_author_id(urgency.announcer_identifier());
+            (
+                accesskit::NodeId(announcements.node_id(urgency).as_u64()),
+                node,
+            )
+        };
+        [
+            node(crate::Urgency::Polite, &prepared.polite),
+            node(crate::Urgency::Assertive, &prepared.assertive),
+        ]
+    }
+
+    /// Appends the announcer nodes to `root`'s children.
+    fn adopt_announcers(announcements: &crate::Announcements, root: &mut accesskit::Node) {
+        for urgency in [crate::Urgency::Polite, crate::Urgency::Assertive] {
+            root.push_child(accesskit::NodeId(announcements.node_id(urgency).as_u64()));
+        }
     }
 
     /// Marks a specific node as dirty.
@@ -1352,7 +1453,7 @@ impl SemanticsOwner {
     /// for a full publish, the changed nodes for an incremental one, and 0
     /// when nothing was delivered. The pipeline's phase counters sum it.
     pub fn flush(&mut self) -> usize {
-        if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
+        if !self.needs_flush() {
             return 0;
         }
         // While two live nodes share an identity, a diff could carry the
@@ -1389,16 +1490,76 @@ impl SemanticsOwner {
             .map(|id| accesskit::NodeId(id.as_u64()))
     }
 
+    /// The whole rooted tree as one update, the announcer nodes included, and
+    /// the announcements it would deliver. `None` while the tree has no root.
+    fn full_update(
+        &self,
+        focus: Option<SemanticsId>,
+    ) -> Option<(
+        accesskit::TreeUpdate,
+        Option<crate::announce::PreparedAnnouncements>,
+    )> {
+        let mut update = crate::accesskit_translation::tree_to_scaled_update(
+            &self.tree,
+            focus,
+            self.device_pixel_ratio,
+        )?;
+        let prepared = self.announcements.as_ref().map(|announcements| {
+            let prepared = announcements.prepare();
+            let root = update
+                .tree
+                .as_ref()
+                .expect("BUG: a full update names its root")
+                .root;
+            if let Some((_, node)) = update.nodes.iter_mut().find(|(id, _)| *id == root) {
+                Self::adopt_announcers(announcements, node);
+            }
+            update
+                .nodes
+                .extend(Self::announcer_nodes(announcements, &prepared));
+            prepared
+        });
+        Some((update, prepared))
+    }
+
+    /// Removes from the queue what a delivered update carried, journaling it
+    /// under `revision`, the revision that update makes current.
+    fn commit_announcements(
+        &self,
+        delivered: Option<&crate::announce::PreparedAnnouncements>,
+        revision: TreeRevision,
+    ) {
+        if let (Some(announcements), Some(delivered)) = (&self.announcements, delivered) {
+            announcements.commit(delivered, revision);
+        }
+    }
+
+    /// The announcements this presentation delivered after `params.since`,
+    /// for an agent: assistive technology hears them as announcer node
+    /// values, which an agent's reads leave out. Empty when no announcement
+    /// queue is installed.
+    #[must_use]
+    pub fn announcement_journal(
+        &self,
+        params: &flui_protocol::AnnouncementsParams,
+    ) -> flui_protocol::AnnouncementJournal {
+        self.announcements
+            .as_ref()
+            .map(|announcements| announcements.journal(params.since, params.max_entries))
+            .unwrap_or_default()
+    }
+
+    /// The revision the publication in progress makes current.
+    fn next_revision(&self) -> TreeRevision {
+        TreeRevision(self.revision.0.saturating_add(1))
+    }
+
     /// Publishes the complete rooted tree and resets the mirror to it.
     /// Returns the number of nodes delivered (0 when there is no root yet).
     fn publish_full(&mut self) -> usize {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
-        let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
-            &self.tree,
-            None,
-            self.device_pixel_ratio,
-        ) else {
+        let Some((update, announced)) = self.full_update(None) else {
             // No root yet — nothing an adapter could apply. Leave the tree
             // dirty (and any full publish pending) so the next flush retries
             // once assembly has rooted it, rather than silently swallowing
@@ -1421,6 +1582,8 @@ impl SemanticsOwner {
         if let Some(callback) = callback {
             callback(&update);
         }
+        // Delivered: a panic above leaves the messages queued for the retry.
+        self.commit_announcements(announced.as_ref(), self.next_revision());
 
         let published = update.nodes.len();
         self.revision = TreeRevision(self.revision.0.saturating_add(1));
@@ -1625,12 +1788,17 @@ impl SemanticsOwner {
                 continue;
             };
             findings.extend(inapplicable_of(node).map(SemanticsDiagnostic::InapplicableAttribute));
-            let translated = crate::accesskit_translation::to_published_node(
+            let mut translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
                 self.device_pixel_ratio,
                 &anchors,
             );
+            if id == state.root
+                && let Some(announcements) = &self.announcements
+            {
+                Self::adopt_announcers(announcements, &mut translated);
+            }
             if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
@@ -1656,16 +1824,32 @@ impl SemanticsOwner {
             if held(&id).is_none() {
                 continue;
             }
-            let translated = crate::accesskit_translation::to_published_node(
+            let mut translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
                 self.device_pixel_ratio,
                 &anchors,
             );
+            if id == state.root
+                && let Some(announcements) = &self.announcements
+            {
+                Self::adopt_announcers(announcements, &mut translated);
+            }
             if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
         }
+
+        // An announcement changes only its node's value.
+        let announced = self.announcements.as_ref().map(|announcements| {
+            let prepared = announcements.prepare();
+            for (id, node) in Self::announcer_nodes(announcements, &prepared) {
+                if held(&id) != Some(&node) {
+                    changed.push((id, node));
+                }
+            }
+            prepared
+        });
 
         #[cfg(any(test, feature = "testing"))]
         {
@@ -1735,6 +1919,10 @@ impl SemanticsOwner {
         let callback = self.callback.as_ref().map(Arc::clone);
         if let Some(callback) = callback {
             callback(&update);
+        }
+        // Delivered: a panic above leaves the messages queued for the retry.
+        if let (Some(announcements), Some(announced)) = (&self.announcements, &announced) {
+            announcements.commit(announced, TreeRevision(self.revision.0.saturating_add(1)));
         }
 
         #[cfg(debug_assertions)]

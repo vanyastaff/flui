@@ -776,7 +776,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.6",
+                "protocol": "0.7",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

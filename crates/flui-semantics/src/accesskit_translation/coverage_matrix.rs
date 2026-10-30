@@ -15,7 +15,7 @@ use super::{PublishView, to_node};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
-use crate::role::{Assertiveness, SemanticsRole};
+use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
 use flui_foundation::geometry::Axis;
@@ -158,6 +158,7 @@ fn every_published_attribute_reads_through_the_consumer() {
     let SemanticsAttributes {
         states: _,
         live: _,
+        live_atomic: _,
         label: _,
         value: _,
         numeric_range: _,
@@ -207,6 +208,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         hidden: _,
         modal: _,
         required: _,
+        busy: _,
         invalid: _,
         current: _,
         has_popup: _,
@@ -475,7 +477,7 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::None,
             |a| {
                 a.label = Some("Saved".into());
-                a.live = Some(Assertiveness::Assertive);
+                a.live = Some(LiveSetting::Assertive);
             },
             |n| n.live() == accesskit::Live::Assertive,
         ),
@@ -522,6 +524,22 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::Button,
             |a| a.states.hidden = Some(true),
             |n| n.is_hidden() && common_filter(n) == FilterResult::ExcludeSubtree,
+        ),
+        Row::new(
+            "busy",
+            R::Log,
+            |a| a.states.busy = Some(true),
+            |n| n.data().is_busy(),
+        ),
+        Row::new(
+            "live atomic",
+            R::None,
+            |a| {
+                a.label = Some("3 results".into());
+                a.live = Some(LiveSetting::Polite);
+                a.live_atomic = Some(true);
+            },
+            |n| n.live() == accesskit::Live::Polite && n.is_live_atomic(),
         ),
         Row::new(
             "modal",
