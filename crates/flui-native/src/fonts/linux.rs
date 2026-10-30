@@ -327,19 +327,38 @@ impl Drop for Fontconfig {
 
 /// `locale` as fontconfig spells a language: lower case, `-` between the
 /// language and its region (`ja-jp`), and `und` for an empty tag.
+///
+/// Fontconfig tells Simplified from Traditional Chinese only by region, so a
+/// Chinese tag's script subtag picks a region of that script when its own
+/// region is of the other one: `zh-Hans-TW` is `zh-cn`, `zh-Hant-CN` is
+/// `zh-tw` (the script wins, as in `fallback_tables::Han::of`), and a bare
+/// script takes its main region (`zh-Hans` is `zh-cn`).
 fn fontconfig_language(locale: &str) -> CString {
     let tag = locale
         .split(['.', '@'])
         .next()
         .unwrap_or("")
-        .replace('_', "-");
+        .replace('_', "-")
+        .to_ascii_lowercase();
     let mut subtags = tag.split('-').filter(|subtag| !subtag.is_empty());
-    let language = subtags.next().unwrap_or("und").to_ascii_lowercase();
-    let region =
-        subtags.find(|subtag| subtag.len() == 2 && subtag.chars().all(char::is_alphabetic));
+    let language = subtags.next().unwrap_or("und");
+    let rest: Vec<&str> = subtags.collect();
+    let mut region = rest
+        .iter()
+        .copied()
+        .find(|subtag| subtag.len() == 2 && subtag.chars().all(|c| c.is_ascii_alphabetic()));
+    if language == "zh" {
+        const TRADITIONAL: [&str; 3] = ["tw", "hk", "mo"];
+        let traditional_region = region.is_some_and(|region| TRADITIONAL.contains(&region));
+        if rest.contains(&"hans") && (traditional_region || region.is_none()) {
+            region = Some("cn");
+        } else if rest.contains(&"hant") && !traditional_region {
+            region = Some("tw");
+        }
+    }
     let spelled = match region {
-        Some(region) => format!("{language}-{}", region.to_ascii_lowercase()),
-        None => language,
+        Some(region) => format!("{language}-{region}"),
+        None => language.to_owned(),
     };
     CString::new(spelled).unwrap_or_else(|_| c"und".to_owned())
 }
@@ -356,6 +375,13 @@ mod tests {
             ("en-US", "en-us"),
             ("ja_JP.UTF-8", "ja-jp"),
             ("zh-Hant-TW", "zh-tw"),
+            ("zh-Hans-TW", "zh-cn"),
+            ("zh-Hant-CN", "zh-tw"),
+            ("zh-Hant", "zh-tw"),
+            ("zh-Hans", "zh-cn"),
+            ("zh-Hans-SG", "zh-sg"),
+            ("zh-HK", "zh-hk"),
+            ("zh", "zh"),
             ("sr-Latn", "sr"),
             ("", "und"),
         ] {
