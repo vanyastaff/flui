@@ -95,7 +95,6 @@ pub(super) fn manual_clock_ui_runtime(clock: &ManualClock) -> UiRuntime {
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

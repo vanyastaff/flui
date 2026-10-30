@@ -11,12 +11,13 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_native::storage::DataDirs;
 use flui_native::{
-    AppHandler, HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformError,
+    AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
+    PlatformError,
     PlatformExecutor, Task,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
-    Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
+    CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     StorageName, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowHandler, WindowOptions, WindowState,
@@ -58,7 +59,7 @@ impl Platform for OutsidePlatform {
         unreachable!("the impl never compiles")
     }
 
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
+    fn clipboard(&self) -> Rc<dyn NativeClipboard> {
         unreachable!("the impl never compiles")
     }
 
@@ -67,12 +68,6 @@ impl Platform for OutsidePlatform {
     }
 
     fn activate(&self, _: bool) {}
-
-    fn write_to_clipboard(&self, _: ClipboardItem) {}
-
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        None
-    }
 
     fn open_url(&self, _: &str) {}
 

@@ -484,17 +484,20 @@ pub trait LifecycleContext: BuildContext {
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
-    /// The presentation's plain-text clipboard.
+    /// A platform capability's handle, erased: the entry point behind
+    /// [`LifecycleContextExt::capability`], which is how widgets call it.
     ///
-    /// Every UI runtime installs one over its platform's clipboard when it builds
-    /// the presentation, so this is `None` only on a bare owner (an
-    /// `ElementTree` in a unit test), never under a UI runtime. Acquire it in a
-    /// lifecycle hook (`init_state` / `did_change_dependencies`), the same
-    /// rule `text_input_handle` follows.
+    /// # Errors
     ///
-    /// ADR-0084: this becomes `cx.capability::<Clipboard>()` once the
-    /// capability registry lands; the handle it returns stays the same.
-    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
+    /// [`NotRegistered`](flui_platform::UnsupportedReason::NotRegistered) on
+    /// a bare owner or when the UI runtime has no provider for it; otherwise
+    /// what the provider answers.
+    #[doc(hidden)]
+    fn capability_erased(
+        &self,
+        capability: std::any::TypeId,
+        name: &'static str,
+    ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported>;
 
     /// The presentation's announcer: speaks a message through assistive
     /// technology without a visible change (ADR-0204 §4).
@@ -504,7 +507,7 @@ pub trait LifecycleContext: BuildContext {
     /// completion on another thread can announce. `None` on a bare owner (an
     /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
     /// (`init_state` / `did_change_dependencies`), the same rule
-    /// `clipboard_handle` follows.
+    /// `text_input_handle` follows.
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer>;
 
     /// Whether this presentation's accessibility adapter says where the
@@ -523,7 +526,7 @@ pub trait LifecycleContext: BuildContext {
     /// mode, so `did_change_dependencies` runs when the mode changes and is
     /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
     /// in a unit test). Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    /// `did_change_dependencies`), the same rule `text_input_handle` follows.
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle>;
 
     /// The presentation's drag-and-drop (ADR-0211): drags that start in its
@@ -550,7 +553,7 @@ pub trait LifecycleContext: BuildContext {
     /// `None` when the UI runtime has none: a platform without files, an
     /// application that configured no storage, or a bare owner in a unit
     /// test. Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    /// `did_change_dependencies`), the same rule `text_input_handle` follows.
     ///
     /// A value written here directly is not flushed when the application or
     /// the session ends: a write still in flight then may be lost. Only what
@@ -563,7 +566,7 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// `None` on a bare owner in a unit test, and until a host installs a
     /// guard. Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    /// `did_change_dependencies`), the same rule `text_input_handle` follows.
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         None
     }
@@ -727,6 +730,51 @@ pub trait LifecycleContext: BuildContext {
     /// `None` before the element is mounted under a pipeline owner.
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
 }
+
+/// Platform capabilities through the seam (ADR-0152): `cx.capability::<C>()`.
+///
+/// A blanket extension of [`LifecycleContext`], so it exists only where a
+/// lifecycle hook runs. A build context has no such method:
+///
+/// ```compile_fail,E0599
+/// use flui_view::{BuildContext, LifecycleContextExt};
+///
+/// enum Probe {}
+/// impl flui_platform::capability::Capability for Probe {
+///     type Handle = ();
+///     const NAME: &'static str = "probe";
+/// }
+///
+/// fn build_body(ctx: &dyn BuildContext) {
+///     let _ = ctx.capability::<Probe>();
+/// }
+/// ```
+pub trait LifecycleContextExt: LifecycleContext {
+    /// The handle of capability `C`, made by this UI runtime's provider for
+    /// this widget's presentation.
+    ///
+    /// Acquire it in `init_state` or `did_change_dependencies` and keep it in
+    /// the state; the provider runs on every acquisition, and a handle that
+    /// holds an operating-system subscription ends it when its last clone
+    /// drops.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`](flui_platform::Unsupported) naming `C`:
+    /// [`NotRegistered`](flui_platform::UnsupportedReason::NotRegistered)
+    /// when nothing provides it, otherwise what the provider answers.
+    fn capability<C: flui_platform::capability::Capability>(
+        &self,
+    ) -> Result<C::Handle, flui_platform::Unsupported> {
+        let handle = self.capability_erased(std::any::TypeId::of::<C>(), C::NAME)?;
+        let handle: Box<C::Handle> = handle
+            .downcast::<C::Handle>()
+            .expect("BUG: the registry keys a provider by the capability whose handle it makes");
+        Ok(*handle)
+    }
+}
+
+impl<T: LifecycleContext + ?Sized> LifecycleContextExt for T {}
 
 /// Extension trait for typed InheritedView lookups.
 pub trait BuildContextExt: BuildContext {

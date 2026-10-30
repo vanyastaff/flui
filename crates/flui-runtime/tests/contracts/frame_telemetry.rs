@@ -28,7 +28,6 @@ fn runtime(clock: &ManualClock, fonts: &flui_painting::FontCollection) -> UiRunt
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

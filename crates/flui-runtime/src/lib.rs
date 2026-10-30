@@ -11,6 +11,9 @@
 //! `flui_platform::PlatformWindow`, and a frame leaves through a
 //! [`FrameSink`](sink::FrameSink) the host implements.
 //!
+//! - [`capability`]: the registry presentations acquire platform capabilities
+//!   from, and the queue a provider's answers reach the owner through
+//!   (ADR-0152);
 //! - [`dev_agent`]: the host half of the development-agent seam — attaches
 //!   an installed `DevAgentHook` once per loop, hands it each window with
 //!   content, and contains its panics (ADR-0095 §3);
@@ -46,6 +49,7 @@
 //! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
+pub mod capability;
 pub mod dev_agent;
 pub mod epoch;
 pub mod execution;

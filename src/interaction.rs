@@ -193,5 +193,6 @@ pub use flui_interaction::pointer::{
     PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
-    ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,
+    ClientToken, ClipboardBackend, ClipboardCapability, ClipboardHandle, DetachOutcome,
+    TextInputClient, TextInputError, TextInputHandle,
 };

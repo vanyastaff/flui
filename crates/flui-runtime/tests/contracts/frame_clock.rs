@@ -321,7 +321,6 @@ fn late_font_diagnostic_case(change_on_report: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -567,7 +566,6 @@ fn background_deadline_case(unknown: bool) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -753,7 +751,6 @@ fn delivery_case(delivery: Delivery) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1097,7 +1094,6 @@ fn source_failure_case(failure: SourceFailure) {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1302,7 +1298,6 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(host.clone()),
         ),
@@ -1369,7 +1364,6 @@ fn manual_frame_runtime(host: &ManualClock) -> UiRuntime {
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(host.clone()),
         ),

@@ -21,7 +21,7 @@ use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, P
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::TextStoreHost;
-use flui_platform::{Clipboard, CursorError, CursorIcon, PlatformWindow};
+use flui_platform::{CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
@@ -87,9 +87,10 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// [`SemanticsActionRequest`] and resolves at the next Idle drain —
     /// never on the adapter's own thread.
     pub(crate) command_sender: super::ui_runtime::UiCommandSender,
-    /// The UI runtime's platform clipboard, handed to widgets through
-    /// `LifecycleContext::clipboard_handle`.
-    pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The providers this presentation's widgets acquire platform
+    /// capabilities from, and where their completions settle (ADR-0152).
+    pub(crate) capabilities: crate::capability::CapabilityRegistry,
+    pub(crate) completions: flui_platform::capability::CompletionSource,
     /// The UI runtime's byte storage, if it has one, handed to widgets through
     /// `LifecycleContext::storage`.
     pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
@@ -105,14 +106,6 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's drag sessions, which this presentation's widgets reach
     /// through `LifecycleContext::drag_and_drop`.
     pub(crate) drag: flui_interaction::drag::DragHandle,
-}
-
-/// A fresh in-memory clipboard — the one the headless platform hands out —
-/// for a test UI runtime's `UiRuntime::new`.
-#[cfg(any(test, feature = "testing"))]
-#[must_use]
-pub fn test_clipboard() -> Arc<dyn Clipboard> {
-    Arc::new(flui_platform::InMemoryClipboard::new())
 }
 
 /// Pointer interpolation policy owned by one presentation.
@@ -862,10 +855,13 @@ impl PresentationState {
             }
             let presentation = owner.capabilities_mut();
             presentation.text_input = Some(text_input.handle());
-            presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
-                capabilities.clipboard,
-            ));
             presentation.textures = Some(textures.clone());
+            presentation.capabilities =
+                Some(Rc::new(crate::capability::PresentationCapabilities {
+                    registry: capabilities.capabilities,
+                    completions: capabilities.completions,
+                    window: Rc::downgrade(&window),
+                }));
             presentation.storage = capabilities.storage;
             presentation.close_guard = Some(close_guard.guard());
             // Paired here, the one place holding both halves: the ui_runtime's

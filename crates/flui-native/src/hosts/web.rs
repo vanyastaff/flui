@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_platform::Clipboard;
+use crate::host::SharedClipboard;
 
 use crate::clipboard::web::WebClipboard;
 use crate::display::web::WebDisplays;
@@ -59,8 +59,8 @@ impl WebHost for Web {
         Box::new(PageSession)
     }
 
-    /// The page's own clipboard, which reads only its own writes.
-    fn clipboard() -> Arc<dyn Clipboard> {
+    /// The Navigator Clipboard API, falling back to what the page wrote.
+    fn clipboard() -> Arc<dyn SharedClipboard> {
         Arc::new(WebClipboard::new())
     }
 

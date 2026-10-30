@@ -20,7 +20,7 @@ fn at_ms(ms: u64) -> ReadingTime {
 }
 
 fn reading(contact: u64, kind: PointerKind, action: ReadingAction, ms: u64) -> NativeReading {
-    NativeReading::new(NativeContact(contact), kind, action, at_ms(ms)).at(10.0, 20.0, 1.0)
+    NativeReading::new(NativeContact(contact), kind, action, at_ms(ms)).at_device(10.0, 20.0, 1.0)
 }
 
 fn touch(contact: u64, action: ReadingAction, ms: u64) -> NativeReading {
@@ -670,11 +670,11 @@ fn click_settings() -> ClickSettings {
 }
 
 fn click(contacts: &mut ContactRegistry, ms: u64, x: f64) -> Option<u8> {
-    let press = mouse(PRESS, ms).at(x, 20.0, 1.0);
+    let press = mouse(PRESS, ms).at_device(x, 20.0, 1.0);
     let PointerEvent::Down(down) = single(&decode(contacts, &press).expect("valid")) else {
         panic!("press")
     };
-    decode(contacts, &mouse(RELEASE, ms + 1).at(x, 20.0, 1.0)).expect("valid");
+    decode(contacts, &mouse(RELEASE, ms + 1).at_device(x, 20.0, 1.0)).expect("valid");
     down.click_count.map(NonZeroU8::get)
 }
 
@@ -816,7 +816,7 @@ fn pan_zoom_carries_only_scale_and_rotation() {
     let mut at = |action, x: f64, ms| {
         decode(
             &mut contacts,
-            &reading(9, PointerKind::Trackpad, action, ms).at(x, 20.0, 2.0),
+            &reading(9, PointerKind::Trackpad, action, ms).at_device(x, 20.0, 2.0),
         )
         .expect("valid")
         .into_iter()
@@ -924,14 +924,14 @@ fn a_batch_attaches_its_readings_in_order() {
     decode(&mut contacts, &touch(1, PRESS, 10)).expect("valid");
     let mut batch = MoveBatch::new();
     for (ms, x) in [(11, 11.0), (12, 12.0)] {
-        batch.push_coalesced(touch(1, ReadingAction::Move, ms).at(x, 20.0, 1.0));
+        batch.push_coalesced(touch(1, ReadingAction::Move, ms).at_device(x, 20.0, 1.0));
     }
-    batch.push_predicted(touch(1, ReadingAction::Move, 15).at(15.0, 20.0, 1.0));
-    batch.push_predicted(touch(1, ReadingAction::Move, 16).at(f64::NAN, 20.0, 1.0));
+    batch.push_predicted(touch(1, ReadingAction::Move, 15).at_device(15.0, 20.0, 1.0));
+    batch.push_predicted(touch(1, ReadingAction::Move, 16).at_device(f64::NAN, 20.0, 1.0));
     let assembled = batch
         .decode(
             &mut contacts,
-            &touch(1, ReadingAction::Move, 13).at(13.0, 20.0, 1.0),
+            &touch(1, ReadingAction::Move, 13).at_device(13.0, 20.0, 1.0),
         )
         .expect("valid");
     let PointerEvent::Move(movement) = single(&assembled) else {
@@ -957,7 +957,7 @@ fn a_batch_attaches_its_readings_in_order() {
     };
     assert!(plain.coalesced().is_empty(), "the batch was emptied");
 
-    batch.push_coalesced(touch(1, ReadingAction::Move, 15).at(f64::INFINITY, 0.0, 1.0));
+    batch.push_coalesced(touch(1, ReadingAction::Move, 15).at_device(f64::INFINITY, 0.0, 1.0));
     let failed = batch
         .decode(&mut contacts, &touch(1, ReadingAction::Move, 16))
         .expect_err("refused");
@@ -980,11 +980,11 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input() {
     for (name, bad) in [
         (
             "non-finite position",
-            touch(1, ReadingAction::Move, 2).at(f64::NAN, 0.0, 1.0),
+            touch(1, ReadingAction::Move, 2).at_device(f64::NAN, 0.0, 1.0),
         ),
         (
             "zero scale",
-            touch(1, ReadingAction::Move, 2).at(1.0, 1.0, 0.0),
+            touch(1, ReadingAction::Move, 2).at_device(1.0, 1.0, 0.0),
         ),
         (
             "pressure past one",
@@ -1059,7 +1059,7 @@ fn an_orphan_reading_emits_nothing() {
         assert_eq!(error.fault(), DecodeFault::Orphan, "{action:?}");
         assert!(error.into_inputs().is_empty(), "{action:?}");
     }
-    let undecodable = touch(6, ReadingAction::Move, 1).at(f64::NAN, 0.0, 1.0);
+    let undecodable = touch(6, ReadingAction::Move, 1).at_device(f64::NAN, 0.0, 1.0);
     assert!(
         decode(&mut contacts, &undecodable)
             .expect_err("refused")
@@ -1092,7 +1092,7 @@ fn stamped(contacts: &mut ContactRegistry, reading: &NativeReading) -> u64 {
 
 fn timed(contact: u64, action: ReadingAction, time: ReadingTime) -> NativeReading {
     NativeReading::new(NativeContact(contact), PointerKind::Touch, action, time)
-        .at(1.0, 1.0, 1.0)
+        .at_device(1.0, 1.0, 1.0)
         .from_device(NativeDevice(1))
 }
 

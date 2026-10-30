@@ -1203,9 +1203,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // instance) — see that impl's doc.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let released = APP_RUNTIME.with(|slot| {
-            let state = slot.borrow();
+            let mut state = slot.borrow_mut();
             state.clear_platform_clipboard();
-            state.clear_redraw_window()
+            // The run's providers are user code: they drop outside the borrow.
+            (state.capabilities.take(), state.clear_redraw_window())
         });
         // Ordinarily `None` already: the window-close path released this pin
         // (`release_redraw_window_for`) while the event loop was still alive,

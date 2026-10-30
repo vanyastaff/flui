@@ -143,7 +143,7 @@ impl HeldButtons {
 }
 
 /// The OS double-click thresholds: the interval and the full rectangle, in
-/// device pixels, a following press must land within to count.
+/// the raw unit of the readings they judge (see [`RawPoint`]), a following press must land within to count.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClickSettings {
     /// The longest time between presses that still counts.

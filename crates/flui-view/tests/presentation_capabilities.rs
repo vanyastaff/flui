@@ -72,7 +72,9 @@ impl ViewState<Asker> for AskerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.found.borrow_mut() = Some(Present {
             text_input: ctx.text_input_handle().is_some(),
-            clipboard: ctx.clipboard_handle().is_some(),
+            clipboard: ctx
+                .capability::<flui_interaction::ClipboardCapability>()
+                .is_ok(),
             haptics: ctx.haptics().is_some(),
             drag_and_drop: ctx.drag_and_drop().is_some(),
             textures: ctx.texture_registry().is_some(),

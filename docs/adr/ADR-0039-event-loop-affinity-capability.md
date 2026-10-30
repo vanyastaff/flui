@@ -7,9 +7,12 @@
   `window_appearance` entry only;
   [ADR-0254](ADR-0254-window-contract.md) for §3's sentence that the owner lane carries no closures
   only (the deferred window open carries a `Send` factory that builds the window's handler on the
-  owner); and [ADR-0254](ADR-0254-window-contract.md) decision 4 for the one-shot
+  owner); [ADR-0254](ADR-0254-window-contract.md) decision 4 for the one-shot
   `PlatformReadyCallback` of §1 and §6 only (`run` takes an `AppHandler`, whose `ready` receives
-  the capability; the capability and its loop scope stay).
+  the capability; the capability and its loop scope stay); and
+  [ADR-0152](ADR-0152-capability-seam-revised.md) for §5 (the synchronous `Clipboard` trait is
+  gone: each host's clipboard is an owner-local `NativeClipboard` that `OwnerPlatform` hands out,
+  and widgets reach it through the clipboard capability).
 
 ## Context
 

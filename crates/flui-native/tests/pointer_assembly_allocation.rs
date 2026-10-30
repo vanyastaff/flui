@@ -56,7 +56,7 @@ fn reading(contact: u64, kind: PointerKind, action: ReadingAction, ms: u64) -> N
         action,
         ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
     )
-    .at(4.0, 8.0, 2.0)
+    .at_device(4.0, 8.0, 2.0)
 }
 
 fn scale(phase: GesturePhase) -> ReadingAction {
@@ -143,7 +143,8 @@ fn pointer_assembly_allocates_nothing_per_event() {
             batch
                 .decode(
                     &mut contacts,
-                    &reading(5, PointerKind::Touch, ReadingAction::Move, 20_002).at(6.0, 8.0, 2.0),
+                    &reading(5, PointerKind::Touch, ReadingAction::Move, 20_002)
+                        .at_device(6.0, 8.0, 2.0),
                 )
                 .expect("decodes"),
         );

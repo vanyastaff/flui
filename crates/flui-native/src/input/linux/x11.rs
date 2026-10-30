@@ -715,7 +715,7 @@ pub mod decode {
             .on(surface)
             .from_device(target.device)
             .with_modifiers(modifiers_of_mask(event.modifiers))
-            .at(event.position.0, event.position.1, scale);
+            .at_device(event.position.0, event.position.1, scale);
             if target.kind == PointerKind::Touch {
                 reading
             } else {
