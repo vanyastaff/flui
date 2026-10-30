@@ -30,6 +30,7 @@ use flui_platform::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
+use flui_rendering::semantics::TextSelection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
 
@@ -172,9 +173,9 @@ fn source_offset_at_global(
 /// (`flui-objects`), which itself delegates to
 /// [`flui_painting::TextPainter::get_word_boundary`] — ICU4X word
 /// segmentation over the laid-out text. This widget's own Ctrl/Alt+Arrow
-/// word-jump (`controller.rs`'s private `next_word_boundary`/
-/// `prev_word_boundary`) walks the same ICU4X segments
-/// ([`flui_painting::text_boundaries`]) but answers a different question: a
+/// word-jump (the controller stops at
+/// [`flui_painting::text_boundaries::word_starts`]) walks the same ICU4X
+/// segments but answers a different question: a
 /// directional "next/previous stop" with its own asymmetric tie-break (see
 /// the controller's `# Word unit` doc), where this one answers "which
 /// segment is under this exact position". A double-tap and a keyboard
@@ -1311,6 +1312,9 @@ struct FieldSemanticsActions {
     enabled: Rc<Cell<bool>>,
     edits: EditObserver,
     store: Option<Rc<EditableTextStore>>,
+    /// A selection set or replaced from assistive technology commits the
+    /// composition first.
+    commit: CompositionCommit,
 }
 
 impl FieldSemanticsActions {
@@ -1331,12 +1335,48 @@ impl FieldSemanticsActions {
     }
 
     fn set_text(&self, cx: &EventCx<'_>, text: &str) {
+        self.edit(cx, false, |controller| controller.set_text(text));
+    }
+
+    /// The selection a platform set, in bytes of the published value: the
+    /// mask's on an obscured field, mapped back to the source here. The
+    /// controller snaps both ends to its grapheme boundaries.
+    fn set_selection(&self, cx: &EventCx<'_>, selection: TextSelection, obscuring: Option<char>) {
+        self.edit(cx, true, |controller| {
+            let source = |offset: usize| match obscuring {
+                Some(mask) => source_offset_for_masked_offset(&controller.text(), offset, mask),
+                None => offset,
+            };
+            controller.set_selection(source(selection.anchor), source(selection.focus));
+        });
+    }
+
+    /// Replaces the selection with `text`, as a paste does: line breaks
+    /// dropped, the caret after the inserted text.
+    fn replace_selected_text(&self, cx: &EventCx<'_>, text: &str) {
+        let line: String = text
+            .chars()
+            .filter(|&character| character != '\n' && character != '\r')
+            .collect();
+        self.edit(cx, true, |controller| controller.insert_str(&line));
+    }
+
+    /// Runs `edit` on the current controller through the keyboard's edit
+    /// path: the composition committed first when `commit` asks for it,
+    /// accepted platform grants before the edit, `on_changed` around it and
+    /// the text store told after it. Each step runs though an earlier one
+    /// failed: the platform hears of the edit before the first failure is
+    /// resumed.
+    fn edit(&self, cx: &EventCx<'_>, commit: bool, edit: impl FnOnce(&TextEditingController)) {
         if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
             return;
         }
-        // Each step runs though an earlier one failed: the platform hears of
-        // the edit before the first failure is resumed.
         let mut calls = OwnerCalls::new();
+        // The composition keeps its text and ends before the selection moves
+        // from under it, as on a pointer-down or a paste (ADR-0142 item 4).
+        if commit {
+            self.commit.run(&mut calls);
+        }
         // Accepted platform grants precede app edits, just as they precede a
         // key edit. A grant can re-enter and replace or detach the field.
         if let Some(store) = &self.store {
@@ -1344,7 +1384,7 @@ impl FieldSemanticsActions {
         }
         if self.edits.writer.check_context(cx).is_ok() && self.live_node().is_some() {
             let controller = self.edits.controller.borrow().clone();
-            calls.run(|| self.edits.around(|| controller.set_text(text)));
+            calls.run(|| self.edits.around(|| edit(&controller)));
             if let Some(store) = &self.store {
                 calls.run(|| store.controller_changed());
             }
@@ -2017,6 +2057,7 @@ impl ViewState<EditableText> for EditableTextState {
             enabled: Rc::clone(&self.accepts_semantics_actions),
             edits: self.edit_observer(),
             store: self.text_store.clone(),
+            commit: self.composition_commit(),
         };
         let enabled = view.enabled;
         let appearance = FieldAppearance {
@@ -2778,6 +2819,16 @@ fn build_field_view(
     if enabled {
         let edit = actions.clone();
         semantics = semantics.on_set_value(move |cx, text| edit.set_text(cx, text));
+        let obscuring = appearance
+            .obscure_text
+            .then_some(appearance.obscuring_character);
+        let select = actions.clone();
+        semantics = semantics.on_set_text_selection(move |cx, selection| {
+            select.set_selection(cx, selection, obscuring);
+        });
+        let replace = actions.clone();
+        semantics = semantics
+            .on_replace_selected_text(move |cx, text| replace.replace_selected_text(cx, text));
         // Focus eligibility is independent of the enabled document's value
         // mutability. A queued focus request rechecks eligibility at delivery.
         if focus_node.can_request_focus() {

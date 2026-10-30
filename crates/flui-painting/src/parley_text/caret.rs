@@ -13,9 +13,10 @@ use parley::layout::BreakReason;
 
 use super::ParagraphLayout;
 use super::shape::is_hard_break as is_break;
-use crate::text_boundaries::{grapheme_bounds, word_at};
+use crate::text_boundaries::{grapheme_bounds, graphemes, word_at};
 use crate::typography::{
-    LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
+    LineMetrics, TextAffinity, TextBox, TextCharacter, TextDirection, TextLineLayout, TextLineRun,
+    TextPosition, TextRange,
 };
 
 /// One cluster where it is painted.
@@ -297,6 +298,110 @@ impl ParagraphLayout {
             close(&mut open);
         }
         boxes
+    }
+
+    /// One entry per kept line, in the painted box: its runs of one
+    /// direction, each a contiguous range of the text, with the extended
+    /// grapheme clusters they hold where they are painted. Lines and runs
+    /// are in logical order; a cluster the layout splits into several, or
+    /// that holds several, gets its proportional share of their advance, as
+    /// a caret does, built on the first query and kept with the layout. A
+    /// layout with no line reports one empty line box of the
+    /// paragraph's line height.
+    pub(crate) fn line_layouts(&self) -> &[TextLineLayout] {
+        self.line_layouts.get_or_init(|| self.lay_out_lines())
+    }
+
+    fn lay_out_lines(&self) -> Vec<TextLineLayout> {
+        let mut layouts: Vec<TextLineLayout> = self
+            .placed_lines()
+            .iter()
+            .map(|line| TextLineLayout {
+                top: f64::from(line.top),
+                bottom: f64::from(line.bottom),
+                start: line.text_start,
+                runs: self.line_runs(line),
+            })
+            .collect();
+        if layouts.is_empty() {
+            layouts.push(TextLineLayout {
+                top: 0.0,
+                bottom: f64::from(self.line_height),
+                start: 0,
+                runs: Vec::new(),
+            });
+        }
+        layouts
+    }
+
+    /// `line`'s runs: its clusters grouped into stretches that share a
+    /// direction and are contiguous in the text, in logical order, each
+    /// described by grapheme.
+    fn line_runs(&self, line: &PlacedLine) -> Vec<TextLineRun> {
+        let mut stretches: Vec<Vec<&Placed>> = Vec::new();
+        for cluster in &line.clusters {
+            match stretches.last_mut() {
+                Some(stretch) if stretch[0].rtl == cluster.rtl => stretch.push(cluster),
+                _ => stretches.push(vec![cluster]),
+            }
+        }
+        // A stretch of one direction in visual order is contiguous in the
+        // text once sorted, unless embeddings nest; split it where it is not.
+        let mut runs: Vec<Vec<&Placed>> = Vec::new();
+        for mut stretch in stretches {
+            stretch.sort_by_key(|cluster| cluster.range.start);
+            let mut run: Vec<&Placed> = Vec::new();
+            for cluster in stretch {
+                if run
+                    .last()
+                    .is_some_and(|last| last.range.end != cluster.range.start)
+                {
+                    runs.push(std::mem::take(&mut run));
+                }
+                run.push(cluster);
+            }
+            runs.push(run);
+        }
+        runs.sort_by_key(|run| run[0].range.start);
+        runs.into_iter()
+            .map(|clusters| self.line_run(&clusters))
+            .collect()
+    }
+
+    /// One run of logically ordered, contiguous `clusters`, by grapheme.
+    fn line_run(&self, clusters: &[&Placed]) -> TextLineRun {
+        let start = clusters[0].range.start;
+        let end = clusters[clusters.len() - 1].range.end;
+        let characters = graphemes(&self.text[start..end])
+            .map(|grapheme| {
+                let range = start + grapheme.start..start + grapheme.end;
+                let (mut left, mut right) = (f32::INFINITY, f32::NEG_INFINITY);
+                for cluster in clusters.iter().filter(|cluster| {
+                    cluster.range.start < range.end && range.start < cluster.range.end
+                }) {
+                    for x in [
+                        cluster.x_at(range.start.max(cluster.range.start)),
+                        cluster.x_at(range.end.min(cluster.range.end)),
+                    ] {
+                        left = left.min(x);
+                        right = right.max(x);
+                    }
+                }
+                TextCharacter {
+                    range,
+                    left: f64::from(left),
+                    right: f64::from(right),
+                }
+            })
+            .collect();
+        TextLineRun {
+            direction: if clusters[0].rtl {
+                TextDirection::Rtl
+            } else {
+                TextDirection::Ltr
+            },
+            characters,
+        }
     }
 
     /// One entry per kept line, in the painted box.

@@ -93,11 +93,9 @@ an index that is never reused).
   measured in the semantics assembly benchmark.
 - The id range is a fixed 4 294 967 295 synthetic nodes per owner lifetime; exhaustion is
   terminal and observable rather than a silent collision.
-- Published word starts reuse the editor's word policy: the segmentation in
-  `flui-painting::text_boundaries` (`word_segments_from`) as `crates/flui-widgets/src/text/controller.rs`
-  applies it for Ctrl+Arrow (`next_word_boundary`, `prev_word_boundary`), so a screen reader's
-  word stops match the editor's. The controller's helpers stay; the run builder calls the same
-  policy rather than a copy.
+- Published word starts are the editor's word stops: `flui_painting::text_boundaries::word_starts`,
+  which the controller steps between for Ctrl+Arrow (`next_word_start`, `previous_word_start`)
+  and `RenderEditable` publishes, so a screen reader's word stops match the editor's.
 
 ## Verification
 

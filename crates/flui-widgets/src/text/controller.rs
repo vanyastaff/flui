@@ -8,7 +8,8 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use flui_painting::text_boundaries::{
-    is_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary, word_segments_from,
+    is_grapheme_boundary, next_grapheme_boundary, next_word_start, previous_grapheme_boundary,
+    previous_word_start,
 };
 
 use flui_foundation::ListenerId;
@@ -237,9 +238,9 @@ pub(super) struct ComposingState {
 /// [`Self::move_caret_word_right`], [`Self::extend_selection_word_left`]/
 /// [`Self::extend_selection_word_right`]) and word deletion
 /// ([`Self::delete_word_backward`]/[`Self::delete_word_forward`]) step by
-/// UAX #29 **word** segments (ICU4X's, through
-/// [`flui_painting::text_boundaries::word_segments_from`]), not ASCII
-/// whitespace runs: a
+/// UAX #29 **word** segments, stopping at
+/// [`flui_painting::text_boundaries::word_starts`], the starts a field
+/// publishes to assistive technology, not ASCII whitespace runs: a
 /// straight/curly apostrophe inside a word (`"don't"`) and a letter-digit
 /// run (`"foo123"`) each stay one segment per the standard's own rules,
 /// and a run of plain whitespace is skipped as a whole rather than
@@ -812,7 +813,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev = prev_word_boundary(&guard.text, caret);
+                    let prev = previous_word_start(&guard.text, caret);
                     guard.selection = Selection::collapsed(prev);
                     true
                 }
@@ -834,7 +835,7 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    let next = next_word_boundary(&guard.text, caret);
+                    let next = next_word_start(&guard.text, caret);
                     guard.selection = Selection::collapsed(next);
                     true
                 }
@@ -852,7 +853,7 @@ impl TextEditingController {
     pub fn extend_selection_word_left(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != 0).then(|| prev_word_boundary(&guard.text, caret))
+            (caret != 0).then(|| previous_word_start(&guard.text, caret))
         });
     }
 
@@ -861,7 +862,7 @@ impl TextEditingController {
     pub fn extend_selection_word_right(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != guard.text.len()).then(|| next_word_boundary(&guard.text, caret))
+            (caret != guard.text.len()).then(|| next_word_start(&guard.text, caret))
         });
     }
 
@@ -883,7 +884,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev = prev_word_boundary(&guard.text, caret);
+                    let prev = previous_word_start(&guard.text, caret);
                     guard.text.drain(prev..caret);
                     guard.selection = Selection::collapsed(prev);
                     guard.composing = None;
@@ -908,7 +909,7 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    let next = next_word_boundary(&guard.text, caret);
+                    let next = next_word_start(&guard.text, caret);
                     guard.text.drain(caret..next);
                     guard.composing = None;
                     true
@@ -1079,84 +1080,6 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
     }
 }
 
-/// The byte offset of the next word-jump stop forward from `offset` — see
-/// [`TextEditingController`]'s `# Word unit` doc section for the full
-/// forward/backward contract this implements.
-///
-/// Finds the segment `offset` currently touches (the first one whose end
-/// is past `offset`) and returns the start of the first non-whitespace
-/// segment strictly after it, or `text.len()` if none remains. Streamed,
-/// not collected, and started at the line that holds `offset`: this runs
-/// on every Ctrl/Alt+Right and must not segment, or allocate a segment
-/// list for, the whole buffer on every keystroke.
-fn next_word_boundary(text: &str, offset: usize) -> usize {
-    let total = text.len();
-    if text.is_empty() || offset >= total {
-        return total;
-    }
-    let offset = clamp_to_char_boundary(text, offset);
-    let mut segments = word_segments_from(text, offset).skip_while(|segment| segment.end <= offset);
-    // Consume the segment `offset` touches (already skipped-to by the
-    // `skip_while` above) without inspecting it — a word-jump always
-    // clears whatever segment it started in/on.
-    segments.next();
-    segments
-        .find(|segment| !segment.whitespace)
-        .map_or(total, |segment| segment.start)
-}
-
-/// The byte offset of the previous word-jump stop backward from `offset`
-/// — see [`TextEditingController`]'s `# Word unit` doc section for the
-/// full forward/backward contract this implements.
-///
-/// Finds the segment `offset` currently touches (the last one whose start
-/// is before `offset`). If that segment is a word, returns ITS OWN start
-/// without skipping it; if it is whitespace (or `offset` already sits at
-/// a word's start), continues back to the start of the previous
-/// non-whitespace segment, or `0` if none remains.
-///
-/// The segmenter walks forward only, so each pass scans one line forward,
-/// from its start up to the bound, and a pass that finds no word moves to
-/// the line before: the cost is the lines walked back over, not the
-/// buffer, and nothing is collected.
-fn prev_word_boundary(text: &str, offset: usize) -> usize {
-    if text.is_empty() || offset == 0 {
-        return 0;
-    }
-    let offset = clamp_to_char_boundary(text, offset);
-    if offset == 0 {
-        return 0;
-    }
-    let Some(touching) = word_segments_from(text, offset - 1)
-        .take_while(|segment| segment.start < offset)
-        .last()
-    else {
-        return 0;
-    };
-    if !touching.whitespace {
-        return touching.start;
-    }
-    // The last word before `bound`, one line at a time.
-    let mut bound = touching.start;
-    while bound > 0 {
-        let mut line_start = bound;
-        let mut word = None;
-        for segment in
-            word_segments_from(text, bound - 1).take_while(|segment| segment.start < bound)
-        {
-            line_start = line_start.min(segment.start);
-            if !segment.whitespace {
-                word = Some(segment.start);
-            }
-        }
-        if let Some(start) = word {
-            return start;
-        }
-        bound = line_start;
-    }
-    0
-}
-
 /// Clamp `offset` to the nearest extended-grapheme-cluster boundary of `s`,
 /// rounding forward like [`clamp_to_char_boundary`] (which it applies
 /// first, so an offset off a char boundary is safe too).
@@ -1253,7 +1176,7 @@ mod tests {
     //
     // See `TextEditingController`'s `# Word unit` doc section for the
     // forward/backward tie-break.
-    // Red-check: swap `next_word_boundary`/`prev_word_boundary` back to an
+    // Red-check: swap `next_word_start`/`previous_word_start` back to an
     // ASCII-whitespace scan and the CJK/Arabic/emoji cases below jump by
     // scalar or byte instead of by word.
     // ------------------------------------------------------------------

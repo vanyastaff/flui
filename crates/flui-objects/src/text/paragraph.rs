@@ -624,7 +624,9 @@ impl RenderBox for RenderParagraph {
 
 /// Maps the painting-side [`TextDirection`] onto `flui-semantics`'s own
 /// parallel enum of the same name (two definitions of the same concept).
-fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semantics::TextDirection {
+pub(super) fn semantics_text_direction(
+    direction: TextDirection,
+) -> flui_rendering::semantics::TextDirection {
     match direction {
         TextDirection::Ltr => flui_rendering::semantics::TextDirection::Ltr,
         TextDirection::Rtl => flui_rendering::semantics::TextDirection::Rtl,

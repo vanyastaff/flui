@@ -87,6 +87,9 @@ pub struct ParagraphLayout {
     /// The kept lines' clusters where they are painted, for the caret
     /// queries; built on the first one.
     pub(super) placed: OnceLock<Vec<PlacedLine>>,
+    /// The kept lines by run and grapheme, for `TextPainter::line_layouts`;
+    /// built on the first query.
+    pub(super) line_layouts: OnceLock<Vec<crate::typography::TextLineLayout>>,
 }
 
 // A painter keeps its layout in its cache, and a render object holding the
@@ -633,6 +636,7 @@ impl TextContext {
             ellipsized,
             kept_text,
             placed: OnceLock::new(),
+            line_layouts: OnceLock::new(),
         };
         validate_layout(&layout)?;
         Ok(layout)

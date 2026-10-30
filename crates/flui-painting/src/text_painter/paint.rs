@@ -2,7 +2,7 @@
 //! [`super::measure`]'s `layout()` cached: paint records its paragraph, and
 //! the cursor queries read the layout that measured it.
 
-use crate::typography::{LineMetrics, TextBox, TextPosition, TextRange};
+use crate::typography::{LineMetrics, TextBox, TextLineLayout, TextPosition, TextRange};
 use flui_foundation::geometry::Offset;
 
 use super::{TextLayoutCache, TextPainter};
@@ -70,6 +70,20 @@ impl TextPainter {
     #[must_use]
     pub fn get_line_metrics(&self) -> Vec<LineMetrics> {
         self.laid_out("get_line_metrics").layout.line_metrics()
+    }
+
+    /// Returns each kept line's runs of one direction, in logical order,
+    /// with the extended grapheme clusters they hold where they are painted:
+    /// the layout a text field describes to assistive technology. Built once
+    /// per layout, on the first query.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](super::TextPainter::layout) has not been
+    /// called.
+    #[must_use]
+    pub fn line_layouts(&self) -> &[TextLineLayout] {
+        self.laid_out("line_layouts").layout.line_layouts()
     }
 
     /// Returns the boxes of the text between `start` and `end`: one per
