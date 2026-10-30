@@ -383,11 +383,11 @@ where
         );
         #[cfg(target_os = "ios")]
         {
-            run_ios(root, config)
+            run_ios(root, config).inspect_err(|_| discard_capabilities())
         }
         #[cfg(target_arch = "wasm32")]
         {
-            run_web(root, config)
+            run_web(root, config).inspect_err(|_| discard_capabilities())
         }
     }
 }
@@ -409,8 +409,19 @@ pub(in crate::app) fn install_capabilities(
     let registry = capabilities
         .into_registry(&clipboard)
         .map_err(LaunchError::CapabilityConflict)?;
-    host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities = Some(registry));
+    // A displaced registry's providers are user code too: they drop after the
+    // borrow is released.
+    let displaced = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.replace(registry));
+    drop(displaced);
     Ok(())
+}
+
+/// Take back the registry [`install_capabilities`] installed, when the
+/// platform failed to start and no teardown will run.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn discard_capabilities() {
+    let installed = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.take());
+    drop(installed);
 }
 
 #[cfg(all(
