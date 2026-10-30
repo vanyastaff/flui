@@ -13,7 +13,7 @@ use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKe
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample,
 };
 use flui_testing::replay::MouseScript;
@@ -181,6 +181,44 @@ impl Scene {
         self.settle();
         handled
     }
+
+    /// One step of a mouse contact by hand, `millis` into it, for a test
+    /// that changes the tree while the button is held.
+    fn contact(&mut self, step: Contact, millis: u64, at: Offset<f64>) {
+        let mouse = PointerInfo::new(
+            PointerId::try_from(78_u64).expect("a nonzero id"),
+            PointerKind::Mouse,
+        );
+        let sample = PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        );
+        let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let event = match step {
+            Contact::Press => PointerEvent::Down(PointerPress::new(
+                mouse,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
+            Contact::Move => PointerEvent::Move(PointerMove::new(mouse, held, sample)),
+            Contact::Release => PointerEvent::Up(PointerRelease::new(
+                mouse,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
+        };
+        self.laid.dispatch_pointer_event(&event);
+    }
+}
+
+/// A step of [`Scene::contact`].
+#[derive(Clone, Copy)]
+enum Contact {
+    Press,
+    Move,
+    Release,
 }
 
 /// The platform's command modifier, as the app's shortcuts bind it.
@@ -368,7 +406,9 @@ pub(crate) fn a_blur_dims_the_highlight_and_keeps_the_selection() {
 /// leave at once; once no selected text is left, the selection clears.
 /// Each move is reported.
 ///
-/// Red-check: never move a departed end (the listener keeps the old text).
+/// Red-check: never move a departed end (the listener keeps the old text);
+/// leave a drag on the text it started on (the selection stops following
+/// the pointer once that text leaves).
 pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
     const THIRD: &str = "Third one";
     // One children type before and after, so the texts that stay keep their
@@ -437,8 +477,8 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
     // backward, so the moving end is at its start. The outer texts sit in
     // columns of their own, so emptying those leaves the middle text's
     // element in place.
-    let nested = |outer: bool| {
-        let around = |words: &'static str| {
+    let nested = |first: bool, third: bool| {
+        let around = |words: &'static str, outer: bool| {
             let children: Vec<BoxedView> = if outer {
                 vec![Text::new(words).boxed()]
             } else {
@@ -447,16 +487,16 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
             Column::new(children).boxed()
         };
         Column::new(vec![
-            around(FIRST),
+            around(FIRST, first),
             Text::new(SECOND).boxed(),
-            around(THIRD),
+            around(THIRD, third),
         ])
         .boxed()
     };
-    let mut scene = Scene::over(nested(true));
+    let mut scene = Scene::over(nested(true, true));
     let (first, third) = (scene.index_of(FIRST), scene.index_of(THIRD));
     scene.drag(scene.at(third, 0.5), scene.at(first, 0.3));
-    scene.replace(nested(false));
+    scene.replace(nested(false, false));
     assert_eq!(scene.selected().as_deref(), Some(SECOND));
     assert!(scene.key(
         Key::Named(NamedKey::ArrowRight),
@@ -468,6 +508,28 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
         Some(&SECOND[1..]),
         "still backward"
     );
+
+    // The text a drag started on leaves while the button is held: the drag
+    // goes on from the end that stays and follows the pointer to release.
+    let mut scene = Scene::over(nested(true, true));
+    let (first, second) = (scene.index_of(FIRST), scene.index_of(SECOND));
+    let (from, over) = (scene.at(first, 0.3), scene.at(second, 0.5));
+    scene.contact(Contact::Press, 0, from);
+    for step in 1..=4_u32 {
+        scene.laid.pump_for(Duration::from_millis(16));
+        let at = from + (over - from) * (f64::from(step) / 4.0);
+        scene.contact(Contact::Move, u64::from(step) * 16, at);
+    }
+    scene.replace(nested(false, true));
+    let release = scene.at(scene.index_of(THIRD), 1.0) + Offset::new(2.0, 0.0);
+    scene.contact(Contact::Move, 160, release);
+    scene.contact(Contact::Release, 176, release);
+    scene.settle();
+    assert_eq!(
+        scene.selected(),
+        Some(format!("{SECOND}\n{THIRD}")),
+        "the drag follows the pointer after its first text left"
+    );
 }
 
 /// A drag ends where the button is released, even when the release lies
@@ -476,49 +538,16 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
 /// Red-check: end a drag without applying its release position (the
 /// selection stops at the last move, inside the first text).
 pub(crate) fn a_drag_ends_where_it_is_released() {
-    use flui_platform::pointer::PointerMove;
-
     let mut scene = Scene::two_texts();
-    let mouse = PointerInfo::new(
-        PointerId::try_from(78_u64).expect("a nonzero id"),
-        PointerKind::Mouse,
-    );
-    let sample = |millis: u64, at: Offset<f64>| {
-        PointerSample::new(
-            EventTime::from_nanos(millis * 1_000_000),
-            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
-        )
-    };
     let (from, middle) = (scene.at(0, 0.0) + Offset::new(-2.0, 0.0), scene.at(0, 0.5));
     let release = scene.at(1, 1.0) + Offset::new(2.0, 0.0);
-    let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
-    scene
-        .laid
-        .dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
-            mouse,
-            PointerButton::PRIMARY,
-            PointerButtons::NONE,
-            sample(0, from),
-        )));
+    scene.contact(Contact::Press, 0, from);
     for step in 1..=4_u32 {
         let at = from + (middle - from) * (f64::from(step) / 4.0);
         scene.laid.pump_for(Duration::from_millis(16));
-        scene
-            .laid
-            .dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
-                mouse,
-                held,
-                sample(u64::from(step) * 16, at),
-            )));
+        scene.contact(Contact::Move, u64::from(step) * 16, at);
     }
-    scene
-        .laid
-        .dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
-            mouse,
-            PointerButton::PRIMARY,
-            PointerButtons::NONE,
-            sample(80, release),
-        )));
+    scene.contact(Contact::Release, 80, release);
     scene.settle();
     assert_eq!(
         scene.selected().as_deref(),

@@ -517,6 +517,7 @@ impl SelectionModel {
                     DocumentSelection::new(moved.clone(), kept.clone())
                 }
             });
+        self.rebase_drag(held, next.as_ref());
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             writer.write(|cx| self.commit(cx, next.as_ref(), false, CaretMemory::default()));

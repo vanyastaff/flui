@@ -317,6 +317,29 @@ impl SelectionModel {
         self.pointer.drag.borrow_mut().take();
     }
 
+    /// A text the drag in progress started on left: the drag goes on from
+    /// `kept`'s anchor, the end that stays put, by character; without a
+    /// selection left, it ends. `held` says whether a position's text is
+    /// still in the area.
+    pub(super) fn rebase_drag(
+        &self,
+        held: impl Fn(&DocumentPosition) -> bool,
+        kept: Option<&DocumentSelection>,
+    ) {
+        let mut drag = self.pointer.drag.borrow_mut();
+        let Some(current) = drag.as_ref() else {
+            return;
+        };
+        if held(&current.start) && held(&current.end) {
+            return;
+        }
+        *drag = kept.map(|kept| Drag {
+            unit: Unit::Character,
+            start: kept.anchor().clone(),
+            end: kept.anchor().clone(),
+        });
+    }
+
     /// A press of `count` consecutive taps at `global` that did not drag: a
     /// single one clears the selection, a double one selects the word under
     /// it and a triple one the text. With Shift held, it extends the
