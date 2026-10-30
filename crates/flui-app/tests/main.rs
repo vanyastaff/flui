@@ -2,6 +2,9 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#[path = "capability_registration.rs"]
+mod capability_registration;
+
 #[path = "config_options.rs"]
 mod config_options;
 
@@ -41,4 +44,16 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
         .map(|(name, _)| *name)
         .collect();
     assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
+}
+
+#[test]
+fn capability_registration() {
+    run_table(
+        "capability_registration",
+        &[(
+            "capability_registration::conflicting_registrations_fail_run_before_the_platform_starts",
+            capability_registration::conflicting_registrations_fail_run_before_the_platform_starts
+                as fn(),
+        )],
+    );
 }

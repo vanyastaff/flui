@@ -1,7 +1,7 @@
 # ADR-0152: The capability seam, revised from ADR-0084
 
-- **Status:** Accepted (2026-10-20). Not implemented: the seam lands together with the clipboard,
-  its first consumer (see "Landing rule and first consumer").
+- **Status:** Accepted (2026-10-20). Implemented with the clipboard, its first consumer (see
+  "Landing rule and first consumer" and "As built").
 - **Date:** 2026-10-06
 - **Revised:** 2026-10-20 — after reading how ten frameworks ship platform services (sources
   below): one result type, the first two `ProviderContext` methods, the full reason and
@@ -420,6 +420,51 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
   `Completion<T>: Send` (E0277);
 - a package fixture that depends only on `flui-sdk` and the contract declares, registers and
   acquires its own capability, and so does a leaf-crate fixture that depends on the contract alone.
+
+### As built
+
+The clipboard landing spells the shape of §3 as follows; the properties of §2 hold as written.
+
+- **A completion always ends.** `Completion<T>` settles with `Result<T, Abandoned>`:
+  `on_complete` takes `FnOnce(Result<T, Abandoned>)`, `poll` answers
+  `Option<Result<T, Abandoned>>` and the future yields the same. `Abandoned::ProviderDropped` is a
+  `Resolver` dropped unanswered, `Abandoned::OwnerRetired` a UI runtime that dropped first, so no
+  waiter hangs; a value settled before retirement is still delivered.
+- **Where completions come from.** `ProviderContext::completions()` is the UI runtime's
+  `CompletionSource`, whose `pending::<T: Send>()` returns the `(Completion<T>, Resolver<T>)`
+  pair. The closures waiting on completions live in the owner-local `PendingCompletions`; a
+  settle job carries only a generational slot id.
+- **The owner-job queue.** The poster sends to an unbounded queue of its own, not to the bounded
+  command inbox, where backpressure would lose an answer. The UI runtime drains it after the
+  inbox at every Idle drain, bounded by the length it read first, and retires its completions
+  when it drops.
+- **Refusals name the capability.** `Unsupported::of::<C>` and its erased form
+  `Unsupported::named` set the name `Unsupported::capability` returns.
+- **The registry.** `flui_runtime::capability::CapabilityRegistry::builder()` takes
+  `overrides`, `built_ins` and each `plugin`; `build` answers `CapabilityConflict::Duplicate`
+  (one capability twice in one tier, checked in every tier even where a higher one answers) or
+  `CapabilityConflict::SharedName`. `Application::capability::<C>(provider)` and
+  `Application::plugin(plugin)` register, and `Application::run` answers
+  `AppRunError::CapabilityConflict` before the platform is created. `RuntimeHostServices` takes
+  the registry through `with_capabilities`; without one every acquisition answers
+  `NotRegistered`.
+- **The core host's clipboard.** `flui_native::NativeClipboard` is owner-local and
+  `OwnerPlatform::clipboard` hands it out; its read answers through a `Resolver`. Win32, AppKit,
+  UIKit and `arboard` answer at once, the web when `navigator.clipboard.readText()` settles
+  (falling back to what the page wrote when the browser refuses). Android keeps an in-memory
+  clipboard until `ClipboardManager` is reached through JNI.
+- **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, drops or refuses
+  reads and counts live handles; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin`
+  mount a tree over another registry. `CompletionSource` is public, so the contract needs no
+  `scripted` feature; ADR-0243 names test support `testing` in any case.
+- **Checked failures.** `capability` on a `BuildContext` is the E0599 doctest of
+  `LifecycleContextExt`; `ClipboardHandle: Send` and `Completion<T>: Send` are the E0277 cases
+  `a_clipboard_handle_stays_on_its_thread` (`flui-interaction`) and
+  `a_completion_cannot_cross_a_thread` (`flui-platform`).
+- **The §4 tests** are the `capability_seam` table of `flui-testing`,
+  `a_package_declares_registers_and_acquires_its_own_capability` (`flui-sdk`),
+  `a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone` (`flui-platform`) and
+  `conflicting_registrations_fail_run_before_the_platform_starts` (`flui-app`).
 
 ### Consequences
 

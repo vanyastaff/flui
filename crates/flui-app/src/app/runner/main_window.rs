@@ -767,14 +767,15 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    let _logging = super::super::logging::init_managed_logging(&application.config);
-    // Before the platform starts, so a conflict opens no window (ADR-0152 §1).
+    // Before anything starts, so a conflict opens no window and installs
+    // nothing (ADR-0152 §1).
     let capabilities = std::mem::take(&mut application.capabilities);
     // A plugin's `register` is user code: it runs with no borrow held.
     let clipboard = APP_RUNTIME.with(|slot| Rc::clone(slot.borrow().clipboard_slot()));
     let registry = capabilities
         .into_registry(&clipboard)
         .map_err(AppRunError::CapabilityConflict)?;
+    let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);

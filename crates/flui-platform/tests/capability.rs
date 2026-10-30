@@ -220,3 +220,71 @@ fn a_refusal_names_its_capability() {
         None
     );
 }
+
+/// A leaf capability crate's whole surface, written against the contract
+/// alone: its marker, its provider, its plugin, and an acquisition through
+/// what the plugin registered.
+mod leaf {
+    use flui_platform::capability::{Capability, CapabilityRegistrar, Plugin, ProviderContext};
+    use flui_platform::{Unsupported, UnsupportedReason};
+
+    pub(super) enum Vibration {}
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub(super) struct VibrationHandle {
+        pub(super) motors: u8,
+    }
+
+    impl Capability for Vibration {
+        type Handle = VibrationHandle;
+        const NAME: &'static str = "vibration";
+    }
+
+    pub(super) struct VibrationPlugin {
+        pub(super) present: bool,
+    }
+
+    impl Plugin for VibrationPlugin {
+        fn register(&self, registrar: &mut CapabilityRegistrar) {
+            let present = self.present;
+            registrar.provide::<Vibration>(move |_: &ProviderContext<'_>| {
+                if present {
+                    Ok(VibrationHandle { motors: 2 })
+                } else {
+                    Err(Unsupported::of::<Vibration>(
+                        UnsupportedReason::NotOnThisDevice,
+                    ))
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
+    use leaf::{Vibration, VibrationHandle, VibrationPlugin};
+
+    let owner = Owner::new();
+    let acquire = |present: bool| {
+        let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
+        flui_platform::capability::Plugin::register(&VibrationPlugin { present }, &mut registrar);
+        let entries = registrar.into_entries();
+        assert_eq!(entries.len(), 1, "one provider registered");
+        assert_eq!(entries[0].name(), Vibration::NAME);
+        assert_eq!(entries[0].capability(), std::any::TypeId::of::<Vibration>());
+        let cx = flui_platform::capability::ProviderContext::new(
+            owner.source.poster(),
+            &owner.source,
+            None,
+        );
+        entries[0].provide(&cx).map(|handle| {
+            *handle
+                .downcast::<VibrationHandle>()
+                .expect("the provider answers its capability's handle")
+        })
+    };
+    assert_eq!(acquire(true), Ok(VibrationHandle { motors: 2 }));
+    let refusal = acquire(false).expect_err("absent");
+    assert_eq!(refusal.capability(), Some("vibration"));
+    assert_eq!(refusal.reason, UnsupportedReason::NotOnThisDevice);
+}

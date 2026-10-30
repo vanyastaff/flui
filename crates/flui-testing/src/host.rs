@@ -673,11 +673,59 @@ impl HeadlessHost {
         Self::with_storage(window, None)
     }
 
+    /// [`Self::new`], its widgets acquiring platform capabilities from
+    /// `registry` alone (ADR-0152): the host's [`clipboard`](Self::clipboard)
+    /// reaches them only if `registry` provides it.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::new`].
+    #[must_use]
+    pub fn with_capabilities(
+        window: HeadlessWindow,
+        registry: flui_runtime::capability::CapabilityRegistry,
+    ) -> Self {
+        Self::assemble(window, None, Some(registry), None)
+    }
+
+    /// [`Self::new`], its widgets acquiring what `plugin` registers beside
+    /// the host's [`clipboard`](Self::clipboard): how a package tests its
+    /// plugin on a headless host (ADR-0152).
+    ///
+    /// # Panics
+    ///
+    /// When `plugin` registers a capability twice, or under the name of
+    /// another; and as [`Self::new`].
+    #[must_use]
+    pub fn with_plugin(
+        window: HeadlessWindow,
+        plugin: &dyn flui_platform::capability::Plugin,
+    ) -> Self {
+        let clipboard = crate::ScriptedClipboard::new();
+        let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
+        clipboard.register(&mut built_ins);
+        let registry = flui_runtime::capability::CapabilityRegistry::builder()
+            .built_ins(built_ins)
+            .plugin(plugin)
+            .build()
+            .unwrap_or_else(|conflict| panic!("the plugin's registrations conflict: {conflict}"));
+        Self::assemble(window, None, Some(registry), Some(clipboard))
+    }
+
     /// [`Self::new`], its widgets reaching `storage` through
     /// `LifecycleContext::storage`.
     pub(crate) fn with_storage(
         window: HeadlessWindow,
         storage: Option<Arc<dyn flui_platform::Storage>>,
+    ) -> Self {
+        Self::assemble(window, storage, None, None)
+    }
+
+    fn assemble(
+        window: HeadlessWindow,
+        storage: Option<Arc<dyn flui_platform::Storage>>,
+        capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
+        clipboard: Option<crate::ScriptedClipboard>,
     ) -> Self {
         #[expect(
             clippy::cast_possible_truncation,
@@ -689,7 +737,7 @@ impl HeadlessHost {
         let gesture_preset = window.gesture_preset.clone();
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let clipboard = crate::ScriptedClipboard::new();
+        let clipboard = clipboard.unwrap_or_default();
         let clock = ManualClock::new();
         // A collection of its own: the ui_runtime owns a `TextContext` over it
         // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
@@ -720,14 +768,15 @@ impl HeadlessHost {
             &fonts,
             ClockSource::Manual(clock.clone()),
         );
-        let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
-        clipboard.register(&mut built_ins);
-        host = host.with_capabilities(
+        let registry = capabilities.unwrap_or_else(|| {
+            let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
+            clipboard.register(&mut built_ins);
             flui_runtime::capability::CapabilityRegistry::builder()
                 .built_ins(built_ins)
                 .build()
-                .expect("BUG: one built-in per capability cannot conflict"),
-        );
+                .expect("BUG: one built-in per capability cannot conflict")
+        });
+        host = host.with_capabilities(registry);
         if let Some(storage) = storage {
             host = host.with_storage(storage);
         }
