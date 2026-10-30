@@ -9,6 +9,7 @@ use flui::foundation::RenderId;
 use flui::interaction::PointerKind;
 use flui::platform::EventTime;
 use flui::platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui::testing::a11y::Role;
 use flui::testing::storage::MemoryStorage;
 use flui::testing::widgets::{LaidOut, lay_out_with_storage, offset, settle_lazy, tight};
 use flui::view::CloseReason;
@@ -209,7 +210,8 @@ impl AppRun {
     /// every step the two name the same element.
     pub fn focused(&self) -> Option<String> {
         let tree = self.laid.a11y_tree().expect("BUG: AppRun enables semantics");
-        let node = tree.focus();
+        // With nothing focused the tree reports its root window focused.
+        let node = tree.focus().filter(|node| node.role() != Role::Window);
         let primary = self.laid.focus_manager().primary_focus();
         match (&node, &primary) {
             (None, None) => {}

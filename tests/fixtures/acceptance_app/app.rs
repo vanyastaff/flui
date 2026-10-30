@@ -573,9 +573,14 @@ impl StatelessView for NoteRow {
         let id = *self.key.value();
         let shared = self.shared.clone();
         SizedBox::height(self.extent).child(
-            on_current_page(&self.title, &self.router, &Route::Home, move |cx, router| {
-                open_note(cx, &shared, router, id);
-            })
+            on_current_page(
+                &self.title,
+                &self.router,
+                &Route::Home,
+                move |cx, router| {
+                    open_note(cx, &shared, router, id);
+                },
+            )
             .style(flat_row()),
         )
     }
