@@ -84,6 +84,22 @@ impl CaretMemory {
             column: Some(column),
         }
     }
+
+    /// What a pointer selection whose moving end is `extent` leaves: the
+    /// affinity of `hit` when the end is where the pointer hit, so an end
+    /// dropped at a soft wrap stays on the line it ends.
+    fn after_hit(extent: &DocumentPosition, hit: &Hit) -> Self {
+        Self {
+            upstream: *extent == hit.at && hit.affinity == TextAffinity::Upstream,
+            column: None,
+        }
+    }
+}
+
+/// Where the pointer hit a text, and on which side of a soft wrap.
+struct Hit {
+    at: DocumentPosition,
+    affinity: TextAffinity,
 }
 
 /// What the pointer is doing in the area.
@@ -142,7 +158,7 @@ impl SelectionModel {
 
     /// The position nearest `global` (render-root coordinates): in the text
     /// under it, else in the nearest text, nearer by line first.
-    fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<DocumentPosition> {
+    fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<Hit> {
         ordered
             .iter()
             .filter_map(|text| {
@@ -166,13 +182,15 @@ impl SelectionModel {
                         gap(global.dy, bounds.top(), bounds.bottom()),
                         gap(global.dx, bounds.left(), bounds.right()),
                     );
-                    let byte = paragraph
+                    let hit = paragraph
                         .painter()
-                        .get_position_for_offset(Offset::new(x, y))
-                        .offset;
+                        .get_position_for_offset(Offset::new(x, y));
                     Some((
                         distance,
-                        DocumentPosition::new(text.entry.anchor.clone(), byte),
+                        Hit {
+                            at: DocumentPosition::new(text.entry.anchor.clone(), hit.offset),
+                            affinity: hit.affinity,
+                        },
                     ))
                 })
             })
@@ -221,8 +239,9 @@ impl SelectionModel {
 
     /// Takes `selection` from the user's pointer or keys: the area takes the
     /// focus, so its highlight is the active one, and the listener hears of
-    /// the change through the area's writer.
-    fn select_from_input(&self, selection: Option<DocumentSelection>) {
+    /// the change through the area's writer. `caret` is what the keys keep
+    /// about the new moving end.
+    fn select_from_input(&self, selection: Option<DocumentSelection>, caret: CaretMemory) {
         // A click that selects nothing still makes this area the target of
         // the keys, so select all and copy act on the area last clicked. A
         // blur listener that panics still lets the selection commit and be
@@ -235,7 +254,9 @@ impl SelectionModel {
         }
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
-            failure.contain(|| writer.write(|cx| self.select(cx, selection.as_ref())));
+            failure.contain(|| {
+                writer.write(|cx| self.commit(cx, selection.as_ref(), true, caret));
+            });
         }
         failure.resume();
     }
@@ -259,16 +280,17 @@ impl SelectionModel {
             });
             return;
         }
-        let Some(at) = self.position_at(&ordered, pressed) else {
+        let Some(hit) = self.position_at(&ordered, pressed) else {
             return;
         };
-        let (start, end) = self.unit_at(&ordered, &at, unit);
+        let (start, end) = self.unit_at(&ordered, &hit.at, unit);
         *self.pointer.drag.borrow_mut() = Some(Drag {
             unit,
             start: start.clone(),
             end: end.clone(),
         });
-        self.select_from_input(Some(DocumentSelection::new(start, end)));
+        let caret = CaretMemory::after_hit(&end, &hit);
+        self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
     }
 
     /// The drag moved to `global`: select from its first unit to the unit
@@ -278,16 +300,17 @@ impl SelectionModel {
             return;
         };
         let ordered = self.ordered();
-        let Some(at) = self.position_at(&ordered, global) else {
+        let Some(hit) = self.position_at(&ordered, global) else {
             return;
         };
-        let (start, end) = self.unit_at(&ordered, &at, drag.unit);
+        let (start, end) = self.unit_at(&ordered, &hit.at, drag.unit);
         let selection = if Self::compare(&ordered, &start, &drag.start) == Ordering::Less {
             DocumentSelection::new(drag.end, start)
         } else {
             DocumentSelection::new(drag.start, end)
         };
-        self.select_from_input(Some(selection));
+        let caret = CaretMemory::after_hit(selection.focus(), &hit);
+        self.select_from_input(Some(selection), caret);
     }
 
     fn drag_ended(&self) {
@@ -307,19 +330,21 @@ impl SelectionModel {
             .filter(|_| self.pointer.shift.get())
             .map(|selection| selection.anchor().clone());
         if let Some(anchor) = anchor {
-            if let Some(at) = self.position_at(&ordered, global) {
-                self.select_from_input(Some(DocumentSelection::new(anchor, at)));
+            if let Some(hit) = self.position_at(&ordered, global) {
+                let caret = CaretMemory::after_hit(&hit.at, &hit);
+                self.select_from_input(Some(DocumentSelection::new(anchor, hit.at)), caret);
             }
             return;
         }
         let unit = Unit::of_taps(count);
         if unit == Unit::Character {
-            self.select_from_input(None);
+            self.select_from_input(None, CaretMemory::default());
             return;
         }
-        if let Some(at) = self.position_at(&ordered, global) {
-            let (start, end) = self.unit_at(&ordered, &at, unit);
-            self.select_from_input(Some(DocumentSelection::new(start, end)));
+        if let Some(hit) = self.position_at(&ordered, global) {
+            let (start, end) = self.unit_at(&ordered, &hit.at, unit);
+            let caret = CaretMemory::after_hit(&end, &hit);
+            self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
         }
     }
 

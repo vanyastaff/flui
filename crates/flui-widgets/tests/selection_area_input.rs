@@ -608,7 +608,8 @@ pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
 /// second step lands near the start of the third line); resolve a line end
 /// downstream (the second Shift+End selects the next line); drop a line
 /// step's hit affinity (Shift+Home after landing on a wrapped line's end
-/// stays put).
+/// stays put); drop the pointer hit's affinity (Shift+Home after a drag to
+/// that line's end stays put).
 pub(crate) fn line_keys_keep_their_column_and_their_line() {
     let mut scene = Scene::over(Column::new((Text::new("abcdefghij\nx\nabcdefghij"),)).boxed());
     // Near the top left, on the first line.
@@ -666,8 +667,25 @@ pub(crate) fn line_keys_keep_their_column_and_their_line() {
     assert!(scene.key(Key::Named(NamedKey::Home), Code::Home, Modifiers::SHIFT));
     assert_eq!(
         scene.selected(),
-        Some(first),
+        Some(first.clone()),
         "back to the second line's start"
+    );
+
+    // A drag released past the end of the short line leaves its end on
+    // that line too.
+    let mut scene =
+        Scene::over(Column::new((SizedBox::width(width).child(Text::new("aaaa b aaaa")),)).boxed());
+    let paragraph = scene.paragraphs()[0];
+    let height = scene.laid.size(paragraph).height;
+    let past_short_line =
+        scene.laid.absolute_offset(paragraph) + Offset::new(width - 1.0, height / 2.0);
+    scene.drag(corner(&scene), past_short_line);
+    assert_eq!(scene.selected().as_deref(), Some("aaaa b "));
+    assert!(scene.key(Key::Named(NamedKey::Home), Code::Home, Modifiers::SHIFT));
+    assert_eq!(
+        scene.selected(),
+        Some(first),
+        "a dragged end goes back to the second line's start"
     );
 }
 
