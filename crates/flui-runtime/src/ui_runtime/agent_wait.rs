@@ -170,7 +170,7 @@ impl UiRuntime {
             settled: causes.is_empty(),
         };
         let evaluation = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             pipeline.semantics_owner().map(|owner| {
                 owner.evaluate_wait(&wait.condition, facts, Placement::new(ratio, window))
