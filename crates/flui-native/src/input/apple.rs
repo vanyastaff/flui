@@ -1033,6 +1033,9 @@ pub(crate) mod macos {
             contacts: ContactRegistry,
             scrolling: ScrollPhases,
             force: crate::input::apple::force::ForceClick,
+            /// Keys held down whose key code names no code, with the key each
+            /// was pressed as.
+            unplaced: crate::input::keys::UnplacedKeys<u16>,
         }
 
         impl Default for MacInputState {
@@ -1049,6 +1052,7 @@ pub(crate) mod macos {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
                     force: crate::input::apple::force::ForceClick::default(),
+                    unplaced: crate::input::keys::UnplacedKeys::default(),
                 }
             }
         }
@@ -1072,26 +1076,27 @@ pub(crate) mod macos {
                 if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
                     let key_code = event.keyCode();
                     let code = crate::input::apple::keys::keycode_to_code(key_code);
+                    let key = KeyEvent::new(
+                        if event_type == NSEventType::KeyDown {
+                            KeyState::Down
+                        } else {
+                            KeyState::Up
+                        },
+                        extract_key(event, key_code),
+                        code,
+                        time,
+                    )
+                    .with_location(crate::input::keys::location_for_code(code))
+                    .with_modifiers(extract_modifiers(event))
+                    .with_repeat(
+                        if event_type == NSEventType::KeyDown && event.isARepeat() {
+                            KeyRepeat::AutoRepeat
+                        } else {
+                            KeyRepeat::First
+                        },
+                    );
                     return vec![PlatformInput::Keyboard(
-                        KeyEvent::new(
-                            if event_type == NSEventType::KeyDown {
-                                KeyState::Down
-                            } else {
-                                KeyState::Up
-                            },
-                            extract_key(event, key_code),
-                            code,
-                            time,
-                        )
-                        .with_location(crate::input::keys::location_for_code(code))
-                        .with_modifiers(extract_modifiers(event))
-                        .with_repeat(
-                            if event_type == NSEventType::KeyDown && event.isARepeat() {
-                                KeyRepeat::AutoRepeat
-                            } else {
-                                KeyRepeat::First
-                            },
-                        ),
+                        self.unplaced.settle(Some(key_code), key),
                     )];
                 }
                 if event_type == NSEventType::FlagsChanged {

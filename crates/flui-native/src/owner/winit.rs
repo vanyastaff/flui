@@ -224,7 +224,7 @@ pub(crate) trait LoopInput: Send {
 
     /// What a key event with `modifiers` held delivers, if anything.
     fn key(
-        &self,
+        &mut self,
         event: winit::event::KeyEvent,
         modifiers: ModifiersState,
     ) -> Option<PlatformInput>;
