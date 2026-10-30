@@ -1,6 +1,6 @@
 //! Touch handles: what they look like ([`SelectionHandles`], [`DotHandles`],
 //! [`DefaultSelectionHandles`]) and how a [`SelectionArea`](super::SelectionArea)
-//! shows them, in its nearest [`Overlay`], each pinned under one end of the
+//! shows them, in its nearest [`Overlay`](crate::Overlay), each pinned under one end of the
 //! selection by a layer link the paragraph holding that end publishes.
 
 use std::cell::{Cell, RefCell};

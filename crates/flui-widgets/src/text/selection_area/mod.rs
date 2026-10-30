@@ -95,7 +95,7 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 /// hears of each change.
 ///
 /// A touch long press selects the word under it and shows a handle under
-/// each end, in the nearest [`Overlay`](crate::Overlay); dragging a handle
+/// each end, in the nearest [`Overlay`]; dragging a handle
 /// moves its end, and the handles follow the ends as the text scrolls. A
 /// tap, Esc or a selection by mouse hides them. They look like
 /// [`handles`](Self::handles) sets, else the nearest
