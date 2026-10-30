@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Point;
 use flui_platform::text_store::{
-    CommitGate, DEFERRED_LOCK_CAPACITY, InMemoryTextStore, LockGrant, LockKind, LockOutcome,
-    LockTiming, OffsetError, PointMode, TextStore, TextStoreEdit, TextStoreError, TextStoreRead,
-    Utf16Offset,
+    CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockKind, LockOutcome, LockTiming, OffsetError,
+    PointMode, TextStore, TextStoreEdit, TextStoreError, TextStoreRead, Utf16Offset,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 
 use super::{
     AcpChange, AcpSelection, Hresult, LockRequest, SelectionInsert, Session, SessionSlot,

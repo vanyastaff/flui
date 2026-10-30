@@ -55,17 +55,20 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
+use flui_interaction::text_input::{
+    CompositionLedger, EditGeneration, LockArbiter, committed_text,
+};
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionLedger, EditGeneration, LockArbiter, LockGrant,
-    LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect, RetainOnFailure, Selection,
-    TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, committed_text, utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
-use super::controller::{self, ComposingState, TextEditingController};
+use super::controller::{self, ComposingState, SessionWrite, TextEditingController};
 use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
@@ -513,24 +516,20 @@ impl EditableTextStore {
             || doc.composing != original.composing
             || doc.origin != original.origin)
             .then(|| doc.committed());
-        let applied = controller.with_inner_silent(|inner| {
-            if !inner.generation.admits(generation) {
-                return false;
-            }
-            inner.selection = controller::Selection {
+        let origin = doc.origin;
+        let write = SessionWrite {
+            text: doc.text,
+            selection: controller::Selection {
                 anchor: doc.anchor,
                 caret: doc.caret,
-            };
-            let origin = doc.origin;
-            inner.composing = doc.composing.map(|(range, caret_hidden)| ComposingState {
+            },
+            composing: doc.composing.map(|(range, caret_hidden)| ComposingState {
                 range,
                 caret_hidden,
                 origin,
-            });
-            inner.text = doc.text;
-            true
-        });
-        if !applied {
+            }),
+        };
+        if !controller.write_session(generation, write) {
             return;
         }
         *self.reported.borrow_mut() = reported;

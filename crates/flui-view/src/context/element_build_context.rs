@@ -602,6 +602,9 @@ impl LifecycleContext for ElementBuildContext {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.owner.read().capabilities().clipboard.clone()
     }
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
+        self.owner.read().capabilities().announcer.clone()
+    }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.owner.read().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
@@ -614,6 +617,9 @@ impl LifecycleContext for ElementBuildContext {
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.owner.read().capabilities().storage.clone()
+    }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.owner.read().capabilities().close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,
@@ -1048,6 +1054,9 @@ impl LifecycleContext for BuildCtx<'_> {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.capabilities.presentation.clipboard.clone()
     }
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
+        self.capabilities.presentation.announcer.clone()
+    }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.capabilities.presentation.haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
@@ -1060,6 +1069,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
         self.capabilities.presentation.storage.clone()
+    }
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        self.capabilities.presentation.close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,

@@ -422,23 +422,89 @@ O(dirty + anchors + relation sources), and the scaling oracle counts all three
 **Test.** `relations_resolve_through_anchors_across_publication` in `tests/incremental_flush.rs`,
 red with the clean-source loop removed.
 
-### A live region's politeness is explicit, else implied by its role
+### A live region's setting and atomicity are explicit, else implied by its role
 
-**Rule.** `set_live_region(Some(politeness))` records the node's `Assertiveness`, and
-AccessKit's `live` follows it. A node with no explicit politeness takes the one ARIA gives its
-role: `Alert` assertive, `Status` and `Log` polite, `Timer` and `Marquee` off.
-An explicit politeness wins over the role's.
+**Rule.** `set_live_region(LiveSetting)` records the node's setting, and AccessKit's `live`
+follows it. A node with no explicit setting takes the one ARIA gives its role: `Alert`
+assertive, `Status` and `Log` polite, `Timer` and `Marquee` off. `set_live_atomic` decides
+`aria-atomic`; undeclared, an `Alert` or a `Status` is atomic. Atomicity is published only on a
+region that announces. Setting and atomicity are one group: two configurations that each declare
+either form separate nodes, and a forced merge keeps the receiver's group whole. `busy` is a
+state like any other and publishes AccessKit's `busy`.
 
-**Why.** Live regions are how a change reaches a screen reader without the user moving to it:
-AccessKit has no imperative announcement, so `SemanticsHost::announce` has no platform path and
-a widget that must speak (a snack bar, a validation error) does it by being a live region.
-A yes/no live flag could only say polite, and an `Alert` that stayed silent until visited is
-not an alert. `Timer` and `Marquee` publish `off` rather than nothing: an absent setting would
-inherit an enclosing region's politeness and announce every tick.
+**Why.** Live regions are how a change reaches a screen reader without the user moving to it.
+An `Alert` that stayed silent until visited is not an alert. `Off` is published rather than left
+out: an absent setting inherits an enclosing region's politeness and announces every tick.
 
 **Test.** `live_regions_announce_at_their_politeness` in `accesskit_translation.rs`;
 `a_shown_snack_bar_is_announced_as_a_polite_status` in
 `packages/flui-material/tests/snack_bar.rs`.
+
+### Announcements are a change of an announcer node's value
+
+**Rule.** [ADR-0204](../../docs/adr/ADR-0204-synthetic-semantics-nodes.md) §4. A presentation's
+pipeline keeps one `Announcements`: the queue and the two synthetic identities, minted from the
+pipeline's identity source on first request and installed in every `SemanticsOwner` it creates.
+The owner publishes two `Label` nodes, polite and assertive, live and atomic, as the last children
+of the root, in both the full and the incremental path. A flush takes the pending messages of
+each urgency as one value, one message per line, and appends a zero-width space when the value
+would repeat what the node shows. Messages leave the queue only after the update carrying them
+is delivered, and only those it carried. While the owner is disabled or disposed nothing
+listens: `Announcer::announce` accepts and drops, and pending messages are cleared, so an
+adapter that connects later is not read a backlog. An announcement with nothing dirty still
+produces a frame: the presentation's frame gate reads `PipelineOwner::has_pending_announcements`,
+and the semantics phase flushes an owner that needs it without assembling.
+
+An agent reads the interface, not the announcer nodes: `read_wire` and `locate_wire` leave them
+out by their identities. It hears announcements through the journal
+(`SemanticsOwner::announcement_journal`, protocol `semantics.announcements`): each delivered
+message is one entry with its urgency and the revision that delivered it, kept in the shared
+queue so it outlives owner replacement; the last 256 are held and the rest counted as dropped.
+
+**Why.** AccessKit 0.25 has no announcement API; every adapter announces a live region whose
+value changes (macOS and iOS read `value`, not `label`). A queue owned by the owner would lose
+accepted messages when accessibility is switched off and on, and a message committed before
+delivery would be lost to an adapter that panicked.
+
+**Test.** `announcements_reach_the_live_region_value`, `a_repeated_announcement_changes_the_value`,
+`a_failed_delivery_keeps_the_announcement`, `an_announcer_queues_then_requests_a_frame`,
+`an_agent_neither_reads_nor_locates_the_announcer_nodes`,
+`the_agent_journal_holds_each_delivered_announcement`,
+`the_agent_journal_counts_what_it_no_longer_holds` in
+`tests/announce.rs`; `an_idle_presentation_speaks_an_announcement` in
+`crates/flui-runtime/tests/contracts/announce.rs`.
+
+### A text field's text is published as runs under pipeline identities
+
+**Rule.** [ADR-0204](../../docs/adr/ADR-0204-synthetic-semantics-nodes.md). The render object that
+lays out a field's text declares it as a `TextContent`: `TextRun`s, each one stretch of one line
+in one direction of at most 256 AccessKit characters (`u8` byte lengths on `char` boundaries),
+covering the value from its first byte, on lines that never go back, and a `TextRunSelection` in
+`(run, character)` positions. `TextRun::try_new` and `TextContent::try_new` check that model. The
+pipeline moves the runs' geometry into the window's space and gives each run a synthetic
+identity keyed by its whole identity: the node, its place, its start and its text. An unchanged
+run keeps its identity, a changed one takes a new one, and a rebuilt field forgets the runs it
+no longer has. A text field publishes its runs as `TextRun` children after its own, linked
+`next_on_line`/`previous_on_line` within a line, and its selection as `text_selection`; other
+roles publish none. Content without identities, as when the identity space is exhausted, is
+withheld whole, runs and selection together, and reported as `TextRunsWithheld`; the value
+still reads. A platform `SetTextSelection` names run positions, so the owner decodes it
+(`SemanticsOwner::semantics_action_request_for`, `PipelineOwner::decode_semantics_action`):
+both ends must lie in the target field's current runs, else `ActionDecodeError::InvalidTextPosition`,
+and the handler receives a `TextSelection` in bytes of the value. A request on a run goes to its
+field. An agent reads the value, not the runs.
+
+**Why.** AccessKit reads text only through `TextRun` children, and a `TextPosition` is a bare
+node id: a reissued identity would point an old selection at other text. Separate types for run
+positions and editor bytes make a mix-up a type error.
+
+**Test.** `a_field_reads_by_character_word_and_line`,
+`a_direction_change_inside_a_line_reads_as_one_line`,
+`a_selection_is_read_only_from_the_fields_own_runs`,
+`runs_without_identities_are_withheld_and_reported`,
+`a_run_is_checked_against_accesskits_model` in `tests/text_runs.rs`;
+`a_fields_runs_keep_their_identities_until_their_text_changes` in
+`crates/flui-widgets/tests/semantics.rs`.
 
 ### A header publishes AccessKit's `Heading` at its level
 

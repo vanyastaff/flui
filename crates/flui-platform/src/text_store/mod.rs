@@ -13,9 +13,9 @@
 //!   here, once.
 //! - [`TextStoreRead`] and [`TextStoreEdit`]: what a session can do. A read
 //!   lock hands out only the first, so an edit under it does not compile.
-//! - [`LockGrant`] and [`LockArbiter`]: the lock, and the one state machine
-//!   every store embeds to decide when a grant runs. [`CommitGate`] is the
-//!   presentation's frame transaction as that machine reads it.
+//! - [`LockGrant`], [`LockOutcome`] and [`TextStoreError`]: the lock and its
+//!   answers. [`CommitGate`] is the presentation's frame transaction as a
+//!   store reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
 //! - [`TextStoreHost`]: what a pull-model window offers the presentation:
@@ -23,20 +23,14 @@
 //!   [`commit_composition_in_place`] when the platform cannot end it.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
-//! - [`CompositionLedger`] and [`committed_text`]: the committed text
-//!   (the composition replaced by what it stands for) every store reports
-//!   to its owner.
-//! - [`EditGeneration`]: the count of application edits a session is
-//!   checked against before it writes back.
-//! - [`InMemoryTextStore`]: a complete store over a `String`, the
-//!   conformance kit's reference and a backend test's field.
 //!
-//! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`).
+//! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`). The
+//! machinery a widget's store is built from (the lock arbiter, the
+//! composition ledger, the edit generation) is `flui_interaction::text_input`'s,
+//! and the reference store is `flui_interaction::testing::InMemoryTextStore`
+//! (ADR-0151 §6, ADR-0264).
 
-mod composition_ledger;
-mod generation;
 mod host;
-mod in_memory;
 mod lock;
 mod owner_calls;
 mod projection;
@@ -44,12 +38,9 @@ mod session;
 mod store;
 pub mod utf16;
 
-pub use composition_ledger::{CompositionLedger, committed_text};
-pub use generation::EditGeneration;
 pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError, commit_composition_in_place};
-pub use in_memory::InMemoryTextStore;
 pub use lock::{
-    CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
+    CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
 };
 pub use owner_calls::{OwnerCalls, RetainOnFailure};

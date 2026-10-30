@@ -200,6 +200,82 @@ impl UiRuntime {
         }
     }
 
+    /// Whether presentation `id`'s close guard refuses a close for `reason`.
+    /// A refused close is recorded on the guard, once per reason, and is
+    /// carried out when the last hold over it is released: the host does not
+    /// close the presentation now, and the next
+    /// [`settle_close_guards`](Self::settle_close_guards) after that release
+    /// hands the close back. `false`, and nothing recorded, for a reason the
+    /// platform does not let the application refuse and for a presentation
+    /// that is gone.
+    #[must_use]
+    pub fn close_refused(&self, id: PresentationId, reason: flui_view::CloseReason) -> bool {
+        self.presentations
+            .get(id)
+            .is_some_and(|presentation| presentation.close_guard().refuses(reason))
+    }
+
+    /// Presentation `id`'s close guard, for the host to answer its window's
+    /// close requests with.
+    pub(crate) fn close_guard_of(
+        &self,
+        id: PresentationId,
+    ) -> Option<flui_view::__runtime::CloseGuardSource> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.close_guard().clone())
+    }
+
+    /// Withdraw the close presentation `id`'s guard recorded for `reason`:
+    /// the platform cancelled it, as when a log-off is cancelled. Closes
+    /// recorded for other reasons stay recorded.
+    pub fn withdraw_close(&self, id: PresentationId, reason: flui_view::CloseReason) {
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.close_guard().withdraw(reason);
+        }
+    }
+
+    /// Settle every presentation's close guard on the owner's turn: wake the
+    /// waiters each change resolved, one by one, and return the closes now
+    /// due, for the host to carry out without asking the application again.
+    /// Nothing happens when no guard signalled since the last settle.
+    ///
+    /// A waiter whose wake panics is reported as a
+    /// [`CallbackPanic`](crate::frame_failure::FrameFailureKind::CallbackPanic) of its
+    /// presentation and loses neither the due closes nor the waiters after
+    /// it.
+    pub fn settle_close_guards(&self) -> Vec<(PresentationId, flui_view::CloseReason)> {
+        if !self
+            .close
+            .settle_owed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Vec::new();
+        }
+        let settled: Vec<_> = self
+            .presentations
+            .iter()
+            .map(|presentation| (presentation.id(), presentation.close_guard().settle()))
+            .collect();
+        let mut due = Vec::new();
+        for (id, settled) in settled {
+            for waker in settled.wake {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
+                    self.report_contained_panic(
+                        flui_foundation::PresentationAddress {
+                            ui_runtime_id: self.id,
+                            presentation_id: id,
+                        },
+                        payload.as_ref(),
+                    );
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                }
+            }
+            due.extend(settled.close.map(|reason| (id, reason)));
+        }
+        due
+    }
+
     /// Attach the host's control of presentation `id`'s window: from now on its
     /// elements reach it through `LifecycleContext::window`. Call before the
     /// root widget is attached, so `init_state` finds it. `false` when no
@@ -931,9 +1007,9 @@ mod tests {
     /// Red-check: drop the commit from `commit_composition_for_close` — the
     /// store is still composing.
     fn an_accepted_close_commits_the_preedit_before_the_guard() {
+        use flui_interaction::testing::InMemoryTextStore;
         use flui_platform::text_store::{
-            Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
-            Utf16Offset, Utf16Range,
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =

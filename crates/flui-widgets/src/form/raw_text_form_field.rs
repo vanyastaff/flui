@@ -14,7 +14,7 @@ use flui_view::prelude::*;
 use super::AutovalidateMode;
 use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
-use crate::Assertiveness;
+use crate::LiveSetting;
 use crate::flex::Column;
 use crate::semantics::Semantics;
 use crate::support::{event_callback, ref_callback};
@@ -96,6 +96,14 @@ impl RawTextFormField {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.config.enabled = enabled;
+        self
+    }
+
+    /// Whether the input takes the focus when it mounts (default `false`);
+    /// see [`EditableText::autofocus`](crate::EditableText::autofocus).
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.config.autofocus = autofocus;
         self
     }
 
@@ -190,6 +198,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
                 .obscure_text(input.obscure_text)
                 .input_purpose(input.input_purpose)
                 .enabled(input.enabled)
+                .autofocus(input.autofocus)
                 .invalid(error.is_some())
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {
@@ -210,7 +219,7 @@ fn with_error_line(input: BoxedView, error: Option<String>) -> BoxedView {
         children.push(
             Semantics::new()
                 .container(true)
-                .live_region(Assertiveness::Polite)
+                .live_region(LiveSetting::Polite)
                 .child(Text::new(error).style(TextStyle::default().with_color(ERROR_COLOR)))
                 .boxed(),
         );

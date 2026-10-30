@@ -19,7 +19,7 @@ use crate::{
         TextDirection,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::{Assertiveness, SemanticsRole},
+    role::{LiveSetting, SemanticsRole},
     states::States,
 };
 
@@ -33,7 +33,10 @@ pub(crate) struct SemanticsAttributes {
     /// The states this node declares.
     pub(crate) states: States,
     /// How changes are announced, when the node is a live region.
-    pub(crate) live: Option<Assertiveness>,
+    pub(crate) live: Option<LiveSetting>,
+    /// Whether a change announces the whole region (`aria-atomic`) rather
+    /// than only what changed.
+    pub(crate) live_atomic: Option<bool>,
     /// The label describing this node.
     pub(crate) label: Option<AttributedString>,
     /// The current value of this node.
@@ -93,6 +96,9 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) max_value_length: Option<i32>,
     /// Current character count for text field.
     pub(crate) current_value_length: Option<i32>,
+    /// A text field's text as runs and its selection, shared because a
+    /// configuration is cloned on every assembly.
+    pub(crate) text: Option<Arc<crate::TextContent>>,
     /// The outline level of a header node.
     pub(crate) heading_level: Option<HeadingLevel>,
     /// Anchors naming this node as a relation target (ADR-0205).

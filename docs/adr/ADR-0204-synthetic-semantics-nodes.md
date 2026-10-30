@@ -17,7 +17,11 @@ Implementation note: this document records the text-run and announcement
 contracts. Its earlier implementation status was too broad: the node model
 still derived all accessible identities from render objects. ADR-0223 adds a
 presentation-owned synthetic identity source for authored regions; it does not
-establish completion of the text-run or announcement consumer paths below.
+establish completion of the text-run consumer path below. The announcer (§4) is
+implemented: `Announcements` and `Announcer` in flui-semantics, kept by the pipeline and handed
+to widgets through `LifecycleContext::announcer`; flui-semantics ARCHITECTURE.md records its rules.
+The text-run model and its publication are implemented (`TextContent`, `TextRun`, identities
+from the pipeline, the owner decoding run positions); a field that lays out its text declares it.
 
 Two kinds of published nodes have no render object: the runs of a text field's text, which a
 screen reader needs to read by character, word and line and to follow the selection, and the

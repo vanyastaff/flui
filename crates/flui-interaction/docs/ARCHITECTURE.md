@@ -16,7 +16,7 @@ checks them with no exceptions. Each public item has one module path; the crate 
 | 1 | `close`, `containment` | `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
 | 2 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | 2 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
-| 2 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
+| 2 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, `ClipboardHandle`, and what a widget's text store is built from (`LockArbiter`, `CompositionLedger`, `EditGeneration`). |
 | 3 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Eleven recognizer types (tap, double tap, long press, hold, swipe, drag, scale, force press, multi-tap, multi-drag, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, One Euro filters (applied by every position-publishing recognizer after acceptance when settings select a tuning; slop, arena and velocity read raw samples), and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
 | 3 | `drag` | Drag-and-drop sessions (ADR-0211). One `DragOwner` per UI runtime holds `DragSessions` (a `Slab` of entries behind `Rc<RefCell<..>>`, borrowed only for short reads and writes, never across a receiver, observer, provider or platform call). A `DragSession` runs in its window on the contact's pointer capture and hit test (its presentation's tree, attached with each presentation's window and hit test, unless the source passes its own). Leaving the window, it asks the window what is under the pointer (`PlatformWindow::window_at`): over another presentation of the runtime it stays on the same capture and hit-tests that tree, leaving the last window's receivers before the next one's enter, and the sibling-presentation reason to escalate applies only where the backend cannot place its windows. When the pointer leaves for anything else, or at the start on an `AtStart` backend, the pure `plan_os_session` (`flui-platform`) decides whether it becomes an OS session, and the request waits in the table until the host enters it at its outermost quiescent point with `PendingOsDrag::start`. A session the OS took always ends: its backend calls the end hook, or drops it uncalled and the session ends cancelled; a hook dropped inside a start that fails is the refusal's, and a refused or panicking start sends the session back to its window (`DragOwner::os_drag_refused`), after which a hook the backend kept ends nothing. An OS offer has one record, and one hover per window it is over (keyed by presentation and offer id): the record holds what the OS sees of the offer, so only the hover that answered last can withdraw the answer, and the offer's count of requests in flight lives on the record, so a dropped offer is concluded once no request of it is in flight, whichever windows its hovers left or closed, and the record outlives its last hover while one is. The identity `(ProcessNonce, UiRuntimeId, DragSessionId)` rides in a private representation of the offer; only the source runtime's table turns it back into the Rust value. `DropTracker` keeps the per-receiver contract (one enter, moves, then exactly one leave or drop; drop only to the receiver that accepted the last move), and a dropped offer is concluded with the OS once every request made from it has resolved. A receiver is one registration, its lane ticket holding that receiver: a ticket unregistered or given another receiver mid-hover leaves the old one at the next move or tick, and it never spring-loads or takes the drop. `DragOwner::tick` runs spring-loading that came due (an undated hover asks for a turn at once) and one autoscroll frame, asking receivers innermost first until one answers `Autoscroll::Scrolling`. A presentation reaches its runtime's drags through `DragAndDrop`, the lifecycle capability the `Draggable` and `DropTarget` widgets acquire: it starts drags that leave through its window, and a mouse or pen drag shows on its cursor what a drop would do (grabbing over nothing or a target that would move it, copy and alias badges, no-drop over a target that declines) through an override of the presentation's `MouseTracker`, because hover is frozen while the drag owns the contact; the override goes when the session ends or the OS takes it. A keyboard or assistive cut or copy is a held session no pointer moves, at most one per runtime; a paste resolves the receiver its target's ticket names, enters it and drops on it as a release would, as a move for a cut and a copy for a copy. `DragOwner::cancel_on_escape` cancels a presentation's in-window and held sessions, which the runtime calls for Escape before focus sees the key. A release whose receivers panic still concludes the session, cancelled, before the panic propagates. After an autoscroll frame that scrolled, an in-window session hit-tests again where its pointer rests. |
 | 4 | `binding` | `GestureBinding` — the owner-local composition root (ADR-0217 §2) over `pub(crate)` services that hold no reference to it or to each other: `PointerSequences` (admitted contacts and their Down routes, captures, resamplers, refusals), `MoveCoalescer`, `ScrollSequences`, `PanZoomSequences`, `MouseTracker`, `ArenaDriver` (close on Down, sweep on Up, abandon on Cancel) and `CloseCoordinator`. Every service is keyed by `InputSurface` (the window, or a surface minted by `embed_surface`); a contact stays with the surface that admitted its Down. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
@@ -909,6 +909,54 @@ attachment, also after an ancestor's removal unbound it, but not when a newer
 attachment mounted it again — or replaces it, the node is retired: a request
 answers `FocusRequestOutcome::Stale` and nothing waits for an attachment. An
 application's node detached with its host still answers `Queued`.
+
+## Text store machinery
+
+A widget's text store is built from three parts of `text_input` that left the
+platform contract because only `flui-widgets` calls them (ADR-0151 §6); the
+contract keeps the lock's values, the `CommitGate`, `OwnerCalls` and the
+projection hosts call. `InMemoryTextStore`, the reference store, is
+`testing`'s and drives the same parts (ADR-0264). `LockArbiter`
+holds the lock rules once for every implementation, including the frame
+transaction: it reads the `CommitGate` the store's owner installs through
+`TextStore::set_commit_gate`, so no store keeps a transaction flag of its own
+to forget. `flui_testing::text_store_kit` checks a store against these rules.
+The arbiter rechecks the gate before each queued grant and after draining older
+work before admitting a new request. If a grant closes the gate, later grants
+remain queued in request order; a new synchronous request is refused and an
+asynchronous request joins the queue's tail. Reopening the gate lets the next
+commit anchor resume that work.
+A grant runs only the platform's code. The store's own owner (a widget's
+`on_changed`) runs in the `settle` function the arbiter calls after each grant
+has released its lock and before the next queued one, so owner code that asks
+for a lock is granted it; a panic there is caught by the arbiter and parked in
+the `CommitGate` for the gate's owner to report, and the queue keeps running
+(ADR-0142 item 2). With no gate installed by an owner there is no one
+to report to, and the panic resumes after the lock is released. The gate a
+failure belongs to is read before the grant runs. Every call into code a store
+does not control, here and in the stores and presentations above, goes
+through `OwnerCalls` (ADR-0142 item 8; its module doc lists the points);
+`flui-widgets`' `owner_code_is_contained_at_every_point` pins each one.
+What a composition stands for in the committed text (nothing for a new
+preedit, the original words for a reconversion) is kept by each store beside
+its composing range and followed through a session by CompositionLedger,
+which applies the same composition rules the stores do, so the owner hears of
+a reconversion only when it commits.
+
+A deletion of preedit keeps its zero-width replacement boundary even when it
+removed no committed text. A later edit crossing that boundary must join the
+deleted replacement's lineage before narrowing decides which origin remains
+(ADR-0142 item 1). `composition_ledger_named_cases` pins the committed text and
+origin after such an edit, including an empty boundary edit and reopening the
+session; `the_ledger_follows_the_reference` checks mixed edits and marks against
+an independent character-based model.
+
+**Tests:** the `text_input` modules' unit tests, `flui-testing`'s
+`in_memory_store_conforms_to_kit_v1`; the public
+`queued_text_store_grants_respect_gate_changes` family covers gate closure
+during deferred and direct grants, FIFO ordering, refusal and resumed progress,
+and `settling_runs_owner_code_outside_the_lock` the settle order and its
+failure paths.
 
 ## Text-input retirement and deferred delivery
 

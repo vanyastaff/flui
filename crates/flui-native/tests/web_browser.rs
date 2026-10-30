@@ -29,11 +29,10 @@ use flui_platform::drag::{
 };
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
-use flui_platform::text_store::{
-    InMemoryTextStore, TextStore, TextStoreHost, Utf16Offset, Utf16Range,
-};
+use flui_platform::text_store::{TextStore, TextStoreHost, Utf16Offset, Utf16Range};
 use flui_platform::{DispatchEventResult, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
+use flui_testing::text_store_kit::InMemoryTextStore;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 

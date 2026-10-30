@@ -278,6 +278,9 @@ macro_rules! for_each_method {
             /// One semantics action on one element.
             SemanticsAct = "semantics.act", Agent, Acts, Core,
                 $crate::act::ActParams => $crate::act::ActOutcome;
+            /// The announcements spoken since a sequence number.
+            SemanticsAnnouncements = "semantics.announcements", Agent, ReadOnly, Record,
+                $crate::events::AnnouncementsParams => $crate::events::AnnouncementJournal;
             /// The elements a locator matches now.
             SemanticsLocate = "semantics.locate", Agent, ReadOnly, Core,
                 $crate::locator::LocateParams => $crate::locator::Matches;

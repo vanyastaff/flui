@@ -41,8 +41,8 @@ use flui_objects::{
 use flui_rendering::{
     protocol::{BoxProtocol, SliverProtocol},
     semantics::{
-        ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
-        Invalid, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
+        ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid,
+        LiveSetting, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
         SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
         TableShape, TextDirection, Toggled,
     },
@@ -692,9 +692,26 @@ impl Semantics {
 
     /// Make this node a live region: assistive technology announces its
     /// changes without the user moving to it, politely or interrupting.
+    /// [`LiveSetting::Off`] keeps it silent inside an enclosing region.
     #[must_use]
-    pub fn live_region(mut self, politeness: Assertiveness) -> Self {
-        self.configuration.set_live_region(Some(politeness));
+    pub fn live_region(mut self, setting: LiveSetting) -> Self {
+        self.configuration.set_live_region(setting);
+        self
+    }
+
+    /// Set whether a change announces the whole region rather than only what
+    /// changed. Undeclared, an alert or a status is atomic.
+    #[must_use]
+    pub fn live_atomic(mut self, atomic: bool) -> Self {
+        self.configuration.set_live_atomic(atomic);
+        self
+    }
+
+    /// Set whether this node is being updated: a screen reader holds back
+    /// the announcements of its subtree until it is not.
+    #[must_use]
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.configuration.set_busy(busy);
         self
     }
 
@@ -964,6 +981,48 @@ impl Semantics {
             SemanticsAction::SetValue,
             Rc::new(move |cx, call| {
                 if let ActionCall::SetValue(text) = call {
+                    handler(cx, &text);
+                }
+            }),
+        );
+        self
+    }
+
+    /// Invoke `handler` with the selection a platform asked this field to
+    /// take, in bytes of its value: the owner has read it from the field's
+    /// published text runs, and refused one whose
+    /// ends lie outside them before it reaches here.
+    #[must_use]
+    pub fn on_set_text_selection<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetTextSelection,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetTextSelection(selection) = call {
+                    handler(cx, selection);
+                }
+            }),
+        );
+        self
+    }
+
+    /// Invoke `handler` with the text a platform asked this field to put in
+    /// place of its selection.
+    #[must_use]
+    pub fn on_replace_selected_text<F, R>(mut self, handler: F) -> Self
+    where
+        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = ref_callback::<str, _, _>(handler);
+        self.event_actions.insert(
+            SemanticsAction::ReplaceSelectedText,
+            Rc::new(move |cx, call| {
+                if let ActionCall::ReplaceSelectedText(text) = call {
                     handler(cx, &text);
                 }
             }),

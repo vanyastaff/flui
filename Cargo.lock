@@ -2317,7 +2317,6 @@ dependencies = [
  "js-sys",
  "language-tags",
  "parking_lot",
- "proptest",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -2340,6 +2339,7 @@ dependencies = [
 name = "flui-rendering"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit",
  "bitflags 2.13.2",
  "criterion",
  "crossbeam-channel",

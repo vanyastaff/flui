@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_foundation::geometry::Size;
 use flui_platform::ImeEvent;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreStatus, project_ime_event,
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore,
+    TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    project_ime_event,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 use windows::Win32::Foundation::{E_UNEXPECTED, HWND};
 use windows::Win32::UI::TextServices::{
     GUID_SYSTEM_FUNCTIONPROVIDER, ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext,
@@ -825,16 +826,15 @@ fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
         .cast_object_ref::<TsfStore>()
         .expect("the document's own object");
     store.fail_lock.set(true);
-    let queue = services.pending.borrow();
+    let queue = services.queue.hold();
     let answer = catch_unwind(AssertUnwindSafe(|| {
         document.RequestLock(TS_LF_READ.0 | TS_LF_SYNC)
     }));
     drop(queue);
     let answer = answer.expect("no panic leaves the COM entry");
     assert_eq!(answer.map_err(|error| error.code()), Err(E_UNEXPECTED));
-    assert_eq!(
-        services.entry_depth.get(),
-        0,
+    assert!(
+        !services.queue.is_entered(),
         "the entry left no depth behind"
     );
     services.focus_store(None);

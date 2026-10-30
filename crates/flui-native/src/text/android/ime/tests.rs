@@ -18,9 +18,10 @@ use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::NamedKey;
 use flui_platform::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
-    TextStoreStatus, Utf16Offset, Utf16Range,
+    CommitGate, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore, TextStoreStatus,
+    Utf16Offset, Utf16Range,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 
 fn offset(units: usize) -> Utf16Offset {
     Utf16Offset::new(units)

@@ -18,7 +18,7 @@ use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
 use flui_rendering::PipelineCell;
-use flui_semantics::{ActionDecodeError, SemanticsActionError, semantics_action_request_for};
+use flui_semantics::{ActionDecodeError, SemanticsActionError};
 
 // AccessKit's vocabulary is this module's vocabulary, so a consumer writes
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
@@ -72,6 +72,12 @@ pub struct NotTreeBound;
 /// instead of merely absent. Reachability does not imply OS visibility:
 /// hidden nodes and transparent containers remain queryable in this raw
 /// snapshot, and adapters apply their own filtering.
+///
+/// # Announcements
+///
+/// The two nodes a presentation speaks announcements through are not
+/// authored content: queries and [`len`](Self::len) leave them out, and
+/// [`announcement`](Self::announcement) reads what they say.
 #[derive(Debug, Clone)]
 pub struct A11yTree {
     update: TreeUpdate,
@@ -79,6 +85,9 @@ pub struct A11yTree {
     order: Vec<usize>,
     /// Each reachable node's parent.
     parents: HashMap<NodeId, NodeId>,
+    /// The presentation's announcer nodes, which carry announcements rather
+    /// than authored content and so are not queryable nodes.
+    announcers: Vec<usize>,
 }
 
 impl A11yTree {
@@ -95,6 +104,7 @@ impl A11yTree {
         let mut order = Vec::with_capacity(update.nodes.len());
         let mut seen: HashSet<NodeId> = HashSet::with_capacity(update.nodes.len());
         let mut parents = HashMap::with_capacity(update.nodes.len());
+        let mut announcers = Vec::new();
 
         if let Some(tree) = update.tree.as_ref() {
             let mut stack = vec![tree.root];
@@ -106,9 +116,14 @@ impl A11yTree {
                 if !seen.insert(id) {
                     continue;
                 }
+                let node = &update.nodes[i].1;
+                if is_announcer(node) {
+                    announcers.push(i);
+                    continue;
+                }
                 order.push(i);
                 // Reversed, so popping yields children left-to-right.
-                for &child in update.nodes[i].1.children().iter().rev() {
+                for &child in node.children().iter().rev() {
                     parents.entry(child).or_insert(id);
                     stack.push(child);
                 }
@@ -119,6 +134,7 @@ impl A11yTree {
             update,
             order,
             parents,
+            announcers,
         }
     }
 
@@ -140,7 +156,21 @@ impl A11yTree {
     /// technology will ever announce — see [the type docs](Self#reachability).
     #[must_use]
     pub fn unreachable_count(&self) -> usize {
-        self.update.nodes.len() - self.order.len()
+        self.update.nodes.len() - self.order.len() - self.announcers.len()
+    }
+
+    /// What the announcer node of `urgency` says: the last announcement this
+    /// snapshot carries, without the mark a repeat appends. `None` when the
+    /// presentation keeps no announcer or has announced nothing.
+    #[must_use]
+    pub fn announcement(&self, urgency: flui_semantics::Urgency) -> Option<&str> {
+        self.announcers
+            .iter()
+            .map(|&i| &self.update.nodes[i].1)
+            .find(|node| node.author_id() == Some(urgency.announcer_identifier()))
+            .and_then(Node::value)
+            .map(|value| value.trim_end_matches('\u{200B}'))
+            .filter(|value| !value.is_empty())
     }
 
     /// Every queryable node, in pre-order.
@@ -600,7 +630,7 @@ pub enum InvokeActionError {
 /// a control a screen reader can see and press to no effect — so a round trip
 /// has to start from the platform's own request type rather than from FLUI's
 /// action enum. Taking [`accesskit::ActionRequest`] whole is what makes the
-/// test cross the production decoder (`semantics_action_request_for`) instead
+/// test cross the production decoder (`PipelineOwner::decode_semantics_action`) instead
 /// of starting one step past it, where a routing gap is invisible.
 ///
 /// Resolve-then-invoke is spelled out here rather than left to each caller
@@ -639,11 +669,23 @@ pub(crate) fn invoke_semantics_action(
     cell: &PipelineCell,
     request: accesskit::ActionRequest,
 ) -> Result<(), InvokeActionError> {
-    let translated = semantics_action_request_for(&request)?;
+    let translated = cell.with(|owner| owner.decode_semantics_action(&request))?;
     let invocation = cell.with(|owner| owner.resolve_semantics_action(translated))?;
 
     invocation.invoke();
     Ok(())
+}
+
+/// Whether `node` is one of a presentation's announcer nodes.
+fn is_announcer(node: &Node) -> bool {
+    node.author_id().is_some_and(|id| {
+        [
+            flui_semantics::Urgency::Polite,
+            flui_semantics::Urgency::Assertive,
+        ]
+        .iter()
+        .any(|urgency| urgency.announcer_identifier() == id)
+    })
 }
 
 #[cfg(test)]

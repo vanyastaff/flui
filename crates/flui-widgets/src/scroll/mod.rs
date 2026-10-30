@@ -59,8 +59,8 @@ pub use anchored_drag::{
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use carousel::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselState, KeylineSnap, MAX_ITEM_EXTENT,
-    MIN_AUTOPLAY_PERIOD,
+    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
+    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
 };
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
