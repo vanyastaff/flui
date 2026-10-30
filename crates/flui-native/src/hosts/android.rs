@@ -5,11 +5,12 @@ use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 
+use crate::accessibility::android::AndroidAccessibility;
 use crate::clipboard::android::MockClipboard;
 use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
 use crate::haptics::android::AndroidHaptics;
-use crate::host::{Absent, Host, position};
+use crate::host::Host;
 use crate::input::android::AndroidInput;
 use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
@@ -40,7 +41,7 @@ impl Host for Android {
     type Displays = AndroidLoop;
     type Input = AndroidLoop;
     type Text = ViewInputMethod;
-    type Accessibility = Absent<position::Accessibility>;
+    type Accessibility = AndroidAccessibility;
     // The loop holds the clipboard and the transport `AndroidHost` makes.
     type Clipboard = AndroidLoop;
     type Drag = AndroidLoop;
