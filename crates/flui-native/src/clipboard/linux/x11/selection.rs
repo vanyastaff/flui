@@ -577,9 +577,23 @@ impl Selections {
         let form = reading.form;
         let reply = self.take_property(MAX_TEXT)?;
         if reply.type_ == self.atoms.incr {
+            // The owner says how much is coming, at least: room for that is
+            // taken once, so honest chunks land without growing the buffer.
+            let announced = reply
+                .value32()
+                .and_then(|mut value| value.next())
+                .and_then(|size| usize::try_from(size).ok())
+                .unwrap_or(0);
+            if announced > MAX_TEXT {
+                // Deleting the property asked for the first chunk: it lands
+                // where no read looks.
+                self.retire_destination();
+                self.answer(None);
+                return Ok(());
+            }
             // Deleting the property asked for the first chunk.
             if let Some(reading) = &mut self.reading {
-                reading.incremental = Some(Vec::new());
+                reading.incremental = Some(Vec::with_capacity(announced));
             }
             return Ok(());
         }
@@ -620,10 +634,11 @@ impl Selections {
             let form = reading.form;
             let bytes = std::mem::take(bytes);
             self.answer(decode(form, bytes));
-        } else if bytes.is_empty() {
+        } else if bytes.capacity() == 0 {
+            // Nothing announced: the first chunk is kept as it came.
             *bytes = reply.value;
         } else {
-            bytes.extend_from_slice(&reply.value);
+            append(bytes, &reply.value);
         }
         Ok(())
     }
@@ -919,6 +934,22 @@ fn report(diagnostic: impl FnOnce()) {
     }
 }
 
+/// Append `chunk` to an `INCR` read's `bytes`, which stay within
+/// [`MAX_TEXT`] with it: past the room taken, the buffer grows exactly,
+/// at most doubling and never past the limit, so a read holds less than
+/// twice [`MAX_TEXT`] even while it grows.
+fn append(bytes: &mut Vec<u8>, chunk: &[u8]) {
+    let needed = bytes.len() + chunk.len();
+    if needed > bytes.capacity() {
+        let grown = bytes
+            .capacity()
+            .saturating_mul(2)
+            .clamp(needed, MAX_TEXT.max(needed));
+        bytes.reserve_exact(grown - bytes.len());
+    }
+    bytes.extend_from_slice(chunk);
+}
+
 /// `bytes` received in `form` as text, or `None` past [`MAX_TEXT`] bytes of
 /// it: ISO 8859-1 and ill-formed UTF-8 grow as they decode.
 fn decode(form: TextForm, bytes: Vec<u8>) -> Option<String> {
@@ -984,7 +1015,7 @@ fn not_before(time: xproto::Timestamp, since: xproto::Timestamp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::not_before;
+    use super::{MAX_TEXT, append, not_before};
 
     /// A time just past the clock's wrap is later than one just before it.
     #[test]
@@ -994,5 +1025,21 @@ mod tests {
         assert!(not_before(5, 5));
         assert!(not_before(6, 5));
         assert!(!not_before(5, 6));
+    }
+
+    /// An `INCR` read's buffer grows exactly within its limit: past the room
+    /// taken it at most doubles, and never past [`MAX_TEXT`].
+    #[test]
+    fn a_read_buffer_grows_within_the_limit() {
+        let mut bytes = Vec::with_capacity(4);
+        append(&mut bytes, b"0123456789");
+        assert_eq!(bytes.capacity(), 10, "grown to what the chunk needs");
+        append(&mut bytes, b"ab");
+        assert_eq!(bytes.capacity(), 20, "doubled");
+        assert_eq!(bytes, b"0123456789ab");
+
+        let mut bytes = vec![0_u8; MAX_TEXT * 3 / 4];
+        append(&mut bytes, b"x");
+        assert_eq!(bytes.capacity(), MAX_TEXT, "not doubled past the limit");
     }
 }
