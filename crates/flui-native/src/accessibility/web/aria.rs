@@ -184,6 +184,31 @@ fn relations(node: &Node, ids: &ElementIds, attributes: &mut Vec<(&'static str, 
     }
 }
 
+/// Whether `node` takes text from the keyboard or an input method. The
+/// window's text input serves it on the canvas (an `EditContext` or the
+/// hidden editor), so the page's focus stays there rather than on the
+/// node's element, which has no input surface.
+pub(crate) fn takes_text(node: &Node) -> bool {
+    matches!(
+        node.role(),
+        Role::TextInput
+            | Role::MultilineTextInput
+            | Role::SearchInput
+            | Role::DateInput
+            | Role::DateTimeInput
+            | Role::WeekInput
+            | Role::MonthInput
+            | Role::TimeInput
+            | Role::EmailInput
+            | Role::NumberInput
+            | Role::PasswordInput
+            | Role::PhoneNumberInput
+            | Role::UrlInput
+            | Role::EditableComboBox
+            | Role::SpinButton
+    )
+}
+
 /// The action a DOM event of `kind` on `node`'s element asks for: `click`,
 /// `focusin` or `contextmenu`.
 pub(crate) fn event_action(kind: &str, node: &Node) -> Option<Action> {
@@ -487,7 +512,7 @@ pub(crate) const fn aria_role(role: Role) -> Option<&'static str> {
 mod tests {
     use accesskit::{Action, Affine, Node, NodeId, Rect, Role, Toggled};
 
-    use super::{ElementIds, ParentFrame, describe};
+    use super::{ElementIds, ParentFrame, describe, takes_text};
 
     fn attribute<'a>(spec: &'a super::ElementSpec, name: &str) -> Option<&'a str> {
         spec.attributes
@@ -806,6 +831,23 @@ mod tests {
                 "{}",
                 case.name
             );
+        }
+    }
+
+    /// The roles the window's text input serves on the canvas.
+    #[test]
+    fn a_node_that_takes_text_is_served_on_the_canvas() {
+        for (role, takes) in [
+            (Role::TextInput, true),
+            (Role::MultilineTextInput, true),
+            (Role::PasswordInput, true),
+            (Role::EditableComboBox, true),
+            (Role::SpinButton, true),
+            (Role::Button, false),
+            (Role::ComboBox, false),
+            (Role::Label, false),
+        ] {
+            assert_eq!(takes_text(&Node::new(role)), takes, "{role:?}");
         }
     }
 

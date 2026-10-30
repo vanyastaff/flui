@@ -1726,7 +1726,13 @@ and writes only what changed between two specs.
   measured after placing and moved by the difference in its own scale. A
   scale on the canvas alone becomes the host's own `transform` from its top
   left corner; a rotation is not followed. The root's device-pixel-ratio
-  transform is dropped, since CSS pixels are already logical.
+  transform is dropped, since CSS pixels are already logical. The host covers
+  the canvas's client box, inside its border, the box the window's layout
+  size reads.
+- **What stands beside the canvas is hidden with it.** As the canvas's
+  sibling, the placeholder and the host share every ancestor's `display` and
+  `visibility`; the canvas's own are copied on each placement and whenever a
+  `MutationObserver` sees its `style`, `class` or `hidden` change.
 - **Work is queued.** A publish, an activation, a DOM event's action and a
   re-placement run in order from one queue. A listener that publishes from
   inside its call, or an event fired synchronously by a change (a removed
@@ -1742,7 +1748,9 @@ and writes only what changed between two specs.
   `CanvasKeys`. The tree's focus moves the page's focus only while the page's
   focus is the window's, on the canvas or in the host (activating a focused
   placeholder puts it on the canvas); a focus whose element takes no DOM focus
-  puts it on the canvas.
+  puts it on the canvas, as does a text field: the window's text input
+  serves it there (an `EditContext` or the hidden editor), and the field's
+  element has no input surface.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.

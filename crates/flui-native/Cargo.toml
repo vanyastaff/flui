@@ -317,6 +317,8 @@ web-sys = { version = "0.3", features = [
     "MediaQueryList",
     "MediaQueryListEvent",
     # Observers
+    "MutationObserver",
+    "MutationObserverInit",
     "ResizeObserver",
     "ResizeObserverEntry",
     "ResizeObserverSize",

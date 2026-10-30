@@ -31,6 +31,7 @@ use flui_semantics::AssistiveFocusSupport;
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement};
 
@@ -179,6 +180,9 @@ struct Page {
     /// The composition root was asked for the whole tree after a refused
     /// update and has not answered with one that stands yet.
     asked_again: Cell<bool>,
+    /// Watches the canvas's own `style`, `class` and `hidden` for a change
+    /// that shows or hides it; dropped when the window closes.
+    canvas_style: RefCell<Option<StyleObserver>>,
 }
 
 impl Page {
@@ -203,9 +207,17 @@ impl Page {
             work: RefCell::default(),
             running: Cell::new(false),
             asked_again: Cell::new(false),
+            canvas_style: RefCell::new(None),
         });
         let placeholder = page.placeholder()?;
         *page.stage.borrow_mut() = Stage::Placeholder(placeholder);
+        let this = page.this.clone();
+        *page.canvas_style.borrow_mut() = Some(StyleObserver::try_new(&page.canvas, move || {
+            if let Some(this) = this.upgrade() {
+                this.submit(Work::Place);
+            }
+        })?);
+        page.place();
         Ok(page)
     }
 
@@ -456,7 +468,8 @@ impl Page {
     }
 
     /// Move the page's focus to the tree's focus. A focus whose element
-    /// takes no DOM focus (a root without `Action::Focus`) puts the page's
+    /// takes no DOM focus (a root without `Action::Focus`), or a text field,
+    /// which the window's text input serves on the canvas, puts the page's
     /// focus on the canvas, off any element it was on before.
     fn follow_focus(&self) {
         let element = {
@@ -466,6 +479,8 @@ impl Page {
             }
             tree.mirror
                 .focus()
+                // A text field is served on the canvas.
+                .filter(|&focus| !tree.mirror.node(focus).is_some_and(aria::takes_text))
                 .and_then(|focus| tree.elements.get(&focus).cloned())
         };
         if let Some(element) = element {
@@ -532,23 +547,61 @@ impl Page {
         }));
     }
 
-    /// Put the host over the canvas's box in the viewport, at the canvas's
-    /// layout size, which the tree's CSS pixels are in.
+    /// Show what stands beside the canvas only while the canvas is shown,
+    /// and put the host over the canvas's drawable box in the viewport, at
+    /// the canvas's layout size, which the tree's CSS pixels are in.
     ///
-    /// A transformed ancestor of the canvas (the host's too, as its sibling)
-    /// makes the host's `fixed` box relative to that ancestor and scales it
-    /// with the canvas: the host is measured where it landed and moved by
-    /// the difference, in its own scale. A scale on the canvas alone is the
-    /// host's own `transform`, from its top left corner. A rotation is not
-    /// followed.
+    /// The host is the canvas's sibling, so an ancestor that hides the canvas
+    /// hides it too; the canvas's own `display` and `visibility` are copied.
+    /// The drawable box is the client box, inside the canvas's border, as the
+    /// window's layout size reads it. A transformed ancestor of the canvas
+    /// (the host's too) makes the host's `fixed` box relative to that
+    /// ancestor and scales it with the canvas: the host is measured where it
+    /// landed and moved by the difference, in its own scale. A scale on the
+    /// canvas alone is the host's own `transform`, from its top left corner.
+    /// A rotation is not followed.
     fn place(&self) {
-        let Some(host) = self.host_element() else {
-            return;
+        let (element, host) = match &*self.stage.borrow() {
+            Stage::Placeholder(placeholder) => (placeholder.element.clone(), false),
+            Stage::Host(host) => (host.element.clone(), true),
+            Stage::Retired => return,
         };
+        let style = element.style();
+        let hidden = self.canvas_hidden();
+        let shown = if hidden {
+            style.set_property("display", "none")
+        } else if host {
+            style.set_property("display", "block")
+        } else {
+            style.remove_property("display").map(drop)
+        };
+        if let Err(error) = shown {
+            warn_failure("the semantics host could not be shown or hidden", &error);
+        }
+        if hidden || !host {
+            return;
+        }
         let canvas = self.canvas.get_bounding_client_rect();
-        let width = f64::from(self.canvas.offset_width());
-        let height = f64::from(self.canvas.offset_height());
-        let style = host.style();
+        let width = f64::from(self.canvas.client_width());
+        let height = f64::from(self.canvas.client_height());
+        let ratio = |landed: f64, laid_out: f64| {
+            let ratio = landed / laid_out;
+            if ratio.is_finite() && ratio > 0.0 {
+                ratio
+            } else {
+                1.0
+            }
+        };
+        // The canvas's whole scale in the viewport, and where its client box
+        // starts there.
+        let total = (
+            ratio(canvas.width(), f64::from(self.canvas.offset_width())),
+            ratio(canvas.height(), f64::from(self.canvas.offset_height())),
+        );
+        let origin = (
+            canvas.left() + f64::from(self.canvas.client_left()) * total.0,
+            canvas.top() + f64::from(self.canvas.client_top()) * total.1,
+        );
         let set = |left: f64, top: f64| {
             for (property, value) in [
                 ("left", left),
@@ -562,30 +615,18 @@ impl Page {
         };
         let placed = style
             .remove_property("transform")
-            .and_then(|_| set(canvas.left(), canvas.top()));
+            .and_then(|_| set(origin.0, origin.1));
         if let Err(error) = placed {
             warn_failure("the semantics host could not be placed", &error);
             return;
         }
-        let placed = host.get_bounding_client_rect();
-        let ratio = |landed: f64, laid_out: f64| {
-            let ratio = landed / laid_out;
-            if ratio.is_finite() && ratio > 0.0 {
-                ratio
-            } else {
-                1.0
-            }
-        };
+        let placed = element.get_bounding_client_rect();
         // The ancestors' scale, which the host shares, and the canvas's own.
         let shared = (ratio(placed.width(), width), ratio(placed.height(), height));
-        let own = (
-            ratio(canvas.width(), placed.width()),
-            ratio(canvas.height(), placed.height()),
-        );
-        let left = canvas.left() + (canvas.left() - placed.left()) / shared.0;
-        let top = canvas.top() + (canvas.top() - placed.top()) / shared.1;
-        let moved = (left - canvas.left()).abs() > f64::EPSILON
-            || (top - canvas.top()).abs() > f64::EPSILON;
+        let own = (total.0 / shared.0, total.1 / shared.1);
+        let left = origin.0 + (origin.0 - placed.left()) / shared.0;
+        let top = origin.1 + (origin.1 - placed.top()) / shared.1;
+        let moved = (left - origin.0).abs() > f64::EPSILON || (top - origin.1).abs() > f64::EPSILON;
         let scaled = (own.0 - 1.0).abs() > SCALE_TOLERANCE || (own.1 - 1.0).abs() > SCALE_TOLERANCE;
         let mut placed = Ok(());
         if moved {
@@ -601,6 +642,19 @@ impl Page {
         if let Err(error) = placed {
             warn_failure("the semantics host could not be placed", &error);
         }
+    }
+
+    /// Whether the canvas's own style hides it.
+    fn canvas_hidden(&self) -> bool {
+        let Some(computed) = self
+            .document
+            .default_view()
+            .and_then(|window| window.get_computed_style(&self.canvas).ok().flatten())
+        else {
+            return false;
+        };
+        let read = |property| computed.get_property_value(property).unwrap_or_default();
+        read("display") == "none" || read("visibility") != "visible"
     }
 
     fn host_element(&self) -> Option<HtmlElement> {
@@ -629,6 +683,7 @@ impl Page {
             }
             Stage::Retired => {}
         }
+        drop(self.canvas_style.borrow_mut().take());
         let elements = std::mem::take(&mut self.tree.borrow_mut().elements);
         drop(elements);
     }
@@ -779,6 +834,38 @@ fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValu
         extra.remove();
     }
     Ok(())
+}
+
+/// A `MutationObserver` on the attributes that can show or hide the canvas,
+/// disconnected when dropped.
+struct StyleObserver {
+    observer: web_sys::MutationObserver,
+    _callback: Closure<dyn Fn()>,
+}
+
+impl StyleObserver {
+    fn try_new(canvas: &HtmlCanvasElement, changed: impl Fn() + 'static) -> Result<Self, JsValue> {
+        let callback = Closure::<dyn Fn()>::new(changed);
+        let observer = web_sys::MutationObserver::new(callback.as_ref().unchecked_ref())?;
+        let options = web_sys::MutationObserverInit::new();
+        options.set_attributes(true);
+        let filter: js_sys::Array = ["style", "class", "hidden"]
+            .into_iter()
+            .map(JsValue::from_str)
+            .collect();
+        options.set_attribute_filter(&filter);
+        observer.observe_with_options(canvas, &options)?;
+        Ok(Self {
+            observer,
+            _callback: callback,
+        })
+    }
+}
+
+impl Drop for StyleObserver {
+    fn drop(&mut self) {
+        self.observer.disconnect();
+    }
 }
 
 /// A scope for one host's element `id`s that no other host on the page

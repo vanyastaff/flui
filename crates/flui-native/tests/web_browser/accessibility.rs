@@ -60,19 +60,32 @@ export function clickNode(id) { document.querySelector(`[data-flui-id="${id}"]`)
 export function clickText(text) {
     [...host().querySelectorAll('flui-node')].find(element => element.textContent === text).click();
 }
-// The host's box, the canvas's and the increment button's in the viewport, each [left, top,
+// The host's box, the canvas's client box and the increment button's in the viewport, each [left, top,
 // width, height].
 export function hostAndCanvas() {
     const box = element => {
         const rect = element.getBoundingClientRect();
         return [rect.left, rect.top, rect.width, rect.height];
     };
+    // The canvas's client box, inside its border, where it draws.
+    const canvas = document.getElementById('flui-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const [x, y] = [rect.width / canvas.offsetWidth, rect.height / canvas.offsetHeight];
     return [
         ...box(host()),
-        ...box(document.getElementById('flui-canvas')),
+        rect.left + canvas.clientLeft * x,
+        rect.top + canvas.clientTop * y,
+        canvas.clientWidth * x,
+        canvas.clientHeight * y,
         ...box(document.querySelector('[data-flui-id="increment"]')),
     ];
 }
+// Whether the host, or the placeholder before it, is shown.
+export function overlayShown() {
+    const overlay = host() ?? document.querySelector('flui-a11y-placeholder');
+    return getComputedStyle(overlay).display !== 'none';
+}
+export function styleCanvas(style) { document.getElementById('flui-canvas').style.cssText += style; }
 // The canvas, styled `canvasStyle`, inside a scrolling container styled `style`, below the
 // page's own content.
 export function scrolledCanvas(style, canvasStyle) {
@@ -120,6 +133,10 @@ extern "C" {
     fn click_text(text: &str);
     #[wasm_bindgen(js_name = hostAndCanvas)]
     fn host_and_canvas() -> Vec<f64>;
+    #[wasm_bindgen(js_name = overlayShown)]
+    fn overlay_shown() -> bool;
+    #[wasm_bindgen(js_name = styleCanvas)]
+    fn style_canvas(style: &str);
     #[wasm_bindgen(js_name = scrolledCanvas)]
     fn scrolled_canvas(style: &str, canvas_style: &str);
     #[wasm_bindgen(js_name = scrollContainer)]
@@ -406,11 +423,67 @@ fn nodes_that_swap_places_are_nested_as_published() {
     window.close_now();
 }
 
-/// The host covers the canvas in the viewport, and follows it when a
-/// container the canvas is in scrolls, also when that container is
-/// transformed, which makes it the host's containing block, and when the
-/// canvas alone is scaled: a screen reader's highlight is drawn where the
-/// element is.
+/// What stands beside the canvas is hidden with it, before activation and
+/// after, as soon as the canvas's own style changes: a screen reader never
+/// reaches the controls of a UI the page hid.
+#[wasm_bindgen_test]
+async fn the_placeholder_and_the_host_are_hidden_with_the_canvas() {
+    let (_platform, window, accessibility) = open();
+    accessibility.publish(counter(0));
+    for (style, shown) in [
+        ("display: none", false),
+        ("display: block", true),
+        ("visibility: hidden", false),
+        ("visibility: visible", true),
+    ] {
+        style_canvas(&format!("; {style}"));
+        super::wait(0).await;
+        assert_eq!(
+            overlay_shown(),
+            shown,
+            "the placeholder, the canvas at {style}"
+        );
+    }
+    activate_placeholder();
+    for (style, shown) in [("display: none", false), ("display: block", true)] {
+        style_canvas(&format!("; {style}"));
+        super::wait(0).await;
+        assert_eq!(overlay_shown(), shown, "the host, the canvas at {style}");
+    }
+    window.close_now();
+}
+
+/// A focused text field leaves the page's focus on the canvas, where the
+/// window's text input serves it.
+#[wasm_bindgen_test]
+fn a_focused_text_field_keeps_the_page_s_focus_on_the_canvas() {
+    const FIELD: NodeId = NodeId(4);
+    let with_field = |focus| {
+        let mut tree = counter(0);
+        tree.nodes[0].1.push_child(FIELD);
+        let mut field = Node::new(Role::TextInput);
+        field.set_label("Name");
+        field.add_action(Action::Focus);
+        field.set_bounds(Rect::new(20.0, 120.0, 220.0, 150.0));
+        tree.nodes.push((FIELD, field));
+        TreeUpdate { focus, ..tree }
+    };
+    let (_platform, window, accessibility) = open();
+    accessibility.publish(with_field(ROOT));
+    focus_placeholder();
+    activate_placeholder();
+    accessibility.publish(with_field(BUTTON));
+    assert_eq!(focused(), "increment");
+    accessibility.publish(with_field(FIELD));
+    assert_eq!(focused(), "canvas", "the field is served on the canvas");
+    window.close_now();
+}
+
+/// The host covers the canvas's drawable box in the viewport, inside its
+/// border, and follows it when a container the canvas is in scrolls, also
+/// when that container is transformed, which makes it the host's containing
+/// block, and when the canvas alone is scaled: a screen reader's highlight
+/// is drawn where the element is.
 #[wasm_bindgen_test]
 fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
     for (container, style, canvas_style) in [
@@ -429,6 +502,11 @@ fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
             "a transformed scrolling container, the canvas scaled",
             "transform: scale(1.5)",
             "transform: scale(0.5, 2)",
+        ),
+        (
+            "a transformed scrolling container, the canvas bordered and scaled",
+            "transform: scale(1.5)",
+            "border: 10px solid black; padding: 0; transform: scale(2)",
         ),
     ] {
         scrolled_canvas(style, canvas_style);
