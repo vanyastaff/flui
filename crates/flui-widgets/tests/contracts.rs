@@ -565,6 +565,8 @@ fn selection_area_text_runs() {
             ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
             ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
             ("selection_area::the_reported_text_follows_the_published_document_order", crate::selection_area::the_reported_text_follows_the_published_document_order),
+            ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
+            ("selection_area::a_line_limit_bounds_what_a_paragraph_reports", crate::selection_area::a_line_limit_bounds_what_a_paragraph_reports),
         ],
     );
 }

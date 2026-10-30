@@ -15,10 +15,10 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
-use flui_objects::SubtreeAnchor;
+use flui_foundation::panic::FirstPanic;
+use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::text_boundaries;
 use flui_painting::typography::TextLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -230,23 +230,23 @@ impl SelectionModel {
         *self.selection.borrow_mut() = Some(selection);
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
-        let woken = catch_unwind(AssertUnwindSafe(|| {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| {
             if let Some(rebuild) = rebuild {
                 rebuild.schedule(RebuildReason::StateChange);
             }
-        }));
-        let told = catch_unwind(AssertUnwindSafe(|| {
+        });
+        failure.contain(|| {
             if let Some(listener) = listener {
                 listener(cx, selected.as_ref());
             }
-        }));
-        if let Err(first) = woken.and(told) {
-            resume_unwind(first);
-        }
+        });
+        failure.resume();
     }
 
     /// The text `selection` covers, in reading order; `None` when it covers
-    /// none.
+    /// none. Each text contributes only what its layout shows: the lines a
+    /// line limit cuts are not in its runs, so they are not reported either.
     fn selected_text(&self, selection: &DocumentSelection) -> Option<SelectedText> {
         let entries = self.registry.entries.borrow();
         let order = self.reading_order(&entries);
@@ -254,7 +254,7 @@ impl SelectionModel {
             let index = entries
                 .iter()
                 .position(|entry| entry.anchor == *at.text())?;
-            Some((order.iter().position(|&i| i == index)?, at.byte()))
+            Some((order.iter().position(|&(i, _)| i == index)?, at.byte()))
         };
         let (from, to) = {
             let (a, b) = (place(selection.anchor())?, place(selection.focus())?);
@@ -264,10 +264,11 @@ impl SelectionModel {
             return None;
         }
         let mut text = String::new();
-        for (rank, &index) in order.iter().enumerate().take(to.0 + 1).skip(from.0) {
+        for (rank, &(index, shown)) in order.iter().enumerate().take(to.0 + 1).skip(from.0) {
             let content = entries[index].text.borrow();
-            let start = if rank == from.0 { from.1 } else { 0 };
-            let end = if rank == to.0 { to.1 } else { content.len() };
+            let shown = shown.unwrap_or(content.len()).min(content.len());
+            let start = if rank == from.0 { from.1 } else { 0 }.min(shown);
+            let end = if rank == to.0 { to.1 } else { shown }.min(shown);
             if rank > from.0 {
                 text.push('\n');
             }
@@ -276,39 +277,78 @@ impl SelectionModel {
         Some(SelectedText { text })
     }
 
-    /// The presented texts' indices in the order the published document
-    /// reads them: by place in the render tree, as the semantics assembly
-    /// keeps it, so the text reported for a selection is the text an adapter
-    /// selected. A text beneath an ancestor that leaves its subtree out of
-    /// semantics (offstage, excluded) is not in the document and is left
-    /// out. Texts not yet in the render tree keep registration order after
-    /// the placed ones.
+    /// The presented texts in the order the published document reads them,
+    /// each as its index and the byte where its laid-out text ends (`None`
+    /// when no layout says): by place in the render tree, as the semantics
+    /// assembly keeps it, so the text reported for a selection is the text
+    /// an adapter selected. A text beneath an ancestor that leaves its
+    /// subtree out of semantics (offstage, excluded) is not in the document
+    /// and is left out. Texts not yet in the render tree keep registration
+    /// order after the placed ones.
     ///
     /// Tree order holds until pointer selection lands: geometric reading
     /// order then replaces it for the model and the assembly at once.
-    fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<usize> {
+    fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<(usize, Option<usize>)> {
         let pipeline = self.pipeline.borrow().clone();
-        let places: Vec<Placement> = pipeline
+        let places: Vec<(Placement, Option<usize>)> = pipeline
             .and_then(|pipeline| {
                 pipeline.try_with_layout(|owner| {
                     entries
                         .iter()
-                        .map(|entry| Placement::of(owner, &entry.subtree))
+                        .map(|entry| {
+                            (
+                                Placement::of(owner, &entry.subtree),
+                                shown_end(owner, &entry.subtree),
+                            )
+                        })
                         .collect()
                 })
             })
-            .unwrap_or_else(|| vec![Placement::Unplaced; entries.len()]);
+            .unwrap_or_else(|| vec![(Placement::Unplaced, None); entries.len()]);
         let mut order: Vec<usize> = (0..entries.len())
-            .filter(|&index| places[index] != Placement::Hidden)
+            .filter(|&index| places[index].0 != Placement::Hidden)
             .collect();
-        order.sort_by(|&a, &b| match (&places[a], &places[b]) {
+        order.sort_by(|&a, &b| match (&places[a].0, &places[b].0) {
             (Placement::At(a), Placement::At(b)) => a.cmp(b),
             (Placement::At(_), _) => Ordering::Less,
             (_, Placement::At(_)) => Ordering::Greater,
             _ => Ordering::Equal,
         });
         order
+            .into_iter()
+            .map(|index| (index, places[index].1))
+            .collect()
     }
+}
+
+/// Where the laid-out text of the paragraph beneath `subtree` ends: its last
+/// shown line's end, which a line limit puts before the authored text's end.
+fn shown_end(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> Option<usize> {
+    let tree = owner.render_tree();
+    let mut at = subtree.get()?;
+    // The paragraph is the first render object beneath the anchor that is
+    // one; link routing may wrap it, but only in a few single-child boxes.
+    for _ in 0..8 {
+        at = *tree.children(at).first()?;
+        let Some(paragraph) = tree
+            .get(at)?
+            .as_box()?
+            .render_object()
+            .downcast_ref::<RenderParagraph>()
+        else {
+            continue;
+        };
+        let painter = paragraph.painter();
+        if !painter.has_layout() {
+            return None;
+        }
+        return painter
+            .line_layouts()
+            .iter()
+            .map(|line| line.runs.last().map_or(line.start, |run| run.range().end))
+            .max();
+    }
+    None
 }
 
 /// Where a registered text stands in the presented document.

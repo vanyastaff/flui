@@ -657,3 +657,84 @@ pub(crate) fn the_reported_text_follows_the_published_document_order() {
         "the report covers what the adapter selected"
     );
 }
+
+/// A paragraph cut by a line limit contributes only its shown lines to a
+/// selection that runs past it, as its runs do.
+///
+/// Red-check: extract each passed-over text to its authored end (the report
+/// holds "hidden").
+pub(crate) fn a_line_limit_bounds_what_a_paragraph_reports() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let (area, seen) = recorded_area(Column::new((
+        RichText::new(TextSpan::new("shown\nhidden")).max_lines(1),
+        Text::new("Omega"),
+    )));
+    let mut laid = mounted(area);
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let document = find_all(state, Role::Document)[0];
+        assert!(
+            !document.document_range().text().contains("hidden"),
+            "the cut line publishes no runs"
+        );
+        let first = find_all(state, Role::Label)
+            .into_iter()
+            .find(|node| {
+                node.data()
+                    .value()
+                    .is_some_and(|value| value.starts_with("shown"))
+            })
+            .expect("the cut paragraph is published");
+        (runs_of(&first), runs_of(&paragraph(state, "Omega")))
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 5)))
+        .expect("a selection across both texts is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("shown\nOmega".to_owned())],
+        "the cut line is not reported"
+    );
+}
+
+/// Text under a subtree that blocks user actions takes no assistive
+/// selection, through its own runs or as an end of a selection sent to the
+/// document (ADR-0216 §1).
+///
+/// Red-check: route a blocked text's selection to the document (the area
+/// accepts it and reports "Blocked").
+pub(crate) fn blocked_text_refuses_assistive_selection() {
+    let (area, seen) = recorded_area(Column::new((
+        Text::new("Alpha"),
+        Semantics::new()
+            .block_user_actions(true)
+            .child(Text::new("Blocked")),
+    )));
+    let mut laid = mounted(area);
+    let (open, blocked, document) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, "Blocked")),
+            find_all(state, Role::Document)[0].locate().0,
+        )
+    };
+    laid.invoke_semantics_action(selection_request(
+        blocked[0],
+        at(blocked[0], 0),
+        at(blocked[0], 3),
+    ))
+    .expect_err("a blocked text refuses a selection in its runs");
+    laid.invoke_semantics_action(selection_request(
+        document,
+        at(open[0], 0),
+        at(blocked[0], 3),
+    ))
+    .expect_err("a document refuses an end in a blocked text");
+    laid.tick();
+    assert!(seen.borrow().is_empty(), "the area saw no selection");
+}

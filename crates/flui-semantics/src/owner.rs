@@ -1060,9 +1060,12 @@ impl SemanticsOwner {
             routed.target_node = accesskit::NodeId(field.as_u64());
         }
         // A selection sent to static text, or to one of its runs, is the
-        // document's to make (ADR-0214 §4).
+        // document's to make (ADR-0214 §4). A text that blocks user actions
+        // keeps the request, which it then refuses (ADR-0216 §1).
         if request.action == accesskit::Action::SetTextSelection
-            && let Some(document) = text_owner.or(target).and_then(|at| self.document_of(at))
+            && let Some(at) = text_owner.or(target)
+            && !self.blocks_user_actions_at(at)
+            && let Some(document) = self.document_of(at)
         {
             routed.target_node = accesskit::NodeId(document.as_u64());
             return crate::accesskit_translation::decode_request(&routed, |target, selection| {
@@ -1089,6 +1092,14 @@ impl SemanticsOwner {
                 .ok()
                 .map(ActionCall::SetTextSelection)
         })
+    }
+
+    /// Whether the node published as `at` blocks user actions (ADR-0216 §1).
+    fn blocks_user_actions_at(&self, at: AccessibilityNodeId) -> bool {
+        self.tree
+            .root()
+            .and_then(|root| self.locate(root, at).ok())
+            .is_some_and(|(_, node)| node.config().blocks_user_actions())
     }
 
     /// The document that makes selections for the node published as `at`:
@@ -1136,6 +1147,11 @@ impl SemanticsOwner {
                 return None;
             }
             let (_, text) = self.locate(root, text).ok()?;
+            // A text that blocks user actions is no end of an assistive
+            // selection (ADR-0216 §1).
+            if text.config().blocks_user_actions() {
+                return None;
+            }
             let anchor = text.config().anchors().first()?;
             // The run's text must be the one the document finds by its anchor.
             let (_, beneath) = self.tree.text_beneath(document, anchor)?;
