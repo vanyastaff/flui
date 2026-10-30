@@ -13,7 +13,7 @@
 //! row's marker focuses it when it mounts. The marker pins its row
 //! ([`KeepAliveHandle::pin`]) while the row holds focus or is the remembered
 //! row, so a row the pointer scrolls away stays built, focused and announced
-//! (ADR-0263).
+//! (ADR-0265).
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;

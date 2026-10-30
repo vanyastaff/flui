@@ -232,7 +232,7 @@ impl ListView {
     /// list inside a `Scrollable` has.
     ///
     /// The focused row stays built and announced while the pointer scrolls it
-    /// away (ADR-0263), and an arrow key moves from it.
+    /// away (ADR-0265), and an arrow key moves from it.
     #[must_use]
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
