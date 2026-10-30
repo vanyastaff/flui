@@ -415,7 +415,7 @@ request.
 
 - Entry 14 names languages and regional formats only. Layout direction, per-app language, and system fonts and fallback have no reading in the platform layer.
 - Android 13 adds per-app language preferences and `setApplicationLocales` ([Android documentation](https://developer.android.com/guide/topics/resources/app-languages)); iOS has a per-app language setting; a right-to-left layout follows from the locale.
-- Text layout resolves fonts through `fontdb` in `flui-painting`; DirectWrite `IDWriteFontFallback`, Android `SystemFonts` (API 29), CoreText and fontconfig are the platform answers to which font draws a character the requested family lacks.
+- Text layout resolves fonts through `fontdb` in `flui-painting`. DirectWrite `IDWriteFontFallback`, Android `fonts.xml` and `AFontMatcher` (API 29), CoreText and fontconfig are the platform answers to which font draws a character the requested family lacks. The collection already puts such an answer (`SystemFallback`) ahead of FLUI's tables, and installs a new one when the locale changes ([ADR-0271](adr/ADR-0271-the-host-feed-asks-the-platform-which-faces-fall-back.md)). The platform layer does not compute it yet, so the tables alone decide.
 - The check is a locale matrix (en-US, ar-EG for right-to-left, ja-JP, hi-IN with its numbering) on every OS: list order, first weekday, 12 or 24 hour clock, per-app override, and CJK and emoji text without missing-glyph boxes.
 
 ### 36. Accessibility bridge fidelity (properties and announcements)

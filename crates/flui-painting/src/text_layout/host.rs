@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::fallback_chain::FallbackChain;
 use super::font_resolve;
+use super::system_fallback::SystemFallback;
 
 /// The host's installed faces, found by one fontdb scan, with the generic
 /// families and the fallback lists FLUI picks for them.
@@ -22,6 +23,7 @@ pub struct HostFonts {
     db: fontdb::Database,
     generics: HostGenerics,
     chain: FallbackChain,
+    system: SystemFallback,
 }
 
 /// The family each generic names on the host.
@@ -44,13 +46,44 @@ impl HostFonts {
     /// tables; the face data itself is read later, by the collection it
     /// feeds. It costs a few milliseconds on a desktop host; run it once per
     /// app.
+    ///
+    /// The fallback order is FLUI's tables alone; [`HostFonts::scan_with`]
+    /// puts the host's own answer ahead of them.
     #[must_use]
     pub fn scan() -> Self {
+        Self::scan_with(|locale| SystemFallback::none(locale))
+    }
+
+    /// [`HostFonts::scan`], with the host's own fallback answer ahead of
+    /// FLUI's tables (ADR-0271): `ask` is called once, with the host's
+    /// locale, and what it returns is merged when a collection is fed.
+    ///
+    /// The platform layer passes its query here, so it runs where the scan
+    /// does, off the owner thread. A panic in `ask` unwinds out of the scan,
+    /// as one in the scan itself would.
+    #[must_use]
+    pub fn scan_with(ask: impl FnOnce(&str) -> SystemFallback) -> Self {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
         let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
         tracing::debug!(faces = db.len(), locale, "scanned the host's fonts");
-        Self::from_database(db, &locale)
+        let mut host = Self::from_database(db, &locale);
+        host.system = ask(&locale);
+        host
+    }
+
+    /// These host fonts with `system` as the host's fallback answer, for a
+    /// test.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn with_system_fallback(mut self, system: SystemFallback) -> Self {
+        self.system = system;
+        self
+    }
+
+    /// The locale the fallback order is picked for.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn locale(&self) -> &str {
+        &self.system.locale
     }
 
     /// Host fonts over `db`, as [`HostFonts::scan`] builds them from the
@@ -78,6 +111,7 @@ impl HostFonts {
             db,
             generics,
             chain: FallbackChain::platform(locale),
+            system: SystemFallback::none(locale),
         }
     }
 
@@ -130,6 +164,7 @@ impl HostFonts {
             cursive: generics.cursive.clone(),
             fantasy: generics.fantasy.clone(),
             chain: self.chain.clone(),
+            system: self.system.clone(),
         }
     }
 }
@@ -182,6 +217,26 @@ impl HostFonts {
                 self.chain
                     .script(parley::fontique::Script::from_str_unchecked(tag))
             });
+            let host_script = names.get(scripts.get(c)).map_or(&[][..], |tag| {
+                let code = <[u8; 4]>::try_from(tag.as_bytes()).unwrap_or(*b"Zzzz");
+                self.system
+                    .script(super::system_fallback::ScriptCode::from_bytes(code))
+            });
+            let named = |face: &fontdb::FaceInfo| {
+                host_script
+                    .iter()
+                    .chain(&self.system.common)
+                    .any(|named| match named {
+                        super::system_fallback::FaceRef::Family(family) => {
+                            face.families.iter().any(|(name, _)| name == family)
+                        }
+                        super::system_fallback::FaceRef::File { path, index } => {
+                            face.index == *index
+                                && matches!(&face.source, fontdb::Source::File(file)
+                                | fontdb::Source::SharedFile(file, _) if file == path)
+                        }
+                    })
+            };
             let reachable = |name: &str| {
                 (!cfg!(feature = "bundled-fonts") && name == self.generics.sans_serif)
                     || script.contains(&name)
@@ -189,7 +244,8 @@ impl HostFonts {
             };
             bundled_sans_serif_maps(c)
                 || self.db.faces().any(|face| {
-                    face.families.iter().any(|(name, _)| reachable(name)) && self.face_maps(face, c)
+                    (named(face) || face.families.iter().any(|(name, _)| reachable(name)))
+                        && self.face_maps(face, c)
                 })
         })
     }
@@ -222,6 +278,7 @@ impl fmt::Debug for HostFonts {
             .field("faces", &self.db.len())
             .field("generics", &self.generics)
             .field("chain", &self.chain)
+            .field("system", &self.system)
             .finish()
     }
 }
@@ -243,6 +300,8 @@ pub(crate) struct HostFaces {
     pub(crate) fantasy: String,
     /// The fallback lists picked for the host.
     pub(crate) chain: FallbackChain,
+    /// The host's own fallback answer, merged ahead of `chain` (ADR-0271).
+    pub(crate) system: SystemFallback,
 }
 
 /// One font file or in-memory font, and every family name its faces carry.
@@ -272,7 +331,7 @@ impl fmt::Debug for HostData {
 
 #[cfg(all(test, feature = "bundled-fonts"))]
 mod tests {
-    use super::{FallbackChain, HostFonts, HostGenerics};
+    use super::{FallbackChain, HostFonts, HostGenerics, SystemFallback};
 
     /// A bundled build's fed collection keeps the bundled Roboto as its
     /// sans-serif family, so coverage asks that face, not the face the
@@ -294,6 +353,7 @@ mod tests {
                 fantasy: ARABIC.to_owned(),
             },
             chain: FallbackChain::from_lists(&[], &[]),
+            system: SystemFallback::none("en-US"),
         };
         assert!(host.covers("\u{0644}"), "the host face maps lam");
         assert!(

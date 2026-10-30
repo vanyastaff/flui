@@ -216,6 +216,94 @@ fn a_feed_that_adds_nothing_leaves_the_generation_alone() {
     );
 }
 
+const PROBE_ARABIC: &[u8] = include_bytes!("../assets/fonts/probe-arabic-ligature.ttf");
+
+/// Arabic the probe face covers (sin, lam, alef, mim) and FLUI's tables
+/// never name it for.
+const ARABIC: &str = "\u{0633}\u{0644}\u{0627}\u{0645}";
+
+/// The host's answer naming the probe face for Arabic.
+fn arabic_answer(locale: &str) -> flui_painting::SystemFallback {
+    use flui_painting::{FaceRef, ScriptCode, SystemFallback};
+
+    SystemFallback::none(locale).with_script(
+        ScriptCode::from_bytes(*b"Arab"),
+        vec![FaceRef::Family("FLUI Probe Arabic".to_owned())],
+    )
+}
+
+/// How many glyphs of `text`, laid out on `fonts` in a style naming no
+/// family, painted as `.notdef`.
+fn notdef_glyphs(fonts: &FontCollection, text: &str) -> usize {
+    let mut context = TextContext::new(fonts);
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new(text))
+        .with_text_direction(TextDirection::Rtl);
+    painter
+        .layout(&mut context, 0.0, WIDTH)
+        .expect("valid fixture lays out");
+    painted_paragraph(&painter)
+        .runs()
+        .flat_map(|run| run.glyphs().iter())
+        .filter(|glyph| glyph.id == 0)
+        .count()
+}
+
+/// A face the host names for a script reaches text in that script, though
+/// FLUI's tables name it nowhere: with the host's answer the Arabic shapes
+/// in the probe face, without it every letter is `.notdef`. Fails if the
+/// feed drops the host's answer.
+fn a_host_fallback_face_draws_a_script_the_tables_miss() {
+    use flui_painting::testing::{feed_with_host, host_fonts_from};
+
+    let (plain, feed) = FontCollection::with_host_feed();
+    feed_with_host(feed, host_fonts_from(&[PROBE_ARABIC])).run();
+    assert_eq!(
+        notdef_glyphs(&plain, ARABIC),
+        4,
+        "FLUI's tables alone never reach the probe face"
+    );
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    feed_with_host(feed, host_fonts_from(&[PROBE_ARABIC]))
+        .with_system_fallback(arabic_answer)
+        .run();
+    assert_eq!(notdef_glyphs(&fonts, ARABIC), 0);
+}
+
+/// `FallbackOrder::set_system_fallback`, the rescan entry point the feed
+/// hands on, replaces the order between frames: each change
+/// raises the generation once, so text laid out before measures again in
+/// the new order, and an answer equal to the installed one changes nothing.
+/// Fails if a rescan leaves the old order, or announces nothing (text then
+/// keeps its old measurement).
+fn a_rescan_swaps_the_fallback_order_between_frames() {
+    use flui_painting::SystemFallback;
+    use flui_painting::testing::{feed_with_host, host_fonts_from};
+
+    let (fonts, feed) = FontCollection::with_host_feed();
+    let mut order = feed_with_host(feed, host_fonts_from(&[PROBE_ARABIC]))
+        .with_system_fallback(arabic_answer)
+        .run();
+    let fed = fonts.generation();
+    assert_eq!(notdef_glyphs(&fonts, ARABIC), 0);
+
+    assert!(order.set_system_fallback(&SystemFallback::none("en-US")));
+    assert_eq!(fonts.generation(), fed + 1, "one announcement per swap");
+    assert_eq!(notdef_glyphs(&fonts, ARABIC), 4, "the host's face is gone");
+
+    assert!(!order.set_system_fallback(&SystemFallback::none("en-US")));
+    assert_eq!(
+        fonts.generation(),
+        fed + 1,
+        "an equal answer changes nothing"
+    );
+
+    assert!(order.set_system_fallback(&arabic_answer("en-US")));
+    assert_eq!(fonts.generation(), fed + 2);
+    assert_eq!(notdef_glyphs(&fonts, ARABIC), 0, "the host's face is back");
+}
+
 #[test]
 fn host_feed_contract() {
     crate::cases::run_cases(
@@ -232,6 +320,14 @@ fn host_feed_contract() {
             (
                 "a_feed_that_adds_nothing_leaves_the_generation_alone",
                 a_feed_that_adds_nothing_leaves_the_generation_alone,
+            ),
+            (
+                "a_host_fallback_face_draws_a_script_the_tables_miss",
+                a_host_fallback_face_draws_a_script_the_tables_miss,
+            ),
+            (
+                "a_rescan_swaps_the_fallback_order_between_frames",
+                a_rescan_swaps_the_fallback_order_between_frames,
             ),
         ],
     );
