@@ -74,11 +74,15 @@ impl Background {
     /// Run `job`, a CPU job (a decode, a large layout, a hash), on the
     /// compute lane.
     ///
+    /// `job` runs exactly once. It is an `FnMut` so that, if it panics, its
+    /// captures are kept rather than dropped during the unwind, where a
+    /// capture whose `Drop` also panics would abort the process.
+    ///
     /// A job the task is cancelled before is skipped; one already running
     /// runs to its end, and its value is dropped.
     pub fn compute<T: Send + 'static>(
         &self,
-        job: impl FnOnce() -> T + Send + 'static,
+        mut job: impl FnMut() -> T + Send + 'static,
     ) -> BackgroundTask<T> {
         let (task, answer) = self.start::<T>();
         let refused = Arc::clone(&answer.resolver);
@@ -87,7 +91,13 @@ impl Background {
                 answer.resolve(Err(BackgroundError::Cancelled));
                 return;
             }
-            let outcome = catch_unwind(AssertUnwindSafe(job)).map_err(panicked);
+            let outcome = match catch_unwind(AssertUnwindSafe(&mut job)) {
+                Ok(value) => Ok(value),
+                Err(payload) => {
+                    std::mem::forget(job);
+                    Err(panicked(payload))
+                }
+            };
             answer.resolve_unless_cancelled(outcome);
         });
         if let Err(error) = self.executor.spawn_compute(work) {

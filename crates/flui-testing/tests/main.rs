@@ -206,30 +206,36 @@ fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
 
-/// A capture of a panicking `on_complete` closure is kept through the
-/// unwind; dropped there, its own panicking `Drop` would abort the process,
-/// so the case runs in a child process.
+/// A capture of a panicking `on_complete` closure or compute job is kept
+/// through the unwind; dropped there, its own panicking `Drop` would abort
+/// the process, so each case runs in a child process.
 #[test]
-fn background_work_callback_keeps_its_captures() {
-    if std::env::var(background_work::CALLBACK_UNWIND_CHILD).is_ok() {
-        background_work::an_on_complete_panic_keeps_its_captures();
+fn background_work_keeps_captures_while_unwinding() {
+    if let Ok(case) = std::env::var(background_work::UNWIND_CHILD) {
+        match case.as_str() {
+            "callback" => background_work::an_on_complete_panic_keeps_its_captures(),
+            "job" => background_work::a_compute_panic_keeps_its_captures(),
+            other => panic!("no case {other}"),
+        }
         return;
     }
-    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "background_work_callback_keeps_its_captures",
-            "--test-threads=1",
-        ])
-        .env(background_work::CALLBACK_UNWIND_CHILD, "1")
-        .env("RUST_BACKTRACE", "0")
-        .output()
-        .expect("child test process");
-    assert!(
-        output.status.success(),
-        "the child aborted: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for case in ["callback", "job"] {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "background_work_keeps_captures_while_unwinding",
+                "--test-threads=1",
+            ])
+            .env(background_work::UNWIND_CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .expect("child test process");
+        assert!(
+            output.status.success(),
+            "case {case} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 /// Each case runs in a child process: without retention, a capture dropped
