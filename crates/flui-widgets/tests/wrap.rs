@@ -40,3 +40,44 @@ pub(crate) fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
 // ── Cross-axis alignment ──────────────────────────────────────────────────────
 
 // ── Container sizing ──────────────────────────────────────────────────────────
+
+// ── Reading direction ─────────────────────────────────────────────────────────
+
+/// A wrap in a right-to-left subtree starts each run at the right, and
+/// follows the ambient direction when it changes.
+///
+/// Red-check: never hand the render object the ambient direction (every
+/// run starts at the left).
+pub(crate) fn wrap_starts_its_runs_at_the_reading_edge() {
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::Directionality;
+
+    let view = |direction| {
+        Directionality::new(
+            direction,
+            Wrap::new(vec![
+                SizedBox::new(40.0, 40.0).boxed(),
+                SizedBox::new(40.0, 40.0).boxed(),
+                SizedBox::new(40.0, 40.0).boxed(),
+            ]),
+        )
+    };
+    let mut laid = lay_out(view(TextDirection::Rtl), loose(100.0));
+    let offsets = |laid: &crate::common::LaidOut| {
+        let root = laid.root();
+        (0..3)
+            .map(|index| laid.offset(laid.child(root, index)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        offsets(&laid),
+        [offset(40.0, 0.0), offset(0.0, 0.0), offset(40.0, 40.0)],
+        "right to left: each run starts at the right"
+    );
+    laid.pump_widget(view(TextDirection::Ltr));
+    assert_eq!(
+        offsets(&laid),
+        [offset(0.0, 0.0), offset(40.0, 0.0), offset(0.0, 40.0)],
+        "a change of direction lays the wrap out again"
+    );
+}

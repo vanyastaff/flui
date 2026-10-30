@@ -135,6 +135,16 @@ pub enum UiCommand {
         /// Where the outcome goes.
         reply: super::agent::ReplySender<flui_protocol::ActOutcome>,
     },
+    /// Hold out for a condition on the addressed presentation: answered when a frame makes it
+    /// hold or its deadline passes (not at the drain, unless it holds already).
+    SemanticsAgentWait {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The condition, window and timeout.
+        params: Box<flui_protocol::WaitParams>,
+        /// Where the outcome goes.
+        reply: super::agent::ReplySender<flui_protocol::WaitOutcome>,
+    },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
     SemanticsLocate {
@@ -246,6 +256,13 @@ impl std::fmt::Debug for UiCommand {
                 .field("element", &request.element)
                 .field("action", &request.action)
                 .field("snapshot", snapshot)
+                .finish_non_exhaustive(),
+            // The condition's text stays out for the same reason.
+            UiCommand::SemanticsAgentWait {
+                presentation_id, ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentWait")
+                .field("presentation_id", presentation_id)
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -904,6 +921,18 @@ impl UiRuntime {
                             };
                             self.fail_agent_job(&reply, element, failure, payload);
                         }
+                    }
+                }
+                UiCommand::SemanticsAgentWait {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    // It answers itself: now if it holds, else after a frame or its deadline.
+                    if self.park_agent_wait(presentation_id, *params, reply) {
+                        report.invoked += 1;
+                    } else {
+                        report.dropped_stale += 1;
                     }
                 }
                 UiCommand::SemanticsLocate {

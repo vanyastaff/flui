@@ -241,7 +241,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 if matches!(change, NativeChange::InitiallyUnfocused) {
                     native.simulate_focus(false);
                 }
-                let runtime = crate::app::ui_runtime::UiRuntime::new(
+                let runtime = crate::app::ui_runtime::UiRuntime::try_new(
                     Rc::clone(&window),
                     1.0,
                     RuntimeHostServices::new(
@@ -1667,7 +1667,7 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
                     services = services.with_preferences(accepted);
                 }
                 let runtime =
-                    crate::app::ui_runtime::UiRuntime::new(Rc::clone(&window), 1.0, services)?;
+                    crate::app::ui_runtime::UiRuntime::try_new(Rc::clone(&window), 1.0, services)?;
                 Ok(present_sizing_reader(runtime, window, log))
             },
         );

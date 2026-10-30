@@ -252,7 +252,7 @@ fn runtime_over(
     window: PresentationWindow,
     nonce: ProcessNonce,
 ) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(

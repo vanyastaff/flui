@@ -25,7 +25,7 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
     });
 
     let (window, _calls) = counting_window(1);
-    let mut ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::try_new(
         window,
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
@@ -59,7 +59,7 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
         wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
     });
     let (window, _calls) = counting_window(id);
-    let mut ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::try_new(
         window,
         1.0,
         crate::runtime_services::RuntimeHostServices::new(

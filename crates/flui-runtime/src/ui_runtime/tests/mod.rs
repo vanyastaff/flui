@@ -35,7 +35,7 @@ fn test_window() -> crate::presentation::PresentationWindow {
 }
 
 pub(super) fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRuntime, UiRuntimeError> {
-    UiRuntime::new(
+    UiRuntime::try_new(
         test_window(),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
@@ -295,6 +295,7 @@ mod agent_act_read;
 mod agent_locate;
 mod agent_semantics;
 mod agent_stability;
+mod agent_wait;
 
 // ========================================================================
 // Frame pipeline, first-frame deferral, and Vsync — migrated from the

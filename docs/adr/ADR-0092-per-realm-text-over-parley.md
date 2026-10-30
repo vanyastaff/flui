@@ -293,7 +293,7 @@ offers `register_font` and no removal, so the rule is the API's, not a conventio
 the host's (`flui-app`'s) shared engine services (`SharedEngineServices`, one per owner thread,
 which is one per app while ADR-0091 fixes a single owner thread), held in the host's granted
 ADR-0097 trampoline cell with no global of its own, and reaches each UI runtime only through
-`UiRuntime::new`. Registering a font adds it to the collection and raises the collection's
+`UiRuntime::try_new`. Registering a font adds it to the collection and raises the collection's
 generation: that generation is the font-collection-changed event. The app notifies every UI runtime it owns (`UiRuntime::fonts_changed`,
 on each UI runtime's owner turn), and at the next frame each pipeline marks for layout and paint every
 render object that measured through the UI runtime's context since the last change — closing
@@ -523,7 +523,7 @@ that wires what it adds.
    `cargo xtask reach` are green.
 2. **Per-UI runtime text context**, in two halves that land separately: 2a in `flui-painting`
    (the types, the lint and their tests), 2b in the runtime (the bullet on shared engine
-   services and `UiRuntime::new`). 2a and 2b have landed.
+   services and `UiRuntime::try_new`). 2a and 2b have landed.
    - `flui_painting::FontCollection` wraps the shared fontique `Collection` (no host scan; with
      `bundled-fonts`, the bundled faces registered and the generic families bound to Roboto) and
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
@@ -531,7 +531,7 @@ that wires what it adds.
      every build, so a UI runtime's constructor has one signature with or without `parley`; shaping
      and registration sat behind the `parley` feature until step 4a folded it.
    - (2b) The runtime's shared engine services hold the collection, and each UI runtime owns a
-     `TextContext` built from the collection passed to `UiRuntime::new`.
+     `TextContext` built from the collection passed to `UiRuntime::try_new`.
    - The cosmic-text path is unchanged, and `FONT_SYSTEM` and `shared_font_system()` stay until
      step 6: this step adds the Parley path beside it rather than routing cosmic-text through a
      new handle, so the handle's shape is Parley's from the start.
