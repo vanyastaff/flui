@@ -109,7 +109,10 @@ pub(crate) trait SimulatedOffers: Send {
 /// The displays position is the loop's: the snapshot it holds.
 impl host::Displays<HeadlessLoop> for HeadlessLoop {
     fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
-        Ok(owner.with_state(|state| state.displays.clone()))
+        owner.with_state(|state| match state.display_failure.take() {
+            Some(message) => Err(PlatformError::Displays { message }),
+            None => Ok(state.displays.clone()),
+        })
     }
 }
 
@@ -253,6 +256,9 @@ pub(crate) struct HeadlessState {
     /// The failure the next `Platform::preferences` read reports instead of a
     /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
     pub(crate) preference_failure: Option<String>,
+    /// The failure the next `Platform::display_snapshot` read reports instead
+    /// of the snapshot ([`HeadlessDisplayControls::fail_next_read`](crate::HeadlessDisplayControls::fail_next_read)).
+    pub(crate) display_failure: Option<String>,
     /// What makes the drag source of a window opened now, as the table names
     /// it ([`HeadlessHost::drag_source`]).
     drag_source: fn(&HeadlessState) -> Option<Arc<dyn PlatformDragSource>>,
@@ -332,6 +338,7 @@ impl HeadlessLoop {
             session_end_releases: 0,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
+            display_failure: None,
             drag_source: H::drag_source,
         };
 

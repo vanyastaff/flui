@@ -250,10 +250,44 @@ impl HeadlessDisplayControls {
             return Ok(());
         };
         apply(&mut state.lock().displays, id, change)?;
+        self.wake();
+        Ok(())
+    }
+
+    /// Report `displays` as the system's displays, all at once, as the
+    /// snapshot's successor, and wake the owner: a hot-plug, a rearrangement
+    /// or a replayed read. A platform that is gone applies nothing.
+    ///
+    /// # Errors
+    /// [`DisplayChangeError::RevisionExhausted`] when the snapshot revision
+    /// cannot advance.
+    pub fn replace(&self, displays: Vec<DisplayInfo>) -> Result<(), DisplayChangeError> {
+        let Some(state) = self.state.upgrade() else {
+            return Ok(());
+        };
+        {
+            let mut state = state.lock();
+            state.displays = state.displays.successor(displays)?;
+        }
+        self.wake();
+        Ok(())
+    }
+
+    /// Make the next read of the displays fail with `message`, as a native
+    /// source that cannot complete a sample does, and wake the owner. The
+    /// read after that reports the platform's displays again.
+    pub fn fail_next_read(&self, message: impl Into<String>) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        state.lock().display_failure = Some(message.into());
+        self.wake();
+    }
+
+    fn wake(&self) {
         // A failed wake leaves the signal's pending debt for the next turn.
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();
         }
-        Ok(())
     }
 }
