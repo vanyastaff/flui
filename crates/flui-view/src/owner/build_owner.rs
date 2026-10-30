@@ -1276,7 +1276,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
-            on_build_scheduled: self.on_build_scheduled.as_deref(),
+            frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
             // Lifecycle paths (mount/unmount/update) get no live-tree view;
@@ -1589,7 +1589,9 @@ impl BuildOwner {
     ) -> BuildDrainResult {
         #[cfg(not(debug_assertions))]
         if matches!(target, BuildScopeTarget::All) {
-            return self.drain_build_scope(tree, target, live_scopes);
+            let result = self.drain_build_scope(tree, target, live_scopes);
+            self.request_owed_frame();
+            return result;
         }
 
         #[cfg(debug_assertions)]
@@ -1615,9 +1617,23 @@ impl BuildOwner {
         }
 
         match outcome {
-            Ok(result) => result,
+            Ok(result) => {
+                self.request_owed_frame();
+                result
+            }
+            // The pass's own failure comes first; the owed wake stays
+            // pending for the next request to retry.
             Err(payload) => std::panic::resume_unwind(payload),
         }
+    }
+
+    /// Deliver the frame a build pass owes for the entries it scheduled
+    /// (see [`FrameWake::AfterPass`](super::element_owner::FrameWake)), once
+    /// every element is back in the tree. A failing wake reaches the caller
+    /// and stays owed, so the next request retries it.
+    fn request_owed_frame(&self) {
+        self.external_inbox
+            .request_frame_if_needed(false, self.on_build_scheduled.as_deref());
     }
 
     fn drain_build_scope(
@@ -1811,7 +1827,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
-                    on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
                     build_view: Some(super::BuildHandle {
@@ -2034,7 +2050,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
-                    on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
                     build_view: None,
@@ -2459,7 +2475,7 @@ impl BuildOwner {
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 inherited_dependencies: &mut self.inherited_dependencies,
                 keep_alive: self.keep_alive.clone(),
-                on_build_scheduled: self.on_build_scheduled.as_deref(),
+                frame_wake: super::element_owner::FrameWake::AfterPass,
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
@@ -2668,7 +2684,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
-            on_build_scheduled: self.on_build_scheduled.as_deref(),
+            frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
             build_view: None,
