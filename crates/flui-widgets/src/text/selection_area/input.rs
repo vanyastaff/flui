@@ -13,8 +13,8 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
-    GestureRecognizer, KeyEventResult, PointerKindSet, TapAndDragGestureRecognizer,
-    TapGestureRecognizer,
+    GestureRecognizer, KeyEventResult, LongPressGestureRecognizer, PointerKindSet,
+    TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
@@ -26,7 +26,7 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 
-use super::{SelectableEntry, SelectionModel, paragraph_beneath};
+use super::{HandleSide, SelectableEntry, SelectionModel, paragraph_beneath};
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{
     Action, ActionOutcome, CopySelectionTextIntent, DismissIntent, GesturePolicy, Listener,
@@ -156,6 +156,107 @@ impl SelectionModel {
             .flatten()
     }
 
+    /// The selection's `side` end in reading order, with its text.
+    fn end(&self, ordered: &[Ordered], side: HandleSide) -> Option<(usize, DocumentPosition)> {
+        let selection = self.selection.borrow().clone()?;
+        let (anchor, focus) = (selection.anchor().clone(), selection.focus().clone());
+        let backward = Self::compare(ordered, &anchor, &focus) == Ordering::Greater;
+        let (start, end) = if backward {
+            (focus, anchor)
+        } else {
+            (anchor, focus)
+        };
+        let at = match side {
+            HandleSide::End => end,
+            _ => start,
+        };
+        let index = ordered
+            .iter()
+            .position(|text| text.entry.anchor == *at.text())?;
+        Some((index, at))
+    }
+
+    /// Where `side`'s end sits: the middle of its line, in render-root
+    /// coordinates, and the line's height. The start sits on the line after
+    /// it and the end on the line it ends, as the paragraph publishes them.
+    fn end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
+        let ordered = self.ordered();
+        let (index, at) = self.end(&ordered, side)?;
+        self.with_paragraph(&ordered[index].entry, |paragraph, to_root| {
+            let painter = paragraph.painter();
+            let upstream = side == HandleSide::End;
+            let position = if upstream {
+                TextPosition::upstream(at.byte())
+            } else {
+                TextPosition::downstream(at.byte())
+            };
+            let caret = painter.get_offset_for_caret(position);
+            let height = line_of(&painter.get_line_metrics(), at.byte(), upstream)?.height;
+            let (x, y) = to_root.transform_point(caret.dx, caret.dy + height / 2.0);
+            Some((Offset::new(x, y), height))
+        })
+    }
+
+    /// The height of the line `side`'s end sits on, while it is laid out.
+    pub(super) fn end_line_height(&self, side: HandleSide) -> Option<f64> {
+        self.end_line(side).map(|(_, height)| height)
+    }
+
+    /// A drag of `side`'s handle began with the contact at `global`: the
+    /// end keeps the distance it had from the contact, so the handle does
+    /// not jump under the finger.
+    pub(super) fn handle_drag_started(&self, side: HandleSide, global: Offset<f64>) {
+        let grip = self.end_line(side).map(|(middle, _)| middle - global);
+        self.handles.grip.set(grip.map(|grip| (side, grip)));
+    }
+
+    /// `side`'s handle was dragged to `global`: its end moves to the
+    /// position there, the other end stays, and an end never passes the
+    /// other, so the handles keep their sides.
+    pub(super) fn handle_dragged(&self, side: HandleSide, global: Offset<f64>) {
+        let Some((gripped, grip)) = self.handles.grip.get() else {
+            return;
+        };
+        if gripped != side {
+            return;
+        }
+        let ordered = self.ordered();
+        let other = match side {
+            HandleSide::End => HandleSide::Start,
+            _ => HandleSide::End,
+        };
+        let (Some(hit), Some((_, fixed))) = (
+            self.position_at(&ordered, global + grip),
+            self.end(&ordered, other),
+        ) else {
+            return;
+        };
+        let keeps_side = match side {
+            HandleSide::End => Self::compare(&ordered, &fixed, &hit.at) == Ordering::Less,
+            _ => Self::compare(&ordered, &hit.at, &fixed) == Ordering::Less,
+        };
+        if !keeps_side {
+            return;
+        }
+        let caret = CaretMemory::after_hit(&hit.at, &hit);
+        self.select_from_input(Some(DocumentSelection::new(fixed, hit.at)), caret);
+    }
+
+    /// A touch long press at `global`: select the word under it and show
+    /// the handles.
+    fn long_pressed(self: &Rc<Self>, global: Offset<f64>) {
+        let ordered = self.ordered();
+        let Some(hit) = self.position_at(&ordered, global) else {
+            return;
+        };
+        let (start, end) = self.unit_at(&ordered, &hit.at, Unit::Word);
+        let caret = CaretMemory::after_hit(&end, &hit);
+        self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
+        if self.selection.borrow().is_some() {
+            self.show_handles();
+        }
+    }
+
     /// The position nearest `global` (render-root coordinates): in the text
     /// under it, else in the nearest text, nearer by line first.
     fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<Hit> {
@@ -265,6 +366,8 @@ impl SelectionModel {
     /// extend from it. With Shift held, the drag extends the current
     /// selection from its anchor instead.
     fn drag_started(&self, pressed: Offset<f64>, unit: Unit) {
+        // A mouse, pen or trackpad selection shows no handles.
+        self.hide_handles();
         let ordered = self.ordered();
         let anchor = self
             .selection
@@ -345,6 +448,8 @@ impl SelectionModel {
     /// it and a triple one the text. With Shift held, it extends the
     /// selection from its anchor.
     fn tapped(&self, global: Offset<f64>, count: u32) {
+        // A tap, by touch or not, hides the handles.
+        self.hide_handles();
         let ordered = self.ordered();
         let anchor = self
             .selection
@@ -659,6 +764,7 @@ impl StatefulView for SelectionGestures {
             recognizers: None,
             tap_and_drag: Rc::new(RecognizerAttachment::default()),
             touch_tap: Rc::new(RecognizerAttachment::default()),
+            touch_long_press: Rc::new(RecognizerAttachment::default()),
         }
     }
 }
@@ -666,12 +772,14 @@ impl StatefulView for SelectionGestures {
 struct Recognizers {
     tap_and_drag: Rc<TapAndDragGestureRecognizer>,
     touch_tap: Rc<TapGestureRecognizer>,
+    touch_long_press: Rc<LongPressGestureRecognizer>,
 }
 
 impl Recognizers {
     fn cancel(&self) {
         let _ = self.tap_and_drag.cancel();
         let _ = self.touch_tap.cancel();
+        let _ = self.touch_long_press.cancel();
     }
 }
 
@@ -682,6 +790,7 @@ pub struct SelectionGesturesState {
     recognizers: Option<Recognizers>,
     tap_and_drag: Rc<RecognizerAttachment<TapAndDragGestureRecognizer>>,
     touch_tap: Rc<RecognizerAttachment<TapGestureRecognizer>>,
+    touch_long_press: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
 }
 
 impl std::fmt::Debug for SelectionGesturesState {
@@ -752,9 +861,9 @@ impl SelectionGesturesState {
                 .build()
         };
         let touch_tap = {
-            let tapped = weak;
-            TapGestureRecognizer::builder(arena)
-                .settings(settings)
+            let tapped = weak.clone();
+            TapGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
                 .allowed_devices(PointerKindSet::TOUCH)
                 .on_tap_up(move |details| {
                     if let Some(model) = tapped.upgrade() {
@@ -763,11 +872,25 @@ impl SelectionGesturesState {
                 })
                 .build()
         };
+        let touch_long_press = {
+            let pressed = weak;
+            LongPressGestureRecognizer::builder(arena)
+                .settings(settings)
+                .allowed_devices(PointerKindSet::TOUCH)
+                .on_long_press_start(move |details| {
+                    if let Some(model) = pressed.upgrade() {
+                        model.long_pressed(details.global_position);
+                    }
+                })
+                .build()
+        };
         self.tap_and_drag.attach(&tap_and_drag);
         self.touch_tap.attach(&touch_tap);
+        self.touch_long_press.attach(&touch_long_press);
         let outgoing = self.recognizers.replace(Recognizers {
             tap_and_drag,
             touch_tap,
+            touch_long_press,
         });
         self.built_for = Some(policy);
         if let Some(outgoing) = outgoing {
@@ -789,6 +912,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
     fn dispose(&mut self) {
         self.tap_and_drag.clear();
         self.touch_tap.clear();
+        self.touch_long_press.clear();
         if let Some(recognizers) = self.recognizers.take() {
             recognizers.cancel();
         }
@@ -811,6 +935,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
             })
             .recognizer(&self.tap_and_drag)
             .recognizer(&self.touch_tap)
+            .recognizer(&self.touch_long_press)
             .child(view.child.clone())
     }
 }

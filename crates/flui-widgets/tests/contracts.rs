@@ -586,6 +586,21 @@ fn selection_area_text_runs() {
     );
 }
 
+/// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
+/// of a handle moves its end, and a tap, Esc or the mouse hides them.
+#[test]
+fn selection_area_handles() {
+    run_cases(
+        "selection_area_handles",
+        &[
+            ("selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end", crate::selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end as fn()),
+            ("selection_area_handles::dragging_a_handle_moves_its_end", crate::selection_area_handles::dragging_a_handle_moves_its_end),
+            ("selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles", crate::selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles),
+            ("selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay", crate::selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay),
+        ],
+    );
+}
+
 /// A `SelectionArea` selects with a mouse and the keyboard, copies, clears and dims its
 /// highlight on a blur, reading its texts where they are laid out.
 #[test]
