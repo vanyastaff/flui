@@ -156,7 +156,7 @@ impl MultiTapCount {
 
     /// The count, or `None` below two.
     #[must_use]
-    pub const fn new(contacts: usize) -> Option<Self> {
+    pub const fn try_new(contacts: usize) -> Option<Self> {
         if contacts >= 2 {
             Some(Self(contacts))
         } else {
@@ -190,7 +190,7 @@ impl TryFrom<usize> for MultiTapCount {
     type Error = MultiTapCountError;
 
     fn try_from(contacts: usize) -> Result<Self, Self::Error> {
-        Self::new(contacts).ok_or(MultiTapCountError { contacts })
+        Self::try_new(contacts).ok_or(MultiTapCountError { contacts })
     }
 }
 

@@ -33,6 +33,9 @@
   `flui_log::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
   `RecordingWriter`, `flui_painting` `CornerRounding` and `RoundedPolygon`, and
   `flui_assets::NetworkLoader`.
+- **`flui-objects`, `flui-interaction`**: the same for `AspectRatioFactor`, `FractionFactor`,
+  `CarouselGeometry`, `RenderSliverConstrainedCrossAxis`, `MultiTapCount`, `OneEuroTuning` and
+  `PolynomialFit`.
 
 ### Fixed
 

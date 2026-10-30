@@ -39,7 +39,7 @@
 //! these values are application defaults, not a device-independent guarantee,
 //! which is why no platform preset selects smoothing (ADR-0172, ADR-0212 §4).
 //!
-//! Tuning is validated once, by [`OneEuroTuning::new`], and cannot be mutated
+//! Tuning is validated once, by [`OneEuroTuning::try_new`], and cannot be mutated
 //! into an invalid state. Filtering rejects non-finite input and
 //! unrepresentable arithmetic without changing the last accepted sample or
 //! derivative. This is preferable to silently saturating a slope or changing
@@ -131,7 +131,7 @@ impl OneEuroTuning {
     ///
     /// Cutoffs must be finite and strictly positive; `beta` must be finite
     /// and nonnegative.
-    pub fn new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Result<Self, OneEuroFilterError> {
+    pub fn try_new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Result<Self, OneEuroFilterError> {
         if !min_cutoff.is_finite() || min_cutoff <= 0.0 {
             return Err(OneEuroFilterError::InvalidMinCutoff);
         }

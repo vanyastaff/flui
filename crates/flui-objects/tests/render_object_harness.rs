@@ -2615,7 +2615,7 @@ fn harness_aspect_ratio_unbounded_minima_remain_finite() {
         assert_eq!(run.dry_layout(run.root(), constraints), expected);
     }
     fn ratio(value: f64) -> AspectRatioFactor {
-        AspectRatioFactor::new(value).expect("valid ratio")
+        AspectRatioFactor::try_new(value).expect("valid ratio")
     }
     fn height_minimum() {
         check(
@@ -5499,7 +5499,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
         };
         let mut run = RenderTester::mount(
             box_node(RenderViewport::new(axis)).child(
-                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                sliver_node(RenderSliverConstrainedCrossAxis::try_new(40.0).unwrap())
                     .label("limit")
                     .child(
                         sliver_node(RenderSliverToBoxAdapter::new())
@@ -5530,7 +5530,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
             );
         }
         for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(RenderSliverConstrainedCrossAxis::new(invalid).is_err());
+            assert!(RenderSliverConstrainedCrossAxis::try_new(invalid).is_err());
             run.update::<RenderSliverConstrainedCrossAxis>(id, |object| {
                 assert!(object.set_max_extent(invalid).is_err());
             });
@@ -11899,7 +11899,7 @@ fn harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes() {
         let group = sliver_node(RenderSliverCrossAxisGroup::new())
             .label("group")
             .child(
-                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                sliver_node(RenderSliverConstrainedCrossAxis::try_new(40.0).unwrap())
                     .label("content_track")
                     .with_parent_data_seed(track(SliverCrossAxisAllocation::Content))
                     .child(adapter(30.0, "a")),

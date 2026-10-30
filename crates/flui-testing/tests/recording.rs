@@ -1277,7 +1277,8 @@ fn header_gesture_values_read_back_exactly() {
         let mut values = base.for_kind(PointerKind::Mouse).values();
         values.velocity_estimator = estimator;
         values.remainder_handoff = handoffs[index % handoffs.len()];
-        values.position_smoothing = Some(OneEuroTuning::new(1.5, 0.25, 2.0).expect("valid tuning"));
+        values.position_smoothing =
+            Some(OneEuroTuning::try_new(1.5, 0.25, 2.0).expect("valid tuning"));
         values.max_resolution_delay = Duration::from_nanos(1_234_567_891);
         values.min_target = 31.5;
         let mouse = GestureSettings::try_from_values(values.clone()).expect("valid values");
