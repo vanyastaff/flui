@@ -8321,10 +8321,8 @@ impl LazySliver {
             }
             Self::Grid => {
                 // Six 50 px columns across the 300 px viewport.
-                let mut grid = RenderSliverGrid::new(
-                    SliverGridDelegateWithFixedCrossAxisCount::new(6),
-                    count,
-                );
+                let mut grid =
+                    RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(6), count);
                 let _ = grid.set_pinned_indices(pinned);
                 sliver_node(grid)
             }
