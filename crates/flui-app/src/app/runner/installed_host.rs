@@ -405,10 +405,13 @@ impl OwnerEffects for HostState {
         finish(first);
     }
 
-    /// Only Android has a refresh-rate request to make (`ANativeWindow_setFrameRate`);
-    /// elsewhere the 250 ms hold would add a wake for nothing.
+    /// Android (`ANativeWindow_setFrameRate`) and iOS (the display link's
+    /// frame-rate range) have a refresh-rate request to make. iOS holds a
+    /// ProMotion panel at its maximum only while the presentation is active,
+    /// and leaves a still screen to the system's adaptive rate. Elsewhere the
+    /// 250 ms hold would add a wake for nothing.
     fn tracks_frame_rate_demand(&self) -> bool {
-        cfg!(target_os = "android")
+        cfg!(any(target_os = "android", target_os = "ios"))
     }
 
     fn frame_rate_demand_changed(
