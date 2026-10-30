@@ -23,7 +23,7 @@ struct TileAxis {
     repeat: bool,
 }
 impl TileAxis {
-    fn new(start: f64, end: f64, origin: f64, step: f64, repeat: bool) -> Option<Self> {
+    fn try_new(start: f64, end: f64, origin: f64, step: f64, repeat: bool) -> Option<Self> {
         if ![start, end, origin, step, end - start]
             .into_iter()
             .all(f64::is_finite)
@@ -72,7 +72,7 @@ struct ImageQuad {
     bounds: Rect<f64>,
 }
 impl ImageQuad {
-    fn new(matrix: Matrix4, dst: Rect<f64>) -> Option<Self> {
+    fn try_new(matrix: Matrix4, dst: Rect<f64>) -> Option<Self> {
         if !valid_affine(matrix) || !valid_rect(dst) {
             return None;
         }
@@ -308,7 +308,7 @@ impl DrawBatcher {
                 }
             };
         if repeat == ImageRepeat::NoRepeat && !mode.is_advanced() {
-            let Some(quad) = ImageQuad::new(matrix, dst) else {
+            let Some(quad) = ImageQuad::try_new(matrix, dst) else {
                 return;
             };
             let Some(uv) = source_uv(src, image, atlas) else {
@@ -329,7 +329,7 @@ impl DrawBatcher {
         let mut content = segment.empty_sibling();
         let mut bounds = None;
         if repeat == ImageRepeat::NoRepeat {
-            let Some(quad) = ImageQuad::new(matrix, dst) else {
+            let Some(quad) = ImageQuad::try_new(matrix, dst) else {
                 return;
             };
             let Some(uv) = source_uv(src, image, atlas) else {
@@ -353,7 +353,7 @@ impl DrawBatcher {
             if !valid_rect(fitted) {
                 return;
             }
-            let Some(columns) = TileAxis::new(
+            let Some(columns) = TileAxis::try_new(
                 dst.left(),
                 dst.right(),
                 fitted.left(),
@@ -362,7 +362,7 @@ impl DrawBatcher {
             ) else {
                 return;
             };
-            let Some(rows) = TileAxis::new(
+            let Some(rows) = TileAxis::try_new(
                 dst.top(),
                 dst.bottom(),
                 fitted.top(),
@@ -388,7 +388,7 @@ impl DrawBatcher {
                     if !valid_rect(clipped) {
                         continue;
                     }
-                    let Some(quad) = ImageQuad::new(matrix, clipped) else {
+                    let Some(quad) = ImageQuad::try_new(matrix, clipped) else {
                         return;
                     };
                     // First and last tiles retain their natural source phase.
@@ -593,7 +593,7 @@ impl DrawBatcher {
                 if !valid_rect(tile) || !valid_rect(src) {
                     continue;
                 }
-                let Some(quad) = ImageQuad::new(state.current_transform_matrix(), tile) else {
+                let Some(quad) = ImageQuad::try_new(state.current_transform_matrix(), tile) else {
                     return;
                 };
                 let Some(uv) = source_uv(src, image, atlas) else {
@@ -669,7 +669,7 @@ impl DrawBatcher {
         for (index, (src, transform)) in sprites.iter().zip(transforms).enumerate() {
             let matrix = state.current_transform_matrix() * *transform;
             let Some(quad) =
-                ImageQuad::new(matrix, Rect::from_xywh(0.0, 0.0, src.width(), src.height()))
+                ImageQuad::try_new(matrix, Rect::from_xywh(0.0, 0.0, src.width(), src.height()))
             else {
                 return;
             };
@@ -721,7 +721,7 @@ impl DrawBatcher {
             crate::external_texture_registry::ExternalAlpha::Premultiplied => [opacity; 4],
             _ => [1.0, 1.0, 1.0, opacity],
         };
-        let Some(quad) = ImageQuad::new(state.current_transform_matrix(), dst) else {
+        let Some(quad) = ImageQuad::try_new(state.current_transform_matrix(), dst) else {
             segment.record_external_error(crate::error::ExternalTextureError::InvalidDestination);
             return;
         };

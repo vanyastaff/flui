@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use crate::error::AssetError;
 
-/// How long [`NetworkLoader::new`]'s client waits for a connection.
+/// How long [`NetworkLoader::try_new`]'s client waits for a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long [`NetworkLoader::new`]'s client waits for the next bytes of a
+/// How long [`NetworkLoader::try_new`]'s client waits for the next bytes of a
 /// response.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long [`NetworkLoader::new`]'s client lets a whole request take, body
+/// How long [`NetworkLoader::try_new`]'s client lets a whole request take, body
 /// included. The read timeout alone restarts with every byte, so a server
 /// that drips one byte per read timeout would otherwise hold the request open
 /// indefinitely.
@@ -39,7 +39,7 @@ fn read_failed(url: &str, error: &reqwest::Error) -> AssetError {
 /// ```rust,ignore
 /// use flui_assets::loaders::NetworkLoader;
 ///
-/// let loader = NetworkLoader::new()?;
+/// let loader = NetworkLoader::try_new()?;
 ///
 /// // Load from URL
 /// let bytes = loader.load_url("https://example.com/image.png").await?;
@@ -62,7 +62,7 @@ impl NetworkLoader {
     /// # Errors
     ///
     /// Returns an error if TLS or resolver initialization fails.
-    pub fn new() -> reqwest::Result<Self> {
+    pub fn try_new() -> reqwest::Result<Self> {
         reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
@@ -85,7 +85,7 @@ impl NetworkLoader {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let loader = NetworkLoader::new()?;
+    /// let loader = NetworkLoader::try_new()?;
     /// let bytes = loader.load_url("https://example.com/data.bin").await?;
     /// ```
     pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
@@ -215,7 +215,7 @@ mod tests {
         const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
         let addr = spawn_single_response_server(FIXTURE_BODY);
-        let loader = NetworkLoader::new().expect("default HTTP client initializes");
+        let loader = NetworkLoader::try_new().expect("default HTTP client initializes");
 
         let bytes = tokio::time::timeout(
             REQUEST_TIMEOUT,

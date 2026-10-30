@@ -180,7 +180,7 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
         .write_recording(Vec::new(), flui_platform::WindowId(1))
         .expect("written");
     let recording = flui_testing::recording::ReplayableRecording::read(
-        flui_testing::recording::RecordingReader::new(&bytes[..]).expect("header"),
+        flui_testing::recording::RecordingReader::try_new(&bytes[..]).expect("header"),
     )
     .expect("a whole recording");
     assert_eq!(recording.rows().len(), script.len());

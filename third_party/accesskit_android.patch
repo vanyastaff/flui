@@ -31,3 +31,24 @@ index aa74b7877..3602e8111 100644
      /// Create an `AccessibilityNodeInfo` for the AccessKit node
      /// corresponding to the given virtual view ID. Returns null if
      /// there is no such node.
+diff --git a/src/node.rs b/src/node.rs
+index 5297a52c8..333372007 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -318,6 +318,16 @@ pub(crate) fn populate_node_info(
+             )
+             .unwrap();
+         }
++        if let Some(author_id) = self.0.author_id() {
++            let author_id = env.new_string(author_id).unwrap();
++            env.call_method(
++                node_info,
++                "setViewIdResourceName",
++                "(Ljava/lang/String;)V",
++                &[(&author_id).into()],
++            )
++            .unwrap();
++        }
+ 
+         if let Some(text) = self.text() {
+             let text = env.new_string(text).unwrap();

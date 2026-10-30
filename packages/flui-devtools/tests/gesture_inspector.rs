@@ -259,7 +259,7 @@ fn winner_type(contest: &ContestReport) -> Option<&'static str> {
 fn a_recording_replays_to_the_model_the_live_run_built() {
     let mut live = host();
     let inspector = GestureInspector::attach(live.arena()).expect("observer registration");
-    let writer = RecordingWriter::new(Vec::new(), &live.recording_header(Privacy::Redact))
+    let writer = RecordingWriter::try_new(Vec::new(), &live.recording_header(Privacy::Redact))
         .expect("the header writes");
     let recording = record(live.input_taps(), writer).expect("first tap registration");
     session(&mut live);
@@ -280,8 +280,9 @@ fn a_recording_replays_to_the_model_the_live_run_built() {
         "the long press won at its deadline"
     );
 
-    let recording = ReplayableRecording::read(RecordingReader::new(&bytes[..]).expect("header"))
-        .expect("a whole recording");
+    let recording =
+        ReplayableRecording::read(RecordingReader::try_new(&bytes[..]).expect("header"))
+            .expect("a whole recording");
     let mut fresh = host();
     let replayed = GestureInspector::attach(fresh.arena()).expect("observer registration");
     let _ = fresh.replay(&recording);

@@ -230,7 +230,7 @@ impl AssetRegistry {
         self.load_decoded(source, move |url| async move {
             let loader = network_loader
                 .get_or_try_init(|| async {
-                    crate::NetworkLoader::new().map_err(|error| AssetError::LoadFailed {
+                    crate::NetworkLoader::try_new().map_err(|error| AssetError::LoadFailed {
                         path: url.to_string(),
                         reason: format!("HTTP client initialization failed: {error}"),
                     })

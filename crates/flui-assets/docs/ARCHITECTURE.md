@@ -366,7 +366,7 @@ hot-reload = ["notify"]
 
 - Default network image loads share a lazily initialized HTTP client per registry,
   constructed on the loading runtime. Initialization returns a typed error and
-  remains retryable. `NetworkLoader::new` is fallible rather than hiding external
+  remains retryable. `NetworkLoader::try_new` is fallible rather than hiding external
   initialization failures in a panic; `Default` is not a construction contract.
   Hosts supply a client builder that creates a fresh configured pool, preserving
   its HTTP policy through capacity transitions without changing runtime selection.
@@ -526,7 +526,7 @@ and `loads_past_admission_are_bounded_by_count` (one decode thread: while a
 decode holds its slot only three more requests go out, and the next starts
 when it returns).
 
-`NetworkLoader::new` gives up on a connection after `CONNECT_TIMEOUT`, on a
+`NetworkLoader::try_new` gives up on a connection after `CONNECT_TIMEOUT`, on a
 silent response after `READ_TIMEOUT`, and on any request after
 `REQUEST_TIMEOUT` (a server that drips one byte per read timeout would
 otherwise hold a load slot forever); `load_url` refuses a body over

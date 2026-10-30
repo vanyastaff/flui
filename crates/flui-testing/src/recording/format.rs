@@ -259,7 +259,7 @@ struct HeaderDto {
 const REDACTED_NAME: &str = super::dto::REDACTED;
 
 impl HeaderDto {
-    fn new(header: &RecordingHeader, privacy: Privacy) -> Result<Self, DtoError> {
+    fn try_new(header: &RecordingHeader, privacy: Privacy) -> Result<Self, DtoError> {
         let keep = privacy == Privacy::KeepText;
         let text = |text: &Option<String>| {
             text.as_ref().map(|text| {
@@ -382,9 +382,9 @@ impl<W: Write> RecordingWriter<W> {
     ///
     /// [`RecordingError::Io`] or [`RecordingError::Json`] when the header
     /// cannot be written.
-    pub fn new(mut out: W, header: &RecordingHeader) -> Result<Self, RecordingError> {
+    pub fn try_new(mut out: W, header: &RecordingHeader) -> Result<Self, RecordingError> {
         let privacy = header.privacy;
-        let dto = HeaderDto::new(header, privacy).map_err(|error| dto_error(1, error))?;
+        let dto = HeaderDto::try_new(header, privacy).map_err(|error| dto_error(1, error))?;
         write_line(&mut out, 1, &dto)?;
         Ok(Self {
             out,
@@ -472,7 +472,7 @@ impl<R: BufRead> RecordingReader<R> {
     /// [`RecordingError::Version`] for another major version, and
     /// [`RecordingError::Io`] or [`RecordingError::Json`] for a missing or
     /// malformed header.
-    pub fn new(mut input: R) -> Result<Self, RecordingError> {
+    pub fn try_new(mut input: R) -> Result<Self, RecordingError> {
         let mut buffer = String::new();
         input.read_line(&mut buffer)?;
         let value: serde_json::Value = serde_json::from_str(&buffer)

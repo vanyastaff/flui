@@ -306,7 +306,7 @@ impl std::fmt::Debug for MemoryReceivers {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            application_identity: AppIdentity::new("FLUI App")
+            application_identity: AppIdentity::try_new("FLUI App")
                 .expect("BUG: the default application identity is valid"),
             diagnostics_profile: DiagnosticsProfile::default(),
             motion_override: MotionOverride::FollowSystem,

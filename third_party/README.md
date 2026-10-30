@@ -64,16 +64,20 @@ commit.
 
 **Why:** TalkBack's cursor reaches FLUI's `Semantics::on_assistive_focus_within` (gap 36 in
 `docs/gaps.md`), as VoiceOver's does through `accesskit_ios` above. The published adapter records
-where the cursor is (`ACTION_ACCESSIBILITY_FOCUS`) in a private field and tells nobody.
+where the cursor is (`ACTION_ACCESSIBILITY_FOCUS`) in a private field and tells nobody. The
+semantics identifier (ADR-0240) reaches Android's `viewIdResourceName`, as it reaches
+`AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through AccessKit's
+`author_id`; the published adapter sets no resource name.
 
 **Change** (`accesskit_android.patch`, the whole difference from the published crate):
 
 - `Adapter::accessibility_focus`, a read accessor: the node and tree that hold accessibility
   focus, or `None` when no node of the tree holds it. FLUI reads it after each action, hover
   event and update it hands the adapter, and tells the application when the answer changed.
+- `populate_node_info` sets `viewIdResourceName` from the node's `author_id`, when it has one.
 
-**Drop it when** an `accesskit_android` release reports the cursor to the application. The text
-for that upstream pull request is below; it has not been sent.
+**Drop it when** an `accesskit_android` release reports the cursor to the application and sets
+the resource name. The text for those upstream pull requests is below; neither has been sent.
 
 ### Upstream pull request (not sent)
 
@@ -93,3 +97,17 @@ for that upstream pull request is below; it has not been sent.
 > This is not the tree's focus, which the application owns. The iOS adapter keeps the same state
 > (`Context::platform_focus`); a shared trait in `accesskit` is a follow-up if the two shapes
 > should converge.
+
+### Upstream pull request (not sent)
+
+> **android: publish `author_id` as the view's resource name**
+>
+> UI tests on Android find a view by its resource name (`viewIdResourceName`: UI Automator's
+> `By.res`, Espresso's `withResourceName`, Appium's `id` locator). The other AccessKit adapters
+> already map `author_id` to their platform's identifier (`AutomationId`, `AXIdentifier`,
+> `accessibilityIdentifier`, AT-SPI's accessible id), but the Android adapter sets none, so a
+> test cannot locate a node by the identifier the application gave it.
+>
+> This sets `AccessibilityNodeInfo.setViewIdResourceName` from `Node::author_id` in
+> `populate_node_info`, when the node has one. Screen readers do not announce the resource name,
+> so nothing a user hears changes.

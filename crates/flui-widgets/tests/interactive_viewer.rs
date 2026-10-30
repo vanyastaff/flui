@@ -17,7 +17,7 @@ use flui_platform::pointer::{
 };
 use flui_platform::{EventTime, keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
-use flui_testing::{MouseScript, PointerScript, TouchScript};
+use flui_testing::{MouseScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
 use flui_widgets::{
@@ -763,11 +763,20 @@ fn double_tap(device: Device, point: Offset<f64>) -> PointerScript {
     .expect("whole contacts")
 }
 
-/// A double tap zooms in one step about the tapped point, through the
-/// alternatives' first command; at the maximum it zooms back out to the
-/// minimum.
+/// A double tap, and a trackpad's smart zoom, zoom in one step about the
+/// tapped point, through the alternatives' first command; at the maximum
+/// they zoom back out to the minimum.
 pub(crate) fn viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum() {
-    for device in DEVICES {
+    let tapped = at(90.0, 120.0);
+    let smart_zoom = TrackpadScript::new("smart zoom", tapped)
+        .smart_zoom()
+        .build()
+        .expect("one discrete event");
+    let gestures = DEVICES
+        .into_iter()
+        .map(|device| (format!("{device:?}"), double_tap(device, tapped)))
+        .chain([("trackpad smart zoom".to_owned(), smart_zoom)]);
+    for (gesture, script) in gestures {
         let transform = TransformationController::new();
         let mut laid = lay_out(
             InteractiveViewer::new(viewer_alternatives())
@@ -777,22 +786,21 @@ pub(crate) fn viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum(
                 .child(SizedBox::new(300.0, 300.0)),
             tight(300.0, 300.0),
         );
-        let tapped = at(90.0, 120.0);
-        laid.replay(&double_tap(device, tapped));
+        laid.replay(&script);
         laid.pump_for(Duration::from_millis(400));
-        assert_eq!(scale_of(&transform), 2.0, "{device:?}: one step in");
-        assert_planar(&transform, &format!("{device:?} double tap"));
+        assert_eq!(scale_of(&transform), 2.0, "{gesture}: one step in");
+        assert_planar(&transform, &gesture);
         let scene = transform.to_scene(tapped);
         assert!(
             (scene.dx - tapped.dx).abs() < 1e-9 && (scene.dy - tapped.dy).abs() < 1e-9,
-            "{device:?}: the tapped point stays under the tap: {scene:?}"
+            "{gesture}: the tapped point stays under the tap: {scene:?}"
         );
-        laid.replay(&double_tap(device, tapped));
+        laid.replay(&script);
         laid.pump_for(Duration::from_millis(400));
         assert_eq!(
             scale_of(&transform),
             1.0,
-            "{device:?}: back out at the maximum"
+            "{gesture}: back out at the maximum"
         );
     }
 }

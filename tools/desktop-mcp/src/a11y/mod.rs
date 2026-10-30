@@ -626,7 +626,7 @@ impl AccessibilityBackend for Unsupported {
 pub fn backend() -> Box<dyn AccessibilityBackend> {
     #[cfg(target_os = "windows")]
     {
-        match uia::Uia::new() {
+        match uia::Uia::try_new() {
             Ok(b) => Box::new(b),
             Err(e) => Box::new(Unsupported::new(format!(
                 "UI Automation failed to initialize: {e}"

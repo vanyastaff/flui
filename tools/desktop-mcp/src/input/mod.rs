@@ -3,7 +3,7 @@
 //! On Windows and macOS the device is enigo's. Linux is not built in yet:
 //! enigo and xcap link libxkbcommon and PipeWire there, which the workspace's
 //! Linux builds do not install, so on Linux [`Input`] is uninhabited and
-//! [`Input::new`] reports why.
+//! [`Input::try_new`] reports why.
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod device;
@@ -633,7 +633,7 @@ pub enum Input {}
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 impl Input {
     /// Why there is no input device.
-    pub fn new() -> Result<Self, String> {
+    pub fn try_new() -> Result<Self, String> {
         Err(format!(
             "input is not supported on {} yet (Windows and macOS only)",
             std::env::consts::OS
