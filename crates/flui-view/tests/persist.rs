@@ -15,9 +15,10 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
 use flui_testing::widgets::{LaidOut, lay_out, lay_out_with_storage, tight};
 use flui_view::persist::{
-    CodecStep, DecodeError, Document, PersistError, Persisted, ReadOnlyReason, SaveStatus,
+    CodecStep, DecodeError, Document, PersistError, Persisted, ReadOnlyReason, Revision, SaveStatus,
 };
 use flui_view::prelude::*;
+use flui_view::{CloseGuard, CloseReason};
 
 /// The document under test: one line of text.
 #[derive(Debug, PartialEq)]
@@ -34,12 +35,15 @@ impl Document for Note {
     }
 
     fn encode(&self) -> Vec<u8> {
+        if self.0 == "panic" {
+            fail_the_codec();
+        }
         self.0.clone().into_bytes()
     }
 
     fn decode(version: u32, body: &[u8]) -> Result<Self, DecodeError> {
         if body == b"panic" {
-            fail_the_decode();
+            fail_the_codec();
         }
         let text = String::from_utf8(body.to_vec())
             .map_err(|error| DecodeError::new(error.to_string()))?;
@@ -68,8 +72,8 @@ impl Drop for Note {
     }
 }
 
-/// A decode that panics, out of line so the codec's return type stays its own.
-fn fail_the_decode() {
+/// A codec that panics, out of line so the codec's return types stay its own.
+fn fail_the_codec() {
     panic!("the codec broke");
 }
 // The document, its codec and its status stay on the owner thread.
@@ -102,14 +106,21 @@ impl View for Leaf {
     }
 }
 
+/// What `init_state` hands the test: the document and the presentation's close
+/// guard.
+struct Opened {
+    document: Persisted<Note>,
+    guard: Option<CloseGuard>,
+}
+
 /// Opens the document in `init_state` and hands it to the test.
 #[derive(Clone, StatefulView)]
 struct NoteOpener {
-    opened: Rc<RefCell<Option<Persisted<Note>>>>,
+    opened: Rc<RefCell<Option<Opened>>>,
 }
 
 struct NoteOpenerState {
-    opened: Rc<RefCell<Option<Persisted<Note>>>>,
+    opened: Rc<RefCell<Option<Opened>>>,
 }
 
 impl StatefulView for NoteOpener {
@@ -124,7 +135,10 @@ impl StatefulView for NoteOpener {
 
 impl ViewState<NoteOpener> for NoteOpenerState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        *self.opened.borrow_mut() = Some(Persisted::open(cx));
+        *self.opened.borrow_mut() = Some(Opened {
+            document: Persisted::open(cx),
+            guard: cx.close_guard(),
+        });
     }
 
     fn build(&self, _view: &NoteOpener, _cx: &dyn BuildContext) -> impl IntoView {
@@ -135,6 +149,12 @@ impl ViewState<NoteOpener> for NoteOpenerState {
 /// Mount a tree over `storage` and take the document it opened: a fresh
 /// mount over the same storage is a restart.
 fn mount(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>) {
+    let (laid, document, _guard) = mount_guarded(storage);
+    (laid, document)
+}
+
+/// [`mount`], with the presentation's close guard the document holds.
+fn mount_guarded(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, CloseGuard) {
     let opened = Rc::new(RefCell::new(None));
     let laid = lay_out_with_storage(
         NoteOpener {
@@ -143,11 +163,15 @@ fn mount(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>) {
         tight(10.0, 10.0),
         storage.clone(),
     );
-    let document = opened
+    let Opened { document, guard } = opened
         .borrow_mut()
         .take()
         .expect("init_state opened the document");
-    (laid, document)
+    (
+        laid,
+        document,
+        guard.expect("a hosted presentation has a close guard"),
+    )
 }
 
 /// Poll `future` between frames until it completes.
@@ -171,7 +195,6 @@ fn stored(revision: u64, body: &str) -> Vec<u8> {
 /// A document loads from storage, a set value is written under the next
 /// revision, and a restart over the same storage loads that value.
 #[test]
-#[ignore = "contract: Persisted loads and writes through the ui_runtime's storage"]
 fn a_loaded_document_round_trips_through_memory_storage() {
     let storage = MemoryStorage::new();
     storage.put(&Note::NAME, stored(7, "first"));
@@ -208,7 +231,6 @@ fn a_loaded_document_round_trips_through_memory_storage() {
 /// "Saved" is reported only once the storage commits the write: until then
 /// the status is `Saving` and nothing is committed.
 #[test]
-#[ignore = "contract: Persisted reports a write as saved only after the storage commits it"]
 fn saved_status_appears_only_after_commit() {
     let storage = MemoryStorage::new();
     storage.put(&Note::NAME, stored(1, "first"));
@@ -248,7 +270,8 @@ fn mount_without_storage() -> (LaidOut, Persisted<Note>) {
     let document = opened
         .borrow_mut()
         .take()
-        .expect("init_state opened the document");
+        .expect("init_state opened the document")
+        .document;
     (laid, document)
 }
 
@@ -476,4 +499,257 @@ fn a_value_a_load_replaces_is_dropped_after_the_document_settles() {
         ],
         "each replaced value saw the status its load left"
     );
+}
+
+/// Mount over `storage` holding `body` at revision 1 and load it.
+fn loaded(storage: &MemoryStorage, body: &str) -> (LaidOut, Persisted<Note>, CloseGuard) {
+    storage.put(&Note::NAME, stored(1, body));
+    let (mut laid, notes, guard) = mount_guarded(storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
+    (laid, notes, guard)
+}
+
+/// A set has nothing to write over unless a load produced a writable value:
+/// before a load, after a failed one, over a newer format, at the last
+/// revision and without storage it is refused, the status stays and nothing
+/// is written (R24, R31).
+#[test]
+fn no_write_without_a_writable_base() {
+    let cases: [(&str, Option<Vec<u8>>, bool, PersistError); 5] = [
+        (
+            "not loaded",
+            Some(stored(1, "kept")),
+            false,
+            PersistError::NotLoaded,
+        ),
+        (
+            "a failed load",
+            Some(b"kept".to_vec()),
+            true,
+            PersistError::NotLoaded,
+        ),
+        (
+            "a newer format",
+            Some(b"flui-document notes 3 1\nkept".to_vec()),
+            true,
+            PersistError::NewerVersion {
+                found: 3,
+                supported: 2,
+            },
+        ),
+        (
+            "the last revision",
+            Some(stored(u64::MAX, "kept")),
+            true,
+            PersistError::Exhausted,
+        ),
+        (
+            "nothing stored, not loaded",
+            None,
+            false,
+            PersistError::NotLoaded,
+        ),
+    ];
+    for (case, bytes, load, expected) in cases {
+        let storage = MemoryStorage::new();
+        if let Some(bytes) = &bytes {
+            storage.put(&Note::NAME, bytes.clone());
+        }
+        let (mut laid, notes) = mount(&storage);
+        if load {
+            drop(drive(&mut laid, notes.load()));
+        }
+        let before = notes.status();
+        assert_eq!(notes.set(Note("new".into())), Err(expected), "{case}");
+        laid.pump();
+        assert_eq!(notes.status(), before, "{case}: the status stays");
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            bytes,
+            "{case}: nothing written"
+        );
+        assert_eq!(notes.committed(), None, "{case}");
+    }
+
+    let (mut laid, notes) = mount_without_storage();
+    match notes.set(Note("new".into())) {
+        Err(PersistError::Storage(StorageError::Unsupported(refusal))) => {
+            assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
+        }
+        other => panic!("without storage a set is refused, got {other:?}"),
+    }
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Unavailable);
+}
+
+/// A full disk fails the write: the status says so, the stored file keeps
+/// the old value, and a load is refused over the unsaved edit (R30); a retry
+/// then writes the latest value (R20).
+#[test]
+fn retry_after_failure_publishes_the_latest_value() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Full);
+    let second = notes.set(Note("second".into()));
+    laid.pump();
+    let full = PersistError::Storage(StorageError::Full);
+    assert_eq!(notes.status(), SaveStatus::Failed(full.clone()));
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+    assert_eq!(notes.committed(), None);
+    assert_eq!(
+        drive(&mut laid, notes.load()).map(|_| ()),
+        Err(PersistError::UnsavedChanges),
+        "a load would drop the edit"
+    );
+
+    let third = notes.set(Note("third".into()));
+    storage.fail_next(StorageError::Full);
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(full),
+        "the later edit failed too"
+    );
+    assert_eq!(second.map(Revision::get), Ok(2));
+    assert_eq!(third.as_ref().map(|revision| revision.get()), Ok(3));
+
+    notes.retry();
+    assert_eq!(notes.status(), SaveStatus::Saving);
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(3, "third")));
+    assert_eq!(notes.committed(), third.ok());
+}
+
+/// Edits made while a write is in flight replace each other: only the
+/// latest is written after it, under its own revision (R28).
+#[test]
+fn a_later_edit_supersedes_an_unstarted_one() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    let barrier = storage.hold_commits();
+    let revisions: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .map(|text| notes.set(Note(text.into())))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("a loaded document takes every value");
+    assert_eq!(
+        revisions
+            .iter()
+            .map(|revision| revision.get())
+            .collect::<Vec<_>>(),
+        [2, 3, 4]
+    );
+    laid.pump();
+    barrier.commit();
+    for _ in 0..3 {
+        laid.pump();
+    }
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(4, "c")));
+    assert_eq!(notes.committed(), revisions.last().copied());
+    assert_eq!(notes.status(), SaveStatus::Clean);
+}
+
+/// An encode panic publishes nothing and fails that save; the next set
+/// works. A failure is kept until a write succeeds, the first of several
+/// winning (R29).
+#[test]
+fn codec_panic_is_contained_first_failure_kept() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    let panicked = PersistError::Panicked {
+        during: CodecStep::Encode,
+        message: "the codec broke".into(),
+    };
+    assert_eq!(notes.set(Note("panic".into())), Err(panicked.clone()));
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Failed(panicked.clone()));
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+
+    let second = notes.set(Note("second".into()));
+    assert_eq!(second.map(Revision::get), Ok(2));
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "a write succeeded");
+
+    storage.fail_next(StorageError::Full);
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    let full = PersistError::Storage(StorageError::Full);
+    assert_eq!(notes.status(), SaveStatus::Failed(full.clone()));
+    assert_eq!(notes.set(Note("panic".into())), Err(panicked));
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(full),
+        "the first failure is kept"
+    );
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+}
+
+/// A write in flight holds the user's and the program's close and lets a
+/// session end through; the held close is carried out once the write is
+/// stored (R12, R14). A failed write requires a decision, even of a session
+/// end.
+#[test]
+fn a_saving_document_holds_user_close_only() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, guard) = loaded(&storage, "first");
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Saving);
+    assert!(!laid.request_close(CloseReason::User), "the user waits");
+    assert!(!laid.request_close(CloseReason::Program));
+    assert_eq!(
+        guard.pending().map(|pending| pending.reason()),
+        Some(CloseReason::User)
+    );
+
+    barrier.commit();
+    // No status read in between: the document follows the write by itself.
+    laid.pump();
+    laid.pump();
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+    assert!(
+        guard.pending().is_none(),
+        "the held closes were carried out"
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    let _barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert!(
+        laid.request_close(CloseReason::SessionEnd),
+        "a session end is not held by a write in flight"
+    );
+
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Full);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert!(matches!(notes.status(), SaveStatus::Failed(_)));
+    assert!(
+        !laid.request_close(CloseReason::SessionEnd),
+        "a failed write requires a decision"
+    );
+}
+
+/// Two UI runtimes keep their own documents of one name, each in its own
+/// storage (R36).
+#[test]
+fn two_runtimes_keep_independent_documents() {
+    let (left, right) = (MemoryStorage::new(), MemoryStorage::new());
+    let (mut left_laid, left_notes, _left_guard) = loaded(&left, "left");
+    let (mut right_laid, right_notes, _right_guard) = loaded(&right, "right");
+    assert!(left_notes.set(Note("left 2".into())).is_ok());
+    left_laid.pump();
+    right_laid.pump();
+    assert_eq!(left.contents(&Note::NAME), Some(stored(2, "left 2")));
+    assert_eq!(right.contents(&Note::NAME), Some(stored(1, "right")));
+    assert_eq!(right_notes.status(), SaveStatus::Clean);
+    assert_eq!(right_notes.committed(), None);
 }
