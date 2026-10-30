@@ -528,15 +528,12 @@ impl CloseRequestRouter {
         })
     }
 
-    #[cfg(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    ))]
     /// Every registered presentation, in registration order.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
         self.entries
             .lock()
