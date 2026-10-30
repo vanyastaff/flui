@@ -170,10 +170,13 @@ impl fmt::Debug for PrimaryClaims {
 /// platform answers, at once or later; it never calls back into the handle,
 /// and asks a [`SelectionText`] only with no borrow of its own held.
 ///
-/// What a claim or a release lets go of, the backend returns rather than
-/// drops: the handle drops it once the new claim has a guard, and keeps it
-/// instead while unwinding (ADR-0127), so a panicking capture never leaves
-/// a claim without its guard nor turns into a second panic.
+/// What a claim or a release lets go of, the backend returns and never drops
+/// itself. Dropping a [`SelectionText`] runs user code (its captures'
+/// `Drop`), so the handle does it once no borrow of the backend is held and
+/// the new claim has its guard: a panicking capture then unwinds through
+/// that guard, which withdraws the claim, instead of leaving it current with
+/// no owner. While unwinding, the handle keeps what it was given rather than
+/// dropping it into a second panic (ADR-0127).
 pub trait PrimarySelectionBackend: 'static {
     /// Offer `text` as the primary selection, replacing any claim before:
     /// the claim's number, and what the replaced claim offered.
