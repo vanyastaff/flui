@@ -603,6 +603,8 @@ impl Selections {
         // A chunk past what the read has left reads as empty with bytes after
         // it, which is not the end of the transfer.
         if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
+            // The owner's transfer goes on: its chunks land where no read looks.
+            self.retire_destination();
             self.answer(None);
         } else if reply.value.is_empty() {
             let form = reading.form;
