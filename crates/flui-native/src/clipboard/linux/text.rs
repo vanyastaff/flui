@@ -138,8 +138,8 @@ mod tests {
     fn text_round_trips_through_each_form() {
         for form in TextForm::OFFERED {
             assert_eq!(
-                form.decode(form.encode("caf\u{e9}")),
-                "caf\u{e9}",
+                form.decode(form.encode("\u{e9}t\u{e9}")),
+                "\u{e9}t\u{e9}",
                 "{form:?}"
             );
             assert_eq!(TextForm::named(form.name()), Some(form), "{form:?}");
