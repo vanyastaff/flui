@@ -24,8 +24,13 @@ impl<Id: PartialEq> UnplacedKeys<Id> {
     const MAX_HELD: usize = 16;
 
     /// `event` of the host's key `id`, its key the key-down's when it has no
-    /// code.
-    pub(crate) fn settle(&mut self, id: Id, mut event: KeyEvent) -> KeyEvent {
+    /// code. `None` is a key the host has no name for either (a synthetic
+    /// event's zero key code): it passes through, since keys sharing no name
+    /// cannot be told apart.
+    pub(crate) fn settle(&mut self, id: Option<Id>, mut event: KeyEvent) -> KeyEvent {
+        let Some(id) = id else {
+            return event;
+        };
         if event.code != Code::Unidentified || event.release() == KeyRelease::Never {
             return event;
         }
@@ -62,7 +67,7 @@ mod tests {
     #[test]
     fn a_code_less_key_is_released_as_it_was_pressed() {
         // (case, events in as (id, state, repeat, key, code), keys out)
-        type Step = (u32, KeyState, KeyRepeat, &'static str, Code);
+        type Step = (Option<u32>, KeyState, KeyRepeat, &'static str, Code);
         type Row = (&'static str, &'static [Step], &'static [&'static str]);
         use Code::{KeyA, Unidentified};
         use KeyRepeat::{AutoRepeat, First};
@@ -71,38 +76,51 @@ mod tests {
             (
                 "shift pressed while held",
                 &[
-                    (7, Down, First, "x", Unidentified),
-                    (7, Down, AutoRepeat, "X", Unidentified),
-                    (7, Up, First, "X", Unidentified),
+                    (Some(7), Down, First, "x", Unidentified),
+                    (Some(7), Down, AutoRepeat, "X", Unidentified),
+                    (Some(7), Up, First, "X", Unidentified),
                 ],
                 &["x", "x", "x"],
             ),
             (
                 "a key with a code passes through",
-                &[(7, Down, First, "a", KeyA), (7, Up, First, "A", KeyA)],
+                &[
+                    (Some(7), Down, First, "a", KeyA),
+                    (Some(7), Up, First, "A", KeyA),
+                ],
                 &["a", "A"],
             ),
             (
                 "two keys apart",
                 &[
-                    (7, Down, First, "x", Unidentified),
-                    (8, Down, First, "y", Unidentified),
-                    (7, Up, First, "X", Unidentified),
-                    (8, Up, First, "Y", Unidentified),
+                    (Some(7), Down, First, "x", Unidentified),
+                    (Some(8), Down, First, "y", Unidentified),
+                    (Some(7), Up, First, "X", Unidentified),
+                    (Some(8), Up, First, "Y", Unidentified),
                 ],
                 &["x", "y", "x", "y"],
             ),
             (
                 "a release with no press passes through",
-                &[(7, Up, First, "X", Unidentified)],
+                &[(Some(7), Up, First, "X", Unidentified)],
                 &["X"],
+            ),
+            (
+                "keys the host has no name for pass through",
+                &[
+                    (None, Down, First, "a", Unidentified),
+                    (None, Down, First, "b", Unidentified),
+                    (None, Up, First, "a", Unidentified),
+                    (None, Up, First, "b", Unidentified),
+                ],
+                &["a", "b", "a", "b"],
             ),
             (
                 "a press again takes its new key",
                 &[
-                    (7, Down, First, "x", Unidentified),
-                    (7, Down, First, "X", Unidentified),
-                    (7, Up, First, "x", Unidentified),
+                    (Some(7), Down, First, "x", Unidentified),
+                    (Some(7), Down, First, "X", Unidentified),
+                    (Some(7), Up, First, "x", Unidentified),
                 ],
                 &["x", "X", "X"],
             ),
@@ -126,8 +144,8 @@ mod tests {
     fn a_key_no_release_follows_is_not_held() {
         let mut unplaced = UnplacedKeys::default();
         let stray = event(KeyState::Down, "é", Code::Unidentified).with_release(KeyRelease::Never);
-        let _ = unplaced.settle(1_u32, stray);
-        let up = unplaced.settle(1, event(KeyState::Up, "E", Code::Unidentified));
+        let _ = unplaced.settle(Some(1_u32), stray);
+        let up = unplaced.settle(Some(1), event(KeyState::Up, "E", Code::Unidentified));
         assert_eq!(up.key, Key::character("E"), "nothing was held for it");
     }
 
@@ -135,11 +153,11 @@ mod tests {
     fn the_oldest_held_key_is_let_go_past_the_bound() {
         let mut unplaced = UnplacedKeys::default();
         for id in 0..=16_u32 {
-            let _ = unplaced.settle(id, event(KeyState::Down, "x", Code::Unidentified));
+            let _ = unplaced.settle(Some(id), event(KeyState::Down, "x", Code::Unidentified));
         }
-        let first = unplaced.settle(0, event(KeyState::Up, "X", Code::Unidentified));
+        let first = unplaced.settle(Some(0), event(KeyState::Up, "X", Code::Unidentified));
         assert_eq!(first.key, Key::character("X"), "the oldest was let go");
-        let last = unplaced.settle(16, event(KeyState::Up, "X", Code::Unidentified));
+        let last = unplaced.settle(Some(16), event(KeyState::Up, "X", Code::Unidentified));
         assert_eq!(last.key, Key::character("x"));
     }
 }

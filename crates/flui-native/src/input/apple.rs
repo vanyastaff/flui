@@ -1095,7 +1095,9 @@ pub(crate) mod macos {
                             KeyRepeat::First
                         },
                     );
-                    return vec![PlatformInput::Keyboard(self.unplaced.settle(key_code, key))];
+                    return vec![PlatformInput::Keyboard(
+                        self.unplaced.settle(Some(key_code), key),
+                    )];
                 }
                 if event_type == NSEventType::FlagsChanged {
                     let key_code = event.keyCode();

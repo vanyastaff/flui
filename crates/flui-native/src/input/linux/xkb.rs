@@ -1065,7 +1065,7 @@ mod keyboard {
                 } else {
                     KeyRepeat::First
                 });
-            Some(self.unplaced.settle(keycode, event))
+            Some(self.unplaced.settle(Some(keycode), event))
         }
 
         /// The keyboard leaves its window: the compose sequence in progress

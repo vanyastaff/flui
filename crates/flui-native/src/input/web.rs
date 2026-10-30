@@ -593,9 +593,12 @@ pub(crate) mod events {
                 return;
             }
             let ke: &web_sys::KeyboardEvent = event.unchecked_ref();
+            // Read before the held keys are borrowed: a DOM getter may
+            // dispatch. A zero key code (a synthetic event's) names no key.
+            let key_code = Some(ke.key_code()).filter(|code| *code != 0);
             let input = match convert_keyboard_event(ke, state, self.composing.get()) {
                 PlatformInput::Keyboard(key) => {
-                    PlatformInput::Keyboard(self.unplaced.borrow_mut().settle(ke.key_code(), key))
+                    PlatformInput::Keyboard(self.unplaced.borrow_mut().settle(key_code, key))
                 }
                 other => other,
             };

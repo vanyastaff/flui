@@ -909,11 +909,12 @@ impl InputWindow {
         input: flui_platform::PlatformInput,
     ) -> flui_platform::PlatformInput {
         match input {
+            // Scan code 0 (input injected by virtual key alone) names no key.
             flui_platform::PlatformInput::Keyboard(event) => {
                 flui_platform::PlatformInput::Keyboard(
                     self.unplaced_keys
                         .borrow_mut()
-                        .settle((scan_code, extended), event),
+                        .settle((scan_code != 0).then_some((scan_code, extended)), event),
                 )
             }
             other => other,

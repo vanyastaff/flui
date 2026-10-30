@@ -875,7 +875,13 @@ impl LoopInput for WinitInput {
         event: winit::event::KeyEvent,
         modifiers: winit::keyboard::ModifiersState,
     ) -> Option<PlatformInput> {
-        let id = event.physical_key;
+        // `NativeKeyCode::Unidentified` names no key.
+        let id = match event.physical_key {
+            winit::keyboard::PhysicalKey::Unidentified(
+                winit::keyboard::NativeKeyCode::Unidentified,
+            ) => None,
+            key => Some(key),
+        };
         Some(match keyboard_event(event, modifiers) {
             PlatformInput::Keyboard(key) => PlatformInput::Keyboard(self.unplaced.settle(id, key)),
             other => other,
