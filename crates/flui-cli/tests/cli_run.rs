@@ -241,7 +241,8 @@ fn json_mode_streams_the_app_lifecycle_as_ndjson() {
 
 /// A worker hot-reload project builds and starts its host under the
 /// application's floors, so a `[platforms]` table FLUI cannot honour stops
-/// `flui run` before anything is built (ADR-0244 §10).
+/// `flui run` before anything is built, wherever in the project it runs
+/// (ADR-0244 §10).
 #[test]
 fn a_worker_project_refuses_a_floor_flui_cannot_honour() {
     let tmp = TempDir::new().expect("fixture");
@@ -268,22 +269,35 @@ fn a_worker_project_refuses_a_floor_flui_cannot_honour() {
          [platforms.ios]\nmin = \"12.0\"\n",
     )
     .expect("application config");
-    let output = cargo_bin_cmd!("flui")
-        .current_dir(root)
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("CARGO_TARGET_DIR", root.join("target"))
-        .args(["run", "--device", "desktop"])
-        .timeout(std::time::Duration::from_secs(60))
-        .output()
-        .expect("CLI");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success()
-            && stderr
-                .contains("[platforms.ios] min = \"12.0\" is below FLUI's floor for ios, 13.0"),
-        "status {:?}: {stderr}",
-        output.status
-    );
+    // From the workspace root with hot reload, and from the host package
+    // below `flui.toml` without it: both paths find the same floors.
+    let mut failures = Vec::new();
+    for (dir, extra) in [
+        (root.to_path_buf(), None),
+        (root.join("host"), Some("--no-hot-reload")),
+    ] {
+        let output = cargo_bin_cmd!("flui")
+            .current_dir(&dir)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .args(["run", "--device", "desktop"])
+            .args(extra)
+            .timeout(std::time::Duration::from_secs(60))
+            .output()
+            .expect("CLI");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.success()
+            || !stderr
+                .contains("[platforms.ios] min = \"12.0\" is below FLUI's floor for ios, 13.0")
+        {
+            failures.push(format!(
+                "{} {extra:?}: {:?}: {stderr}",
+                dir.display(),
+                output.status
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
     assert!(
         !root.join("target").exists(),
         "nothing is built before the refusal"

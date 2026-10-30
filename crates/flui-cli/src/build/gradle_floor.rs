@@ -16,10 +16,10 @@ const PROPERTY: &str = "flui.minSdk";
 /// `api` itself.
 pub(crate) fn state_min_sdk(android_dir: &Path, api: u32) -> BuildResult<()> {
     let script = android_dir.join("app").join("build.gradle.kts");
-    let refused = std::fs::read_to_string(&script)
-        .ok()
-        .and_then(|text| stated_min_sdk(&text))
-        .and_then(|stated| match stated {
+    let text = std::fs::read_to_string(&script).unwrap_or_default();
+    let refused = min_sdk_assignments(&text)
+        .into_iter()
+        .find_map(|stated| match stated {
             MinSdk::Property => None,
             MinSdk::Literal(literal) if literal == api => None,
             MinSdk::Literal(literal) => Some(literal.to_string()),
@@ -89,33 +89,37 @@ enum MinSdk {
     Unverified(String),
 }
 
-/// The first `minSdk = …` assignment in a Gradle build script, a trailing
-/// `//` comment dropped; `None` when the script has none.
-fn stated_min_sdk(script: &str) -> Option<MinSdk> {
-    script.lines().find_map(|line| {
-        let (key, value) = line.split_once('=')?;
-        if key.trim() != "minSdk" {
-            return None;
-        }
-        let value = value
-            .split_once("//")
-            .map_or(value, |(code, _)| code)
-            .trim();
-        Some(if let Ok(literal) = value.parse() {
-            MinSdk::Literal(literal)
-        } else if value.replace(' ', "")
-            == format!("providers.gradleProperty(\"{PROPERTY}\").get().toInt()")
-        {
-            MinSdk::Property
-        } else {
-            MinSdk::Unverified(value.to_owned())
+/// Every `minSdk = …` assignment in a Gradle build script, in order, a
+/// trailing `//` comment dropped: a later one overrides an earlier one, so
+/// each must state the floor.
+fn min_sdk_assignments(script: &str) -> Vec<MinSdk> {
+    script
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != "minSdk" {
+                return None;
+            }
+            let value = value
+                .split_once("//")
+                .map_or(value, |(code, _)| code)
+                .trim();
+            Some(if let Ok(literal) = value.parse() {
+                MinSdk::Literal(literal)
+            } else if value.replace(' ', "")
+                == format!("providers.gradleProperty(\"{PROPERTY}\").get().toInt()")
+            {
+                MinSdk::Property
+            } else {
+                MinSdk::Unverified(value.to_owned())
+            })
         })
-    })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MinSdk, restate, stated_min_sdk};
+    use super::{MinSdk, min_sdk_assignments, restate};
 
     /// `flui.minSdk` is replaced or appended, other lines kept; a `minSdk`
     /// assignment reads as a literal (its comment dropped), the property, or
@@ -141,24 +145,29 @@ mod tests {
             }
         }
         for (script, expected) in [
-            ("        minSdk = 21\n", Some(MinSdk::Literal(21))),
+            ("        minSdk = 21\n", vec![MinSdk::Literal(21)]),
             (
                 "        minSdk = 23 // minimum supported API\n",
-                Some(MinSdk::Literal(23)),
+                vec![MinSdk::Literal(23)],
             ),
             (
                 "        minSdk = providers.gradleProperty(\"flui.minSdk\").get().toInt()\n",
-                Some(MinSdk::Property),
+                vec![MinSdk::Property],
             ),
             (
                 "        minSdk = libs.versions.minSdk.get().toInt()\n",
-                Some(MinSdk::Unverified(
+                vec![MinSdk::Unverified(
                     "libs.versions.minSdk.get().toInt()".to_owned(),
-                )),
+                )],
             ),
-            ("        targetSdk = 35\n", None),
+            (
+                "        minSdk = providers.gradleProperty(\"flui.minSdk\").get().toInt()\n\
+                 \x20       minSdk = 23\n",
+                vec![MinSdk::Property, MinSdk::Literal(23)],
+            ),
+            ("        targetSdk = 35\n", vec![]),
         ] {
-            let found = stated_min_sdk(script);
+            let found = min_sdk_assignments(script);
             if found != expected {
                 failures.push(format!("{script:?}: {found:?}"));
             }

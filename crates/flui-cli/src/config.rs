@@ -89,18 +89,23 @@ impl FluiConfig {
     }
 }
 
-/// The floors a build in `root` uses: those of its `flui.toml`, or FLUI's
-/// alone when it has none (an in-repo example, a plain cargo package).
+/// The floors a build in `root` uses: those of the nearest `flui.toml` at or
+/// above `root`, the one `flui run` finds the project by (a worker project's
+/// host package sits below it), or FLUI's alone when there is none (an
+/// in-repo example, a plain cargo package).
 ///
 /// # Errors
 /// When `flui.toml` cannot be read or parsed, or a `[platforms]` table is
 /// refused ([`FluiConfig::floors`]).
 pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
-    let manifest = root.join("flui.toml");
-    if !manifest.is_file() {
-        return Ok(AppFloors::default());
+    match root
+        .ancestors()
+        .map(|dir| dir.join("flui.toml"))
+        .find(|manifest| manifest.is_file())
+    {
+        Some(manifest) => FluiConfig::load_from(&manifest)?.floors(),
+        None => Ok(AppFloors::default()),
     }
-    FluiConfig::load_from(&manifest)?.floors()
 }
 
 /// Host/worker hot reload layout.
