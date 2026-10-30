@@ -1674,6 +1674,13 @@ impl ViewState<EditableText> for EditableTextState {
         //    selection they leave.
         let listener = self.controller_listener();
         self.controller_listener_id = Some(self.controller.borrow().add_listener(listener));
+        // A selection the controller already held is claimed now: no change
+        // will report it.
+        claim_primary(
+            &self.primary,
+            &Rc::downgrade(&self.controller),
+            &self.obscure,
+        );
 
         // 4. Forward FocusManager focus-change events into the rebuild notifier
         //    so the caret appears / disappears immediately when this field

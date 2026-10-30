@@ -338,8 +338,11 @@ impl SelectionModel {
     }
 
     /// The text the area holds selected now; `None` when it covers none.
+    /// The stored ends are snapped against the texts as they are now, as a
+    /// paint does: a text rebuilt since may no longer have a boundary there.
     fn selected_text(&self) -> Option<String> {
         let selection = self.selection.borrow().clone()?;
+        let selection = self.registry.snap(&selection)?;
         let covered = self.covered(&selection)?;
         Some(self.joined(&covered).text)
     }

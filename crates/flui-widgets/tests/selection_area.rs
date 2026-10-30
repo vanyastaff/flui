@@ -1076,3 +1076,28 @@ pub(crate) fn selection_area_offers_its_selection_as_the_primary_selection() {
     select(at(second[0], 2), at(second[0], 2));
     assert!(!primary.is_claimed(), "a collapsed selection lets go");
 }
+
+/// A paragraph rebuilt with other text keeps the selection's stored ends,
+/// which may now split a character: the primary selection answers with the
+/// ends snapped against the text as it is, as the highlight paints it.
+pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
+    let mut laid = mounted(SelectionArea::new(Column::new((Text::new("Alpha"),))));
+    let first = runs_of(&paragraph(consumer(&laid).state(), "Alpha"));
+    let primary = laid.primary_selection();
+    laid.invoke_semantics_action(selection_request(
+        first[0],
+        at(first[0], 0),
+        at(first[0], 4),
+    ))
+    .expect("the selection is accepted");
+    laid.tick();
+    assert_eq!(primary.text().as_deref(), Some("Alph"));
+
+    laid.pump_widget(SelectionArea::new(Column::new((Text::new("東京"),))));
+    laid.tick();
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("東"),
+        "byte 4 splits 京, so the end moves down to the boundary before it"
+    );
+}

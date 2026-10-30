@@ -107,8 +107,12 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
             return ActionOutcome::NotPerformed;
         }
         // Settles at a later owner turn, never inside `read_text`; the backend
-        // the provider supplied is user code, so it runs under `calls`.
-        calls.run(|| clipboard.read_text().on_complete(self.paste_answer(None)));
+        // the provider supplied is user code, so it runs under `calls`. The
+        // answer takes the controller before the backend runs: a backend that
+        // swaps the controller invalidates the paste rather than redirecting
+        // it.
+        let answer = self.paste_answer(None);
+        calls.run(move || clipboard.read_text().on_complete(answer));
         calls.resume();
         ActionOutcome::Performed
     }
@@ -123,9 +127,12 @@ impl ClipboardTextAction {
         if !self.admits_paste() {
             return;
         }
-        calls.run(|| {
+        // The answer takes the controller before the backend runs, as the
+        // paste chord's does.
+        let answer = self.paste_answer(Some(at));
+        calls.run(move || {
             if let Some(read) = self.primary.read_text() {
-                read.on_complete(self.paste_answer(Some(at)));
+                read.on_complete(answer);
             }
         });
     }
@@ -157,11 +164,11 @@ impl ClipboardTextAction {
             if line.is_empty() {
                 return;
             }
-            edits.around(|| {
-                if let Some(at) = at {
-                    controller.set_caret_byte_offset(at);
-                }
-                controller.insert_str(&line);
+            // The caret move and the insertion are one edit, so a listener
+            // that panics at its notification cannot lose the paste.
+            edits.around(|| match at {
+                Some(at) => controller.insert_str_at(at, &line),
+                None => controller.insert_str(&line),
             });
         }
     }

@@ -343,3 +343,41 @@ pub(crate) fn a_middle_press_pastes_the_primary_selection_where_it_lands() {
     harness.dispatch_pointer_move(40.0, 5.0);
     assert!(!controller.has_selection(), "the press started no drag");
 }
+
+/// A field mounted over a controller that already holds a selection offers
+/// it at once: no change will report it.
+pub(crate) fn a_selection_held_before_mounting_is_offered() {
+    let controller = TextEditingController::with_text("hello world");
+    controller.set_selection(0, 5);
+    let (harness, _node) = mount_field(&controller, |field| field);
+    let primary = harness.primary_selection();
+    assert!(primary.is_claimed(), "the existing selection is claimed");
+    assert_eq!(primary.text().as_deref(), Some("hello"));
+}
+
+/// A controller listener that panics when the middle-press paste lands
+/// cannot lose the paste: the caret move and the insertion are one edit.
+pub(crate) fn a_panicking_listener_keeps_the_middle_press_paste() {
+    use flui_interaction::events::PointerButton;
+    use std::cell::Cell;
+
+    let controller = TextEditingController::with_text("abc");
+    let focus_node = FocusNode::with_debug_label("middle-pressed field");
+    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
+        controller.clone(),
+        Rc::clone(&focus_node),
+    ));
+    harness.primary_selection().select("XY");
+    harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
+
+    let armed = Rc::new(Cell::new(true));
+    let _listener = controller.listenable().add_listener(Rc::new({
+        let armed = Rc::clone(&armed);
+        move || {
+            assert!(!armed.replace(false), "listener failed");
+        }
+    }));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
+    assert!(!armed.get(), "the paste notified the listener");
+    assert_eq!(controller.text(), "XYabc", "the paste landed whole");
+}
