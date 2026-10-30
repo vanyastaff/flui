@@ -36,7 +36,7 @@ enum NodeOrigin {
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole};
 ///
@@ -44,7 +44,7 @@ enum NodeOrigin {
 /// node.config_mut().set_label("Submit");
 /// node.config_mut().set_role(SemanticsRole::Button);
 /// node.config_mut()
-///     .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+///     .add_action(SemanticsAction::Click, Rc::new(|_| {}));
 ///
 /// assert!(node.has_been_annotated());
 /// assert!(node.config().has_action(SemanticsAction::Click));
