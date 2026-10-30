@@ -446,6 +446,28 @@ pub(crate) mod motion {
         source & SOURCE_MOUSE == SOURCE_MOUSE && matches!(tool, Tool::Finger)
     }
 
+    /// `InputDevice.SOURCE_TOUCHSCREEN`.
+    pub const SOURCE_TOUCHSCREEN: u32 = 0x0000_1002;
+
+    /// The `MotionEvent` action code a touch-exploration hover hands the
+    /// accessibility adapter (`ACTION_HOVER_ENTER`, `_MOVE` or `_EXIT`). A
+    /// finger hovers over the touchscreen only while TalkBack's explore by
+    /// touch turns touches into hovers (ADR-0255 decision 3); any other event,
+    /// a pen's or a mouse's hover included, is `None` and reaches the window
+    /// as input.
+    #[must_use]
+    pub const fn touch_exploration(action: MotionAction, tool: Tool, source: u32) -> Option<i32> {
+        if source & SOURCE_TOUCHSCREEN != SOURCE_TOUCHSCREEN || !matches!(tool, Tool::Finger) {
+            return None;
+        }
+        match action {
+            MotionAction::HoverEnter => Some(9),
+            MotionAction::HoverMove => Some(7),
+            MotionAction::HoverExit => Some(10),
+            _ => None,
+        }
+    }
+
     impl AndroidMotion {
         /// A decoder over `contacts`.
         #[must_use]
@@ -1432,6 +1454,19 @@ impl ActivityInput for AndroidInput {
             motion_event!(tracing::Level::DEBUG);
         }
         events
+    }
+
+    fn touch_exploration(
+        &self,
+        event: &android_activity::input::MotionEvent<'_>,
+    ) -> Option<(i32, f32, f32)> {
+        let pointer = event.pointer_at_index(0);
+        let code = motion::touch_exploration(
+            action(event.action()),
+            tool(pointer.tool_type()),
+            u32::from(event.source()),
+        )?;
+        Some((code, pointer.x(), pointer.y()))
     }
 
     fn key(

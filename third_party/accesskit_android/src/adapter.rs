@@ -313,6 +313,28 @@ impl Adapter {
         (!events.is_empty()).then_some(QueuedEvents(events))
     }
 
+    /// The node that holds accessibility focus, the cursor of an
+    /// assistive technology such as TalkBack, with the tree it is in.
+    /// Returns `None` when no node holds it, including when the node
+    /// that held it is no longer in the tree.
+    ///
+    /// This is not the tree's focus, which the application owns. The
+    /// assistive technology moves this one through
+    /// `ACTION_ACCESSIBILITY_FOCUS` and `ACTION_CLEAR_ACCESSIBILITY_FOCUS`.
+    pub fn accessibility_focus(&self) -> Option<(NodeId, TreeId)> {
+        let virtual_view_id = self.accessibility_focus?;
+        let State::Active(tree) = &self.state else {
+            return None;
+        };
+        let tree_state = tree.state();
+        let target = if virtual_view_id == HOST_VIEW_ID {
+            tree_state.root_id()
+        } else {
+            self.node_id_map.get_accesskit_id(virtual_view_id)?
+        };
+        tree_state.locate_node(target)
+    }
+
     /// Create an `AccessibilityNodeInfo` for the AccessKit node
     /// corresponding to the given virtual view ID. Returns null if
     /// there is no such node.

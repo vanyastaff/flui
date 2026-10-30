@@ -164,8 +164,11 @@ impl BridgeShared {
     /// moved (clone-and-release, as above). A node of a tree other than the
     /// one FLUI publishes, `TreeId::ROOT`, is off FLUI's tree.
     #[cfg_attr(
-        not(any(target_os = "ios", test)),
-        expect(dead_code, reason = "only iOS's adapter reports the cursor")
+        not(any(target_os = "ios", target_os = "android", test)),
+        expect(
+            dead_code,
+            reason = "only the iOS and Android adapters report the cursor"
+        )
     )]
     pub(crate) fn notify_assistive_focus(&self, node: Option<(NodeId, TreeId)>) {
         let node = node.and_then(|(node, tree)| (tree == TreeId::ROOT).then_some(node));
@@ -207,8 +210,11 @@ impl BridgeShared {
 
     /// Register the assistive-technology cursor listener, replacing any previous one.
     #[cfg_attr(
-        not(any(target_os = "ios", test)),
-        expect(dead_code, reason = "only iOS's adapter reports the cursor")
+        not(any(target_os = "ios", target_os = "android", test)),
+        expect(
+            dead_code,
+            reason = "only the iOS and Android adapters report the cursor"
+        )
     )]
     pub(crate) fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
         let _prev = self.assistive_focus_listener.lock().replace(listener);

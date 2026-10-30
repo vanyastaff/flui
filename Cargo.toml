@@ -687,6 +687,8 @@ unused_async_trait_impl = "allow"
 # have yet (gap 36); the change is listed in third_party/README.md, and the
 # entry goes once the hook is upstream.
 accesskit_ios = { path = "third_party/accesskit_ios" }
+# TalkBack's cursor, likewise: the published adapter keeps it private.
+accesskit_android = { path = "third_party/accesskit_android" }
 
 [package]
 publish = ["crates-io"]

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use crate::input::android::motion::{
     AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, EXIT_GRACE, Motion, MotionAction,
-    PointerFacts, SOURCE_MOUSE, Tool, axis, button, native_buttons, native_device, native_sensors,
-    needs_device_query, pen_angles, pointer_kind,
+    PointerFacts, SOURCE_MOUSE, SOURCE_TOUCHSCREEN, Tool, axis, button, native_buttons,
+    native_device, native_sensors, needs_device_query, pen_angles, pointer_kind, touch_exploration,
 };
 use crate::input::assembly::{NativeCancel, PenAngles};
 use flui_platform::EventTime;
@@ -21,8 +21,6 @@ use web_time::Instant;
 
 /// `InputDevice.SOURCE_STYLUS`.
 const SOURCE_STYLUS: u32 = 0x0000_4002;
-/// `InputDevice.SOURCE_TOUCHSCREEN`.
-const SOURCE_TOUCHSCREEN: u32 = 0x0000_1002;
 /// Physical pixels per logical pixel.
 const SCALE: f64 = 2.0;
 
@@ -601,6 +599,51 @@ fn the_fingers_of_one_move_are_one_frame() {
     ));
 }
 
+/// A finger hovering over the touchscreen is TalkBack exploring by touch and
+/// goes to the accessibility adapter with its action code; a pen's or a
+/// mouse's hover, and a finger's touch, stay input.
+fn only_a_finger_hovering_the_touchscreen_explores_by_touch() {
+    let cases = [
+        (
+            MotionAction::HoverEnter,
+            Tool::Finger,
+            SOURCE_TOUCHSCREEN,
+            Some(9),
+        ),
+        (
+            MotionAction::HoverMove,
+            Tool::Finger,
+            SOURCE_TOUCHSCREEN,
+            Some(7),
+        ),
+        (
+            MotionAction::HoverExit,
+            Tool::Finger,
+            SOURCE_TOUCHSCREEN,
+            Some(10),
+        ),
+        (MotionAction::Down, Tool::Finger, SOURCE_TOUCHSCREEN, None),
+        (MotionAction::Move, Tool::Finger, SOURCE_TOUCHSCREEN, None),
+        (MotionAction::HoverMove, Tool::Stylus, SOURCE_STYLUS, None),
+        (
+            MotionAction::HoverMove,
+            Tool::Stylus,
+            SOURCE_TOUCHSCREEN,
+            None,
+        ),
+        (MotionAction::HoverMove, Tool::Mouse, SOURCE_MOUSE, None),
+        // A touchpad's finger in pointer mode hovers from the mouse source.
+        (MotionAction::HoverMove, Tool::Finger, SOURCE_MOUSE, None),
+    ];
+    for (action, tool, source, expected) in cases {
+        assert_eq!(
+            touch_exploration(action, tool, source),
+            expected,
+            "{action:?} by {tool:?} from {source:#x}"
+        );
+    }
+}
+
 #[test]
 fn android_motion_translation() {
     crate::table_test::run_table(
@@ -649,6 +692,10 @@ fn android_motion_translation() {
             (
                 "the_fingers_of_one_move_are_one_frame",
                 the_fingers_of_one_move_are_one_frame,
+            ),
+            (
+                "only_a_finger_hovering_the_touchscreen_explores_by_touch",
+                only_a_finger_hovering_the_touchscreen_explores_by_touch,
             ),
         ],
     );

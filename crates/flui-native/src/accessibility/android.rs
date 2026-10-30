@@ -22,6 +22,17 @@
 //! re-enters the provider. A call that finds the lock held anyway answers as
 //! a view with no tree.
 //!
+//! # TalkBack's cursor and explore by touch
+//!
+//! The adapter keeps where TalkBack's cursor is; FLUI reads it through the
+//! accessor its vendored copy adds (`third_party/accesskit_android`) after
+//! each action, hover and update it hands the adapter, and tells the
+//! composition root when it moved, after the events are raised. Explore by
+//! touch reaches the adapter from the native input queue, which NativeActivity
+//! takes before any view: the loop offers a finger hovering over the
+//! touchscreen to [`JavaView::explore_by_touch`], and the hover is applied on
+//! the main thread like a publish (ADR-0255 decision 3).
+//!
 //! # Two jni releases
 //!
 //! `accesskit_android` is built on jni 0.21 beside FLUI's 0.22, until it
@@ -36,7 +47,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use accesskit::TreeUpdate;
+use accesskit::{NodeId, TreeId, TreeUpdate};
 use accesskit_android::jni::JNIEnv;
 use accesskit_android::jni::objects::JObject;
 use accesskit_android::jni::sys as jni021;
@@ -47,7 +58,8 @@ use crate::accessibility::bridge::{Action, Activation, BridgeShared};
 use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
+    PlatformAccessibility,
 };
 
 /// The adapter with the handlers it calls.
@@ -55,11 +67,14 @@ struct Provided {
     adapter: Adapter,
     activation: Activation,
     action: Action,
+    /// Where TalkBack's cursor was when the composition root was last told.
+    told: Option<(NodeId, TreeId)>,
 }
 
 /// The part of the bridge the Java main thread holds: the adapter, which the
 /// view's node provider and the owner's posted updates reach.
 struct NodeProvider {
+    shared: Arc<BridgeShared>,
     provided: Mutex<Provided>,
 }
 
@@ -77,13 +92,48 @@ impl NodeProvider {
         Some(f(&mut provided))
     }
 
-    /// Apply `update` and raise its events, outside the adapter's lock.
-    /// Java main thread.
-    fn apply(&self, env: &mut JNIEnv<'_>, host: &JObject<'_>, update: TreeUpdate) {
-        let events = self
-            .with(|provided| provided.adapter.update_if_active(move || update))
-            .flatten();
+    /// Run `f`, which may move TalkBack's cursor, with the adapter; then,
+    /// outside its lock, raise the events `f` made and tell the composition
+    /// root where the cursor went, in that order. Java main thread.
+    ///
+    /// The cursor counts as told only once the listener returned: after a
+    /// panic in it, the next call that finds the cursor where it is now tells
+    /// the root again.
+    fn moving<R>(
+        &self,
+        env: &mut JNIEnv<'_>,
+        host: &JObject<'_>,
+        f: impl FnOnce(&mut Provided) -> (Option<QueuedEvents>, R),
+    ) -> Option<R> {
+        let (events, answer, moved) = self.with(|provided| {
+            let (events, answer) = f(provided);
+            let now = provided.adapter.accessibility_focus();
+            (events, answer, (now != provided.told).then_some(now))
+        })?;
         raise(env, host, events);
+        if let Some(node) = moved {
+            self.shared.notify_assistive_focus(node);
+            self.with(|provided| provided.told = node);
+        }
+        Some(answer)
+    }
+
+    /// Apply `update`: an update that removes the node under the cursor moves
+    /// the cursor off the tree. Java main thread.
+    fn apply(&self, env: &mut JNIEnv<'_>, host: &JObject<'_>, update: TreeUpdate) {
+        self.moving(env, host, |provided| {
+            (provided.adapter.update_if_active(move || update), ())
+        });
+    }
+
+    /// Hand the adapter one touch-exploration hover. Java main thread.
+    fn hover(&self, env: &mut JNIEnv<'_>, host: &JObject<'_>, action: i32, x: f32, y: f32) {
+        self.moving(env, host, |provided| {
+            let events = provided
+                .adapter
+                .on_hover_event(&mut provided.activation, action, x, y);
+            (events, ())
+        });
     }
 }
 
@@ -202,22 +252,40 @@ impl ViewAccessibility for NodeProvider {
                 let Some(action) = PlatformAction::from_java(env, action, &arguments) else {
                     return false;
                 };
-                let events = self
-                    .with(|provided| {
-                        provided.adapter.perform_action(
-                            &mut provided.action,
-                            virtual_view_id,
-                            &action,
-                        )
-                    })
-                    .flatten();
                 // Taken means answered `true`, with the events raised.
-                let taken = events.is_some();
-                raise(env, host, events);
-                taken
+                self.moving(env, host, |provided| {
+                    let events = provided.adapter.perform_action(
+                        &mut provided.action,
+                        virtual_view_id,
+                        &action,
+                    );
+                    let taken = events.is_some();
+                    (events, taken)
+                })
+                .unwrap_or(false)
             })
             .unwrap_or(false)
         }
+    }
+
+    /// TalkBack explores by touch only once it asked for the tree; the hover
+    /// is applied on the Java main thread, after what was posted before it.
+    fn explore(self: Arc<Self>, view: &Arc<JavaView>, action: i32, x: f32, y: f32) -> bool {
+        if !self.shared.is_active() {
+            return false;
+        }
+        view.post(move |env, view| {
+            // SAFETY: the posted call runs attached on the Java main thread
+            // with this environment, and `view` is the installed view's
+            // reference, held for the call, which the closure ends with.
+            unsafe {
+                with_env(env.get_raw(), view.as_raw(), |env, host| {
+                    self.hover(env, host, action, x, y);
+                });
+            }
+            Ok(())
+        });
+        true
     }
 }
 
@@ -236,10 +304,12 @@ impl crate::host::Accessibility<ActivityRef> for AndroidAccessibility {
     fn for_window(window: &ActivityRef) -> Arc<dyn crate::host::WindowAccessibility> {
         let shared = Arc::new(BridgeShared::new());
         let provider = Arc::new(NodeProvider {
+            shared: Arc::clone(&shared),
             provided: Mutex::new(Provided {
                 adapter: Adapter::default(),
                 activation: Activation(Arc::clone(&shared)),
                 action: Action(Arc::clone(&shared)),
+                told: None,
             }),
         });
         window
@@ -307,13 +377,19 @@ impl PlatformAccessibility for AndroidAccessibility {
     fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
         Self::ASSISTIVE_FOCUS
     }
+
+    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
+        self.shared.set_assistive_focus_listener(listener);
+    }
 }
 
 impl AndroidAccessibility {
-    /// The adapter follows TalkBack's cursor but does not say where it is
+    /// TalkBack's cursor comes through the vendored adapter's accessor, read
+    /// after each action, hover and update; a run on a device has not checked
+    /// it yet
     /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
-        flui_semantics::AssistiveFocusSupport::Unreported;
+        flui_semantics::AssistiveFocusSupport::Reported;
 }
 
 impl std::fmt::Debug for AndroidAccessibility {
