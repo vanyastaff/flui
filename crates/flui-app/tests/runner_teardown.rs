@@ -176,6 +176,10 @@ fn runner_teardown() {
                 "teardown_panic_flushes_the_registry_before_resuming",
                 teardown_panic_flushes_the_registry_before_resuming,
             ),
+            (
+                "closing_during_composition_commits_before_detached",
+                closing_during_composition_commits_before_detached,
+            ),
         ],
     );
 }
@@ -305,4 +309,125 @@ fn runner_exit_codes() {
         took < Duration::from_secs(18),
         "the watchdog ended the exit after {took:?}"
     );
+}
+
+/// What a [`ComposingField`] saw of its store when its window's Detached
+/// arrived: whether it was still composing, and its text.
+type SeenAtDetached = Rc<RefCell<Option<(bool, String)>>>;
+
+/// A field that attaches `store` to its window's text input and records the
+/// store as its window's Detached observer sees it.
+#[derive(Clone)]
+struct ComposingField {
+    store: Rc<flui_interaction::testing::InMemoryTextStore>,
+    seen: SeenAtDetached,
+}
+
+struct ComposingFieldState {
+    field: ComposingField,
+    token: Option<flui_interaction::ClientToken>,
+    subscription: Option<flui_view::LifecycleSubscription>,
+}
+
+impl flui_view::StatefulView for ComposingField {
+    type State = ComposingFieldState;
+
+    fn create_state(&self) -> Self::State {
+        ComposingFieldState {
+            field: self.clone(),
+            token: None,
+            subscription: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<ComposingField> for ComposingFieldState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let store: Rc<dyn flui_platform::TextStore> = self.field.store.clone();
+        self.token = Some(
+            ctx.text_input_handle()
+                .expect("the window takes text input")
+                .attach(flui_interaction::TextInputClient::new(store))
+                .expect("the field attaches"),
+        );
+        let (store, seen) = (Rc::clone(&self.field.store), Rc::clone(&self.field.seen));
+        let (_, subscription) = ctx
+            .lifecycle_handle()
+            .expect("a bound lifecycle")
+            .subscribe(move |state| {
+                if state == flui_view::AppLifecycleState::Detached {
+                    seen.replace(Some((store.composition().is_some(), store.text())));
+                }
+            })
+            .expect("the lifecycle is open");
+        self.subscription = Some(subscription);
+    }
+
+    fn build(
+        &self,
+        _view: &ComposingField,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for ComposingField {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// R21: a window closed while its focused field composes commits the
+/// composition, keeping its text, before the window's Detached observers
+/// run, so what they save holds the preedit as text (ADR-0142 item 4).
+///
+/// Red-check: drop the commit from the owner's close — the observer sees the
+/// store still composing.
+pub(crate) fn closing_during_composition_commits_before_detached() {
+    use flui_platform::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    };
+
+    let store = flui_interaction::testing::InMemoryTextStore::new("ab");
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let field = ComposingField {
+        store: Rc::clone(&store),
+        seen: Rc::clone(&seen),
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::RecordingTextStoreHost::new()
+            as Rc<dyn flui_platform::text_store::TextStoreHost>
+    });
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    let composing = Composition {
+        range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        hides_caret: false,
+    };
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("東京").expect("in range");
+                session.set_composition(Some(composing)).expect("in range");
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(store.composition(), Some(composing), "precondition");
+
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 1);
+    assert!(windows[0].simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+
+    assert_eq!(
+        *seen.borrow(),
+        Some((false, "ab東京".to_owned())),
+        "Detached saw the composition committed, its text kept"
+    );
+    run.join().expect("the close returns Ok");
 }

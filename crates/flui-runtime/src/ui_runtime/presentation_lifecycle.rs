@@ -690,6 +690,22 @@ impl UiRuntime {
                     );
                     continue;
                 }
+                // Every path to Detached (an accepted close, the window
+                // destroyed, the session's end) commits the focused field's
+                // composition first, keeping its text, so the observers and
+                // the save see the preedit as text (ADR-0142 item 4). The
+                // field's own unmount then finds nothing left to commit.
+                if step == AppLifecycleState::Detached {
+                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                        presentation.text_input().complete_composition();
+                    }))
+                    .err();
+                    self.record_lifecycle_failure(
+                        &mut first_panic,
+                        failure,
+                        "presentation composition commit",
+                    );
+                }
                 let failure = catch_unwind(AssertUnwindSafe(|| {
                     presentation.widgets().notify_committed_lifecycle(step);
                 }))
