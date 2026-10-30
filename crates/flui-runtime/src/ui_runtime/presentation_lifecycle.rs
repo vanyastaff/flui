@@ -237,27 +237,28 @@ impl UiRuntime {
 
     /// Settle every presentation's close guard on the owner's turn: wake the
     /// waiters each change resolved, one by one, and return the closes now
-    /// due, for the host to carry out without asking the application again.
+    /// due, for the host to carry out without asking the application again,
+    /// and the recorded closes the application declined to carry out.
     /// Nothing happens when no guard signalled since the last settle.
     ///
     /// A waiter whose wake panics is reported as a
     /// [`CallbackPanic`](crate::frame_failure::FrameFailureKind::CallbackPanic) of its
     /// presentation and loses neither the due closes nor the waiters after
     /// it.
-    pub fn settle_close_guards(&self) -> Vec<(PresentationId, flui_view::CloseReason)> {
+    pub fn settle_close_guards(&self) -> SettledCloses {
         if !self
             .close
             .settle_owed
             .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
-            return Vec::new();
+            return SettledCloses::default();
         }
         let settled: Vec<_> = self
             .presentations
             .iter()
             .map(|presentation| (presentation.id(), presentation.close_guard().settle()))
             .collect();
-        let mut due = Vec::new();
+        let mut closes = SettledCloses::default();
         for (id, settled) in settled {
             for waker in settled.wake {
                 if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
@@ -271,9 +272,12 @@ impl UiRuntime {
                     flui_foundation::panic::retain_opaque_payload(payload);
                 }
             }
-            due.extend(settled.close.map(|reason| (id, reason)));
+            closes.due.extend(settled.close.map(|reason| (id, reason)));
+            closes
+                .declined
+                .extend(settled.declined.into_iter().map(|reason| (id, reason)));
         }
-        due
+        closes
     }
 
     /// Attach the host's control of presentation `id`'s window: from now on its
@@ -1075,4 +1079,17 @@ mod tests {
             ],
         );
     }
+}
+
+/// What [`UiRuntime::settle_close_guards`] hands the host.
+#[derive(Debug, Default)]
+#[must_use = "a due close is carried out by the host"]
+#[non_exhaustive]
+pub struct SettledCloses {
+    /// The closes now due, each for its presentation and with the reason it
+    /// was recorded for.
+    pub due: Vec<(PresentationId, flui_view::CloseReason)>,
+    /// The recorded closes the application resolved by keeping the
+    /// presentation open (`PendingClose::stay_open`).
+    pub declined: Vec<(PresentationId, flui_view::CloseReason)>,
 }

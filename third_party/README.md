@@ -9,6 +9,10 @@ holds. To drop one: delete its directory and its `.patch` file, remove the `path
 dependency, bump the `version` to the upstream release that has the change, and run
 `cargo update -p <crate>`.
 
+Publishing blocks on these crates. `cargo publish` drops the `path` key and builds against the
+registry release, which lacks the change, so `flui-native` goes to crates.io only after upstream
+takes each change below or FLUI publishes the vendored crate under its own name.
+
 ## accesskit_ios 0.2.2
 
 **Source:** crates.io `accesskit_ios` 0.2.2, AccessKit commit
@@ -51,3 +55,59 @@ that upstream pull request is below; it has not been sent.
 > This is not the tree's focus, which the application owns. Android's adapter keeps the same
 > state (`ACTION_ACCESSIBILITY_FOCUS`); the trait could live in `accesskit` for both, which is a
 > follow-up if this shape is accepted.
+
+## accesskit_android 0.9.1
+
+**Source:** crates.io `accesskit_android` 0.9.1, AccessKit commit
+`f3026222559c7f5f46d8f25cb7404de68eb149f0` (`adapters/android`), with the licence files of that
+commit.
+
+**Why:** TalkBack's cursor reaches FLUI's `Semantics::on_assistive_focus_within` (gap 36 in
+`docs/gaps.md`), as VoiceOver's does through `accesskit_ios` above. The published adapter records
+where the cursor is (`ACTION_ACCESSIBILITY_FOCUS`) in a private field and tells nobody. The
+semantics identifier (ADR-0240) reaches Android's `viewIdResourceName`, as it reaches
+`AutomationId`, `AXIdentifier`, AT-SPI's id and iOS's `accessibilityIdentifier` through AccessKit's
+`author_id`; the published adapter sets no resource name.
+
+**Change** (`accesskit_android.patch`, the whole difference from the published crate):
+
+- `Adapter::accessibility_focus`, a read accessor: the node and tree that hold accessibility
+  focus, or `None` when no node of the tree holds it. FLUI reads it after each action, hover
+  event and update it hands the adapter, and tells the application when the answer changed.
+- `populate_node_info` sets `viewIdResourceName` from the node's `author_id`, when it has one.
+
+**Drop it when** an `accesskit_android` release reports the cursor to the application and sets
+the resource name. The text for those upstream pull requests is below; neither has been sent.
+
+### Upstream pull request (not sent)
+
+> **android: let the application read where TalkBack's cursor is**
+>
+> An application sometimes needs to know that TalkBack is reading part of its interface: a
+> carousel that advances on a timer has to stop while TalkBack is on it (WCAG 2.2.2). The adapter
+> already tracks the cursor (`Adapter::accessibility_focus`, the virtual view that
+> `ACTION_ACCESSIBILITY_FOCUS` moved to) but keeps it to itself.
+>
+> This adds `Adapter::accessibility_focus(&self) -> Option<(NodeId, TreeId)>`, the AccessKit node
+> under the cursor, or `None` when there is none or the node has left the tree. It is a read
+> only: the low-level adapter's caller already holds it around every call that can move the
+> cursor (`perform_action`, `on_hover_event`, `update_if_active`), so it can compare before and
+> after without a callback, and without running application code inside the adapter.
+>
+> This is not the tree's focus, which the application owns. The iOS adapter keeps the same state
+> (`Context::platform_focus`); a shared trait in `accesskit` is a follow-up if the two shapes
+> should converge.
+
+### Upstream pull request (not sent)
+
+> **android: publish `author_id` as the view's resource name**
+>
+> UI tests on Android find a view by its resource name (`viewIdResourceName`: UI Automator's
+> `By.res`, Espresso's `withResourceName`, Appium's `id` locator). The other AccessKit adapters
+> already map `author_id` to their platform's identifier (`AutomationId`, `AXIdentifier`,
+> `accessibilityIdentifier`, AT-SPI's accessible id), but the Android adapter sets none, so a
+> test cannot locate a node by the identifier the application gave it.
+>
+> This sets `AccessibilityNodeInfo.setViewIdResourceName` from `Node::author_id` in
+> `populate_node_info`, when the node has one. Screen readers do not announce the resource name,
+> so nothing a user hears changes.

@@ -41,8 +41,8 @@ pub(crate) mod windows;
 mod tests {
     use flui_semantics::AssistiveFocusSupport;
 
-    /// Which adapters report where the screen reader's cursor is. Only iOS's
-    /// does, through the vendored adapter's hook; elsewhere a scenario that
+    /// Which adapters report where the screen reader's cursor is. iOS's and
+    /// Android's do, through their vendored adapters; elsewhere a scenario that
     /// needs it fails as gap 36 (`docs/gaps.md`), and this table is where an
     /// adapter that starts to report it says so.
     #[test]
@@ -70,7 +70,7 @@ mod tests {
             (
                 "TalkBack",
                 super::android::AndroidAccessibility::ASSISTIVE_FOCUS,
-                AssistiveFocusSupport::Unreported,
+                AssistiveFocusSupport::Reported,
             ),
             #[cfg(target_os = "ios")]
             (

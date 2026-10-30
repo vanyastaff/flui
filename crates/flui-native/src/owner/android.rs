@@ -125,6 +125,15 @@ mod hooks {
             scale: f64,
         ) -> Vec<PlatformInput>;
 
+        /// Whether `event` is a hover of TalkBack's explore by touch: its
+        /// `MotionEvent` action code and position in pixels, which the loop
+        /// offers the window's accessibility bridge before it reads the event
+        /// as input.
+        fn touch_exploration(
+            &self,
+            event: &android_activity::input::MotionEvent<'_>,
+        ) -> Option<(i32, f32, f32)>;
+
         /// What `event` means; `composing` says whether the input method
         /// composes now, so a key it passed on is still its own.
         fn key(

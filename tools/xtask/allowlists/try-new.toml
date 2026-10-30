@@ -1,0 +1,349 @@
+# Every `new` in the workspace that returns `Result` or `Option`, written by
+# `cargo xtask try-new --seed`. Such a constructor is named `try_new` (AGENTS.md); the
+# list only shrinks: the scan fails on a fallible `new` it does not name and on an
+# entry whose `new` no longer fails.
+reason = "written before the rule had a gate; each entry is renamed to `try_new`"
+
+[[allow]]
+crate = "flui-animation"
+type = "AnimatedValue"
+
+[[allow]]
+crate = "flui-animation"
+type = "BouncingScrollSimulation"
+
+[[allow]]
+crate = "flui-animation"
+type = "BoundedFrictionSimulation"
+
+[[allow]]
+crate = "flui-animation"
+type = "FrictionSimulation"
+
+[[allow]]
+crate = "flui-animation"
+type = "PiecewiseLinear"
+
+[[allow]]
+crate = "flui-animation"
+type = "PlaybackRate"
+
+[[allow]]
+crate = "flui-animation"
+type = "SimulationBounds"
+
+[[allow]]
+crate = "flui-animation"
+type = "SpringCurve"
+
+[[allow]]
+crate = "flui-animation"
+type = "SpringDescription"
+
+[[allow]]
+crate = "flui-animation"
+type = "SpringRest"
+
+[[allow]]
+crate = "flui-animation"
+type = "SpringSimulation"
+
+[[allow]]
+crate = "flui-animation"
+type = "Tolerance"
+
+[[allow]]
+crate = "flui-animation"
+type = "ValueRange"
+
+[[allow]]
+crate = "flui-assets"
+type = "NetworkLoader"
+
+[[allow]]
+crate = "flui-cli"
+type = "SourceWatcher"
+
+[[allow]]
+crate = "flui-desktop-mcp"
+type = "Input"
+
+[[allow]]
+crate = "flui-desktop-mcp"
+type = "Uia"
+
+[[allow]]
+crate = "flui-engine"
+type = "GpuFrameProfiler"
+
+[[allow]]
+crate = "flui-engine"
+type = "ImageQuad"
+
+[[allow]]
+crate = "flui-engine"
+type = "TileAxis"
+
+[[allow]]
+crate = "flui-engine"
+type = "ValidatedAffine"
+
+[[allow]]
+crate = "flui-foundation"
+type = "DevicePixelRatio"
+
+[[allow]]
+crate = "flui-foundation"
+type = "TextSize"
+
+[[allow]]
+crate = "flui-foundation"
+type = "WindowMetrics"
+
+[[allow]]
+crate = "flui-interaction"
+type = "MultiTapCount"
+
+[[allow]]
+crate = "flui-interaction"
+type = "OneEuroTuning"
+
+[[allow]]
+crate = "flui-interaction"
+type = "PolynomialFit"
+
+[[allow]]
+crate = "flui-log"
+type = "AppIdentity"
+
+[[allow]]
+crate = "flui-log"
+type = "AppleBundleId"
+
+[[allow]]
+crate = "flui-native"
+type = "ArboardClipboard"
+
+[[allow]]
+crate = "flui-native"
+type = "Doorbell"
+
+[[allow]]
+crate = "flui-native"
+type = "GlassTint"
+
+[[allow]]
+crate = "flui-native"
+type = "Held"
+
+[[allow]]
+crate = "flui-native"
+type = "HostPlatform"
+
+[[allow]]
+crate = "flui-native"
+type = "IOSLoop"
+
+[[allow]]
+crate = "flui-native"
+type = "Keyboard"
+
+[[allow]]
+crate = "flui-native"
+type = "LoopWaker"
+
+[[allow]]
+crate = "flui-native"
+type = "MacOSLoop"
+
+[[allow]]
+crate = "flui-native"
+type = "MacOSWindow"
+
+[[allow]]
+crate = "flui-native"
+type = "Monitor"
+
+[[allow]]
+crate = "flui-native"
+type = "OwnerControl"
+
+[[allow]]
+crate = "flui-native"
+type = "OwnerWake"
+
+[[allow]]
+crate = "flui-native"
+type = "Pixels"
+
+[[allow]]
+crate = "flui-native"
+type = "PreferenceSource"
+
+[[allow]]
+crate = "flui-native"
+type = "Receiver"
+
+[[allow]]
+crate = "flui-native"
+type = "Trigger"
+
+[[allow]]
+crate = "flui-native"
+type = "WaylandLoop"
+
+[[allow]]
+crate = "flui-native"
+type = "WebLoop"
+
+[[allow]]
+crate = "flui-native"
+type = "WebPreferences"
+
+[[allow]]
+crate = "flui-native"
+type = "WebWindow"
+
+[[allow]]
+crate = "flui-native"
+type = "WindowsLoop"
+
+[[allow]]
+crate = "flui-native"
+type = "WindowsWindow"
+
+[[allow]]
+crate = "flui-native"
+type = "X11Loop"
+
+[[allow]]
+crate = "flui-objects"
+type = "AspectRatioFactor"
+
+[[allow]]
+crate = "flui-objects"
+type = "CarouselGeometry"
+
+[[allow]]
+crate = "flui-objects"
+type = "FractionFactor"
+
+[[allow]]
+crate = "flui-objects"
+type = "RenderSliverConstrainedCrossAxis"
+
+[[allow]]
+crate = "flui-objects"
+type = "Strategy"
+
+[[allow]]
+crate = "flui-painting"
+type = "Corner"
+
+[[allow]]
+crate = "flui-painting"
+type = "CornerRounding"
+
+[[allow]]
+crate = "flui-painting"
+type = "RoundedPolygon"
+
+[[allow]]
+crate = "flui-platform"
+type = "Distance"
+
+[[allow]]
+crate = "flui-platform"
+type = "FlingSpeeds"
+
+[[allow]]
+crate = "flui-platform"
+type = "Locale"
+
+[[allow]]
+crate = "flui-platform"
+type = "NativeMouseGeometry"
+
+[[allow]]
+crate = "flui-platform"
+type = "NativeTouchGeometry"
+
+[[allow]]
+crate = "flui-platform"
+type = "PointerFrame"
+
+[[allow]]
+crate = "flui-platform"
+type = "Utf16Range"
+
+[[allow]]
+crate = "flui-runtime"
+type = "UiRuntime"
+
+[[allow]]
+crate = "flui-scheduler"
+type = "OwnerFrame"
+
+[[allow]]
+crate = "flui-testing"
+type = "HeaderDto"
+
+[[allow]]
+crate = "flui-testing"
+type = "RecordingReader"
+
+[[allow]]
+crate = "flui-testing"
+type = "RecordingWriter"
+
+[[allow]]
+crate = "flui-widgets"
+type = "AnchorSnap"
+
+[[allow]]
+crate = "flui-widgets"
+type = "AnchoredDragController"
+
+[[allow]]
+crate = "flui-widgets"
+type = "ContextMenuArea"
+
+[[allow]]
+crate = "flui-widgets"
+type = "DismissThreshold"
+
+[[allow]]
+crate = "flui-widgets"
+type = "Draggable"
+
+[[allow]]
+crate = "flui-widgets"
+type = "DropTarget"
+
+[[allow]]
+crate = "flui-widgets"
+type = "GestureAlternatives"
+
+[[allow]]
+crate = "flui-widgets"
+type = "HeaderExtents"
+
+[[allow]]
+crate = "flui-widgets"
+type = "PropertyMotion"
+
+[[allow]]
+crate = "flui-widgets"
+type = "SliverConstrainedCrossAxis"
+
+[[allow]]
+crate = "flui-widgets"
+type = "SwipeActions"
+
+[[allow]]
+crate = "flui-widgets"
+type = "ViewportFraction"
+
+[[allow]]
+crate = "xtask"
+type = "ScratchDir"

@@ -31,13 +31,15 @@
 //! fixed by causality rather than by a choice made here — see
 //! [`CloseRequestRouter::consult`]'s own doc.
 //!
-//! # A veto is stateless, which is what makes it finite
+//! # A veto is recorded, never timed
 //!
-//! [`CloseResponse::KeepOpen`] is a complete answer to *this* request. The
-//! runtime records nothing, arms no timer, and owes nothing: the window
-//! stays open and fully interactive, its close affordance still works, and
-//! the next request is put to the handler afresh. There is therefore no
-//! deferral that can be forgotten and no bound that has to be enforced.
+//! [`CloseResponse::KeepOpen`] keeps the window open and records the close
+//! on the presentation's close guard, once per [`CloseReason`]: its widgets
+//! find it as a `PendingClose` and resolve it, by carrying it out or by
+//! staying open. The runtime arms no timer: the window stays open and fully
+//! interactive, its close affordance still works, and the next request is
+//! put to the handler afresh. A presentation without a guard records
+//! nothing, and its veto is a complete answer to that one request.
 //!
 //! A wall-clock deadline was considered and refused on merit rather than
 //! on cost. The canonical use of a close veto is unsaved work, where the
@@ -110,6 +112,7 @@ use parking_lot::Mutex;
 #[non_exhaustive]
 pub struct CloseRequest {
     address: PresentationAddress,
+    reason: CloseReason,
 }
 
 impl CloseRequest {
@@ -126,12 +129,11 @@ impl CloseRequest {
     }
 
     /// Why the close was requested: by the user, by the application's own
-    /// code quitting, or by the session ending.
-    ///
-    /// Not yet carried: every request reads as [`CloseReason::User`].
+    /// code quitting ([`AppHandle::request_quit`](crate::AppHandle::request_quit)),
+    /// or by the session ending.
     #[must_use]
     pub fn reason(&self) -> CloseReason {
-        CloseReason::User
+        self.reason
     }
 }
 
@@ -149,13 +151,19 @@ pub enum CloseResponse {
     /// Keep the window open. Issue #558 calls this outcome *Cancel*; the
     /// name here says what happens rather than what was refused.
     ///
-    /// This fully answers the request — the runtime keeps no pending
-    /// obligation, so nothing has to time out. An application that
-    /// answered this way in order to finish work calls
+    /// The close is recorded on the presentation's close guard as a
+    /// `PendingClose` for the request's reason, once per reason, where its
+    /// widgets find it (`CloseGuard::pending`) and resolve it: `discard_and_close`
+    /// carries the close out, `stay_open` withdraws it. Nothing times out:
+    /// the record waits for that decision. An application that answered
+    /// this way in order to finish work may instead call
     /// [`request_presentation_close`](crate::request_presentation_close)
-    /// when the work is done; one that answered because the user said
-    /// "don't quit" does nothing further, and the next close request is
-    /// put to the handler afresh.
+    /// when the work is done. The next close request is put to the handler
+    /// afresh.
+    ///
+    /// A quit ([`CloseReason::Program`]) this answer refuses is deferred
+    /// until the record is resolved; see
+    /// [`AppHandle::request_quit`](crate::AppHandle::request_quit).
     ///
     /// On winit the close resolved that way completes on the owner's next
     /// turn rather than inside the call — see
@@ -455,8 +463,10 @@ impl CloseRequestRouter {
     ///
     /// `reason` is why the close was asked for. The presentation's close
     /// guard is asked first, with it; a close the guard refuses is kept open
-    /// without asking the handler. Not yet carried to the handler:
-    /// [`CloseRequest::reason`] reads [`CloseReason::User`].
+    /// without asking the handler. Otherwise the handler reads it as
+    /// [`CloseRequest::reason`], and its [`CloseResponse::KeepOpen`] records
+    /// the close on the guard. A handler that panics keeps the window open
+    /// and records nothing: a panic is no answer to wait on.
     pub(crate) fn consult(
         &self,
         address: PresentationAddress,
@@ -494,16 +504,19 @@ impl CloseRequestRouter {
         // The guard comes first: a close its holds refuse is recorded there
         // and carried out once the last hold is released, without asking the
         // handler again.
-        if guard.is_some_and(|guard| guard.refuses(reason)) {
+        if guard.as_ref().is_some_and(|guard| guard.refuses(reason)) {
             return CloseResponse::KeepOpen;
         }
         let Some(handler) = handler else {
             return CloseResponse::Close;
         };
 
-        let request = CloseRequest { address };
+        let request = CloseRequest { address, reason };
         let answered =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)));
+        if let (Ok(CloseResponse::KeepOpen), Some(guard)) = (&answered, &guard) {
+            guard.record(reason);
+        }
         answered.unwrap_or_else(|payload| {
             tracing::error!(
                 ?address,
@@ -513,6 +526,42 @@ impl CloseRequestRouter {
             );
             CloseResponse::KeepOpen
         })
+    }
+
+    /// Every registered presentation, in registration order.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
+        self.entries
+            .lock()
+            .iter()
+            .map(|entry| entry.address)
+            .collect()
+    }
+
+    #[cfg(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    ))]
+    /// Whether the guard of the presentation at `address` has a close for
+    /// `reason` recorded and waiting. `false` for a presentation without a
+    /// guard and for one no longer registered.
+    pub(crate) fn is_recorded(&self, address: PresentationAddress, reason: CloseReason) -> bool {
+        let guard = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|entry| entry.address == address)
+                .and_then(|entry| entry.guard.clone())
+        };
+        guard.is_some_and(|guard| guard.is_recorded(reason))
     }
 
     /// Close the window at `address` programmatically, bypassing the
@@ -708,8 +757,6 @@ mod tests {
     /// The handler reads why the close was asked for: a close the
     /// application's own quit asks for reaches it as `Program`, not as the
     /// user's.
-    #[test]
-    #[ignore = "contract: a close request carries the reason it was asked for"]
     fn a_close_request_carries_its_reason() {
         let router = CloseRequestRouter::new();
         let a = address(1, 1);
@@ -759,6 +806,14 @@ mod tests {
                 (
                     "a_held_guard_keeps_the_close_before_the_handler_is_asked",
                     a_held_guard_keeps_the_close_before_the_handler_is_asked as fn(),
+                ),
+                (
+                    "a_close_request_carries_its_reason",
+                    a_close_request_carries_its_reason as fn(),
+                ),
+                (
+                    "a_kept_open_close_is_recorded_for_its_reason",
+                    a_kept_open_close_is_recorded_for_its_reason as fn(),
                 ),
             ],
         );
@@ -811,6 +866,67 @@ mod tests {
         );
         assert_eq!(router.consult(at, CloseReason::User), CloseResponse::Close);
         assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    /// A handler's `KeepOpen` records the close on the guard for the
+    /// request's reason, once however often it is asked; a handler that
+    /// panics records nothing.
+    fn a_kept_open_close_is_recorded_for_its_reason() {
+        let router = CloseRequestRouter::new();
+        let at = address(1, 1);
+        let panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let panicking = Arc::clone(&panics);
+        let source = flui_view::__runtime::CloseGuardSource::new(
+            &[CloseReason::User, CloseReason::Program],
+            flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
+        );
+        let prepared = PreparedCloseRequest::new(
+            at,
+            &window(1),
+            Some(CloseRequestHandler::new(move |_| {
+                assert!(
+                    !panicking.load(Ordering::SeqCst),
+                    "deliberate handler panic under test"
+                );
+                CloseResponse::KeepOpen
+            })),
+        )
+        .with_guard(source.clone());
+        router
+            .publication(&prepared)
+            .expect("fresh test registration")
+            .publish(prepared);
+
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let panicked = router.consult(at, CloseReason::Program);
+        std::panic::set_hook(previous_hook);
+        assert_eq!(panicked, CloseResponse::KeepOpen);
+        assert!(
+            !router.is_recorded(at, CloseReason::Program),
+            "a panic is no answer to wait on"
+        );
+
+        panics.store(false, Ordering::SeqCst);
+        for _ in 0..2 {
+            assert_eq!(
+                router.consult(at, CloseReason::Program),
+                CloseResponse::KeepOpen
+            );
+        }
+        assert!(router.is_recorded(at, CloseReason::Program));
+        assert!(!router.is_recorded(at, CloseReason::User));
+        let pending = source
+            .guard()
+            .pending()
+            .expect("the kept-open close is recorded");
+        assert_eq!(pending.reason(), CloseReason::Program);
+        pending.stay_open().expect("the record is the current one");
+        assert!(
+            source.guard().pending().is_none(),
+            "asking twice recorded one close"
+        );
+        assert_eq!(source.settle().declined, [CloseReason::Program]);
     }
 
     /// A window whose window system lets the application close none of its

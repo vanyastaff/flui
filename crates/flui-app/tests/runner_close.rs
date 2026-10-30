@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_app::app::{
-    AppConfig, AppHandle, Application, DeviceRecovery, ExitPolicy, FrameFailureHandler,
-    FrameFailureKind, request_presentation_close,
+    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
+    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureKind, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -20,6 +20,7 @@ use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, Re
 use flui_testing::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;
+use flui_view::{CloseGuard, PendingClose};
 
 /// The order every loop's teardown runs in.
 const TEARDOWN_ORDER: [TeardownStep; 6] = [
@@ -54,11 +55,25 @@ struct Observed {
     closed_from_build: Rc<RefCell<Vec<bool>>>,
     /// Opens the load's gate: the future completes once this is set.
     gate: Rc<Gate>,
+    /// The presentation's close guard, once the root is mounted.
+    guard: Rc<RefCell<Option<CloseGuard>>>,
     /// The device rebuild each frame dropped on a lost device reported.
     device_reports: Arc<Mutex<Vec<DeviceRecovery>>>,
 }
 
 impl Observed {
+    fn guard(&self) -> CloseGuard {
+        self.guard
+            .borrow()
+            .clone()
+            .expect("the root mounted with its window's close guard")
+    }
+
+    /// The close recorded on the window's guard and waiting, if one is.
+    fn pending(&self) -> Option<PendingClose> {
+        self.guard().pending()
+    }
+
     fn schedule_rebuild(&self) {
         self.rebuild
             .borrow()
@@ -190,6 +205,7 @@ impl StatefulView for ObservedRoot {
 impl ViewState<ObservedRoot> for ObservedRootState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.observed.rebuild.replace(Some(ctx.rebuild_handle()));
+        self.observed.guard.replace(ctx.close_guard());
     }
 
     fn build(&self, _view: &ObservedRoot, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -226,6 +242,7 @@ impl ViewState<ObservedRoot> for ObservedRootState {
 fn observed_app(
     observed: Observed,
     ready: Rc<RefCell<Option<AppHandle>>>,
+    handler: Option<CloseRequestHandler>,
 ) -> Application<ObservedRoot, impl FnMut(&AppHandle) -> ObservedRoot> {
     let device_reports = Arc::clone(&observed.device_reports);
     let failures = FrameFailureHandler::new(move |report| {
@@ -236,20 +253,22 @@ fn observed_app(
                 .push(recovery);
         }
     });
+    let mut config = AppConfig::new()
+        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+        .with_frame_failure_handler(failures);
+    if let Some(handler) = handler {
+        config = config.with_close_request_handler(handler);
+    }
     Application::new(move |_| ObservedRoot {
         observed: observed.clone(),
     })
-    .with_config(
-        AppConfig::new()
-            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
-            .with_frame_failure_handler(failures),
-    )
+    .with_config(config)
     .on_ready(move |handle| {
         ready.replace(Some(handle.clone()));
     })
 }
 
-/// A started run of [`probe_app`], its main window up and presented.
+/// A started run of [`observed_app`], its main window up and presented.
 struct Started {
     run: HeadlessRunHandle,
     handle: AppHandle,
@@ -258,8 +277,13 @@ struct Started {
 }
 
 fn start(observed: &Observed) -> Started {
+    start_with(observed, None)
+}
+
+/// [`start`], with `handler` answering the windows' close requests.
+fn start_with(observed: &Observed, handler: Option<CloseRequestHandler>) -> Started {
     let ready = Rc::new(RefCell::new(None));
-    let run = HeadlessRun::start(observed_app(observed.clone(), Rc::clone(&ready)));
+    let run = HeadlessRun::start(observed_app(observed.clone(), Rc::clone(&ready), handler));
     run.run_owner_turn();
     let handle = ready.take().expect("on_ready ran during start");
     let windows = run.open_windows();
@@ -500,6 +524,168 @@ pub(crate) fn device_loss_on_the_closing_frame_still_exits_ok() {
     join_ok(started.run);
 }
 
+/// How the application refuses a close in a veto row.
+#[derive(Clone, Copy, Debug)]
+enum Veto {
+    /// The close-request handler answers `KeepOpen`.
+    Handler,
+    /// A widget holds the window's close guard.
+    Hold,
+}
+
+/// A handler that keeps the window open for `refused`, and lets every other
+/// close through.
+fn keep_open_for(refused: CloseReason) -> CloseRequestHandler {
+    CloseRequestHandler::new(move |request| {
+        if request.reason() == refused {
+            CloseResponse::KeepOpen
+        } else {
+            CloseResponse::Close
+        }
+    })
+}
+
+/// Run owner turns until the loop ends, at most `turns` of them.
+fn turn_until_stopped(run: &HeadlessRunHandle, turns: usize) {
+    for _ in 0..turns {
+        if !run.is_running() {
+            return;
+        }
+        run.run_owner_turn();
+    }
+}
+
+/// Everything the window's tree holds is still alive and nothing was
+/// disposed.
+fn assert_nothing_disposed(observed: &Observed, started: &Started, case: &str) {
+    assert!(started.run.is_running(), "{case}: the loop still runs");
+    assert_eq!(observed.disposed.get(), 0, "{case}: nothing was disposed");
+    assert_eq!(observed.states.live(), 1, "{case}: the state is alive");
+    assert_eq!(observed.futures.live(), 1, "{case}: the load is alive");
+    assert!(
+        !started.renderer.is_released(),
+        "{case}: the renderer is still the window's"
+    );
+}
+
+/// R23: a close the application refuses, by its handler or by a hold,
+/// disposes nothing and is recorded for the user's reason; carrying the
+/// record out closes the window and ends the loop.
+pub(crate) fn a_vetoed_close_disposes_nothing() {
+    for veto in [Veto::Handler, Veto::Hold] {
+        let observed = Observed::default();
+        let handler = matches!(veto, Veto::Handler).then(|| keep_open_for(CloseReason::User));
+        let started = start_with(&observed, handler);
+        let hold = matches!(veto, Veto::Hold).then(|| observed.guard().hold());
+
+        let _ = started.window.simulate_close();
+        started.run.run_owner_turn();
+        assert_nothing_disposed(&observed, &started, &format!("{veto:?}"));
+        let pending = observed.pending().expect("the refused close is recorded");
+        assert_eq!(pending.reason(), CloseReason::User, "{veto:?}");
+
+        match hold {
+            Some(hold) => drop(hold),
+            None => pending
+                .discard_and_close()
+                .expect("the record is the current one"),
+        }
+        turn_until_stopped(&started.run, 4);
+        assert!(
+            !started.run.is_running(),
+            "{veto:?}: the recorded close ran and ended the loop"
+        );
+        assert_eq!(observed.disposed.get(), 1, "{veto:?}: disposed once");
+        join_ok(started.run);
+    }
+}
+
+/// A quit a hold or the handler refuses is deferred, disposes nothing and is
+/// recorded as the program's; once the record is carried out the quit goes
+/// ahead without asking again.
+pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
+    for veto in [Veto::Handler, Veto::Hold] {
+        let observed = Observed::default();
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let handler = matches!(veto, Veto::Handler).then(|| {
+            CloseRequestHandler::new(move |request| {
+                if request.reason() == CloseReason::Program {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    CloseResponse::KeepOpen
+                } else {
+                    CloseResponse::Close
+                }
+            })
+        });
+        let started = start_with(&observed, handler);
+        let hold = matches!(veto, Veto::Hold).then(|| observed.guard().hold());
+
+        started.handle.request_quit().expect("the quit is accepted");
+        started.run.run_owner_turn();
+        started.run.run_owner_turn();
+        assert_nothing_disposed(&observed, &started, &format!("{veto:?}"));
+        let pending = observed.pending().expect("the refused quit is recorded");
+        assert_eq!(pending.reason(), CloseReason::Program, "{veto:?}");
+
+        match hold {
+            Some(hold) => drop(hold),
+            None => pending
+                .discard_and_close()
+                .expect("the record is the current one"),
+        }
+        turn_until_stopped(&started.run, 4);
+        assert!(
+            !started.run.is_running(),
+            "{veto:?}: the deferred quit went ahead"
+        );
+        if matches!(veto, Veto::Handler) {
+            assert_eq!(
+                asked.load(Ordering::SeqCst),
+                1,
+                "the handler was not asked again"
+            );
+        }
+        join_ok(started.run);
+    }
+}
+
+/// A quit is cancelled when the window stays open: by its recorded close
+/// resolved with `stay_open`, or by a handler that panicked and so recorded
+/// nothing. The application keeps running and accepts work.
+pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
+    for panics in [false, true] {
+        let observed = Observed::default();
+        let handler = CloseRequestHandler::new(move |request| {
+            if request.reason() != CloseReason::Program {
+                return CloseResponse::Close;
+            }
+            assert!(!panics, "deliberate handler panic under test");
+            CloseResponse::KeepOpen
+        });
+        let started = start_with(&observed, Some(handler));
+
+        started.handle.request_quit().expect("the quit is accepted");
+        started.run.run_owner_turn();
+        if let Some(pending) = observed.pending() {
+            assert!(!panics, "a panic recorded a close");
+            pending.stay_open().expect("the record is the current one");
+        } else {
+            assert!(panics, "a kept-open quit was not recorded");
+        }
+        for _ in 0..3 {
+            started.run.run_owner_turn();
+        }
+        assert_nothing_disposed(&observed, &started, &format!("panics={panics}"));
+        // The cancelled quit fenced nothing: a show request is still served.
+        main_window_address(&started);
+
+        close(&started, CloseRoute::User);
+        assert!(!started.run.is_running(), "panics={panics}");
+        join_ok(started.run);
+    }
+}
+
 /// Sleep until `deadline` and run the turn a native loop runs when its wake
 /// deadline is due: it asks every window for a frame.
 fn wake_at(started: &Started, deadline: Instant) {
@@ -677,6 +863,18 @@ fn runner_close() {
             (
                 "device_loss_on_the_closing_frame_still_exits_ok",
                 device_loss_on_the_closing_frame_still_exits_ok,
+            ),
+            (
+                "a_vetoed_close_disposes_nothing",
+                a_vetoed_close_disposes_nothing,
+            ),
+            (
+                "a_refused_quit_waits_for_the_record_then_exits",
+                a_refused_quit_waits_for_the_record_then_exits,
+            ),
+            (
+                "a_quit_the_window_stays_open_for_is_cancelled",
+                a_quit_the_window_stays_open_for_is_cancelled,
             ),
             (
                 "a_lost_device_waits_out_its_rebuild_backoff",

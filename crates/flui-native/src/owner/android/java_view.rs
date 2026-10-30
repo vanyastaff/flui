@@ -233,6 +233,13 @@ pub(crate) trait ViewAccessibility: Send + Sync {
         action: jint,
         arguments: jni::sys::jobject,
     ) -> bool;
+
+    /// One hover of TalkBack's explore by touch, with its `MotionEvent`
+    /// action code and its position in the view's pixels, from the native
+    /// input queue on the owner thread: whether the adapter takes it, and
+    /// the hover is then not input. The adapter applies it on the Java main
+    /// thread, through `view`.
+    fn explore(self: Arc<Self>, view: &Arc<JavaView>, action: jint, x: f32, y: f32) -> bool;
 }
 
 /// What the text feature made of one of the input method's calls through the
@@ -396,6 +403,14 @@ impl JavaView {
         if self.accessibility.withdraw(accessibility).is_some() {
             self.provide_nodes(false);
         }
+    }
+
+    /// One hover of TalkBack's explore by touch from the native input queue
+    /// (ADR-0255 decision 3): whether the window's bridge takes it, in which
+    /// case it is not input. Owner thread.
+    pub(crate) fn explore_by_touch(self: &Arc<Self>, action: jint, x: f32, y: f32) -> bool {
+        self.accessibility()
+            .is_some_and(|accessibility| accessibility.explore(self, action, x, y))
     }
 
     /// Turn the view's node provider on or off. A call the view finds gone

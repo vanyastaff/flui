@@ -517,9 +517,12 @@ path = "../../third_party/accesskit_ios"
 # node provider forwards to on the Java main thread. Same 0.25 accesskit
 # cohort. It is built on jni 0.21 beside FLUI's 0.22, and the two meet only
 # through raw pointers (the environment and the view in, the node info out),
-# until accesskit_android moves to jni 0.22.
+# until accesskit_android moves to jni 0.22. TalkBack's cursor needs a hook the
+# published adapter keeps private, so the build takes the vendored copy, by
+# path for the reason given at accesskit_ios.
 [target.'cfg(target_os = "android")'.dependencies.accesskit_android]
 version = "0.9.1"
+path = "../../third_party/accesskit_android"
 
 [features]
 default = ["desktop"]

@@ -1,0 +1,29 @@
+[package]
+name = "accesskit_android"
+version = "0.9.1"
+authors.workspace = true
+license.workspace = true
+description = "AccessKit UI accessibility infrastructure: Android adapter"
+categories.workspace = true
+keywords = ["gui", "ui", "accessibility"]
+repository.workspace = true
+readme = "README.md"
+exclude = ["examples"]
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+embedded-dex = []
+
+[dependencies]
+accesskit = { version = "0.25.2", path = "../../accesskit" }
+accesskit_consumer = { version = "0.39.2", path = "../../accesskit_consumer" }
+jni = "0.21.1"
+log = "0.4.17"
+
+[dev-dependencies]
+example_common = { path = "../../example_common" }
+
+[[example]]
+name = "showcase"
+crate-type = ["cdylib"]
