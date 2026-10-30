@@ -1,0 +1,230 @@
+diff --git a/src/adapter.rs b/src/adapter.rs
+index d147ade81..ab41d9981 100644
+--- a/src/adapter.rs
++++ b/src/adapter.rs
+@@ -42,7 +42,7 @@
+ use std::{ffi::c_void, ptr::null_mut};
+ 
+ use crate::{
+-    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
++    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context, PlatformFocusHandler},
+     event::{EventGenerator, QueuedEvents, layout_event, screen_changed_event},
+     filters::filter,
+     node::PlatformNode,
+@@ -346,6 +346,38 @@ pub unsafe fn new(
+         activation_handler: impl 'static + ActivationHandler,
+         action_handler: impl 'static + ActionHandler,
+         deactivation_handler: impl 'static + DeactivationHandler,
++    ) -> Self {
++        let action_handler = Rc::new(ActionHandlerWrapper::new(action_handler));
++        unsafe { Self::with_handlers(view, activation_handler, action_handler, deactivation_handler) }
++    }
++
++    /// Create a new iOS adapter, as [`Adapter::new`] does, whose
++    /// `platform_focus_handler` is told each time VoiceOver's cursor moves to
++    /// a node of the tree or leaves it, on the main thread, outside every
++    /// borrow of the adapter.
++    ///
++    /// # Safety
++    ///
++    /// `view` must be a valid, unreleased pointer to a `UIView`.
++    pub unsafe fn with_platform_focus_handler(
++        view: *mut c_void,
++        activation_handler: impl 'static + ActivationHandler,
++        action_handler: impl 'static + ActionHandler,
++        deactivation_handler: impl 'static + DeactivationHandler,
++        platform_focus_handler: impl 'static + PlatformFocusHandler,
++    ) -> Self {
++        let action_handler = Rc::new(ActionHandlerWrapper::with_platform_focus_handler(
++            action_handler,
++            platform_focus_handler,
++        ));
++        unsafe { Self::with_handlers(view, activation_handler, action_handler, deactivation_handler) }
++    }
++
++    unsafe fn with_handlers(
++        view: *mut c_void,
++        activation_handler: impl 'static + ActivationHandler,
++        action_handler: Rc<dyn ActionHandlerNoMut>,
++        deactivation_handler: impl 'static + DeactivationHandler,
+     ) -> Self {
+         let view = unsafe { Retained::retain(view as *mut UIView) }.unwrap();
+         let view = WeakId::from_retained(&view);
+@@ -353,7 +385,7 @@ pub unsafe fn new(
+ 
+         let state = Rc::new(RefCell::new(State::Inactive {
+             view,
+-            action_handler: Rc::new(ActionHandlerWrapper::new(action_handler)),
++            action_handler,
+             mtm,
+         }));
+         let activation_handler: Rc<ActivationHandlerCell> =
+diff --git a/src/context.rs b/src/context.rs
+index ed784868b..2cb6e54e8 100644
+--- a/src/context.rs
++++ b/src/context.rs
+@@ -3,7 +3,7 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
+-use accesskit::{ActionHandler, ActionRequest};
++use accesskit::{ActionHandler, ActionRequest, NodeId, TreeId};
+ use accesskit_consumer::{FullNodeId, Tree};
+ use hashbrown::HashMap;
+ use objc2::rc::{Retained, WeakId};
+@@ -14,15 +14,47 @@
+ 
+ use crate::node::PlatformNode;
+ 
++/// Told when the assistive technology's own cursor (VoiceOver's) moves to a
++/// node of the tree or leaves it. This is not the tree's focus, which the
++/// application owns and publishes.
++pub trait PlatformFocusHandler {
++    /// The cursor moved to `node`, or left the tree for `None`.
++    fn platform_focus_changed(&mut self, node: Option<(NodeId, TreeId)>);
++}
++
+ pub(crate) trait ActionHandlerNoMut {
+     fn do_action(&self, request: ActionRequest);
++
++    /// Tell the platform focus handler, if there is one.
++    fn platform_focus_changed(&self, _node: Option<(NodeId, TreeId)>) {}
++}
++
++/// The platform focus handler, with the moves made while it runs: those are
++/// told in order once it returns, so a re-entrant move is neither lost nor
++/// told inside the handler.
++struct PlatformFocusCell {
++    handler: RefCell<Box<dyn PlatformFocusHandler>>,
++    pending: RefCell<Vec<Option<(NodeId, TreeId)>>>,
+ }
+ 
+-pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>);
++pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>, Option<PlatformFocusCell>);
+ 
+ impl<H: 'static + ActionHandler> ActionHandlerWrapper<H> {
+     pub(crate) fn new(inner: H) -> Self {
+-        Self(RefCell::new(inner))
++        Self(RefCell::new(inner), None)
++    }
++
++    pub(crate) fn with_platform_focus_handler(
++        inner: H,
++        handler: impl 'static + PlatformFocusHandler,
++    ) -> Self {
++        Self(
++            RefCell::new(inner),
++            Some(PlatformFocusCell {
++                handler: RefCell::new(Box::new(handler)),
++                pending: RefCell::new(Vec::new()),
++            }),
++        )
+     }
+ }
+ 
+@@ -30,6 +62,26 @@ impl<H: ActionHandler> ActionHandlerNoMut for ActionHandlerWrapper<H> {
+     fn do_action(&self, request: ActionRequest) {
+         self.0.borrow_mut().do_action(request)
+     }
++
++    fn platform_focus_changed(&self, node: Option<(NodeId, TreeId)>) {
++        let Some(cell) = &self.1 else {
++            return;
++        };
++        cell.pending.borrow_mut().push(node);
++        let Ok(mut handler) = cell.handler.try_borrow_mut() else {
++            return;
++        };
++        loop {
++            let next = {
++                let mut pending = cell.pending.borrow_mut();
++                if pending.is_empty() {
++                    break;
++                }
++                pending.remove(0)
++            };
++            handler.platform_focus_changed(next);
++        }
++    }
+ }
+ 
+ pub(crate) struct Context {
+diff --git a/src/event.rs b/src/event.rs
+index 171ef470d..51e04a5a6 100644
+--- a/src/event.rs
++++ b/src/event.rs
+@@ -30,6 +30,8 @@ pub(crate) enum QueuedEvent {
+         notification: UIAccessibilityNotifications,
+     },
+     NodeDestroyed(FullNodeId),
++    /// VoiceOver's cursor was on a node the update removed.
++    PlatformFocusLost,
+     Announcement {
+         text: String,
+         assertive: bool,
+@@ -57,6 +59,9 @@ fn raise(self, context: &Rc<Context>) {
+                     UIAccessibilityPostNotification(notification, argument.as_deref());
+                 }
+             }
++            Self::PlatformFocusLost => {
++                context.action_handler.platform_focus_changed(None);
++            }
+             Self::NodeDestroyed(node_id) => {
+                 context.remove_platform_node(node_id);
+             }
+@@ -177,6 +182,7 @@ fn remove_node(&mut self, id: FullNodeId) {
+         self.insert_layout_changed_event_if_needed();
+         if self.platform_focus == Some(id) {
+             *self.context.platform_focus.borrow_mut() = None;
++            self.events.push(QueuedEvent::PlatformFocusLost);
+             self.platform_focus = None;
+         }
+         self.events.push(QueuedEvent::NodeDestroyed(id));
+diff --git a/src/lib.rs b/src/lib.rs
+index a32aa4ab0..4f946a92b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,6 +31,7 @@
+ 
+ mod adapter;
+ pub use adapter::Adapter;
++pub use context::PlatformFocusHandler;
+ 
+ mod event;
+ pub use event::QueuedEvents;
+diff --git a/src/node.rs b/src/node.rs
+index 9edf98bb4..5f5801d66 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -419,19 +419,29 @@ fn container_type(&self) -> UIAccessibilityContainerType {
+ 
+         #[method(accessibilityElementDidBecomeFocused)]
+         fn element_did_become_focused(&self) {
+-            self.resolve_with_context(|node, _, context| {
++            let moved = self.resolve_with_context(|node, _, context| {
+                 *context.platform_focus.borrow_mut() = Some(node.id());
++                (Rc::clone(context), node.locate())
+             });
++            // Told once the tree is no longer borrowed: the handler may update it.
++            if let Some((context, node)) = moved {
++                context.action_handler.platform_focus_changed(Some(node));
++            }
+         }
+ 
+         #[method(accessibilityElementDidLoseFocus)]
+         fn element_did_lose_focus(&self) {
+-            self.resolve_with_context(|node, _, context| {
++            let left = self.resolve_with_context(|node, _, context| {
+                 let mut platform_focus = context.platform_focus.borrow_mut();
+                 if *platform_focus == Some(node.id()) {
+                     *platform_focus = None;
++                    return Some(Rc::clone(context));
+                 }
++                None
+             });
++            if let Some(context) = left.flatten() {
++                context.action_handler.platform_focus_changed(None);
++            }
+         }
+ 
+         #[method_id(accessibilityIdentifier)]

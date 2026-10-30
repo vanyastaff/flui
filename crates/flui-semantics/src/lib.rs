@@ -44,6 +44,7 @@ mod applicability;
 mod accesskit_translation;
 pub mod action;
 mod announce;
+mod assistive_focus;
 mod attributes;
 mod collection;
 pub mod configuration;
@@ -52,6 +53,8 @@ pub mod node;
 mod numeric_range;
 pub mod owner;
 pub mod platform;
+pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
+pub use platform::AssistiveFocusSupport;
 pub mod properties;
 pub mod regions;
 pub mod relation;
@@ -65,8 +68,8 @@ pub mod tree;
 // ============================================================================
 
 pub use action::{
-    ActionCall, ActionDecodeError, CustomActionId, Reveal, ScrollUnit, SemanticsAction,
-    SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
+    ActionCall, ActionDecodeError, AssistiveFocusHandler, CustomActionId, Reveal, ScrollUnit,
+    SemanticsAction, SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation

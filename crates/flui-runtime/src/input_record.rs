@@ -397,6 +397,9 @@ pub(crate) fn input_time(input: &HostInput) -> Option<EventTime> {
         }
         HostInput::Platform(PlatformInput::Keyboard(event)) => Some(event.time),
         HostInput::Frame { vsync, .. } => Some(*vsync),
-        HostInput::Platform(_) | HostInput::Window(_) | HostInput::Accessibility(_) => None,
+        HostInput::Platform(_)
+        | HostInput::Window(_)
+        | HostInput::Accessibility(_)
+        | HostInput::AssistiveFocus(_) => None,
     }
 }

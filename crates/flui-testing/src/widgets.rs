@@ -829,6 +829,14 @@ impl LaidOut {
         self.host.ui_runtime().enable_semantics();
     }
 
+    /// Move the screen reader's cursor to `node` of the published tree, or
+    /// off it for `None`, as VoiceOver or TalkBack reports it; the subtrees it
+    /// left and entered hear of it at the next [`pump`](Self::pump)
+    /// ([`HeadlessHost::move_assistive_focus`](crate::HeadlessHost::move_assistive_focus)).
+    pub fn move_assistive_focus(&mut self, node: Option<crate::NodeId>) {
+        self.host.ui_runtime().move_assistive_focus(node);
+    }
+
     /// The accessibility tree exactly as a platform adapter would receive it,
     /// or `None` until [`enable_semantics`](Self::enable_semantics) has been
     /// called and a frame has run since.

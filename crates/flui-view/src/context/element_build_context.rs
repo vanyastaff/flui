@@ -605,6 +605,9 @@ impl LifecycleContext for ElementBuildContext {
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.owner.read().capabilities().announcer.clone()
     }
+    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
+        self.owner.read().capabilities().assistive_focus
+    }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.owner.read().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
@@ -1056,6 +1059,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.capabilities.presentation.announcer.clone()
+    }
+    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
+        self.capabilities.presentation.assistive_focus
     }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.capabilities.presentation.haptics.clone()?;

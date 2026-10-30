@@ -62,6 +62,28 @@ pub type AccessibilityActivationListener = Arc<dyn Fn(bool) + Send + Sync>;
 /// decoded ([`ActionDecodeError::UnknownTree`](crate::ActionDecodeError::UnknownTree)).
 pub type AccessibilityActionListener = Arc<dyn Fn(ActionRequest) + Send + Sync>;
 
+/// Receives where the assistive technology's own cursor (VoiceOver,
+/// TalkBack) is: the stable id of the node it reads, or `None` once it leaves
+/// the window's tree. Distinct from input focus, which the application owns
+/// and publishes as the tree's `focus`.
+pub type AssistiveFocusListener = Arc<dyn Fn(Option<accesskit::NodeId>) + Send + Sync>;
+
+/// Whether an adapter tells where the assistive technology's cursor is.
+///
+/// A widget that should act on it, such as a carousel that stops moving
+/// while a screen reader reads it, asks first: where the platform keeps the
+/// cursor to itself, it relies on input focus and hover instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum AssistiveFocusSupport {
+    /// The adapter calls its [`AssistiveFocusListener`] each time the cursor moves.
+    Reported,
+    /// The platform, or FLUI's adapter for it, does not say where the cursor
+    /// is ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    #[default]
+    Unreported,
+}
+
 /// Platform capability for exposing one window's accessibility tree.
 pub trait PlatformAccessibility: Send + Sync {
     /// Hand the platform an update — incremental or self-contained.
@@ -92,4 +114,17 @@ pub trait PlatformAccessibility: Send + Sync {
 
     /// Register the inbound-action listener, replacing any previous one.
     fn set_action_listener(&self, listener: AccessibilityActionListener);
+
+    /// Whether this adapter tells where the assistive technology's cursor is.
+    /// Each adapter states it: a host that starts reporting it changes this
+    /// answer, and the platform parity table with it.
+    fn assistive_focus_support(&self) -> AssistiveFocusSupport;
+
+    /// Register the listener told where the assistive technology's cursor is,
+    /// replacing any previous one. An adapter whose
+    /// [`assistive_focus_support`](Self::assistive_focus_support) is
+    /// [`Unreported`](AssistiveFocusSupport::Unreported) never calls it.
+    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
+        drop(listener);
+    }
 }

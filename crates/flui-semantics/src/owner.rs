@@ -1442,6 +1442,39 @@ impl SemanticsOwner {
         self.enabled && self.tree.root().is_some() && self.has_pending_announcements()
     }
 
+    /// The assistive-focus handlers of `node` and every node above it, each
+    /// once, nearest first: the subtrees a cursor on `node` is in. Empty for
+    /// a node the tree does not hold.
+    pub(crate) fn assistive_focus_chain(
+        &self,
+        node: AccessibilityNodeId,
+    ) -> Vec<crate::AssistiveFocusHandler> {
+        let Some(root) = self.tree.root() else {
+            return Vec::new();
+        };
+        let Ok((start, _)) = self.locate(root, node) else {
+            return Vec::new();
+        };
+        let mut chain: Vec<crate::AssistiveFocusHandler> = Vec::new();
+        let mut visited = FxHashSet::default();
+        let mut current = Some(start);
+        while let Some(id) = current {
+            if !visited.insert(id) {
+                break;
+            }
+            let Some(node) = self.tree.get(id) else {
+                break;
+            };
+            for handler in node.config().assistive_focus_handlers() {
+                if !chain.iter().any(|held| Rc::ptr_eq(held, handler)) {
+                    chain.push(Rc::clone(handler));
+                }
+            }
+            current = node.parent();
+        }
+        chain
+    }
+
     /// The announcer nodes' identities, when an announcement queue is
     /// installed: published for assistive technology, which speaks their
     /// value changes, and not part of the interface an agent reads.

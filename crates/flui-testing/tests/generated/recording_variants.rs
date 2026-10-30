@@ -15,6 +15,7 @@ pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("HostInput", "Window"),
     ("HostInput", "Frame"),
     ("HostInput", "Accessibility"),
+    ("HostInput", "AssistiveFocus"),
     ("RecordedSurface", "Window"),
     ("RecordedSurface", "Embedded"),
     ("InputOutcome", "Handled"),

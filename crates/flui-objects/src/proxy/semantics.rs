@@ -33,7 +33,7 @@ impl Drop for ScrollSubscription {
 use flui_rendering::{
     hit_testing::LocalPayloadTarget,
     parent_data::BoxParentData,
-    semantics::{SemanticsActionHandler, SemanticsConfiguration},
+    semantics::{AssistiveFocusHandler, SemanticsActionHandler, SemanticsConfiguration},
     traits::RenderBox,
 };
 
@@ -106,13 +106,26 @@ impl Drop for RefreshSubscription {
 pub struct SemanticsActionRoute {
     target: LocalPayloadTarget,
     handler: SemanticsActionHandler,
+    assistive_focus: Option<AssistiveFocusHandler>,
 }
 
 impl SemanticsActionRoute {
     /// Pair a lane ticket with the handler that resolves it.
     #[must_use]
     pub fn new(target: LocalPayloadTarget, handler: SemanticsActionHandler) -> Self {
-        Self { target, handler }
+        Self {
+            target,
+            handler,
+            assistive_focus: None,
+        }
+    }
+
+    /// This route with the handler that tells the ticket's table where the
+    /// assistive technology's cursor is.
+    #[must_use]
+    pub fn with_assistive_focus(mut self, handler: AssistiveFocusHandler) -> Self {
+        self.assistive_focus = Some(handler);
+        self
     }
 
     /// The owner-lane ticket of the action table.
@@ -125,6 +138,13 @@ impl SemanticsActionRoute {
     #[must_use]
     pub fn handler(&self) -> &SemanticsActionHandler {
         &self.handler
+    }
+
+    /// The handler a node that asks to hear the assistive technology's
+    /// cursor is advertised with, if the route has one.
+    #[must_use]
+    pub fn assistive_focus_handler(&self) -> Option<&AssistiveFocusHandler> {
+        self.assistive_focus.as_ref()
     }
 }
 

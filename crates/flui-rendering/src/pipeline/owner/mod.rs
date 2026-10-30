@@ -214,6 +214,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// replaced owner cannot take them with it.
     semantics_diagnostics: std::collections::VecDeque<flui_semantics::SemanticsDiagnostic>,
 
+    /// Where the assistive technology's cursor is, kept across the semantics
+    /// owners this pipeline makes so every subtree told it was entered hears
+    /// it was left.
+    assistive_focus: flui_semantics::AssistiveFocus,
+
     /// Every semantics diagnostic queued since a test harness last checked,
     /// kept apart from the report queue so a reporting subscriber cannot
     /// hide a finding from the harness.
@@ -404,6 +409,7 @@ where
         semantics_owner: from.semantics_owner,
         semantics_regions: from.semantics_regions,
         semantics_diagnostics: from.semantics_diagnostics,
+        assistive_focus: from.assistive_focus,
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,

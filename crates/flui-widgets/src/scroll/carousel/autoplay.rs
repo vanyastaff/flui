@@ -22,8 +22,9 @@ pub enum CarouselAutoplayError {
 /// An autoplaying carousel draws its own pause control, the first focus stop inside it, a
 /// button that pauses and resumes; its controller's [`pause`](super::CarouselController::pause)
 /// and [`resume`](super::CarouselController::resume) do the same. Autoplay also stops for good,
-/// until that control or `resume`, when keyboard focus enters the carousel, a pointer hovers or
-/// presses on it, or the app stops being in front; a step is a programmatic scroll the user's
+/// until that control or `resume`, when keyboard focus enters the carousel, a screen reader
+/// reads one of its items (where the platform reports its cursor), a pointer hovers or presses
+/// on it, or the app stops being in front; a step is a programmatic scroll the user's
 /// own input takes over from. Reduced motion turns autoplay off, a carousel whose items all fit
 /// takes no steps, and no step is announced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

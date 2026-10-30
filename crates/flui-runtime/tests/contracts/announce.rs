@@ -55,6 +55,10 @@ impl flui_semantics::platform::PlatformAccessibility for Bridge {
     ) {
     }
     fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 struct Sink;

@@ -737,6 +737,7 @@ impl ViewState<Carousel> for CarouselState {
             }
         };
         let on_hover = pause.clone();
+        let on_read = pause.clone();
         let paused = self.shared.controller.borrow().is_paused();
         let localizations = BoxedWidgetsLocalizations::maybe_of(ctx);
         let label = match (&localizations, paused) {
@@ -765,7 +766,19 @@ impl ViewState<Carousel> for CarouselState {
             .child(
                 MouseRegion::new()
                     .on_enter(move |_cx, _pointer, _position| on_hover())
-                    .child(scrollable),
+                    // A screen reader reading an item stops the carousel, as
+                    // keyboard focus entering it does; only a platform that
+                    // reports its cursor says so (`assistive_focus_support`).
+                    .child(
+                        Semantics::new()
+                            .container(true)
+                            .on_assistive_focus_within(move |_cx, within| {
+                                if within {
+                                    on_read();
+                                }
+                            })
+                            .child(scrollable),
+                    ),
             );
         Focus::with_external_node(
             Rc::clone(&self.focus),

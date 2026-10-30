@@ -507,6 +507,13 @@ pub trait LifecycleContext: BuildContext {
     /// `clipboard_handle` follows.
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer>;
 
+    /// Whether this presentation's accessibility adapter says where the
+    /// assistive technology's cursor is, so a widget can rely on
+    /// `Semantics::on_assistive_focus_within` or fall back to input focus
+    /// and hover. `Unreported` on a bare owner. Acquire it in a lifecycle
+    /// hook, as `announcer`.
+    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport;
+
     /// The presentation's haptics (ADR-0210 §10): semantic feedback and
     /// patterns, immediate or aligned with the next presented frame.
     ///

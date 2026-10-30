@@ -1304,6 +1304,60 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
     );
 }
 
+/// The screen reader's cursor, moved by the platform, tells the subtrees it
+/// enters `true` and those it leaves `false`, once each, at the next frame;
+/// moving within a subtree tells it nothing.
+pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler() {
+    use flui_widgets::Row;
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&heard);
+    let item = |label: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(label)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    let mut laid = lay_out(
+        Row::new((
+            host()
+                .on_assistive_focus_within(move |_cx, within| record.borrow_mut().push(within))
+                .child(Row::new((item("first"), item("second")))),
+            item("outside"),
+        )),
+        loose(400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = |label: &str| {
+        tree.find_by_label(label)
+            .unwrap_or_else(|error| panic!("{label}: {error}\n{}", tree.describe()))
+            .id()
+    };
+    let (first, second, outside) = (node("first"), node("second"), node("outside"));
+
+    let steps: [(&str, Option<NodeId>, &[bool]); 5] = [
+        ("onto an item of the group", Some(first), &[true]),
+        ("to its sibling", Some(second), &[]),
+        ("out of the group", Some(outside), &[false]),
+        ("back in", Some(first), &[true]),
+        ("off the tree", None, &[false]),
+    ];
+    for (step, target, expected) in steps {
+        laid.move_assistive_focus(target);
+        assert!(heard.borrow().is_empty(), "{step}: told before the frame");
+        laid.pump();
+        assert_eq!(
+            heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+            expected,
+            "{step}"
+        );
+    }
+}
+
 /// An action handler receives the dispatch's `EventCx`: its signal write
 /// lands, and the signal's reader rebuilds on the next frame.
 pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {

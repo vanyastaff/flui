@@ -349,6 +349,10 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             ),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
+        ("HostInput", "AssistiveFocus") => Some(vec![
+            host(HostInput::AssistiveFocus(Some(accesskit::NodeId(42)))),
+            host(HostInput::AssistiveFocus(None)),
+        ]),
         ("RecordedSurface", "Window") => one(row(
             HostInput::Platform(PlatformInput::Pointer(PointerEvent::Down(press(touch())))),
             InputOutcome::Handled,

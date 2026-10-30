@@ -100,6 +100,11 @@ impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
         drop(listener);
     }
+
+    /// The native headless host plays no screen reader; `flui-testing`'s does.
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 /// The recorder put nothing on its window and records no focus.

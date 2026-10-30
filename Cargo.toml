@@ -59,6 +59,9 @@ members = [
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
+# A vendored crate is built by the members that depend on it, under its own
+# lints, not as a member of FLUI's (third_party/README.md).
+exclude = ["third_party"]
 
 # No `default-members`: a bare `cargo build` at the root builds the `flui`
 # facade alone; `--workspace` builds everything. cargo-hack drives each package

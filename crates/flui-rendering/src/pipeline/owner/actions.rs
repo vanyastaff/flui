@@ -5,7 +5,8 @@
 //! code under the pipeline owner's outer lock.
 
 use flui_semantics::{
-    ActionDecodeError, SemanticsActionError, SemanticsActionInvocation, SemanticsActionRequest,
+    ActionDecodeError, AssistiveFocusChange, SemanticsActionError, SemanticsActionInvocation,
+    SemanticsActionRequest,
 };
 
 use super::PipelineOwner;
@@ -29,6 +30,18 @@ impl PipelineOwner<Idle> {
             Some(owner) => owner.semantics_action_request_for(request),
             None => flui_semantics::semantics_action_request_for(request),
         }
+    }
+
+    /// Move the assistive technology's cursor to `node`, or off the tree for
+    /// `None`, as the platform reported it. Without a semantics tree, or on a
+    /// node it does not hold, the cursor is in no subtree. The returned
+    /// change tells the handlers once this pipeline is no longer borrowed.
+    pub fn move_assistive_focus(
+        &mut self,
+        node: Option<flui_semantics::AccessibilityNodeId>,
+    ) -> AssistiveFocusChange {
+        self.assistive_focus
+            .move_to(node, self.semantics_owner.as_ref())
     }
 
     /// Resolve an accessibility request against this presentation's current
