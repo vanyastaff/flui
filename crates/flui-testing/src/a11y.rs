@@ -18,7 +18,7 @@ use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
 use flui_rendering::PipelineCell;
-use flui_semantics::{ActionDecodeError, SemanticsActionError, semantics_action_request_for};
+use flui_semantics::{ActionDecodeError, SemanticsActionError};
 
 // AccessKit's vocabulary is this module's vocabulary, so a consumer writes
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
@@ -630,7 +630,7 @@ pub enum InvokeActionError {
 /// a control a screen reader can see and press to no effect — so a round trip
 /// has to start from the platform's own request type rather than from FLUI's
 /// action enum. Taking [`accesskit::ActionRequest`] whole is what makes the
-/// test cross the production decoder (`semantics_action_request_for`) instead
+/// test cross the production decoder (`PipelineOwner::decode_semantics_action`) instead
 /// of starting one step past it, where a routing gap is invisible.
 ///
 /// Resolve-then-invoke is spelled out here rather than left to each caller
@@ -669,7 +669,7 @@ pub(crate) fn invoke_semantics_action(
     cell: &PipelineCell,
     request: accesskit::ActionRequest,
 ) -> Result<(), InvokeActionError> {
-    let translated = semantics_action_request_for(&request)?;
+    let translated = cell.with(|owner| owner.decode_semantics_action(&request))?;
     let invocation = cell.with(|owner| owner.resolve_semantics_action(translated))?;
 
     invocation.invoke();

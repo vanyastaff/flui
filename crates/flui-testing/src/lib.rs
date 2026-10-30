@@ -1601,8 +1601,12 @@ impl Default for HeadlessBinding {
 /// owner or disables semantics hides nothing from it.
 pub(crate) fn assert_semantics_clean(pipeline: &flui_rendering::pipeline::PipelineCell) {
     use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::semantics::SemanticsDiagnostic;
 
-    let findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
+    let mut findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
+    // Withheld text runs report an exhausted identity space, not an author
+    // error; a test that exhausts it reads the report queue.
+    findings.retain(|finding| !matches!(finding, SemanticsDiagnostic::TextRunsWithheld(_)));
     assert!(
         findings.is_empty(),
         "the frame's semantics publication found author errors: {findings:?}"
