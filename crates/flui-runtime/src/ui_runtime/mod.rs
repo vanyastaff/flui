@@ -501,6 +501,44 @@ impl Drop for UiRuntime {
             self.owner_jobs.retire(),
             "ui_runtime capability completion retirement",
         );
+        // The application values the runtime's own fields still hold are
+        // destroyed here too, under the same catch, and never by the drop glue
+        // that runs after this body: once a failure resumes below, a capture
+        // that failed in that glue would be a second panic in one unwind, and
+        // abort (#1165). Queued commands carry cross-thread signal writes'
+        // closures; the frame-failure handler is the embedder's. After a
+        // failure they are retained, as every other application value here.
+        //
+        // The inbox closes before any of them runs: a destructor that sends
+        // through a retained sender is refused with `OwnerGone` instead of
+        // queueing a capture that only the drop glue would reach. A command a
+        // worker thread queued between the drain and the close is dropped
+        // with the receiver, under the same catch.
+        let rx = std::mem::replace(&mut self.rx, crossbeam_channel::never());
+        let commands: Vec<UiCommand> = rx.try_iter().collect();
+        let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(rx))).err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            closed,
+            "ui_runtime command inbox close",
+        );
+        let handler = self.frame_failure_handler.borrow_mut().take();
+        let preserving = first.is_some() || std::thread::panicking();
+        if preserving {
+            std::mem::forget(commands);
+            std::mem::forget(handler);
+        } else {
+            let mut retired = flui_foundation::panic::FirstPanic::new();
+            for command in commands {
+                retired.contain(|| drop(command));
+            }
+            retired.contain(|| drop(handler));
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                retired.into_payload(),
+                "ui_runtime application value retirement",
+            );
+        }
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

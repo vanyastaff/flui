@@ -64,7 +64,7 @@ pub(crate) struct SourceWatcher {
 
 impl SourceWatcher {
     /// Create a watcher with the default desktop debounce interval.
-    pub(crate) fn new() -> Result<Self, WatchError> {
+    pub(crate) fn try_new() -> Result<Self, WatchError> {
         Self::with_debounce(timing::SOURCE_DEBOUNCE)
     }
 

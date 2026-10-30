@@ -1350,7 +1350,7 @@ impl Renderer {
         // is strictly additive and must never abort initialization.
         #[cfg(feature = "gpu-profiler")]
         let gpu_profiler = if capabilities.supports_timestamp_queries() {
-            match crate::profiler::GpuFrameProfiler::new(&device) {
+            match crate::profiler::GpuFrameProfiler::try_new(&device) {
                 Ok(profiler) => {
                     tracing::info!("GPU profiler enabled (TIMESTAMP_QUERY available)");
                     Some(profiler)

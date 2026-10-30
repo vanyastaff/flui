@@ -136,9 +136,14 @@ pub(crate) trait ViewTouches {
     fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput>;
 
     /// What the Pencil's hover over `view`, as `recognizer` reports it,
-    /// carries.
-    fn hover(&mut self, recognizer: &UIHoverGestureRecognizer, view: &UIView)
-    -> Vec<PlatformInput>;
+    /// carries. `stamp` is the uptime of the event UIKit last handed the
+    /// recognizer, the hardware time touches carry too.
+    fn hover(
+        &mut self,
+        recognizer: &UIHoverGestureRecognizer,
+        view: &UIView,
+        stamp: Option<f64>,
+    ) -> Vec<PlatformInput>;
 }
 
 /// The system preference source the UIKit loop keeps, on the main thread

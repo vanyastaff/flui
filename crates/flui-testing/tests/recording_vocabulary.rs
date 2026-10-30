@@ -735,12 +735,12 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
 fn round_trip(records: &[InputRecord]) -> Vec<InputRecord> {
     let mut header = RecordingHeader::new(RecordingClock::Monotonic);
     header.privacy = Privacy::KeepText;
-    let mut writer = RecordingWriter::new(Vec::new(), &header).expect("header");
+    let mut writer = RecordingWriter::try_new(Vec::new(), &header).expect("header");
     for record in records {
         writer.write(record).expect("row");
     }
     let bytes = writer.finish().expect("flush");
-    RecordingReader::new(&bytes[..])
+    RecordingReader::try_new(&bytes[..])
         .expect("header")
         .map(|row| row.expect("every row reads back").record)
         .collect()
@@ -792,9 +792,11 @@ fn every_vocabulary_variant_round_trips_through_the_recording_dto() {
         {
             let record = unrecorded_sample(enumeration, variant)
                 .unwrap_or_else(|| panic!("{enumeration}::{variant} has no sample"));
-            let mut writer =
-                RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
-                    .expect("header");
+            let mut writer = RecordingWriter::try_new(
+                Vec::new(),
+                &RecordingHeader::new(RecordingClock::Monotonic),
+            )
+            .expect("header");
             assert!(
                 writer.write(&record).is_err(),
                 "{enumeration}::{variant} is not recorded ({why}), so the writer refuses it"
@@ -844,7 +846,7 @@ fn preference_rows_keep_their_json_spelling() {
         preferences(SystemPreferences::default()),
     ];
     let mut writer =
-        RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
+        RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
             .expect("header");
     for row in &rows {
         writer.write(row).expect("row");

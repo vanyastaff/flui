@@ -24,10 +24,10 @@
 //! use flui_runtime::InputRecord;
 //!
 //! let header = RecordingHeader::new(RecordingClock::Virtual);
-//! let mut writer = RecordingWriter::new(Vec::new(), &header)?;
+//! let mut writer = RecordingWriter::try_new(Vec::new(), &header)?;
 //! writer.write(&InputRecord::End { lost_rows: 0 })?;
 //! let bytes = writer.finish()?;
-//! let mut reader = RecordingReader::new(&bytes[..])?;
+//! let mut reader = RecordingReader::try_new(&bytes[..])?;
 //! let end = reader.next().expect("one row")?;
 //! assert!(matches!(end.record, InputRecord::End { lost_rows: 0 }));
 //! # Ok::<(), flui_testing::recording::RecordingError>(())

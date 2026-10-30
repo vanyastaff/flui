@@ -238,7 +238,26 @@ graph LR
   `a_vetoed_close_disposes_nothing`, `a_refused_quit_waits_for_the_record_then_exits`,
   `a_quit_the_window_stays_open_for_is_cancelled`). Зубы: без записи в ожидание quit падают
   строки quit, без `record` в `consult` — R23 и строки quit.
-- [ ] T12 — обход #1165
+- [x] T12 — обход #1165
+  - [x] Часть 1. Эксперимент риска 1: паника `dispose` вместе с паникующим `Drop` future — abort
+    нет, обе локализуются на месте (`a_failing_dispose_and_future_drop_do_not_abort`); то же
+    внутри внешнего unwind удерживается без вызова кода (R14
+    `user_drop_panic_inside_an_unwind_is_retained`). Найден abort: `UiRuntime::drop` возобновлял
+    первую панику, пока `rx` держал замыкание `SignalWrite`, чей захват паникует в drop glue
+    (статус 134 до правки). Теперь очередь команд и обработчик сбоев кадра уничтожаются в теле
+    `drop` под catch или удерживаются после сбоя
+    (`a_queued_command_outliving_a_teardown_failure_does_not_abort`). Обход: из `Drop` в
+    `owner_dispatch`, `element_tree`, `build_owner` возобновления нет; в `flui-scheduler` —
+    `OwnerFrame` и `PresentationFrameScope`, обе отставляют очереди до возобновления. Итоги — в
+    четырёх `ARCHITECTURE.md`.
+  - [x] Часть 2: R19 `stale_handles_refuse_after_the_runtime_drops` — строки `rebuild_handle`,
+    `command_sender`, `signal_write`, `writer_source`, `post_frame_handle` в
+    `ui_runtime_and_presentation_isolation_matrix` (`flui-runtime`) и `worker_handle`,
+    `service_publisher` в `service_lifecycle_matrix` (`flui-app`): после drop каждый handle
+    отказывает типизированно (`OwnerGone`, `OwnerClosed`, `Closed`, `ShuttingDown`; `RebuildHandle`
+    неактивен) и не держит дерево. R3 `a_close_that_holds_a_failure_never_detaches`: закрытие с
+    удержанным сбоем не роняет владельца, `detached()` не вызван, наблюдатель жив; паника `dispose`
+    сдерживается на месте и такого закрытия не даёт.
 - [ ] T13 — IME-шаг закрытия
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)

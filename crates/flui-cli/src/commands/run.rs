@@ -693,8 +693,8 @@ fn next_event(
 }
 
 fn start_watcher(paths: Vec<(PathBuf, bool)>) -> CliResult<SourceWatcher> {
-    let mut watcher =
-        SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+    let mut watcher = SourceWatcher::try_new()
+        .map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
     for (path, recursive) in paths {
         if !path.exists() {
             ui::debug(format!(

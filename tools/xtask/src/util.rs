@@ -147,7 +147,7 @@ pub(crate) fn tree_size(dir: &Path) -> u64 {
 pub(crate) struct ScratchDir(tempfile::TempDir);
 
 impl ScratchDir {
-    pub(crate) fn new(label: &str) -> anyhow::Result<Self> {
+    pub(crate) fn try_new(label: &str) -> anyhow::Result<Self> {
         tempfile::Builder::new()
             .prefix(&format!("xtask-{label}-"))
             .tempdir()

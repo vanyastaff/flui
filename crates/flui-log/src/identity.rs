@@ -107,7 +107,7 @@ impl AppleBundleId {
     /// Returns the [`IdentityError`] variant naming what was wrong: too few
     /// labels, an empty label, a character outside the accepted set, or a
     /// hyphen at a label boundary.
-    pub fn new(identifier: impl Into<String>) -> Result<Self, IdentityError> {
+    pub fn try_new(identifier: impl Into<String>) -> Result<Self, IdentityError> {
         let identifier = identifier.into();
 
         let labels: Vec<&str> = identifier.split('.').collect();
@@ -180,7 +180,7 @@ impl AppIdentity {
     /// Returns [`IdentityError::EmptyDisplayName`] for a blank name, and
     /// [`IdentityError::DisplayNameHasNul`] for one holding an interior NUL,
     /// which would silently truncate the logcat tag at the C boundary.
-    pub fn new(display_name: impl Into<String>) -> Result<Self, IdentityError> {
+    pub fn try_new(display_name: impl Into<String>) -> Result<Self, IdentityError> {
         let display_name = display_name.into();
         if display_name.trim().is_empty() {
             return Err(IdentityError::EmptyDisplayName);

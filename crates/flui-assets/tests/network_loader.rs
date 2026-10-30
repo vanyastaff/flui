@@ -38,7 +38,7 @@ fn status_rejection() {
                 ],
                 false,
             );
-            let loader = NetworkLoader::new().expect("HTTP client initializes");
+            let loader = NetworkLoader::try_new().expect("HTTP client initializes");
             let url = format!("http://{address}/asset");
             let result = loader.load_url(&url).await;
             assert!(
@@ -66,7 +66,7 @@ fn strict_utf8() {
             ],
             false,
         );
-        let loader = NetworkLoader::new().expect("HTTP client initializes");
+        let loader = NetworkLoader::try_new().expect("HTTP client initializes");
         let url = format!("http://{address}/text");
         assert!(
             loader.load_text(&url).await.is_err(),
@@ -168,7 +168,7 @@ fn redirects() {
 
 fn invalid_url() {
     runtime().block_on(async {
-        let loader = NetworkLoader::new().expect("HTTP client initializes");
+        let loader = NetworkLoader::try_new().expect("HTTP client initializes");
         assert!(loader.load_url("not a URL").await.is_err());
         let (address, server) = spawn_server(vec![Response::ok(b"recovered")], false);
         assert_eq!(

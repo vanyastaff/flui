@@ -46,23 +46,23 @@ fn regressed_timestamp_preserves_the_last_accepted_anchor() {
 fn tuning_admission() {
     for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert_eq!(
-            OneEuroTuning::new(invalid, 0.0, 1.0),
+            OneEuroTuning::try_new(invalid, 0.0, 1.0),
             Err(OneEuroFilterError::InvalidMinCutoff)
         );
         assert_eq!(
-            OneEuroTuning::new(1.0, 0.0, invalid),
+            OneEuroTuning::try_new(1.0, 0.0, invalid),
             Err(OneEuroFilterError::InvalidDerivativeCutoff)
         );
     }
     for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert_eq!(
-            OneEuroTuning::new(1.0, invalid, 1.0),
+            OneEuroTuning::try_new(1.0, invalid, 1.0),
             Err(OneEuroFilterError::InvalidBeta)
         );
     }
     for cutoff in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::MAX] {
-        assert!(OneEuroTuning::new(cutoff, 0.0, cutoff).is_ok());
-        assert!(OneEuroTuning::new(cutoff, f64::MAX, cutoff).is_ok());
+        assert!(OneEuroTuning::try_new(cutoff, 0.0, cutoff).is_ok());
+        assert!(OneEuroTuning::try_new(cutoff, f64::MAX, cutoff).is_ok());
     }
 }
 
@@ -115,7 +115,7 @@ fn overflow_refusal_allows_a_healthy_next_sample() {
     assert_eq!(actual.filter(30.0, 1.0), control.filter(30.0, 1.0));
 
     let mut adaptive =
-        OneEuroFilter::new(OneEuroTuning::new(1.0, f64::MAX, 1.0).expect("valid tuning"));
+        OneEuroFilter::new(OneEuroTuning::try_new(1.0, f64::MAX, 1.0).expect("valid tuning"));
     adaptive.filter(0.0, 0.0).expect("first sample");
     let mut adaptive_control = adaptive;
     assert_eq!(
@@ -131,12 +131,12 @@ fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
     assert_eq!(crossing.filter(-f64::MAX, f64::MAX), Ok(-f64::MAX));
 
     let mut high =
-        OneEuroFilter::new(OneEuroTuning::new(f64::MAX, 0.0, f64::MAX).expect("finite cutoff"));
+        OneEuroFilter::new(OneEuroTuning::try_new(f64::MAX, 0.0, f64::MAX).expect("finite cutoff"));
     high.filter(0.0, 0.0).expect("first sample");
     assert_eq!(high.filter(1.0, 1.0), Ok(1.0));
 
     let mut low = OneEuroFilter::new(
-        OneEuroTuning::new(f64::from_bits(1), 0.0, 1.0).expect("positive cutoff"),
+        OneEuroTuning::try_new(f64::from_bits(1), 0.0, 1.0).expect("positive cutoff"),
     );
     low.filter(0.0, 0.0).expect("first sample");
     let output = low.filter(1.0, f64::MAX).expect("finite long interval");
@@ -151,7 +151,8 @@ fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
 }
 
 fn fixed_cutoff_matches_a_known_scalar_step() {
-    let mut filter = OneEuroFilter::new(OneEuroTuning::new(1.0, 0.0, 1.0).expect("fixed cutoff"));
+    let mut filter =
+        OneEuroFilter::new(OneEuroTuning::try_new(1.0, 0.0, 1.0).expect("fixed cutoff"));
     filter.filter(0.0, 0.0).expect("first sample");
     let output = filter.filter(10.0, 1.0).expect("finite step");
     assert!(
@@ -164,7 +165,7 @@ fn constant_extremes_and_opposite_signs_keep_their_meaning() {
     let cutoff = 3.0 / (7.0 * std::f64::consts::TAU);
     for value in [f64::MAX, -f64::MAX] {
         let mut filter =
-            OneEuroFilter::new(OneEuroTuning::new(cutoff, 0.0, 1.0).expect("fixed cutoff"));
+            OneEuroFilter::new(OneEuroTuning::try_new(cutoff, 0.0, 1.0).expect("fixed cutoff"));
         assert_eq!(filter.filter(value, 0.0), Ok(value));
         assert_eq!(
             filter.filter(value, 1.0),
@@ -181,19 +182,21 @@ fn constant_extremes_and_opposite_signs_keep_their_meaning() {
     // Half smoothing at a two-second interval. Opposite-sign positions have
     // a representable slope and must cancel without overflowing their difference.
     let mut crossing = OneEuroFilter::new(
-        OneEuroTuning::new(1.0 / (2.0 * std::f64::consts::TAU), 0.0, 1.0).expect("half smoothing"),
+        OneEuroTuning::try_new(1.0 / (2.0 * std::f64::consts::TAU), 0.0, 1.0)
+            .expect("half smoothing"),
     );
     crossing.filter(f64::MAX, 0.0).expect("first sample");
     assert_eq!(crossing.filter(-f64::MAX, 2.0), Ok(0.0));
 
     // A positive cutoff/interval product below representable alpha holds
     // the previous endpoint, while the overflowing positive limit picks next.
-    let mut held =
-        OneEuroFilter::new(OneEuroTuning::new(f64::from_bits(1), 0.0, 1.0).expect("tiny cutoff"));
+    let mut held = OneEuroFilter::new(
+        OneEuroTuning::try_new(f64::from_bits(1), 0.0, 1.0).expect("tiny cutoff"),
+    );
     held.filter(0.0, 0.0).expect("first sample");
     assert_eq!(held.filter(1.0, 0.0625), Ok(0.0));
     let mut direct =
-        OneEuroFilter::new(OneEuroTuning::new(f64::MAX, 0.0, 1.0).expect("large cutoff"));
+        OneEuroFilter::new(OneEuroTuning::try_new(f64::MAX, 0.0, 1.0).expect("large cutoff"));
     direct.filter(0.0, 0.0).expect("first sample");
     assert_eq!(direct.filter(42.0, 1.0), Ok(42.0));
 }

@@ -584,6 +584,80 @@ pub(crate) mod wheel {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod force {
+    //! A Force Touch trackpad's pressure across one click. AppKit reports it
+    //! only on `NSEventTypePressure` events, between the press and the
+    //! release, while the drags between them carry none; and a force click
+    //! starts a second stage whose normalized curve begins again at zero.
+    //! The click's pressure is the first stage's latest reading, carried
+    //! onto the drags and held full through the second stage.
+
+    #![forbid(unsafe_code)]
+
+    /// The pressure of the click in progress.
+    #[derive(Debug, Default)]
+    pub(crate) struct ForceClick {
+        pressure: Option<f64>,
+    }
+
+    impl ForceClick {
+        /// A press or release: the next click starts unread.
+        pub(crate) fn reset(&mut self) {
+            self.pressure = None;
+        }
+
+        /// The click's pressure after a pressure event at `stage` reading
+        /// `pressure`. A first-stage reading outside `0..=1` is no reading
+        /// and keeps the last one; stage 0 means the trackpad no longer reads
+        /// a click.
+        pub(crate) fn pressure_event(&mut self, stage: isize, pressure: f32) -> Option<f64> {
+            match stage {
+                0 => self.pressure = None,
+                1 => {
+                    let pressure = f64::from(pressure);
+                    if (0.0..=1.0).contains(&pressure) {
+                        self.pressure = Some(pressure);
+                    }
+                }
+                _ => self.pressure = Some(1.0),
+            }
+            self.pressure
+        }
+
+        /// The pressure a drag within the click carries.
+        pub(crate) fn drag(&self) -> Option<f64> {
+            self.pressure
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::ForceClick;
+
+        #[test]
+        fn a_force_click_keeps_its_pressure_across_drags_and_stages() {
+            let mut click = ForceClick::default();
+            assert_eq!(click.drag(), None, "an unread click");
+            assert_eq!(click.pressure_event(1, 0.25), Some(0.25));
+            assert_eq!(click.drag(), Some(0.25), "a drag carries the reading");
+            assert_eq!(click.pressure_event(1, f32::NAN), Some(0.25), "no reading");
+            assert_eq!(click.pressure_event(1, 0.75), Some(0.75));
+            assert_eq!(
+                click.pressure_event(2, 0.0),
+                Some(1.0),
+                "the second stage holds the first full"
+            );
+            assert_eq!(click.drag(), Some(1.0));
+            assert_eq!(click.pressure_event(1, 0.5), Some(0.5), "back to the first");
+            assert_eq!(click.pressure_event(0, 0.0), None, "no click read");
+            click.pressure_event(1, 0.5);
+            click.reset();
+            assert_eq!(click.drag(), None, "the next click starts unread");
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) mod macos {
     //! The macOS input: the mouse, trackpad and keyboard events each window's
@@ -667,6 +741,7 @@ pub(crate) mod macos {
         pub(super) struct MacInputState {
             contacts: ContactRegistry,
             scrolling: ScrollPhases,
+            force: crate::input::apple::force::ForceClick,
         }
 
         impl Default for MacInputState {
@@ -682,6 +757,7 @@ pub(crate) mod macos {
                 Self {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
+                    force: crate::input::apple::force::ForceClick::default(),
                 }
             }
         }
@@ -782,6 +858,7 @@ pub(crate) mod macos {
                     let Some(button) = mouse_button(event.buttonNumber()) else {
                         return Vec::new();
                     };
+                    self.force.reset();
                     let mut press = mouse(ReadingAction::Press(button));
                     if let Ok(count) = u8::try_from(event.clickCount())
                         && let Some(count) = NonZeroU8::new(count)
@@ -798,6 +875,7 @@ pub(crate) mod macos {
                     let Some(button) = mouse_button(event.buttonNumber()) else {
                         return Vec::new();
                     };
+                    self.force.reset();
                     mouse(ReadingAction::Release(button))
                 } else if event_type == NSEventType::MouseMoved {
                     // AppKit sends a plain move only while no button is held
@@ -813,11 +891,14 @@ pub(crate) mod macos {
                         | NSEventType::OtherMouseDragged
                         | NSEventType::Pressure
                 ) {
-                    // AppKit pressure stages have separate normalized curves. Keep the
-                    // first-stage reading; summing stages would invent a pressure range.
-                    let pressure = (event_type == NSEventType::Pressure && event.stage() == 1)
-                        .then(|| f64::from(event.pressure()))
-                        .filter(|pressure| (0.0..=1.0).contains(pressure));
+                    // AppKit pressure stages have separate normalized curves: the
+                    // click keeps its first stage's reading, carried onto the drags
+                    // between pressure events (`force`).
+                    let pressure = if event_type == NSEventType::Pressure {
+                        self.force.pressure_event(event.stage(), event.pressure())
+                    } else {
+                        self.force.drag()
+                    };
                     mouse(ReadingAction::Move).with_sensors(RawSensors {
                         pressure,
                         ..RawSensors::default()
@@ -1251,8 +1332,9 @@ pub(crate) mod ios {
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
-            TouchInputState::hover(self, recognizer, view)
+            TouchInputState::hover(self, recognizer, view, stamp)
         }
     }
 
@@ -1289,11 +1371,14 @@ pub(crate) mod ios {
 
     impl TouchInputState {
         /// The recognizer is restricted to Stylus at registration; a mouse cannot
-        /// acquire Pencil sensors through this path.
+        /// acquire Pencil sensors through this path. `stamp` is the uptime of
+        /// the event that drove the recognizer: the clock the Pencil's touches
+        /// are stamped on, so its hover and its contact share one.
         pub(crate) fn hover(
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
             if self.pencil_touch.is_some() {
                 // Contact samples own this Pencil while its tip is down.
@@ -1302,8 +1387,12 @@ pub(crate) mod ios {
             // SAFETY: UIKit invokes this target with a live gesture recognizer;
             // `state` is its documented enum-valued getter (omitted by the bindings).
             let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
-            let time =
-                ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let time = match stamp {
+                Some(uptime) => ReadingTime::coarse(NativeTime::UptimeSeconds(uptime)),
+                None => {
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()))
+                }
+            };
             let pencil = |action| {
                 NativeReading::new(
                     PENCIL,
