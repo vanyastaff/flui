@@ -707,7 +707,8 @@ pub(crate) mod transfer {
                 .map(|_| writers.permit().expect("a place below the limit"))
                 .collect();
             assert!(writers.permit().is_none(), "the limit is full");
-            held.pop();
+            drop(held.pop().expect("a held place"));
+            assert_eq!(held.len(), MAX_WRITERS - 1);
             assert!(writers.permit().is_some(), "an ended write frees its place");
         }
 
