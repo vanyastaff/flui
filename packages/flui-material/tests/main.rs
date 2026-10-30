@@ -8,6 +8,9 @@
 
 mod common;
 
+#[path = "animated_icons.rs"]
+mod animated_icons;
+
 #[path = "app_bar.rs"]
 mod app_bar;
 
@@ -859,4 +862,13 @@ fn gesture_alternatives() {
             gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
         ),
     ]);
+}
+
+/// The Material animated icons: checked data, drawn inside the box, mirrored when they say so.
+#[test]
+fn material_animated_icons() {
+    common::run_cases(&[(
+        "animated_icons::every icon draws inside its box",
+        animated_icons::every_icon_draws_inside_its_box,
+    )]);
 }

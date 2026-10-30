@@ -6,10 +6,9 @@
 //!
 //! # Design
 //!
-//! * Metadata is stored as `Option<Arc<dyn Any + Send + Sync + 'static>>`
-//!   — type-erased, but `Arc`-shared so the render
-//!   object stays `Clone` without putting executable callbacks in render
-//!   storage.
+//! * Metadata is stored as an owner-local [`HitMetadata`] — type-erased and
+//!   shared, so the render object stays `Clone` and every hit entry carries
+//!   the same value without copying it.
 //! * Hit-test policy is the typed [`HitTestBehavior`] enum
 //!   (`DeferToChild` / `Opaque` / `Translucent`) rather than two
 //!   independent booleans — the helper methods on
@@ -19,22 +18,17 @@
 //! * Setters return `bool` change-flags so the pipeline can skip
 //!   `mark_needs_paint` on no-op writes.
 
-use std::{any::Any, fmt, sync::Arc};
+use std::{any::Any, fmt};
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
 
 use flui_rendering::{
-    context::BoxHitTestContext, hit_testing::HitTestBehavior, parent_data::BoxParentData,
+    context::BoxHitTestContext,
+    hit_testing::{HitMetadata, HitTestBehavior},
+    parent_data::BoxParentData,
     traits::RenderBox,
 };
-
-/// Type-erased metadata payload attached to a `RenderMetaData` node.
-///
-/// `Arc`-shared so cloning the render object is cheap and the
-/// gesture system can extract a shared reference from a hit-test
-/// entry without copying the payload.
-pub type MetaDataPayload = Arc<dyn Any + Send + Sync + 'static>;
 
 /// A render object that attaches opaque metadata to hit-test results.
 ///
@@ -42,7 +36,7 @@ pub type MetaDataPayload = Arc<dyn Any + Send + Sync + 'static>;
 /// until a hit-test entry reaches the gesture system, which extracts
 /// it for routing.
 pub struct RenderMetaData {
-    metadata: Option<MetaDataPayload>,
+    metadata: Option<HitMetadata>,
     behavior: HitTestBehavior,
     has_child: bool,
 }
@@ -60,11 +54,8 @@ impl RenderMetaData {
 
     /// Builder: set the metadata payload.
     #[must_use]
-    pub fn with_metadata<T>(mut self, value: T) -> Self
-    where
-        T: Any + Send + Sync + 'static,
-    {
-        self.metadata = Some(Arc::new(value));
+    pub fn with_metadata(mut self, value: impl Any) -> Self {
+        self.metadata = Some(HitMetadata::new(value));
         self
     }
 
@@ -77,14 +68,14 @@ impl RenderMetaData {
 
     /// Returns the stored metadata payload, if any.
     #[inline]
-    pub fn metadata(&self) -> Option<&MetaDataPayload> {
+    pub fn metadata(&self) -> Option<&HitMetadata> {
         self.metadata.as_ref()
     }
 
     /// Attempts to downcast the metadata payload to the requested
     /// concrete type. Returns `None` if no payload is stored or the
     /// payload's type doesn't match.
-    pub fn metadata_as<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
+    pub fn metadata_as<T: Any>(&self) -> Option<&T> {
         self.metadata.as_ref()?.downcast_ref::<T>()
     }
 
@@ -98,28 +89,25 @@ impl RenderMetaData {
     /// changed (a None → Some / Some → None / Some → Some transition).
     /// Same-type, different-value swaps always return `true` because
     /// `dyn Any` cannot be compared structurally.
-    pub fn set_metadata<T>(&mut self, value: Option<T>) -> bool
-    where
-        T: Any + Send + Sync + 'static,
-    {
+    pub fn set_metadata<T: Any>(&mut self, value: Option<T>) -> bool {
         let had = self.metadata.is_some();
         let has = value.is_some();
-        self.metadata = value.map(|v| Arc::new(v) as MetaDataPayload);
+        self.metadata = value.map(HitMetadata::new);
         had != has || has
     }
 
     /// Replaces the payload with an already-shared one.
     ///
-    /// The widget-facing setter: a `MetaData` widget holds its payload as an
-    /// `Arc` already (it may be rebuilt many times and must not re-wrap on
-    /// each), so this takes the `Arc` rather than boxing a fresh one like
+    /// The widget-facing setter: a `MetaData` widget holds its payload as a
+    /// [`HitMetadata`] already (it may be rebuilt many times and must not
+    /// re-wrap on each), so this takes it rather than wrapping a fresh one like
     /// [`Self::set_metadata`].
     ///
     /// Returns whether the payload changed identity, the same contract the
     /// other setters give a caller gating work on a change.
-    pub fn set_shared_metadata(&mut self, payload: Option<MetaDataPayload>) -> bool {
+    pub fn set_shared_metadata(&mut self, payload: Option<HitMetadata>) -> bool {
         let changed = match (&self.metadata, &payload) {
-            (Some(current), Some(next)) => !Arc::ptr_eq(current, next),
+            (Some(current), Some(next)) => !current.ptr_eq(next),
             (None, None) => false,
             _ => true,
         };
@@ -196,7 +184,7 @@ impl RenderBox for RenderMetaData {
     /// This is what makes the node findable: the searcher walks a hit path it
     /// got from somewhere else entirely and downcasts, never needing to know
     /// this type exists. `DragTarget` discovery rides on exactly this.
-    fn metadata(&self) -> Option<MetaDataPayload> {
+    fn metadata(&self) -> Option<HitMetadata> {
         self.metadata.clone()
     }
 

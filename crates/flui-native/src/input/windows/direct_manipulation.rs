@@ -1099,7 +1099,7 @@ pub mod manipulation {
             frame: TouchpadFrame,
         ) -> Delivered {
             #[cfg(all(debug_assertions, feature = "native-capture"))]
-            contacts.report(crate::input::assembly::capture::Captured::Viewport { reading, frame });
+            contacts.report(crate::journal::capture::Captured::Viewport { reading, frame });
             let steps = self.decoder.apply(reading);
             self.deliver(contacts, &steps, frame)
         }
@@ -1112,7 +1112,7 @@ pub mod manipulation {
             frame: TouchpadFrame,
         ) -> Delivered {
             #[cfg(all(debug_assertions, feature = "native-capture"))]
-            contacts.report(crate::input::assembly::capture::Captured::ViewportAbandoned { frame });
+            contacts.report(crate::journal::capture::Captured::ViewportAbandoned { frame });
             let steps = self.decoder.abandon();
             let delivered = self.deliver(contacts, &steps, frame);
             self.scrolling.cancel_surface(self.surface);

@@ -328,7 +328,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
         anchors.animate_to(
             Stop::Open,
             Duration::ZERO,
-            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR)
+            flui_animation::SharedCurve::new(flui_animation::curves::LINEAR)
         ),
         Ok(()),
     );

@@ -2,7 +2,7 @@
 //! [`SingleChildLayoutDelegate`].
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_objects::RenderCustomSingleChildLayoutBox;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
@@ -14,15 +14,15 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Backed by `RenderCustomSingleChildLayoutBox`.
 #[derive(Clone)]
 pub struct CustomSingleChildLayout {
-    delegate: Arc<dyn SingleChildLayoutDelegate>,
+    delegate: Rc<dyn SingleChildLayoutDelegate>,
     child: Child,
 }
 
 impl CustomSingleChildLayout {
     /// Creates a custom single-child layout with no child.
-    pub fn new(delegate: Arc<dyn SingleChildLayoutDelegate>) -> Self {
+    pub fn new(delegate: impl SingleChildLayoutDelegate + 'static) -> Self {
         Self {
-            delegate,
+            delegate: Rc::new(delegate),
             child: Child::empty(),
         }
     }

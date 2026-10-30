@@ -151,6 +151,43 @@ pub(super) fn input_dropped_by_lifecycle(
     }
 }
 
+/// Marks `presentation`'s press as committing its composition for as long as
+/// it lives, restoring the enclosing mark on every exit, unwinding included.
+struct PressCommit<'a> {
+    cell: &'a Cell<Option<PresentationId>>,
+    previous: Option<PresentationId>,
+}
+
+impl<'a> PressCommit<'a> {
+    fn begin(cell: &'a Cell<Option<PresentationId>>, presentation: PresentationId) -> Self {
+        Self {
+            cell,
+            previous: cell.replace(Some(presentation)),
+        }
+    }
+}
+
+impl Drop for PressCommit<'_> {
+    fn drop(&mut self) {
+        self.cell.set(self.previous);
+    }
+}
+
+/// Whether `input` begins a pointer contact: a press, alone or in a frame.
+/// A press resolves the presentation's composition before it is dispatched
+/// (ADR-0142 item 4).
+fn begins_contact(input: &PlatformInput) -> bool {
+    let is_press = |event: &PointerEvent| matches!(event, PointerEvent::Down(_));
+    match input {
+        PlatformInput::Pointer(event) => is_press(event),
+        PlatformInput::PointerFrame(frame) => frame.events().iter().any(is_press),
+        PlatformInput::Keyboard(_)
+        | PlatformInput::Ime(_)
+        | PlatformInput::DragDrop(_)
+        | PlatformInput::Capabilities(_) => false,
+    }
+}
+
 /// A safe, content-free discriminator for a [`PlatformInput`] — never the
 /// payload itself. Logging text-input/IME payloads and drag-and-drop payloads
 /// is forbidden; this is the only thing about an input event that may reach a
@@ -384,10 +421,7 @@ impl UiRuntime {
         input: PlatformInput,
         recording: bool,
     ) -> Applied {
-        let InputTarget {
-            presentation: target_id,
-            surface,
-        } = target;
+        let target_id = target.presentation;
         let Some(presentation) = self.presentations.get(target_id) else {
             tracing::debug!(
                 { flui_foundation::diagnostics::PRESENTATION_ID } = target_id.as_u64(),
@@ -397,18 +431,83 @@ impl UiRuntime {
             );
             return Applied::default();
         };
-        if presentation.closing_requested.get()
-            || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
-            || input_dropped_by_lifecycle(presentation.lifecycle(), &input)
-        {
+        if self.input_dropped_for(presentation, &input) {
+            return Applied::default();
+        }
+        let pointer = matches!(
+            input,
+            PlatformInput::Pointer(_) | PlatformInput::PointerFrame(_)
+        );
+        if pointer && self.press_commit.get() == Some(target_id) {
             tracing::debug!(
-                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
-                lifecycle = ?presentation.lifecycle(),
+                { flui_foundation::diagnostics::PRESENTATION_ID } = target_id.as_u64(),
                 input_kind = input_kind(&input),
-                "dropping input due to presentation lifecycle"
+                "dropping pointer input sent from the composition commit of a press"
             );
             return Applied::default();
         }
+        if !begins_contact(&input) {
+            return self.route_platform_input(target, presentation, input, recording);
+        }
+        // A press anywhere in the presentation, the composing field included,
+        // commits the composition before the press is held or hit-tested, so
+        // its handlers (a "Save" button) see the text the user sees (ADR-0142
+        // item 4). The commit runs owner code, which may close the
+        // presentation: the press then goes nowhere. Pointer input that code
+        // sends this presentation is not a second contact ahead of this one,
+        // and is dropped. The commit's failure is the first, raised once the
+        // press was dispatched.
+        let committed = {
+            let _commit = PressCommit::begin(&self.press_commit, target_id);
+            catch_unwind(AssertUnwindSafe(|| {
+                presentation.text_input().complete_composition();
+            }))
+            .err()
+        };
+        let routed = catch_unwind(AssertUnwindSafe(|| {
+            if self.input_dropped_for(presentation, &input) {
+                Applied::default()
+            } else {
+                self.route_platform_input(target, presentation, input, recording)
+            }
+        }));
+        match (committed, routed) {
+            (None, Ok(applied)) => applied,
+            (None, Err(failure)) => resume_unwind(failure),
+            (Some(failure), routed) => {
+                let mut first = Some(failure);
+                preserve_first_input_panic(&mut first, routed.err(), "press after the commit");
+                resume_unwind(first.expect("BUG: the commit's failure stays first"))
+            }
+        }
+    }
+
+    /// Whether `input` for `presentation` is dropped: the presentation is
+    /// closing, the host detached, or its lifecycle refuses this kind.
+    fn input_dropped_for(&self, presentation: &PresentationState, input: &PlatformInput) -> bool {
+        let dropped = presentation.closing_requested.get()
+            || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
+            || input_dropped_by_lifecycle(presentation.lifecycle(), input);
+        if dropped {
+            tracing::debug!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
+                lifecycle = ?presentation.lifecycle(),
+                input_kind = input_kind(input),
+                "dropping input due to presentation lifecycle"
+            );
+        }
+        dropped
+    }
+
+    /// Route `input`, which `presentation` accepts, at `target`.
+    fn route_platform_input(
+        &self,
+        target: InputTarget,
+        presentation: &PresentationState,
+        input: PlatformInput,
+        recording: bool,
+    ) -> Applied {
+        let surface = target.surface;
         // Telemetry: stamp this event's arrival on the RESOLVED target's own
         // clock (never a wall-clock read) before dispatch, so a consumer can
         // later attribute a produced frame's latency back to this specific
@@ -469,9 +568,9 @@ impl UiRuntime {
                     // order once the tree commits.
                     let mut applied = Applied::default();
                     for event in frame.into_events() {
-                        let held = self.apply_platform_input(
-                            presentation_id,
+                        let held = self.route_platform_input(
                             target,
+                            presentation,
                             PlatformInput::Pointer(event),
                             recording,
                         );

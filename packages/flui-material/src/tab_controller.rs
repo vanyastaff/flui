@@ -39,7 +39,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    AnimatedValue, AnimatedValueView, Animation as _, ArcCurve, Curve as _, MotionSpec, Vsync,
+    AnimatedValue, AnimatedValueView, Animation as _, Curve as _, MotionSpec, SharedCurve, Vsync,
     curves,
 };
 use flui_sdk::foundation::panic::PanicRecovery;
@@ -224,7 +224,7 @@ struct Shared {
 fn default_motion() -> MotionSpec {
     MotionSpec::Curve {
         duration: TabController::DEFAULT_DURATION,
-        curve: ArcCurve::new(curves::EASE_IN_OUT),
+        curve: SharedCurve::new(curves::EASE_IN_OUT),
     }
 }
 
@@ -276,9 +276,9 @@ impl Shared {
             // A zero-duration run jumps through the scroll controller, which
             // stops whatever run is driving the pager; `jump_to_page` only
             // writes the offset, and a run in flight would carry on past it.
-            Change::Jump => (Duration::ZERO, ArcCurve::new(curves::LINEAR)),
+            Change::Jump => (Duration::ZERO, SharedCurve::new(curves::LINEAR)),
             Change::Animate if self.reduce_pager.get() => {
-                (Duration::ZERO, ArcCurve::new(curves::LINEAR))
+                (Duration::ZERO, SharedCurve::new(curves::LINEAR))
             }
             Change::Animate => pager_motion(&self.motion.borrow()),
         };
@@ -454,7 +454,7 @@ impl std::fmt::Debug for ClockLease {
 
 /// The pager's duration and curve for `motion`. A pager animates over a
 /// duration and curve only, so a spring runs the default motion.
-fn pager_motion(motion: &MotionSpec) -> (Duration, ArcCurve) {
+fn pager_motion(motion: &MotionSpec) -> (Duration, SharedCurve) {
     match motion {
         // The scroll controller drops a run whose curve the motion core
         // refuses, which would leave the pager on its old page; such a curve
@@ -462,12 +462,12 @@ fn pager_motion(motion: &MotionSpec) -> (Duration, ArcCurve) {
         MotionSpec::Curve { curve, .. }
             if !(curve.slope(0.0).is_finite() && curve.slope(1.0).is_finite()) =>
         {
-            (Duration::ZERO, ArcCurve::new(curves::LINEAR))
+            (Duration::ZERO, SharedCurve::new(curves::LINEAR))
         }
         MotionSpec::Curve { duration, curve } => (*duration, curve.clone()),
         _ => (
             TabController::DEFAULT_DURATION,
-            ArcCurve::new(curves::EASE_IN_OUT),
+            SharedCurve::new(curves::EASE_IN_OUT),
         ),
     }
 }

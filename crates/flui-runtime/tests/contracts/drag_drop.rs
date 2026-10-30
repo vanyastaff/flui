@@ -118,7 +118,7 @@ impl RenderView for ReceiverAnchor {
         let target = ctx
             .register_local_payload(Rc::clone(&self.slot) as Rc<dyn std::any::Any>)
             .expect("the runtime's lane is active while mounting");
-        render_object.set_shared_metadata(Some(Arc::new(target)));
+        render_object.set_metadata(Some(target));
         render_object
     }
 

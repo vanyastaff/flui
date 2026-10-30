@@ -17,7 +17,7 @@ use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{
     DefaultTabController, Tab, TabBar, TabController, TabIndicatorAnimation, Theme, ThemeData,
 };
-use flui_sdk::animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
+use flui_sdk::animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
 use flui_sdk::foundation::Listenable as _;
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
@@ -227,7 +227,7 @@ pub fn a_refused_motion_still_lands_on_the_committed_index() {
     let vsync = Vsync::new();
     let controller = TabController::new(4, 0).with_motion(MotionSpec::Curve {
         duration: Duration::from_millis(300),
-        curve: ArcCurve::new(VerticalStart),
+        curve: SharedCurve::new(VerticalStart),
     });
     let mut laid = mount_bar(
         &controller,
@@ -480,7 +480,7 @@ pub(crate) fn four_tabs() -> Vec<Tab> {
 fn linear_controller() -> TabController {
     TabController::new(4, 0).with_motion(MotionSpec::Curve {
         duration: Duration::from_millis(300),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     })
 }
 

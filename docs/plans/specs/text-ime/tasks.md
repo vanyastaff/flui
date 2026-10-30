@@ -1,12 +1,12 @@
 # text-ime — задачи (уровень 1)
 
-- **Статус:** Утверждена владельцем 2026-10-28; исполнение
+- **Статус:** Утверждена владельцем 2026-10-28; исполнение, ждут T11 (P10) и T10 (FD11)
 - **Design:** [design.md](design.md) (W1–W11; решения владельца 2026-10-28 — в шапке);
   [requirements.md](requirements.md); закрытие во время композиции — [teardown/tasks.md](../teardown/tasks.md)
   T13; приложение приёмки — [persistence/tasks.md](../persistence/tasks.md) P10
-- **Итог:** из 10 задач прежнего плана сделаны T1, T2a, T2b, T4, T6; T5, T9 сделаны в части;
-  T7 и T8 устарели. Осталось пять задач: T3, T5 и T9 можно начинать сейчас, параллельно; новая
-  T11 (строки IME на приложении приёмки) после P10, T3, T5; T10 — нативное доказательство после
+- **Итог:** из 10 задач прежнего плана сделаны T1, T2a, T2b, T3, T4, T5, T6, T9;
+  T7 и T8 устарели. Осталось две задачи: новая
+  T11 (строки IME на приложении приёмки) после persistence P10; T10 — нативное доказательство после
   flui-driver.
 
 ## Правила исполнения
@@ -131,7 +131,21 @@ graph LR
 - [x] T2a — #1458
 - [x] T2b — #1460, #1465
 - [x] T6 — #1497, #1774, #1805, #1821
-- [ ] T3 — runtime: долг якоря, gate, pointer-down вне поля
+- [x] T3 — runtime: долг якоря, gate, pointer-down вне поля. П. 4 (pointer-down): press в любой
+  точке presentation подтверждает композицию до удержания и hit-test; pointer-ввод, отправленный
+  из этого коммита, отбрасывается. П. 5 (долг якоря): `UiRuntime::pay_owed_anchor` в начале
+  `drain_owner_inbox`, `pump_background` и `pump` (кадр идёт и после неудачного долга), запрос
+  wake, пока долг не погашен, отказ из gate через тот же долг. П. 6 (gate на время lease):
+  `CommitGate::set_checked_out` ставит `RuntimeLease`, gate тогда пропускает только
+  `CommitGate::owner_entry`, которым `TextInputOwner` оборачивает свои входы; якорь в конце lease
+  (`UiRuntime::finish_checkout`). Строки: `a_grant_deferred_by_a_panicking_frame_runs_without_another_frame`
+  (F8), `a_failed_anchor_stays_owed_and_asks_for_a_wake`,
+  `a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn`,
+  `a_press_outside_the_field_commits_the_composition_before_its_handlers` (R6, runtime),
+  `a_checked_out_gate_admits_only_owner_calls`,
+  `a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code` (вместо
+  `tsf_entries_while_the_realm_is_checked_out_run_no_user_code`); каждая падает по assert при
+  откате своего хунка. Живой прогон TSF во вложенном цикле сообщений — на Windows (Ваня), в T10
 - [x] T4 — остаток: `VK_PROCESSKEY`, ACP на Linux CI; #1955 (зонд и ручной прогон IME не выполнялись)
 - [x] T5 — остаток: unmount и хук закрытия; #1958. `dispose` снимает composing range на месте
   (`end_composition`), если поле держит клиента, и перестаёт сообщать правки в `on_changed`;
@@ -143,6 +157,6 @@ graph LR
   `a_reset_mid_composition_removes_the_preedit` (в `crates/flui-widgets/tests/form.rs`, рядом с
   остальными строками композиции формы). Красные по assert на `df3d56dd6`, зелёные после;
   проверено на Windows 2026-10-28
-- [ ] T9 — остаток: реконверсия; L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` ждёт прогона на Windows (Ваня)
+- [x] T9 — остаток: реконверсия; #1965, #1977. L-часть — ответ `TS_IAS_QUERYONLY` в модуле `acp` (`acp::insert_at_selection`), `query_only_insert_answers_from_the_selection` зелёный на Linux, clippy `-p flui-native --target x86_64-pc-windows-msvc --all-targets` чистый; W-строка `reconversion_requests_leave_the_document_unchanged` (кейс «reconversion requests» в `tsf/tests.rs`) зелёная на Windows на `51030c2` 2026-10-29: 13/13 кейсов TSF, `QueryRange` и `Reconvert` отвечают Ok, документ не меняется. Ручная проверка 変換 с Microsoft IME ja-JP — у Вани
 - [ ] T11 — строки IME на приложении приёмки
 - [ ] T10 — нативное доказательство (после flui-driver FD11)

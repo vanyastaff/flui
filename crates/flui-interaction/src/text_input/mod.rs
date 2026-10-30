@@ -510,6 +510,10 @@ impl TextInputOwner {
     }
 
     fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
+        self.gate.owner_entry(|| self.attach_entered(client))
+    }
+
+    fn attach_entered(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         if let Err(error) = self.ensure_open() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
             retire_rejected(&mut failure, client);
@@ -678,6 +682,10 @@ impl TextInputOwner {
     }
 
     fn detach(&self, token: ClientToken) -> Result<DetachOutcome, TextInputError> {
+        self.gate.owner_entry(|| self.detach_entered(token))
+    }
+
+    fn detach_entered(&self, token: ClientToken) -> Result<DetachOutcome, TextInputError> {
         self.ensure_open()?;
         self.ensure_supported()?;
         let platform = self.push_platform();
@@ -727,6 +735,10 @@ impl TextInputOwner {
     }
 
     fn set_cursor_area(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
+        self.gate.owner_entry(|| self.set_cursor_area_entered(area))
+    }
+
+    fn set_cursor_area_entered(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
         self.ensure_open()?;
         self.ensure_supported()?;
         // A pull platform asks the store for geometry itself.
@@ -759,6 +771,11 @@ impl TextInputOwner {
     /// grant settled inside a host call parked, then the host call's own
     /// panic. Later ones are retained.
     pub fn complete_composition(&self) {
+        self.gate
+            .owner_entry(|| self.complete_composition_entered());
+    }
+
+    fn complete_composition_entered(&self) {
         let store = {
             let state = self.state.borrow();
             if state.lifecycle != OwnerLifecycle::Open {
@@ -899,6 +916,10 @@ impl TextInputOwner {
     /// callback or the projection ran, then that callback's or projection's
     /// own panic; later ones are retained.
     pub fn dispatch(&self, event: &ImeEvent) {
+        self.gate.owner_entry(|| self.dispatch_entered(event));
+    }
+
+    fn dispatch_entered(&self, event: &ImeEvent) {
         let mut calls = OwnerCalls::new();
         // A failure parked by a grant before this dispatch (one the platform
         // requested directly) is this turn's to report, on every path, and it
@@ -942,7 +963,26 @@ impl TextInputOwner {
     /// Whether this presentation's frame transaction is open.
     #[must_use]
     pub fn is_transaction_open(&self) -> bool {
-        !self.gate.is_open()
+        self.gate.is_shut()
+    }
+
+    /// Record whether this presentation's UI runtime is checked out of its
+    /// owner's slot: while it is, a store this owner attached admits only
+    /// this owner's own calls, and a platform entry reaching it from
+    /// elsewhere (a nested message loop) is refused a synchronous lock and
+    /// queues an asynchronous one, for the anchor that ends the checkout
+    /// (ADR-0142 item 6).
+    pub fn set_checked_out(&self, checked_out: bool) {
+        self.gate.set_checked_out(checked_out);
+    }
+
+    /// Whether a failure owner code raised after a grant waits in this
+    /// presentation's gate: a grant the platform asked for outside any
+    /// dispatch or anchor parked it, and the next
+    /// [`Self::run_deferred_grants`] reports it.
+    #[must_use]
+    pub fn holds_failure(&self) -> bool {
+        self.gate.holds_failure()
     }
 
     /// Run what waited for the frame to close: first the pull host's queued
@@ -961,6 +1001,10 @@ impl TextInputOwner {
     /// ones are retained. A panicking host operation does not hold the
     /// grants back.
     pub fn run_deferred_grants(&self) -> usize {
+        self.gate.owner_entry(|| self.run_deferred_grants_entered())
+    }
+
+    fn run_deferred_grants_entered(&self) -> usize {
         if self.is_transaction_open() {
             // Nothing could run, and the retired stores wait for the anchor
             // that closes this transaction.
@@ -1066,6 +1110,10 @@ impl TextInputOwner {
     }
 
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
+        self.gate.owner_entry(|| self.close_with_mode_entered(mode));
+    }
+
+    fn close_with_mode_entered(&self, mode: CloseMode) {
         let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
         let (retired, completing, active, host_ops, host_focused) = {
             let mut state = self.state.borrow_mut();

@@ -100,7 +100,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_animation::{Animatable, Animation, AnimationStatus, ArcCurve, Curve, CurvedAnimation};
+use flui_animation::{Animatable, Animation, AnimationStatus, Curve, CurvedAnimation, SharedCurve};
 use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{Matrix4, Rect};
 
@@ -635,7 +635,7 @@ impl MeasurementPass<'_> {
         } else {
             let reverse_curve = curve_hero
                 .reverse_curve()
-                .unwrap_or_else(|| ArcCurve::new(curve.flipped()));
+                .unwrap_or_else(|| SharedCurve::new(curve.flipped()));
             curved.with_reverse_curve(reverse_curve)
         };
         let animation: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);

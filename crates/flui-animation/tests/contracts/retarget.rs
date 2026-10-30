@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::motion_trace::AnimatedValue;
 use flui_animation::{
-    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate, RepeatMode,
+    AnimationController, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate, RepeatMode, SharedCurve,
     SpringDescription, Steps, Vsync, curves,
 };
 use flui_foundation::geometry::Offset;
@@ -74,7 +74,7 @@ fn terminal_slope(curve: (f64, f64, f64, f64)) -> f64 {
 fn curve_spec(curve: (f64, f64, f64, f64), millis: u64) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_millis(millis),
-        curve: ArcCurve::new(Cubic::new(curve.0, curve.1, curve.2, curve.3)),
+        curve: SharedCurve::new(Cubic::new(curve.0, curve.1, curve.2, curve.3)),
     }
 }
 
@@ -610,7 +610,7 @@ fn a_time_defined_spring_inherits_velocity() {
 fn reversal_shortens_by_the_eased_fraction() {
     let linear = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     };
     let mut value = AnimatedValue::with_motion(0.0_f64, linear).expect("finite motion");
     value.animate_to(100.0).expect("finite motion");
@@ -758,7 +758,7 @@ fn a_spring_reversal_does_not_sample_the_interrupted_curve() {
     let controller = owner.controller();
     let tripwire = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(Tripwire {
+        curve: SharedCurve::new(Tripwire {
             tripped: tripped.clone(),
         }),
     };
@@ -811,7 +811,7 @@ fn reversal_progress_is_sampled_from_a_current_seam() {
     let controller = owner.controller();
     let replacing = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(ReplacingCurve {
+        curve: SharedCurve::new(ReplacingCurve {
             displaced: displaced.clone(),
         }),
     };
@@ -878,7 +878,7 @@ fn a_replacement_made_by_the_reversal_sample_is_seen_before_the_new_segment() {
     let controller = owner.controller();
     let replacing = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(ReplacingTransform {
+        curve: SharedCurve::new(ReplacingTransform {
             armed: armed.clone(),
         }),
     };
@@ -890,7 +890,7 @@ fn a_replacement_made_by_the_reversal_sample_is_seen_before_the_new_segment() {
     armed.store(true, Ordering::SeqCst);
     let counting = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(CountingSlope {
+        curve: SharedCurve::new(CountingSlope {
             reads: reads.clone(),
         }),
     };
@@ -923,7 +923,7 @@ fn a_retarget_elsewhere_runs_the_full_duration() {
 fn linear_spec(millis: u64) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_millis(millis),
-        curve: ArcCurve::new(curves::LINEAR),
+        curve: SharedCurve::new(curves::LINEAR),
     }
 }
 
@@ -1054,7 +1054,7 @@ fn a_large_span_with_a_steep_start_keeps_its_seam() {
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_secs(2),
-            curve: ArcCurve::new(Cubic::new(0.5, 1.0, 0.75, 1.0)),
+            curve: SharedCurve::new(Cubic::new(0.5, 1.0, 0.75, 1.0)),
         },
     )
     .expect("finite motion");
@@ -1075,7 +1075,7 @@ fn a_large_span_over_a_short_curve_keeps_its_seam() {
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_millis(500),
-            curve: ArcCurve::new(Cubic::new(0.25, 0.125, 0.75, 1.0)),
+            curve: SharedCurve::new(Cubic::new(0.25, 0.125, 0.75, 1.0)),
         },
     )
     .expect("finite motion");
@@ -1844,7 +1844,7 @@ fn retarget_retries_a_changed_sample_without_publishing_stale_velocity() {
             0.7,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: ArcCurve::new(curves::LINEAR),
+                curve: SharedCurve::new(curves::LINEAR),
             },
         );
         assert_eq!(calls.get(), 2, "one retry queries the new source");
@@ -1911,7 +1911,7 @@ fn a_panicking_curve_slope_leaves_the_old_segment_running() {
     controller.tick_at(Duration::from_millis(250));
     let motion = MotionSpec::Curve {
         duration: Duration::from_secs(1),
-        curve: ArcCurve::new(PanickingSlope),
+        curve: SharedCurve::new(PanickingSlope),
     };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         controller.retarget(0.8, &motion)
@@ -2030,7 +2030,7 @@ fn a_retarget_from_a_listener_is_ordered_and_lock_free() {
                 0.0,
                 &MotionSpec::Curve {
                     duration: Duration::from_millis(100),
-                    curve: ArcCurve::new(curves::EASE_IN),
+                    curve: SharedCurve::new(curves::EASE_IN),
                 },
             )
             .expect("retarget from value callback");
@@ -2059,7 +2059,7 @@ fn a_retarget_without_a_clock_settles_at_its_target() {
             0.8,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1000),
-                curve: ArcCurve::new(curves::EASE_IN),
+                curve: SharedCurve::new(curves::EASE_IN),
             },
         )
         .expect("clockless retarget");
@@ -2084,7 +2084,7 @@ fn controller_curve_seam() {
             0.8,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: ArcCurve::new(curves::EASE_IN),
+                curve: SharedCurve::new(curves::EASE_IN),
             },
         )
         .expect("curve retarget");
@@ -2507,7 +2507,7 @@ fn a_large_arrival_correction_is_weighted_before_scaling() {
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_secs(1),
-            curve: ArcCurve::new(Cubic::new(0.25, 0.0, 0.75, 0.5)),
+            curve: SharedCurve::new(Cubic::new(0.25, 0.0, 0.75, 0.5)),
         },
     )
     .expect("finite motion");

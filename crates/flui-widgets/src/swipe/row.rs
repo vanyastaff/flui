@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{ArcCurve, MotionPolicy};
+use flui_animation::{MotionPolicy, SharedCurve};
 use flui_foundation::geometry::{Axis, Size};
 use flui_foundation::{Listenable, ListenerId};
 use flui_objects::SubtreeAnchor;
@@ -215,7 +215,7 @@ pub(crate) fn return_to(
         controller.animate_to(
             stop,
             RETURN,
-            ArcCurve::new(flui_animation::curves::EASE_OUT),
+            SharedCurve::new(flui_animation::curves::EASE_OUT),
         )
     };
     if result.is_err() {

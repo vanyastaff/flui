@@ -48,7 +48,7 @@ src/
 │
 ├── curve.rs          # Curve trait, shared input policy, Builtin value equality
 ├── curve/            # interval, cubic, split, penner (elastic/bounce/decelerate),
-│                     # steps, erased (Flipped, ArcCurve), piecewise, spring
+│                     # steps, erased (Flipped, SharedCurve), piecewise, spring
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
@@ -591,7 +591,7 @@ conservative rest estimate. It samples normalized progress times an upward-round
 `Duration`, retaining overshoot. It is a pure duration-based authoring value;
 `MotionSpec::Spring` remains the velocity-inheriting motion contract.
 
-Both concrete curves participate in `ArcCurve`'s built-in value comparison.
+Both concrete curves participate in `SharedCurve`'s built-in value comparison.
 Equivalent recreated configuration retains the original AnimatedValue run and
 future, rather than rediscovering equality through allocation identity. Neither
 curve adds user callbacks, shared mutation, frame state or retirement obligations.

@@ -1,7 +1,7 @@
 //! Authored easing is immutable, canonical, finite and independent of query order.
 
 use flui_animation::{
-    ArcCurve, Curve, LinearStop, PiecewiseLinear, PiecewiseLinearError, SimulationError,
+    Curve, LinearStop, PiecewiseLinear, PiecewiseLinearError, SharedCurve, SimulationError,
     SimulationParameter, SpringCurve, SpringDescription, Tolerance,
 };
 use std::time::Duration;
@@ -179,12 +179,12 @@ fn curves_keep_normalized_input_policy_and_value_equality() {
         LinearStop::new(1.0).at(1.0),
     ])
     .unwrap();
-    assert_eq!(ArcCurve::new(first.clone()), ArcCurve::new(explicit));
+    assert_eq!(SharedCurve::new(first.clone()), SharedCurve::new(explicit));
     let spring = SpringDescription::new(1.0, 100.0, 6.0).unwrap();
     let one = SpringCurve::new(spring, Tolerance::DEFAULT).unwrap();
     let two = SpringCurve::new(spring, Tolerance::DEFAULT).unwrap();
-    assert_eq!(ArcCurve::new(one.clone()), ArcCurve::new(two));
-    for curve in [ArcCurve::new(first), ArcCurve::new(one)] {
+    assert_eq!(SharedCurve::new(one.clone()), SharedCurve::new(two));
+    for curve in [SharedCurve::new(first), SharedCurve::new(one)] {
         for (input, expected) in [
             (f64::NEG_INFINITY, 0.0),
             (-1.0, 0.0),
@@ -283,7 +283,7 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
     for spring in [false, true] {
         let make = || {
             if spring {
-                ArcCurve::new(
+                SharedCurve::new(
                     SpringCurve::new(
                         SpringDescription::new(1.0, 100.0, 10.0).unwrap(),
                         Tolerance::DEFAULT,
@@ -291,7 +291,7 @@ fn equivalent_recreated_curves_keep_the_admitted_run() {
                     .unwrap(),
                 )
             } else {
-                ArcCurve::new(
+                SharedCurve::new(
                     PiecewiseLinear::new(&[
                         LinearStop::new(0.0),
                         LinearStop::new(0.25),

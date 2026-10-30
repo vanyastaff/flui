@@ -33,6 +33,9 @@
 //! - [`capture`], [`perf`] and [`audit`]: pixels, frame performance and audits, each with
 //!   its [`Verdict`] where it judges;
 //! - [`error`]: the fixed [`ErrorCode`]s, [`Retry`] and the [`ErrorObject`] that carries them;
+//! - `native_recording` (with `serde`): the schema of a native recording, the journal of a
+//!   backend's pointer registry before translation (ADR-0215 §4), which the core writes and
+//!   a reader such as the driver reads without it;
 //! - [`version`]: the [`PROTOCOL_VERSION`] the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -63,6 +66,8 @@ pub mod inspect;
 pub mod locator;
 pub mod method;
 pub mod motion;
+#[cfg(feature = "serde")]
+pub mod native_recording;
 pub mod perf;
 pub mod semantics;
 pub mod session;

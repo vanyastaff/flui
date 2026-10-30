@@ -341,12 +341,12 @@ impl ViewState<Disclosure> for DisclosureState {
             let header = Flexible::new(header.take_value()).boxed();
             let indicator = CustomPaint::new()
                 .size(Size::new(side, side))
-                .painter(std::rc::Rc::new(Chevron {
+                .painter(Chevron {
                     state: snapshot.state,
                     direction,
                     color: snapshot.indicator_color,
                     focused: focused.get(),
-                }))
+                })
                 .boxed();
             let header = Row::new(GuardedChildren::new([header, indicator]))
                 .main_axis_size(MainAxisSize::Min);
