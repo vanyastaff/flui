@@ -542,7 +542,7 @@ impl Selections {
             return Ok(());
         }
         let form = reading.form;
-        let reply = self.take_property()?;
+        let reply = self.take_property(MAX_TEXT)?;
         if reply.type_ == self.atoms.incr {
             // Deleting the property asked for the first chunk.
             if let Some(reading) = &mut self.reading {
@@ -559,16 +559,18 @@ impl Selections {
         Ok(())
     }
 
-    /// The owner wrote an `INCR` chunk.
+    /// The owner wrote an `INCR` chunk: read at most what the read has left
+    /// of [`MAX_TEXT`], the first chunk kept as it came.
     fn read_chunk(&mut self) -> Result<(), ReplyOrIdError> {
-        if self
+        let Some(received) = self
             .reading
             .as_ref()
-            .is_none_or(|reading| reading.incremental.is_none())
-        {
+            .and_then(|reading| reading.incremental.as_ref())
+            .map(Vec::len)
+        else {
             return Ok(());
-        }
-        let reply = self.take_property()?;
+        };
+        let reply = self.take_property(MAX_TEXT.saturating_sub(received))?;
         let Some(reading) = &mut self.reading else {
             return Ok(());
         };
@@ -581,16 +583,19 @@ impl Selections {
             self.answer(decode(form, bytes));
         } else if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
             self.answer(None);
+        } else if bytes.is_empty() {
+            *bytes = reply.value;
         } else {
             bytes.extend_from_slice(&reply.value);
         }
         Ok(())
     }
 
-    /// Read and delete the window's destination property, at most
-    /// [`MAX_TEXT`] bytes of it.
-    fn take_property(&self) -> Result<GetPropertyReply, ReplyOrIdError> {
-        let longs = u32::try_from(MAX_TEXT / 4).expect("BUG: the text limit fits a request");
+    /// Read and delete the window's destination property, at most `limit`
+    /// bytes of it, rounded up to whole 32-bit units; a longer value says
+    /// so in `bytes_after`.
+    fn take_property(&self, limit: usize) -> Result<GetPropertyReply, ReplyOrIdError> {
+        let longs = u32::try_from(limit.div_ceil(4)).expect("BUG: the text limit fits a request");
         Ok(self
             .connection
             .get_property(
