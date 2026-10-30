@@ -16,7 +16,7 @@ impl SliverConstrainedCrossAxis {
     ///
     /// # Errors
     /// Refuses negative or nonfinite limits.
-    pub fn new(
+    pub fn try_new(
         max_extent: f64,
         child: impl IntoView,
     ) -> Result<Self, InvalidSliverCrossAxisExtent> {

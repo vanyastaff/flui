@@ -240,16 +240,20 @@ pub struct UiRuntime {
     input_taps: crate::InputTaps,
     /// The arena observers a recording keeps, and what they reported.
     decision_recorder: recording::DecisionRecorder,
-    /// The platform clipboard this UI runtime's presentations hand their widgets:
-    /// the initial one at construction, every later one through
-    /// [`Self::assemble_presentation`].
-    clipboard: Arc<dyn flui_platform::Clipboard>,
+    /// The providers this UI runtime's presentations acquire platform
+    /// capabilities from: the registry the host gave it, handed to the initial
+    /// presentation at construction and to every later one through
+    /// [`Self::assemble_presentation`] (ADR-0152).
+    capabilities: crate::capability::CapabilityRegistry,
+    /// Where providers' answers come back to the owner thread: drained after
+    /// the command inbox at every Idle drain, retired when the UI runtime drops.
+    owner_jobs: crate::capability::OwnerJobs,
     /// The byte storage this UI runtime's presentations hand their widgets
     /// (`LifecycleContext::storage`), if the host gave it one; installed
-    /// like [`Self::clipboard`].
+    /// like [`Self::capabilities`].
     storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What every presentation closes and persists through, installed like
-    /// [`Self::clipboard`].
+    /// [`Self::capabilities`].
     close: crate::runtime_services::CloseServices,
     /// The UI runtime's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in
@@ -489,6 +493,14 @@ impl Drop for UiRuntime {
             self.owner_frame.retire(),
             "ui_runtime owner-local frame retirement",
         );
+        // Its capability completions end next, under the same rule: a
+        // waiting closure's captures and a future's waker run here, contained,
+        // and never after the first failure resumes (ADR-0152).
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            self.owner_jobs.retire(),
+            "ui_runtime capability completion retirement",
+        );
         // The application values the runtime's own fields still hold are
         // destroyed here too, under the same catch, and never by the drop glue
         // that runs after this body: once a failure resumes below, a capture
@@ -511,16 +523,21 @@ impl Drop for UiRuntime {
             "ui_runtime command inbox close",
         );
         let handler = self.frame_failure_handler.borrow_mut().take();
+        // The capability providers are application values too: the last
+        // registry clone is usually this one.
+        let capabilities = std::mem::take(&mut self.capabilities);
         let preserving = first.is_some() || std::thread::panicking();
         if preserving {
             std::mem::forget(commands);
             std::mem::forget(handler);
+            std::mem::forget(capabilities);
         } else {
             let mut retired = flui_foundation::panic::FirstPanic::new();
             for command in commands {
                 retired.contain(|| drop(command));
             }
             retired.contain(|| drop(handler));
+            retired.contain(|| drop(capabilities));
             crate::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first,
                 retired.into_payload(),

@@ -45,15 +45,15 @@ const VELOCITY_TOLERANCE: f64 = 20.0;
 /// ```
 /// use flui_widgets::ViewportFraction;
 ///
-/// let half = ViewportFraction::new(0.5).expect("a positive share");
+/// let half = ViewportFraction::try_new(0.5).expect("a positive share");
 /// assert_eq!(half.get(), 0.5);
-/// assert!(ViewportFraction::new(f64::INFINITY).is_err());
-/// assert!(ViewportFraction::new(0.0).is_err());
+/// assert!(ViewportFraction::try_new(f64::INFINITY).is_err());
+/// assert!(ViewportFraction::try_new(0.0).is_err());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct ViewportFraction(f64);
 
-/// Why [`ViewportFraction::new`] refused a share of the viewport.
+/// Why [`ViewportFraction::try_new`] refused a share of the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[error("a viewport fraction must be finite and greater than zero, got {fraction}")]
 pub struct InvalidViewportFraction {
@@ -78,7 +78,7 @@ impl ViewportFraction {
     ///
     /// [`InvalidViewportFraction`] when `fraction` is NaN, infinite, zero or
     /// negative.
-    pub fn new(fraction: f64) -> Result<Self, InvalidViewportFraction> {
+    pub fn try_new(fraction: f64) -> Result<Self, InvalidViewportFraction> {
         if fraction.is_finite() && fraction > 0.0 {
             Ok(Self(fraction))
         } else {
@@ -162,7 +162,7 @@ impl SnapPolicy for PageSnap {
     }
 }
 
-/// Why [`AnchorSnap::new`] refused its anchors.
+/// Why [`AnchorSnap::try_new`] refused its anchors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnchorSnapError {
@@ -190,7 +190,7 @@ pub enum AnchorSnapError {
 /// ```
 /// use flui_widgets::{AnchorSnap, ScrollMetrics, SnapPolicy};
 ///
-/// let stops = AnchorSnap::new([0.0, 120.0, 400.0]).expect("finite anchors");
+/// let stops = AnchorSnap::try_new([0.0, 120.0, 400.0]).expect("finite anchors");
 /// let at = |pixels| ScrollMetrics::new(pixels, 0.0, 400.0, 300.0);
 /// assert_eq!(stops.target(&at(50.0), 0.0), 0.0, "nearest at rest");
 /// assert_eq!(stops.target(&at(50.0), 500.0), 120.0, "a fling takes the next one");
@@ -210,7 +210,7 @@ impl AnchorSnap {
     ///
     /// [`AnchorSnapError::Empty`] for no anchors,
     /// [`AnchorSnapError::NonFinite`] for a NaN or infinite one.
-    pub fn new(anchors: impl IntoIterator<Item = f64>) -> Result<Self, AnchorSnapError> {
+    pub fn try_new(anchors: impl IntoIterator<Item = f64>) -> Result<Self, AnchorSnapError> {
         let mut anchors: Vec<f64> = anchors.into_iter().collect();
         if let Some(index) = anchors.iter().position(|anchor| !anchor.is_finite()) {
             return Err(AnchorSnapError::NonFinite { index });

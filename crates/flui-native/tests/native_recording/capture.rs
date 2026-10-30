@@ -294,7 +294,7 @@ fn touch(action: ReadingAction, ms: u64) -> NativeReading {
         action,
         ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
     )
-    .at(10.0, 20.0, 1.0)
+    .at_device(10.0, 20.0, 1.0)
 }
 
 const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);

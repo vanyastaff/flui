@@ -653,7 +653,6 @@ fn accessibility_input_reaches_the_semantics_owner() {
                 })
             },
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

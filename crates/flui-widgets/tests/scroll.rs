@@ -104,7 +104,8 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
     let content = |weight, limit| {
         Viewport::new((SliverCrossAxisGroup::new((
             SliverCrossAxisItem::content(
-                SliverConstrainedCrossAxis::new(limit, child("fixed", 30.0)).expect("valid limit"),
+                SliverConstrainedCrossAxis::try_new(limit, child("fixed", 30.0))
+                    .expect("valid limit"),
             ),
             child("one share", 60.0),
             SliverCrossAxisItem::flex(
@@ -156,7 +157,7 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
 pub(crate) fn constrained_sliver_updates_layout_without_replacing_the_child() {
     use flui_widgets::{SliverConstrainedCrossAxis, SliverToBoxAdapter, Viewport};
     let content = |extent| {
-        Viewport::new((SliverConstrainedCrossAxis::new(
+        Viewport::new((SliverConstrainedCrossAxis::try_new(
             extent,
             SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
         )
@@ -3279,7 +3280,7 @@ pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
 
 /// Anchors at 0, 500 and 1000 px.
 fn three_anchors() -> flui_widgets::SharedSnapPolicy {
-    Arc::new(flui_widgets::AnchorSnap::new([0.0, 500.0, 1000.0]).expect("three anchors"))
+    Arc::new(flui_widgets::AnchorSnap::try_new([0.0, 500.0, 1000.0]).expect("three anchors"))
 }
 
 /// A drag from 800 that comes to rest at 740 and lifts: the snap settles

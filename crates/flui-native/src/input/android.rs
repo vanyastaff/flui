@@ -688,7 +688,7 @@ pub(crate) mod motion {
                 let mut reading =
                     NativeReading::new(contact, kind, action, ReadingTime::epoch(time))
                         .on(SURFACE)
-                        .at(f64::from(axes.x), f64::from(axes.y), event.scale)
+                        .at_device(f64::from(axes.x), f64::from(axes.y), event.scale)
                         .with_buttons(buttons)
                         .with_modifiers(motion.modifiers)
                         .with_sensors(native_sensors(kind, event.capabilities, axes));
@@ -863,7 +863,7 @@ pub(crate) mod motion {
                         ReadingTime::epoch(event.time),
                     )
                     .on(SURFACE)
-                    .at(focal.0, focal.1, event.scale)
+                    .at_device(focal.0, focal.1, event.scale)
                     .with_primary(true)
                     .with_modifiers(motion.modifiers);
                     if let Some(device) = event.device {
@@ -929,7 +929,7 @@ pub(crate) mod motion {
                     ReadingTime::epoch(event.time),
                 )
                 .on(SURFACE)
-                .at(cursor.position.0, cursor.position.1, event.scale)
+                .at_device(cursor.position.0, cursor.position.1, event.scale)
                 .with_buttons(PointerButtons::NONE)
                 .with_modifiers(motion.modifiers);
                 if let Some(device) = event.device {

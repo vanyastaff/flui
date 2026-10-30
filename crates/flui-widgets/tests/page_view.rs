@@ -442,14 +442,14 @@ fn a_refused_device_does_not_stop_a_pager_in_motion() {
 #[test]
 fn a_viewport_fraction_that_is_not_finite_and_positive_is_refused() {
     for fraction in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 0.0, -0.5] {
-        let refused = ViewportFraction::new(fraction).expect_err("refused");
+        let refused = ViewportFraction::try_new(fraction).expect_err("refused");
         assert!(
             refused.fraction().is_nan() || refused.fraction() == fraction,
             "the error names {fraction}"
         );
     }
 
-    let half = ViewportFraction::new(0.5).expect("a positive share");
+    let half = ViewportFraction::try_new(0.5).expect("a positive share");
     let controller = PageController::with_params(1, half);
     let (mut laid, _vsync) =
         mount(PageView::new(pages(4), pager_alternatives()).controller(controller.clone()));

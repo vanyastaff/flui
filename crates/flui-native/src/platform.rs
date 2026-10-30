@@ -10,8 +10,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
-    Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName,
-    SystemNotice, SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName, SystemNotice,
+    SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 
 use crate::error::{BootstrapError, PlatformError};
@@ -290,10 +290,11 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// compiled in.
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
-    // ==================== Input & Clipboard ====================
+    // ==================== Clipboard and data transfer ====================
 
-    /// Get the platform's clipboard interface
-    fn clipboard(&self) -> Arc<dyn Clipboard>;
+    /// The host's plain-text clipboard, owner-local: the application's
+    /// clipboard provider builds its handles over it (ADR-0152).
+    fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard>;
 
     /// The data-transfer transport (ADR-0038). Contract: returns clones of
     /// ONE source instance per platform instance — the source owns
@@ -321,20 +322,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// UIKit and Android decide which application is in front; winit raises
     /// one window at a time; the Web has no way to.
     fn activate(&self, ignoring_other_apps: bool);
-
-    // ==================== Clipboard (US3 Enhanced) ====================
-
-    /// Write a rich clipboard item (text + metadata)
-    ///
-    /// A host that keeps only text writes the item's first text entry to the
-    /// [`clipboard`](Self::clipboard).
-    fn write_to_clipboard(&self, item: ClipboardItem);
-
-    /// Read a rich clipboard item
-    ///
-    /// A host that keeps only text answers the [`clipboard`](Self::clipboard)'s
-    /// text.
-    fn read_from_clipboard(&self) -> Option<ClipboardItem>;
 
     // ==================== File Operations (US3) ====================
 
@@ -630,7 +617,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         read
     }
 
-    fn clipboard(&self) -> Arc<dyn flui_platform::Clipboard> {
+    fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard> {
         H::Clipboard::clipboard(&self.owner)
     }
 
@@ -640,14 +627,6 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn activate(&self, ignoring_other_apps: bool) {
         H::Lifecycle::activate(&self.owner, ignoring_other_apps);
-    }
-
-    fn write_to_clipboard(&self, item: ClipboardItem) {
-        H::Clipboard::write(&self.owner, item);
-    }
-
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        H::Clipboard::read(&self.owner)
     }
 
     fn open_url(&self, url: &str) {

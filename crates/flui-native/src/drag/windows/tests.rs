@@ -896,7 +896,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
         ReadingAction::Press(PointerButton::PRIMARY),
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .at(10.0, 10.0, 1.0)
+    .at_device(10.0, 10.0, 1.0)
     .from_device(NativeDevice(0x51));
     crate::input::windows::testing::decode_into(hwnd, press)
         .expect("a valid reading")

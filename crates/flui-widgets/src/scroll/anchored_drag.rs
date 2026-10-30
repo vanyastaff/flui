@@ -197,7 +197,7 @@ impl<K: Copy + Eq + 'static> DraggableAnchorsBuilder<K> {
             return Err(AnchorsError::Empty);
         }
         entries.sort_by(|(_, a), (_, b)| a.total_cmp(b));
-        let snap = AnchorSnap::new(entries.iter().map(|&(_, offset)| offset))
+        let snap = AnchorSnap::try_new(entries.iter().map(|&(_, offset)| offset))
             .expect("BUG: the anchors were checked non-empty and finite above");
         Ok(DraggableAnchors {
             entries: entries.into(),
@@ -383,7 +383,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
     /// # Errors
     ///
     /// [`AnchorsError::Missing`] when `initial` is not one of `anchors`.
-    pub fn new(anchors: DraggableAnchors<K>, initial: K) -> Result<Self, AnchorsError> {
+    pub fn try_new(anchors: DraggableAnchors<K>, initial: K) -> Result<Self, AnchorsError> {
         let offset = anchors.offset(initial).ok_or(AnchorsError::Missing)?;
         let (min, max) = anchors.extent();
         let scroll = ScrollController::with_initial_scroll_offset(offset);
@@ -610,8 +610,8 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 ///     .at(Row::Actions, -96.0)
 ///     .build()
 ///     .expect("two finite anchors");
-/// let controller = AnchoredDragController::new(anchors, Row::Closed).expect("a known anchor");
-/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+/// let controller = AnchoredDragController::try_new(anchors, Row::Closed).expect("a known anchor");
+/// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
 ///     ControlSpec::new(GestureCommand::new("Show actions", AnchorIntent::Previous), Text::new("<"))
 ///         .control(GestureCommand::new("Hide actions", AnchorIntent::Next), Text::new(">")),
 /// ))

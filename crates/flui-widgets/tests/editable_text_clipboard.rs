@@ -10,7 +10,6 @@ use std::rc::Rc;
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_platform::Clipboard as _;
 use flui_widgets::{EditableText, TextEditingController};
 
 /// The platform's command modifier, as `DefaultFocusTraversal` binds it.
@@ -50,7 +49,7 @@ fn mount_field(
 /// bound by nothing, so the clipboard stayed empty.
 pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
     let controller = TextEditingController::with_text("abc");
-    let (harness, _node) = mount_field(&controller, |field| field);
+    let (mut harness, _node) = mount_field(&controller, |field| field);
     controller.set_selection(0, 3);
 
     let consumed = harness
@@ -58,7 +57,7 @@ pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
         .dispatch_key_event(&chord("c", command()))
         .is_handled();
     assert!(consumed, "copy consumes the chord");
-    assert_eq!(harness.clipboard().read_text().as_deref(), Some("abc"));
+    assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
     assert_eq!(controller.selection(), 0..3, "copy keeps the selection");
 
     controller.set_caret_byte_offset(3);
@@ -66,6 +65,12 @@ pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
         .focus_manager()
         .dispatch_key_event(&chord("v", command()))
         .is_handled();
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "the read settles at the next owner turn, never inside the chord"
+    );
+    harness.tick();
     assert_eq!(controller.text(), "abcabc");
     assert_eq!(controller.caret_byte_offset(), 6);
 }
@@ -88,7 +93,7 @@ pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_an
             "{key}: a disabled action leaves the key unconsumed"
         );
     }
-    assert_eq!(harness.clipboard().read_text(), None);
+    assert_eq!(harness.clipboard().text(), None);
     assert_eq!(controller.text(), "secret", "cut deleted nothing");
 }
 
@@ -176,7 +181,7 @@ fn select_all_replacement(obscured: bool) {
     assert!(!controller.has_selection());
     assert_eq!(changes.get(), edits + 1, "replacement is one user edit");
     assert_eq!(
-        harness.clipboard().read_text(),
+        harness.clipboard().text(),
         None,
         "selection requires no clipboard operation"
     );
@@ -238,12 +243,12 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
     let controller = TextEditingController::new();
     let node = FocusNode::new();
     let retiring = node.clone();
-    let harness = crate::common::harness::mount_with_ime(
+    let mut harness = crate::common::harness::mount_with_ime(
         EditableText::new(controller.clone(), node.clone())
             .on_changed(move |_cx, _text| retiring.unfocus()),
     );
     let _ = node.request_focus();
-    harness.clipboard().write_text("paste".into());
+    harness.clipboard().set_text("paste");
     harness.dispatch_ime(&flui_platform::ImeEvent::Preedit {
         text: "composition".into(),
         cursor: None,
@@ -256,6 +261,8 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
         .focus_manager()
         .dispatch_key_event(&chord("v", command()))
         .is_handled();
+    // The read settles at the next owner turn; the field is unfocused by then.
+    harness.tick();
     assert_eq!(
         controller.text(),
         "composition",

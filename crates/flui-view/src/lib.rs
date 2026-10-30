@@ -193,7 +193,7 @@ pub use child::{Child, Children};
 // Context
 pub use context::{
     BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
-    LifecycleContext,
+    LifecycleContext, LifecycleContextExt,
 };
 // Element types
 pub use element::Lifecycle;
@@ -230,9 +230,9 @@ pub use test_only_global_key_registry::{
 };
 // Tree management
 pub use owner::{
-    BuildOwner, BuildPremise, DuplicateGlobalKey, ElementOwner, FrameBuildReport, GlobalKeyScope,
-    LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason, RebuildReasons,
-    RecoveredAt, RecoveredPanic,
+    BuildOwner, BuildPremise, CapabilitySource, DuplicateGlobalKey, ElementOwner, FrameBuildReport,
+    GlobalKeyScope, LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason,
+    RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{
@@ -284,7 +284,9 @@ pub mod prelude {
     pub use crate::InheritedData;
 
     // Logging
-    pub use crate::context::{BuildContext, BuildContextExt, LifecycleContext};
+    pub use crate::context::{
+        BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt,
+    };
     // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
     // `Signal::get` is inherent and takes the context as a `ReadScope`, so
     // `ReadScope` is not in the prelude. `cx.scope()` still resolves on any

@@ -53,7 +53,7 @@ fn three() -> DraggableAnchors<Stop> {
 }
 
 fn controller(anchors: DraggableAnchors<Stop>) -> AnchoredDragController<Stop> {
-    AnchoredDragController::new(anchors, Stop::Closed).expect("Closed is an anchor")
+    AnchoredDragController::try_new(anchors, Stop::Closed).expect("Closed is an anchor")
 }
 
 /// The side of the dragged square and of the area it is dragged in.
@@ -74,7 +74,7 @@ fn alternatives_in(direction: TextDirection) -> GestureAlternatives {
         TextDirection::Ltr => ControlPlacement::Trailing,
         TextDirection::Rtl => ControlPlacement::Leading,
     };
-    GestureAlternatives::new(Alternative::VisibleControl(
+    GestureAlternatives::try_new(Alternative::VisibleControl(
         ControlSpec::new(
             GestureCommand::new("Next anchor", AnchorIntent::Next),
             SizedBox::shrink(),
@@ -317,7 +317,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
     }
     let one = stops(&[(Stop::Open, 40.0)]);
     assert_eq!(
-        AnchoredDragController::new(one.clone(), Stop::Closed).unwrap_err(),
+        AnchoredDragController::try_new(one.clone(), Stop::Closed).unwrap_err(),
         AnchorsError::Missing,
         "the initial key must be an anchor"
     );
@@ -347,7 +347,7 @@ pub(crate) fn anchored_drag_refuses_degenerate_anchor_sets() {
             settle(&mut laid);
             pager.pixels()
         };
-        let held = AnchoredDragController::new(one.clone(), Stop::Open).expect("an anchor");
+        let held = AnchoredDragController::try_new(one.clone(), Stop::Open).expect("an anchor");
         let moved = paged(drag_view(&held, Axis::Horizontal).boxed());
         // A scrollable with no room is the reference: the drag goes up the
         // chain from where the inner contact won it.

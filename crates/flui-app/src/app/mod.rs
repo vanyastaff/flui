@@ -10,6 +10,7 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
+pub(crate) mod capability;
 pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;

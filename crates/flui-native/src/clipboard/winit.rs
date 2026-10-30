@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use flui_platform::Clipboard;
+use crate::host::SyncClipboard;
 
 /// Arboard-based clipboard implementation
 ///
@@ -104,8 +104,8 @@ impl Default for ArboardClipboard {
     }
 }
 
-impl Clipboard for ArboardClipboard {
-    fn read_text(&self) -> Option<String> {
+impl SyncClipboard for ArboardClipboard {
+    fn read_now(&self) -> Option<String> {
         let mut clipboard = self.clipboard.lock();
         let Some(clipboard) = clipboard.as_mut() else {
             tracing::debug!("clipboard read on an inert (backend-less) clipboard");
@@ -124,7 +124,7 @@ impl Clipboard for ArboardClipboard {
         }
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         let mut clipboard = self.clipboard.lock();
         let Some(clipboard) = clipboard.as_mut() else {
             tracing::warn!(

@@ -732,7 +732,7 @@ impl SeatAssembly {
                 state.fingers = false;
                 let reading = self
                     .mouse_reading(device, surface, ReadingAction::Enter, time)
-                    .at(x, y, 1.0);
+                    .at_logical(x, y);
                 self.decode(&reading, &mut out);
             }
             PointerWire::Leave => {
@@ -777,7 +777,7 @@ impl SeatAssembly {
                 };
                 let reading = self
                     .mouse_reading(device, surface, ReadingAction::Move, time)
-                    .at(x, y, 1.0);
+                    .at_logical(x, y);
                 self.decode(&reading, &mut out);
             }
             PointerWire::Button { code, pressed } => {
@@ -1014,7 +1014,7 @@ impl SeatAssembly {
             let mut reading = touch_reading(device, surface, step.id, step.action, step.time)
                 .with_modifiers(self.modifiers_of(device));
             if let Some((x, y)) = step.position {
-                reading = reading.at(x, y, 1.0);
+                reading = reading.at_logical(x, y);
             }
             if let Some((_, size)) = shapes.iter().find(|(id, _)| *id == step.id) {
                 reading = reading.with_sensors(RawSensors {
@@ -1133,12 +1133,12 @@ impl SeatAssembly {
         };
         let mut readings: SmallVec<[NativeReading; 6]> = SmallVec::new();
         if frame.entered.is_some() {
-            readings.push(reading(ReadingAction::Enter).at(x, y, 1.0));
+            readings.push(reading(ReadingAction::Enter).at_logical(x, y));
         }
         if frame.down {
-            readings.push(reading(ReadingAction::Press(PointerButton::PRIMARY)).at(x, y, 1.0));
+            readings.push(reading(ReadingAction::Press(PointerButton::PRIMARY)).at_logical(x, y));
         } else if frame.moved {
-            readings.push(reading(ReadingAction::Move).at(x, y, 1.0));
+            readings.push(reading(ReadingAction::Move).at_logical(x, y));
         }
         for (code, pressed) in frame.buttons {
             let button = button_of(code);
@@ -1293,7 +1293,7 @@ impl SeatAssembly {
             .from_device(device)
             .with_primary(true)
             .with_modifiers(self.modifiers_of(pointer))
-            .at(pinch.focal.0, pinch.focal.1, 1.0);
+            .at_logical(pinch.focal.0, pinch.focal.1);
             self.decode(&reading, &mut out);
         }
         out
