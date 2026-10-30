@@ -168,12 +168,17 @@ R13. Цена: 6 дней (~80 вызовов входов кадра, почт�
 sendable с причинами (ledger ADR-0136) нет — решение владельца 2026-10-28; `Send` типов из R4
 держит consumer R4, `!Send` owner-типов — trybuild R1.
 
-**Позиции**, каждая со своей self-test fixture (крейт-заглушка, на котором gate обязан упасть):
-supertrait; bound параметра и where-clause; alias (`DynTrait`); поле публичного типа;
-синтетический auto-trait impl; generics и where-clause impl-блоков (blanket impl
-`impl<T: Send> Listenable for T`); **приватный sealed supertrait** (`Listenable: sealed::Base`,
+**Позиции** — только то, что написал автор; каждая со своей self-test fixture (минимальный
+rustdoc JSON, на котором gate обязан упасть): supertrait; bound параметра и where-clause;
+`dyn … + Send` в alias (`DynTrait`), в поле публичного типа и в сигнатуре; generics и
+where-clause impl-блоков (blanket impl `impl<T: Send> Listenable for T`); явный (не
+синтетический) `impl Send/Sync for`; **приватный sealed supertrait** (`Listenable: sealed::Base`,
 `Base: Send`) — JSON строится с `--document-private-items`, и замыкание supertrait
-проходит по приватным элементам; `-> impl Trait + Send` в возврате. Вторая линия для трейтов —
+проходит по приватным элементам; `-> impl Trait + Send` в возврате. Синтетические auto-trait
+impl (`impl Send for Size`, который rustdoc выводит из полей) не позиции: это следствие полей,
+а не решение автора, их тысячи, и новый тип данных был бы находкой вопреки «список только
+сокращается»; `!Send` owner-типов держит trybuild R1, `Send` типов из R4 — consumer R4
+(решение координатора 2026-10-30). Вторая линия для трейтов —
 consumer R2: `!Send` реализатор каждого flip-трейта не скомпилируется, если bound спрятан
 где-то, чего gate не видит.
 

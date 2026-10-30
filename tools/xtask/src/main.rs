@@ -34,6 +34,7 @@ mod perf;
 mod platform_floor;
 mod ratchet;
 mod recording_vocabulary;
+mod send_impls;
 mod testing;
 mod toolchain;
 mod wasm;
@@ -114,6 +115,8 @@ enum Command {
     Globals(globals::GlobalsArgs),
     /// Check that every OS entry into flui-native goes through the panic boundary (ADR-0151 §16).
     PanicBoundary(panic_boundary::PanicBoundaryArgs),
+    /// Check that every `unsafe impl Send`/`Sync` is listed and the list only shrinks (ADR-0136).
+    SendImpls(send_impls::SendImplsArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -195,6 +198,7 @@ fn main() -> ExitCode {
         Command::Wgsl(args) => wgsl::wgsl(&args),
         Command::Globals(args) => globals::globals(&args),
         Command::PanicBoundary(args) => panic_boundary::panic_boundary(&args),
+        Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
