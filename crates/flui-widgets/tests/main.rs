@@ -165,6 +165,8 @@ mod stack_positioned;
 #[path = "stream_builder.rs"]
 mod stream_builder;
 mod swipe_actions;
+#[path = "symbol_effect.rs"]
+mod symbol_effect;
 #[path = "system_gesture_exclusion.rs"]
 mod system_gesture_exclusion;
 #[path = "table.rs"]
