@@ -8294,7 +8294,7 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
 
 /// The sliver anchor publishes its own id while mounted and is transparent:
 /// it commits its child's geometry whole and passes hits through to it.
-fn harness_sliver_subtree_anchor_publishes_its_id_and_its_childs_geometry() {
+fn harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry() {
     let anchor = SubtreeAnchor::new();
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverSubtreeAnchor::new(anchor.clone()))
@@ -13534,7 +13534,7 @@ fn family_sliver_wrappers() {
         ("sliver_fill_remaining_and_overscroll_fills_viewport", harness_sliver_fill_remaining_and_overscroll_fills_viewport),
         ("sliver_fill_remaining_with_scrollable_reports_full_scroll_extent", harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent),
         ("sliver_ignore_pointer_blocks_hits_when_active", harness_sliver_ignore_pointer_blocks_hits_when_active),
-        ("sliver_subtree_anchor_publishes_its_id_and_its_childs_geometry", harness_sliver_subtree_anchor_publishes_its_id_and_its_childs_geometry),
+        ("sliver_subtree_anchor_publishes_its_id_and_the_child_geometry", harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry),
         ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
         ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
         ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),
