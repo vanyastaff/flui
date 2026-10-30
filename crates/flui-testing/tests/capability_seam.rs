@@ -7,7 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
+use flui_interaction::{
+    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimarySelectionCapability,
+};
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
@@ -19,20 +21,27 @@ use flui_view::{
     BuildContext, IntoView, LifecycleContext, LifecycleContextExt, StatefulView, View, ViewState,
 };
 
-type Acquired = Rc<RefCell<Option<Result<ClipboardHandle, Unsupported>>>>;
+type Acquired<C> = Rc<RefCell<Option<Result<<C as Capability>::Handle, Unsupported>>>>;
 
-/// Acquires the clipboard in `init_state` and keeps what it was answered.
-#[derive(Clone)]
-struct Acquirer {
-    acquired: Acquired,
+/// Acquires capability `C` in `init_state` and keeps what it was answered.
+struct Acquirer<C: Capability> {
+    acquired: Acquired<C>,
 }
 
-struct AcquirerState {
-    acquired: Acquired,
+impl<C: Capability> Clone for Acquirer<C> {
+    fn clone(&self) -> Self {
+        Self {
+            acquired: Rc::clone(&self.acquired),
+        }
+    }
 }
 
-impl StatefulView for Acquirer {
-    type State = AcquirerState;
+struct AcquirerState<C: Capability> {
+    acquired: Acquired<C>,
+}
+
+impl<C: Capability> StatefulView for Acquirer<C> {
+    type State = AcquirerState<C>;
 
     fn create_state(&self) -> Self::State {
         AcquirerState {
@@ -41,27 +50,32 @@ impl StatefulView for Acquirer {
     }
 }
 
-impl View for Acquirer {
+impl<C: Capability> View for Acquirer<C> {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
-impl ViewState<Acquirer> for AcquirerState {
+impl<C: Capability> ViewState<Acquirer<C>> for AcquirerState<C> {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.acquired
-            .replace(Some(cx.capability::<ClipboardCapability>()));
+        self.acquired.replace(Some(cx.capability::<C>()));
     }
 
-    fn build(&self, _view: &Acquirer, _cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Acquirer<C>, _cx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }
 
-/// Mount an [`Acquirer`] on `host` and return what it was answered.
+/// Mount an [`Acquirer`] of the clipboard on `host` and return what it was
+/// answered.
 fn acquire(host: &mut HeadlessHost) -> Result<ClipboardHandle, Unsupported> {
-    let acquired = Acquired::default();
-    host.attach(&Acquirer {
+    acquire_capability::<ClipboardCapability>(host)
+}
+
+/// Mount an [`Acquirer`] of `C` on `host` and return what it was answered.
+fn acquire_capability<C: Capability>(host: &mut HeadlessHost) -> Result<C::Handle, Unsupported> {
+    let acquired = Acquired::<C>::default();
+    host.attach(&Acquirer::<C> {
         acquired: Rc::clone(&acquired),
     })
     .expect("root attaches");
@@ -396,4 +410,56 @@ pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
         Some(&"capture dropped at teardown"),
         "the completion's failure comes first; the provider is kept, not dropped into a second panic"
     );
+}
+
+/// A claim is asked for its text only when the selection is read, with no
+/// borrow of the selection held; a newer claim, or another application
+/// selecting, makes it stale, and a stale claim's drop leaves the selection
+/// alone.
+pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.primary_selection();
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+    let asked = Rc::new(Cell::new(0));
+    let first = selection.claim({
+        let asked = Rc::clone(&asked);
+        let scripted = scripted.clone();
+        move || {
+            asked.set(asked.get() + 1);
+            // Re-enters the selection, as a widget reading its own state may.
+            assert!(scripted.is_claimed());
+            Some("first".to_owned())
+        }
+    });
+    assert_eq!(asked.get(), 0, "a claim copies nothing");
+    assert!(first.is_current());
+
+    let settled = settle_into(selection.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*settled.borrow(), Some(Ok(Some("first".to_owned()))));
+    assert_eq!(asked.get(), 1, "a read asks the claim once");
+
+    let second = selection.claim(|| Some("second".to_owned()));
+    assert!(!first.is_current(), "the newer claim holds the selection");
+    drop(first);
+    assert!(second.is_current(), "a stale claim releases nothing");
+    assert_eq!(scripted.text().as_deref(), Some("second"));
+
+    scripted.select("elsewhere");
+    assert!(!second.is_current(), "another application selected");
+    drop(second);
+    assert_eq!(scripted.text().as_deref(), Some("elsewhere"));
+
+    let third = selection.claim(|| Some("third".to_owned()));
+    drop(third);
+    assert_eq!(scripted.text(), None, "a current claim's drop releases it");
+}
+
+pub(crate) fn a_runtime_without_a_primary_selection_answers_not_registered() {
+    let mut host = HeadlessHost::with_capabilities(window(), CapabilityRegistry::empty());
+    let refusal = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect_err("nothing provides the primary selection");
+    assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
+    assert_eq!(refusal.capability(), Some(PrimarySelectionCapability::NAME));
 }

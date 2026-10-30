@@ -619,6 +619,23 @@ impl std::fmt::Debug for HeadlessDevAgent {
 /// documents published (ADR-0260).
 pub use flui_view::__runtime::SESSION_END_BUDGET;
 
+/// The capabilities a headless host provides when it is given no registry:
+/// the clipboard and the primary selection, each scripted by the test.
+#[derive(Default)]
+struct ScriptedBuiltIns {
+    clipboard: crate::ScriptedClipboard,
+    primary_selection: crate::ScriptedPrimarySelection,
+}
+
+impl ScriptedBuiltIns {
+    fn registrar(&self) -> flui_platform::capability::CapabilityRegistrar {
+        let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
+        self.clipboard.register(&mut registrar);
+        self.primary_selection.register(&mut registrar);
+        registrar
+    }
+}
+
 /// A [`UiRuntime`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
 #[doc(alias = "HeadlessRuntime")]
@@ -628,7 +645,7 @@ pub struct HeadlessHost {
     sink: HeadlessSink,
     window: Rc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
-    clipboard: crate::ScriptedClipboard,
+    scripted: ScriptedBuiltIns,
     /// The windows opened beside the primary one, in opening order.
     secondary: Vec<SecondaryWindow>,
     /// The surfaces embedded in the primary window, in minting order.
@@ -689,7 +706,8 @@ impl HeadlessHost {
     }
 
     /// [`Self::new`], its widgets acquiring what `plugin` registers beside
-    /// the host's [`clipboard`](Self::clipboard): how a package tests its
+    /// the host's [`clipboard`](Self::clipboard) and
+    /// [`primary_selection`](Self::primary_selection): how a package tests its
     /// plugin on a headless host (ADR-0152).
     ///
     /// # Panics
@@ -701,15 +719,13 @@ impl HeadlessHost {
         window: HeadlessWindow,
         plugin: &dyn flui_platform::capability::Plugin,
     ) -> Self {
-        let clipboard = crate::ScriptedClipboard::new();
-        let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
-        clipboard.register(&mut built_ins);
+        let scripted = ScriptedBuiltIns::default();
         let registry = flui_runtime::capability::CapabilityRegistry::builder()
-            .built_ins(built_ins)
+            .built_ins(scripted.registrar())
             .plugin(plugin)
             .build()
             .unwrap_or_else(|conflict| panic!("the plugin's registrations conflict: {conflict}"));
-        Self::assemble(window, None, Some(registry), Some(clipboard))
+        Self::assemble(window, None, Some(registry), Some(scripted))
     }
 
     /// [`Self::new`], its widgets reaching `storage` through
@@ -725,7 +741,7 @@ impl HeadlessHost {
         window: HeadlessWindow,
         storage: Option<Arc<dyn flui_platform::Storage>>,
         capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
-        clipboard: Option<crate::ScriptedClipboard>,
+        scripted: Option<ScriptedBuiltIns>,
     ) -> Self {
         #[expect(
             clippy::cast_possible_truncation,
@@ -737,7 +753,7 @@ impl HeadlessHost {
         let gesture_preset = window.gesture_preset.clone();
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let clipboard = clipboard.unwrap_or_default();
+        let scripted = scripted.unwrap_or_default();
         let clock = ManualClock::new();
         // A collection of its own: the ui_runtime owns a `TextContext` over it
         // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
@@ -769,10 +785,8 @@ impl HeadlessHost {
             ClockSource::Manual(clock.clone()),
         );
         let registry = capabilities.unwrap_or_else(|| {
-            let mut built_ins = flui_platform::capability::CapabilityRegistrar::new();
-            clipboard.register(&mut built_ins);
             flui_runtime::capability::CapabilityRegistry::builder()
-                .built_ins(built_ins)
+                .built_ins(scripted.registrar())
                 .build()
                 .expect("BUG: one built-in per capability cannot conflict")
         });
@@ -818,7 +832,7 @@ impl HeadlessHost {
             sink: HeadlessSink::new(surface.0, surface.1),
             window,
             accessibility,
-            clipboard,
+            scripted,
             text_store_host,
             secondary: Vec::new(),
             embedded: Vec::new(),
@@ -1155,7 +1169,13 @@ impl HeadlessHost {
     /// The clipboard the UI runtime hands its widgets.
     #[must_use]
     pub fn clipboard(&self) -> crate::ScriptedClipboard {
-        self.clipboard.clone()
+        self.scripted.clipboard.clone()
+    }
+
+    /// The primary selection the UI runtime hands its widgets.
+    #[must_use]
+    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+        self.scripted.primary_selection.clone()
     }
 
     /// The recording text store backend of a particular presentation.
