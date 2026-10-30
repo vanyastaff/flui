@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use flui_native::storage::{DataDirs, FileStore, data_dirs};
-use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
+use flui_platform::{AppDataDir, StorageError, StorageName, StoredVersion, WriteMode};
 
 use crate::run_table;
 
@@ -240,10 +240,10 @@ fn long_non_ascii_path_round_trips() {
 }
 
 fn data_dirs_place_each_scope_under_the_application_name() {
-    let app = StorageName::from_static("flui-notes");
+    let app = AppDataDir::try_new("dev.flui.notes").expect("an identifier is a directory name");
     if let Some(dirs) = data_dirs(&app) {
-        assert!(dirs.roaming.ends_with("flui-notes"), "{dirs:?}");
-        assert!(dirs.local.ends_with("flui-notes"), "{dirs:?}");
+        assert!(dirs.roaming.ends_with("dev.flui.notes"), "{dirs:?}");
+        assert!(dirs.local.ends_with("dev.flui.notes"), "{dirs:?}");
         assert!(
             dirs.roaming.is_absolute() && dirs.local.is_absolute(),
             "{dirs:?}"

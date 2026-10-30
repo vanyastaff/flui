@@ -10,6 +10,7 @@
 /// - `NoProfile` / `HasProfile` - Build profile (debug/release)
 use std::path::PathBuf;
 
+use crate::build::app_floor::AppFloors;
 use crate::build::output::default_output_dir;
 use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
@@ -53,6 +54,7 @@ pub(crate) struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
     profile: Pr,
     output_dir: Option<PathBuf>,
     bundle: Option<AppBundle>,
+    floors: AppFloors,
 }
 
 // Initial builder creation
@@ -71,6 +73,7 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
             profile: NoProfile,
             output_dir: None,
             bundle: None,
+            floors: AppFloors::default(),
         }
     }
 }
@@ -93,6 +96,7 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
             profile: self.profile,
             output_dir: self.output_dir,
             bundle: self.bundle,
+            floors: self.floors,
         }
     }
 }
@@ -112,6 +116,7 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
             profile: HasProfile(profile),
             output_dir: self.output_dir,
             bundle: self.bundle,
+            floors: self.floors,
         }
     }
 }
@@ -133,6 +138,14 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     #[must_use]
     pub(crate) fn with_bundle(mut self, bundle: AppBundle) -> Self {
         self.bundle = Some(bundle);
+        self
+    }
+
+    /// Build against these floors (FLUI's, raised where `flui.toml` asks)
+    /// instead of FLUI's alone.
+    #[must_use]
+    pub(crate) fn with_floors(mut self, floors: AppFloors) -> Self {
+        self.floors = floors;
         self
     }
 
@@ -174,6 +187,7 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
             profile: self.profile.0,
             output_dir,
             bundle: self.bundle,
+            floors: self.floors,
         }
     }
 }

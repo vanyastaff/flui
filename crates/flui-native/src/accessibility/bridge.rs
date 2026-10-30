@@ -7,16 +7,20 @@
 //! active flag, the retained self-contained update, and the two listeners —
 //! is this struct, extracted so the retention and dispatch rules are written
 //! (and unit-tested, on Linux, where tests actually execute) exactly once
-//! instead of re-derived per OS.
+//! instead of re-derived per OS. The Web's semantics host shares it too.
 //!
 //! [`PlatformAccessibility`]: flui_semantics::platform::PlatformAccessibility
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use accesskit::{ActionHandler, ActionRequest, ActivationHandler, NodeId, TreeId, TreeUpdate};
+#[cfg(not(target_arch = "wasm32"))]
+use accesskit::{ActionHandler, ActivationHandler};
+use accesskit::{ActionRequest, NodeId, TreeId, TreeUpdate};
 use parking_lot::Mutex;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
@@ -29,8 +33,10 @@ use flui_semantics::{
 // contained here and answers as if no listener ran.
 
 /// AccessKit's activation handler over a bridge's shared state.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Activation(pub(crate) Arc<BridgeShared>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         os_entry(
@@ -69,8 +75,10 @@ impl accesskit::DeactivationHandler for Deactivation {
 }
 
 /// AccessKit's action handler over a bridge's shared state.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Action(pub(crate) Arc<BridgeShared>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ActionHandler for Action {
     fn do_action(&mut self, request: ActionRequest) {
         os_entry(

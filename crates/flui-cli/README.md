@@ -346,7 +346,7 @@ flui devices --json | jq -r 'select(.event=="device" and .platform=="ios") | .id
 [app]
 name = "my_app"
 version = "0.1.0"
-organization = "com.example"
+id = "com.example.my_app"
 
 [build]
 target_platforms = ["macos", "ios", "web"]
@@ -358,10 +358,33 @@ worker_package = "my_app-logic"
 worker_lib = "my_app_logic"
 logic_watch = "logic/src"
 types_watch = "types/src"
+
+# Optional: the lowest release the app runs on, above FLUI's floor.
+[platforms.ios]
+min = "15.0"
+
+[platforms.android]
+min = 26
 ```
 
-`[app].name` and `[app].organization` become the macOS bundle name and
-identifier. Unknown keys are ignored. There is no global configuration file
+`[app].id` is the application's one identifier; `flui create` makes it from
+`--org` and the name (`-` becomes `_`). Every platform name comes from it:
+it is the Android package as written, the Apple bundle identifier with `_` as
+`-` (`com.example.my-app`), and it names the application's data directory.
+`flui create` writes it into the project's `.cargo/config.toml` as
+`[env] FLUI_APP_ID`, so every cargo invocation builds the application with it,
+and `flui build` and `flui run` rewrite that one key when `flui.toml` changes,
+leaving the rest of the file alone. A `flui.toml` that still names
+`organization` is refused with the `id` line to write instead.
+
+`[platforms.<environment>] min` raises FLUI's floor ([version map](../../docs/version-map.md))
+for `windows` (a build number), `macos` and `ios` (a release in quotes) and
+`android` (an API level); a value below FLUI's, or any `min` for `web` or
+`linux`, fails the build. `flui build` writes the higher of the two into the
+APK, the `Info.plist` and the deployment target rustc links with, and the app
+refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
+
+Unknown keys are ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends
 nothing anywhere.
 

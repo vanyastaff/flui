@@ -405,22 +405,29 @@ fn cjk_breaks_at_a_line_separator(renderer: &crate::headless::HeadlessRenderer) 
 /// and a monochrome glyph says nothing about the colour page.
 fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
-    let Some(painter) = COLOUR_EMOJI_FAMILIES
+    let lay_out = |style| {
+        laid_out(
+            &fonts,
+            "A\u{2028}😀",
+            style,
+            TextDirection::Ltr,
+            f64::from(WIDE.0) - 16.0,
+        )
+    };
+    if !COLOUR_EMOJI_FAMILIES
         .into_iter()
-        .map(|family| {
-            laid_out(
-                &fonts,
-                "A\u{2028}😀",
-                black(32.0).with_font_family(family),
-                TextDirection::Ltr,
-                f64::from(WIDE.0) - 16.0,
-            )
-        })
-        .find(colour_covered)
-    else {
+        .any(|family| colour_covered(&lay_out(black(32.0).with_font_family(family))))
+    {
         println!("colour_emoji_on_line_two: skipped, no host colour emoji face");
         return;
-    };
+    }
+    // The style names no emoji family: the emoji generic must reach the
+    // host's colour face ahead of a text face that maps emoji in monochrome.
+    let painter = lay_out(black(32.0));
+    assert!(
+        colour_covered(&painter),
+        "the default style shapes the emoji in the host's colour face"
+    );
     let pixels = read_back(renderer, &painter, 1.0);
     assert!(
         ink_in(&pixels, band(&painter, 0), everywhere(), saturated).is_empty(),

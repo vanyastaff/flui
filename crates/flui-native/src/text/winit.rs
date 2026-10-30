@@ -74,4 +74,14 @@ impl PlatformTextInput for WinitTextInput {
             LogicalSize::new(area.size.width, area.size.height),
         );
     }
+
+    /// A workaround: winit 0.30 has no call that ends a preedit without
+    /// committing it, and disabling IME is the one that drops it
+    /// ([`Window::set_ime_allowed`](https://docs.rs/winit/0.30/winit/window/struct.Window.html#method.set_ime_allowed)).
+    /// Turning it back on keeps the field composing; the `Ime::Disabled` the
+    /// toggle posts ends a composition the store no longer has.
+    fn discard_composition(&self) {
+        self.window.set_ime_allowed(false);
+        self.window.set_ime_allowed(true);
+    }
 }

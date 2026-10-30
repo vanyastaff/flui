@@ -5,14 +5,14 @@ use crate::scroll::ScrollMetrics;
 /// Picks the offset a released scroll settles on: a page, an anchor.
 ///
 /// One open policy shaped like [`ScrollPhysics`](crate::ScrollPhysics):
-/// stateless, `Send + Sync`, held as `Arc<dyn SnapPolicy>` and compared by
-/// [`Arc::ptr_eq`](std::sync::Arc::ptr_eq). A scrollable with a policy springs to its
+/// stateless, owned by the owner thread, held as `Rc<dyn SnapPolicy>` and compared by
+/// [`Rc::ptr_eq`](std::rc::Rc::ptr_eq). A scrollable with a policy springs to its
 /// target on every release — a drag lifting, a press on a moving scrollable
 /// lifting, an assistive scroll — instead of coasting; a target that is not
 /// finite is replaced by the nearest extent with a diagnostic, and a finite
 /// one is clamped to the extents. [`PageSnap`] targets whole pages,
 /// [`AnchorSnap`] a set of offsets.
-pub trait SnapPolicy: Send + Sync + std::fmt::Debug {
+pub trait SnapPolicy: std::fmt::Debug {
     /// The offset to settle on from `metrics` at `velocity` logical pixels
     /// per second along the scroll axis (positive toward the maximum
     /// extent).

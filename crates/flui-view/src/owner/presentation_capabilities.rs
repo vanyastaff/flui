@@ -40,9 +40,6 @@ pub struct PresentationCapabilities {
     pub drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
     /// The presentation's external-texture registry.
     pub textures: Option<flui_rendering::layer::TextureRegistry>,
-    /// The UI runtime's byte storage; absent where the platform has no files
-    /// or the application configured none.
-    pub storage: Option<std::sync::Arc<dyn flui_platform::Storage>>,
     /// The factory that renders a recovered failure in this presentation's
     /// tree, or `None` for the default [`ErrorView`](crate::ErrorView). It
     /// applies from the next recovery on.
@@ -85,7 +82,6 @@ impl std::fmt::Debug for PresentationCapabilities {
             .field("haptics", &self.haptics.is_some())
             .field("drag_and_drop", &self.drag_and_drop.is_some())
             .field("textures", &self.textures.is_some())
-            .field("storage", &self.storage.is_some())
             .field("error_view_builder", &self.error_view_builder.is_some())
             .field("close_guard", &self.close_guard.is_some())
             .finish()

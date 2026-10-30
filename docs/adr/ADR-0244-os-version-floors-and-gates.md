@@ -205,9 +205,10 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
       entry and the template reads `minSdk = providers.gradleProperty("flui.minSdk")`. A hand-edited
       literal that differs is a build error naming `flui.toml` as the place to change it;
     - at start, the platform compares the running version with the higher of the two. The CLI hands
-      the application's value to the build as an environment variable that `flui-app`'s build script
-      reads (with `rerun-if-env-changed`), so the run-time check of decision 3 also covers an
-      application floor where the system itself does not refuse (Windows).
+      the application's value to the build as `FLUI_APP_MIN_<ENVIRONMENT>`, which `flui-native`'s
+      build script reads (with `rerun-if-env-changed`) next to the floor it compiles in, so the
+      run-time check of decision 3 also covers an application floor where the system itself does not
+      refuse (Windows). A plain `cargo build` sets none and checks FLUI's floor alone.
 
 11. **Application code asks for capabilities, never versions.** Version types and markers stay inside
     the backends. What an application or widget may branch on is a capability through the platform's

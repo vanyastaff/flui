@@ -23,7 +23,7 @@ fn project_with_android_configured() -> TempDir {
     let tmp = TempDir::new().expect("temp dir");
     std::fs::write(
         tmp.path().join("flui.toml"),
-        "[app]\nname = \"test-app\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n\
+        "[app]\nname = \"test-app\"\nversion = \"0.1.0\"\nid = \"com.example.test_app\"\n\
          [build]\ntarget_platforms = [\"android\"]\n",
     )
     .expect("write flui.toml");
@@ -199,7 +199,13 @@ fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
     let android = std::fs::read_to_string(project.join("platforms/android/app/build.gradle.kts"))
         .expect("generated Android configuration");
     assert!(
-        android.contains("minSdk = 23"),
+        android.contains("minSdk = providers.gradleProperty(\"flui.minSdk\").get().toInt()"),
+        "the build script reads the floor flui.toml states, never a literal"
+    );
+    let properties = std::fs::read_to_string(project.join("platforms/android/gradle.properties"))
+        .expect("generated Gradle properties");
+    assert!(
+        properties.lines().any(|line| line == "flui.minSdk=23"),
         "Android safe-area capture requires API 23"
     );
 

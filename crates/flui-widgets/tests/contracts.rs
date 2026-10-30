@@ -545,6 +545,10 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root,
             ),
             (
+                "keyboard_focus::routes::back_keys_leave_a_page_with_nothing_focusable",
+                crate::keyboard_focus::routes::back_keys_leave_a_page_with_nothing_focusable,
+            ),
+            (
                 "raw_button::raw_button_activates_from_the_keyboard",
                 crate::raw_button::raw_button_activates_from_the_keyboard,
             ),

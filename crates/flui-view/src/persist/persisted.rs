@@ -1,20 +1,25 @@
 //! [`Persisted`], the owner-local handle to one stored document.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::sync::Arc;
 
-use flui_platform::{Storage, Unsupported, UnsupportedReason};
+use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_platform::{StorageError, Stored, StoredVersion, Unsupported};
 
-use super::{Document, PersistError, Revision, SaveStatus};
-use crate::LifecycleContext;
+use super::{CodecStep, Document, PersistError, ReadOnlyReason, Revision, SaveStatus};
+use super::{StorageCapability, StorageHandle};
 use crate::context::CrateToken;
 use crate::flush_registry::FlushRegistry;
+use crate::{LifecycleContext, LifecycleContextExt};
 
-/// What a document asks of storage while nothing provides it.
-const NOT_WIRED: Unsupported = Unsupported::new(UnsupportedReason::NotRegistered);
+/// The first word of a stored document's header line.
+const HEADER_MAGIC: &str = "flui-document";
+
+/// What a write asks of storage until writing is wired.
+const NOT_WIRED: Unsupported = Unsupported::new(flui_platform::UnsupportedReason::NotRegistered);
 
 /// One [`Document`] kept for a widget: loaded from the UI runtime's storage,
 /// written on every [`set`](Self::set), with its [`SaveStatus`].
@@ -24,23 +29,42 @@ const NOT_WIRED: Unsupported = Unsupported::new(UnsupportedReason::NotRegistered
 /// the status stay on the owner thread, and only bytes travel to the thread
 /// that does the IO.
 ///
-/// Not yet wired to storage: [`load`](Self::load) resolves to
-/// [`PersistError::Storage`] with [`StorageError::Unsupported`](flui_platform::StorageError::Unsupported)
-/// ([`UnsupportedReason::NotRegistered`]),
-/// [`set`](Self::set) refuses every value, and nothing is ever
-/// [`committed`](Self::committed).
+/// Writing is not wired yet: [`set`](Self::set) refuses every value, and
+/// nothing is ever [`committed`](Self::committed).
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
 
 /// What the clones of one [`Persisted`] share.
 struct OpenDocument<D> {
-    /// The UI runtime's storage, if it has one.
-    storage: Option<Arc<dyn Storage>>,
+    /// The UI runtime's storage, or why it has none.
+    storage: Result<StorageHandle, Unsupported>,
     /// The host's flush registry, which `set` publishes into.
     #[expect(dead_code, reason = "published into once set writes")]
     registry: Option<FlushRegistry>,
-    value_type: PhantomData<D>,
+    /// Borrowed only between codec calls, storage requests and wakes.
+    state: RefCell<DocumentState<D>>,
+}
+
+/// Where one document stands; see [`Persisted::status`].
+struct DocumentState<D> {
+    status: SaveStatus,
+    /// The number of the latest load; an earlier load's result is not
+    /// applied.
+    generation: u64,
+    /// The value the last applied load produced.
+    loaded: Option<Loaded<D>>,
+}
+
+/// A loaded value and the stored file it came from.
+struct Loaded<D> {
+    value: Rc<D>,
+    /// The version of the stored bytes, which a data write is based on.
+    #[expect(dead_code, reason = "read by set once it writes")]
+    base: StoredVersion,
+    /// The revision the stored header records; 0 when nothing is stored.
+    #[expect(dead_code, reason = "read by set once it writes")]
+    revision: Revision,
 }
 
 impl<D: Document> Clone for Persisted<D> {
@@ -66,11 +90,21 @@ impl<D: Document> Persisted<D> {
     /// `did_change_dependencies`; nothing is read until [`load`](Self::load).
     #[must_use]
     pub fn open(cx: &dyn LifecycleContext) -> Self {
+        let storage = cx.capability::<StorageCapability>();
+        let status = if storage.is_ok() {
+            SaveStatus::NotLoaded(None)
+        } else {
+            SaveStatus::Unavailable
+        };
         Self {
             document: Rc::new(OpenDocument {
-                storage: cx.storage(),
+                storage,
                 registry: cx.flush_registry_in_crate(CrateToken::new()),
-                value_type: PhantomData,
+                state: RefCell::new(DocumentState {
+                    status,
+                    generation: 0,
+                    loaded: None,
+                }),
             }),
         }
     }
@@ -78,21 +112,30 @@ impl<D: Document> Persisted<D> {
     /// Read the stored document: [`Document::initial`] when nothing is
     /// stored, the decoded value otherwise. The returned future runs on the
     /// owner thread; a later load replaces an earlier one, whose result is
-    /// not applied.
+    /// returned but not applied. Dropping the future cancels the read.
     ///
     /// # Errors
     ///
     /// The [`PersistError`] that kept the document from loading: the
-    /// storage's error, corrupt bytes, a body the document cannot decode, a
-    /// newer format, a contained codec panic, or edits not yet stored.
+    /// storage's error ([`StorageError::Unsupported`] when the UI runtime has
+    /// no storage, [`StorageError::TooLarge`] for a file over
+    /// [`Document::MAX_BYTES`]), corrupt bytes, a body the document cannot
+    /// decode, a newer format, a contained codec panic, or edits not yet
+    /// stored.
     ///
     /// The future is not promised to be [`Unpin`]: pin it (`Box::pin`,
     /// `std::pin::pin!`) before polling it by hand.
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static {
-        // An async block, so the future is `!Unpin` like the owner-local load
-        // that replaces it; the captured value keeps it `!Send`.
-        let failed: Result<Rc<D>, PersistError> = Err(PersistError::Storage(NOT_WIRED.into()));
-        async move { failed }
+        let document = Rc::clone(&self.document);
+        let start = document.start_load();
+        async move {
+            let (generation, read) = start?;
+            let outcome = match read.await {
+                Ok(stored) => decode_stored::<D>(stored),
+                Err(error) => Err(PersistError::Storage(error)),
+            };
+            document.settle(generation, outcome)
+        }
     }
 
     /// Make `value` the document's value and hand it to the storage,
@@ -119,11 +162,7 @@ impl<D: Document> Persisted<D> {
     /// Where the document stands against its storage.
     #[must_use]
     pub fn status(&self) -> SaveStatus {
-        if self.document.storage.is_some() {
-            SaveStatus::NotLoaded(None)
-        } else {
-            SaveStatus::Unavailable
-        }
+        self.document.state.borrow().status.clone()
     }
 
     /// After a failed write, write the latest value again; otherwise do
@@ -135,4 +174,162 @@ impl<D: Document> Persisted<D> {
     /// its place. Does nothing unless the last load found the file corrupt
     /// or undecodable.
     pub fn start_over(&self) {}
+}
+
+/// A load in flight: its generation and the storage read.
+type LoadStart = (u64, flui_platform::StorageFuture<Stored>);
+
+impl<D: Document> OpenDocument<D> {
+    /// Begin a load: refuse it over unsaved edits or without storage,
+    /// otherwise make it the latest and issue the read.
+    fn start_load(&self) -> Result<LoadStart, PersistError> {
+        let mut state = self.state.borrow_mut();
+        if matches!(state.status, SaveStatus::Saving | SaveStatus::Failed(_)) {
+            return Err(PersistError::UnsavedChanges);
+        }
+        let storage = self
+            .storage
+            .as_ref()
+            .map_err(|refusal| PersistError::Storage(StorageError::Unsupported(*refusal)))?;
+        state.generation = state.generation.wrapping_add(1);
+        let generation = state.generation;
+        drop(state);
+        Ok((generation, storage.read(&D::NAME, D::MAX_BYTES)))
+    }
+
+    /// Apply a finished load if it is still the latest, and hand its
+    /// outcome to the caller either way.
+    fn settle(
+        &self,
+        generation: u64,
+        outcome: Result<Loaded<D>, PersistError>,
+    ) -> Result<Rc<D>, PersistError> {
+        let mut state = self.state.borrow_mut();
+        let latest = state.generation == generation;
+        let (result, replaced) = match outcome {
+            Ok(loaded) => {
+                let value = Rc::clone(&loaded.value);
+                let replaced = if latest {
+                    state.status = SaveStatus::Clean;
+                    state.loaded.replace(loaded)
+                } else {
+                    Some(loaded)
+                };
+                (Ok(value), replaced)
+            }
+            Err(error) => {
+                let replaced = if latest {
+                    state.status = match &error {
+                        PersistError::NewerVersion { found, supported } => {
+                            SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion {
+                                found: *found,
+                                supported: *supported,
+                            })
+                        }
+                        other => SaveStatus::NotLoaded(Some(other.clone())),
+                    };
+                    state.loaded.take()
+                } else {
+                    None
+                };
+                (Err(error), replaced)
+            }
+        };
+        drop(state);
+        // A replaced value's drop is application code: no borrow is held.
+        drop(replaced);
+        result
+    }
+}
+
+/// The document a storage read holds: [`Document::initial`] when nothing is
+/// stored, otherwise the body under a header naming this document in a
+/// format this build reads, decoded with any codec panic contained.
+fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError> {
+    let Some(bytes) = stored.bytes else {
+        return Ok(Loaded {
+            value: Rc::new(D::initial()),
+            base: stored.version,
+            revision: Revision::new(0),
+        });
+    };
+    let header = parse_header(&bytes, D::NAME.as_str())?;
+    if header.version > D::VERSION {
+        return Err(PersistError::NewerVersion {
+            found: header.version,
+            supported: D::VERSION,
+        });
+    }
+    let body = &bytes[header.body_start..];
+    let decoded = catch_unwind(AssertUnwindSafe(|| D::decode(header.version, body)));
+    let value = match decoded {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return Err(PersistError::Decode(error)),
+        Err(payload) => {
+            let message = payload_text(&*payload)
+                .unwrap_or("a panic without a message")
+                .to_owned();
+            retain_opaque_payload(payload);
+            return Err(PersistError::Panicked {
+                during: CodecStep::Decode,
+                message,
+            });
+        }
+    };
+    Ok(Loaded {
+        value: Rc::new(value),
+        base: stored.version,
+        revision: header.revision,
+    })
+}
+
+/// A stored document's header line, parsed.
+struct Header {
+    version: u32,
+    revision: Revision,
+    /// Where the body starts, after the header's newline.
+    body_start: usize,
+}
+
+/// Parse `flui-document <name> <version> <revision>\n` at the start of
+/// `bytes`, requiring `<name>` to be `name`.
+fn parse_header(bytes: &[u8], name: &str) -> Result<Header, PersistError> {
+    let corrupt = |detail: &str| PersistError::Corrupt {
+        detail: detail.to_owned(),
+    };
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| corrupt("no header line"))?;
+    let line =
+        std::str::from_utf8(&bytes[..end]).map_err(|_| corrupt("the header is not UTF-8"))?;
+    let mut fields = line.split(' ');
+    if fields.next() != Some(HEADER_MAGIC) {
+        return Err(corrupt("the header does not start with `flui-document`"));
+    }
+    let stored_name = fields
+        .next()
+        .ok_or_else(|| corrupt("the header has no name"))?;
+    if stored_name != name {
+        return Err(PersistError::Corrupt {
+            detail: format!("the header names `{stored_name}`, not `{name}`"),
+        });
+    }
+    let version = fields
+        .next()
+        .and_then(|field| field.parse::<u32>().ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| corrupt("the header's version is not a number from 1"))?;
+    let revision = fields
+        .next()
+        .and_then(|field| field.parse::<u64>().ok())
+        .ok_or_else(|| corrupt("the header's revision is not a number"))?;
+    if fields.next().is_some() {
+        return Err(corrupt("the header has more than four fields"));
+    }
+    Ok(Header {
+        version,
+        revision: Revision::new(revision),
+        body_start: end + 1,
+    })
 }

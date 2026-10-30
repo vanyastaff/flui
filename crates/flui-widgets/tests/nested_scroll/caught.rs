@@ -4,7 +4,6 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
@@ -263,7 +262,7 @@ fn pager_over(
             top.connection(),
             Scrollable::new()
                 .controller(pager.clone())
-                .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
+                .snap_policy(Rc::new(PageSnap::new(ViewportFraction::FULL)))
                 .child(pages),
         ),
     )

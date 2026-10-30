@@ -126,8 +126,6 @@ positions = [
     { item = "flui_widgets::navigator::route::RouteSettings::argument", at = "bound", marker = "Sync" },
     { item = "flui_widgets::navigator::route::RouteSettings::with_arguments", at = "bound", marker = "Send" },
     { item = "flui_widgets::navigator::route::RouteSettings::with_arguments", at = "bound", marker = "Sync" },
-    { item = "flui_widgets::scroll::nested::snap::SnapPolicy", at = "supertrait", marker = "Send" },
-    { item = "flui_widgets::scroll::nested::snap::SnapPolicy", at = "supertrait", marker = "Sync" },
     { item = "impl core::convert::From for flui_widgets::localization::localizations::BoxedLocalizationsDelegate", at = "bound", marker = "Send" },
     { item = "impl core::convert::From for flui_widgets::localization::localizations::BoxedLocalizationsDelegate", at = "bound", marker = "Sync" },
     { item = "impl core::fmt::Debug for flui_widgets::navigator::page_route::PageRoute", at = "bound", marker = "Send" },

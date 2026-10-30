@@ -305,16 +305,24 @@ fn close_applies_a_queued_focus_change_before_its_completion() {
     assert_eq!(host.completed(&c), 1, "C's is completed once, by the move");
 }
 
+/// A push platform that logs its calls.
 #[derive(Default)]
-struct Push(parking_lot::Mutex<Vec<bool>>);
+struct Push(parking_lot::Mutex<Vec<&'static str>>);
 
 impl PlatformTextInput for Push {
     fn set_ime_allowed(&self, allowed: bool) {
-        self.0.lock().push(allowed);
+        self.0
+            .lock()
+            .push(if allowed { "enable" } else { "disable" });
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {
+        self.0.lock().push("discard");
+    }
 }
 
+/// A push platform's composition is committed in place, and the platform is
+/// told to forget its own copy, so its input method never commits it again.
 fn push_and_storeless_backends_commit_in_place() {
     let platform = Arc::new(Push::default());
     let owner = TextInputOwner::new(TextInputBackend::Push(platform.clone()));
@@ -331,7 +339,7 @@ fn push_and_storeless_backends_commit_in_place() {
         Ok(()),
         "a stale token is a no-op"
     );
-    assert_eq!(*platform.0.lock(), [true, false]);
+    assert_eq!(*platform.0.lock(), ["enable", "discard", "disable"]);
 
     let none = TextInputOwner::new(TextInputBackend::Unsupported);
     assert_eq!(

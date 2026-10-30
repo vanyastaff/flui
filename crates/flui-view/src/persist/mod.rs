@@ -2,8 +2,8 @@
 //!
 //! A [`Document`] is application data with a [`StorageName`], a format
 //! version and its own byte encoding. [`Persisted`] keeps one document for a
-//! widget: it reads it through the UI runtime's [`Storage`] (acquired with
-//! [`LifecycleContext::storage`](crate::LifecycleContext::storage)), writes
+//! widget: it reads it through the UI runtime's storage (a [`StorageHandle`], acquired as
+//! the [`StorageCapability`] in a lifecycle hook), writes
 //! every value [`set`](Persisted::set) on it, and reports where that stands
 //! as a [`SaveStatus`].
 //!
@@ -46,8 +46,10 @@
 //!
 //! [`Storage`]: flui_platform::Storage
 
+mod capability;
 mod persisted;
 
+pub use capability::{StorageCapability, StorageHandle};
 pub use persisted::Persisted;
 
 use flui_platform::{StorageError, StorageName};
@@ -115,10 +117,6 @@ pub struct Revision(u64);
 
 impl Revision {
     /// The revision numbered `n`, as a stored file's header records it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read from stored headers once Persisted loads")
-    )]
     pub(crate) const fn new(n: u64) -> Self {
         Self(n)
     }

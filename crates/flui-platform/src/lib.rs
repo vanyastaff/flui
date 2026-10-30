@@ -11,7 +11,8 @@
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
 //!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
 //! - the byte-storage capability [`Storage`] and its vocabulary
-//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
+//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
+//!   the directory an application's values live in ([`AppDataDir`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
@@ -69,6 +70,8 @@
 //!     }
 //!
 //!     fn set_ime_cursor_area(&self, _area: Bounds) {}
+//!
+//!     fn discard_composition(&self) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -185,7 +188,8 @@ pub use preferences::{
     WheelStep,
 };
 pub use storage::{
-    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
+    AppDataDir, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName, Stored,
+    StoredVersion, WriteMode,
 };
 pub use surface_target::{
     DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,

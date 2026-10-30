@@ -198,7 +198,8 @@ trait depends on `flui-platform` instead.
   that hears the system's broadcasts (`broadcast`); `owner::apple` is
   `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
   `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
-  the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
+  the looper over `android-activity`, whose frames the choreographer paces
+  (`frame_clock`, ADR-0269), the JNI `FluiView` and the NDK lookup;
   `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
   host's loop over its libxcb connection and an eventfd doorbell;
   `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test
@@ -1693,6 +1694,76 @@ a manual run drove Chrome's own input-method path
 (`Input.imeSetComposition` and `Input.insertText` over ChromeDriver's DevTools
 channel, a trusted Escape and key over BiDi) through both surfaces. No OS
 input method, candidate window or soft keyboard has run.
+
+### The web window's accessibility is a parallel ARIA DOM over the canvas
+
+AccessKit has no adapter for the browser, so `accessibility::web` writes the
+browser's accessibility tree itself (ADR-0255 decision 18): one `flui-node`
+element per AccessKit node, nested as the tree is, inside a
+`flui-semantics-host` beside the canvas. The pure part runs on the Linux
+host: `aria::describe` maps a node to its element (`role`, the name as
+`aria-label` or as the element's text for a role named by its content,
+states, ranges, `data-flui-id` from `author_id`, relations such as
+`aria-labelledby` and `aria-controls` as lists of the targets' element `id`s
+(a random scope per host, then the node's identifier; a node named directly
+emits no `aria-labelledby`, which would override its name), the box in its
+parent's element) and `mirror::Mirror::apply` turns each `TreeUpdate` into DOM
+operations, refusing one that names a node it never received, after which the
+composition root is asked for the whole tree once. `dom` runs the operations
+and writes only what changed between two specs.
+
+- **Activation is a placeholder.** The browser does not tell a page that a
+  screen reader runs. Until one does, the page holds a 1×1, clipped
+  `flui-a11y-placeholder` button labelled "Enable accessibility". Its `click`, or
+  Enter or Space on it, puts the host in its place and tells the activation
+  listener, after mirroring the tree retained from before. Nothing
+  deactivates it.
+- **The host is `position: fixed` over the canvas, with `opacity: 0` and `pointer-events:
+  none`.** The canvas alone paints, the pointer keeps reaching it and FLUI keeps hit-testing it.
+  The host is placed again on each publish and on scroll (captured on the
+  window), window resize and visual-viewport changes, the listeners the text
+  input's editor uses (`owner::web::listener::viewport_listeners`). A
+  transformed ancestor makes it the host's containing block, so the host is
+  measured after placing and moved by the difference in its own scale. A
+  scale on the canvas alone becomes the host's own `transform` from its top
+  left corner; a rotation is not followed. The root's device-pixel-ratio
+  transform is dropped, since CSS pixels are already logical. The host covers
+  the canvas's client box, inside its border, the box the window's layout
+  size reads.
+- **What stands beside the canvas is hidden with it.** As the canvas's
+  sibling, the placeholder and the host share every ancestor's `display` and
+  `visibility`; the canvas's own are copied on each placement and whenever a
+  `MutationObserver` sees its `style`, `class` or `hidden` change.
+- **Work is queued.** A publish, an activation, a DOM event's action and a
+  re-placement run in order from one queue. A listener that publishes from
+  inside its call, or an event fired synchronously by a change (a removed
+  element's `focusout`, the host's own `focus()`), waits for the work before
+  it, and no listener runs while the mirror is borrowed. The host listens on
+  itself for `click`, `focusin` and `contextmenu` of every element, so no
+  element keeps a listener. An event that finds the mirror borrowed is the
+  host's own and is dropped, and a `Focus` on the node the tree already
+  focuses is not echoed.
+- **The host is part of the canvas's focus area** (`EditorSlot::set_semantics`),
+  so focus moving between the canvas, its editor and the host's elements is no
+  window focus change. Keys on an element reach the window through
+  `CanvasKeys`. The tree's focus moves the page's focus only while the page's
+  focus is the window's, on the canvas or in the host (activating a focused
+  placeholder puts it on the canvas); a focus whose element takes no DOM focus
+  puts it on the canvas, as does a text field: the window's text input
+  serves it there (an `EditContext` or the hidden editor), and the field's
+  element has no input surface.
+- A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
+  needs an OS-entry boundary. The browser reports no screen reader's cursor:
+  `ASSISTIVE_FOCUS` is `Unreported`.
+
+`a_node_is_described_as_its_element`,
+`each_update_becomes_the_dom_operations_it_needs` and
+`an_update_that_cannot_stand_is_refused_and_changes_nothing` pin the mapping on
+Linux. In headless Chrome,
+`the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
+`a_click_on_an_element_reaches_the_action_listener` and
+`the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
+constructed events. No screen reader has read the host.
 
 ### The Windows display snapshot is cached and invalidated, not sampled per turn
 
@@ -4496,7 +4567,8 @@ read limit and a base of another length decided without a value cursor (the
 stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
-`AppConfig::with_storage_dir` is the one switch.
+the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::with_storage_dir`
+is the one switch.
 
 ### Android samples its displays through JNI and refreshes them on announced change only
 

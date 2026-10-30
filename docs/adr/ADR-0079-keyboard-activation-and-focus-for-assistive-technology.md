@@ -122,7 +122,8 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
 Each route's scope answers `BackIntent` and `DismissIntent`
 (`flui-widgets/src/navigator/route_keys.rs`): `BackIntent` pops the current route of the nearest
 navigator that has one to pop, `DismissIntent` pops only a dismissible modal
-(`back_keys_pop_only_the_current_page`).
+(`back_keys_pop_only_the_current_page`), also with the focus on the route's scope itself, on a page
+with nothing focusable (`back_keys_leave_a_page_with_nothing_focusable`).
 
 ## Amendment: links
 

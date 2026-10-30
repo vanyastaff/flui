@@ -48,6 +48,7 @@ pub(crate) fn execute(
     ui::info(format!("Mode: {}", style(mode).cyan()))?;
 
     let project = ensure_flui_project()?;
+    crate::config::sync_app_id_env_for_current_project()?;
 
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
@@ -141,10 +142,13 @@ fn run_session(
                     style(&project.config.worker_package).cyan(),
                     style(&project.config.host_package).cyan()
                 ))?;
+                let floor_env =
+                    crate::config::project_floors(&project.config_dir)?.host_cargo_env();
                 let mut strategy = WorkerHost {
                     project,
                     profile,
                     verbose,
+                    floor_env,
                 };
                 dev_loop(&mut strategy)?;
             }
@@ -426,6 +430,8 @@ fn run_once(
 ) -> CliResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    cmd.envs(crate::config::project_floors(&root)?.host_cargo_env());
     if release {
         cmd.arg("--release");
     } else if let Some(prof) = profile {
@@ -1392,14 +1398,14 @@ impl AndroidSession {
             }
         })?;
         let config = FluiConfig::load_from(&root.join("flui.toml"))
-            .context("flui.toml names the Android package (`[app] name` and `organization`)")?;
+            .context("flui.toml names the Android package (`[app] id`)")?;
         Ok(Self {
             root,
             device,
             release,
             hot_reload,
             adb,
-            package: config.app.app_id(),
+            package: config.app.id.android_package().to_owned(),
             runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
         })
     }
@@ -1455,7 +1461,9 @@ impl AndroidSession {
         builder
             .validate_environment(abi)
             .map_err(environment_error)?;
+        let floors = crate::config::project_floors(&self.root)?;
         let ctx = BuilderContextBuilder::new(self.root.clone())
+            .with_floors(floors)
             .with_platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
@@ -1617,6 +1625,14 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
         cmd.arg("--verbose");
     }
 
+    // The same floors as the run that follows, or the build script reruns:
+    // a refused `flui.toml` is reported by that run.
+    if let Ok(floors) = std::env::current_dir()
+        .map_err(CliError::from)
+        .and_then(|root| crate::config::project_floors(&root))
+    {
+        cmd.envs(floors.host_cargo_env());
+    }
     // The same features as the run that follows, or cargo builds twice.
     with_agent(&mut cmd, agent);
 
@@ -1633,6 +1649,8 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
 fn spawn_app(profile: Option<&str>, verbose: bool, agent: Option<&Session>) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    cmd.envs(crate::config::project_floors(&root)?.host_cargo_env());
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -1666,6 +1684,9 @@ struct WorkerHost {
     project: WorkerHotReloadProject,
     profile: Option<String>,
     verbose: bool,
+    /// The application's floors (ADR-0244 §10), for both cargo invocations:
+    /// the same values keep the build script from rerunning between them.
+    floor_env: Vec<(&'static str, String)>,
 }
 
 impl WorkerHost {
@@ -1695,6 +1716,7 @@ impl WorkerHost {
                 ],
                 self.profile.as_deref(),
                 self.verbose,
+                &self.floor_env,
             )
         })
     }
@@ -1713,6 +1735,7 @@ impl WorkerHost {
             staged,
             self.profile.as_deref(),
             self.verbose,
+            &self.floor_env,
         )
     }
 }
@@ -1984,9 +2007,11 @@ fn spawn_host_package(
     worker_plugin: &Path,
     profile: Option<&str>,
     verbose: bool,
+    floor_env: &[(&'static str, String)],
 ) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "-p", package]);
+    cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -2021,9 +2046,15 @@ fn spawn_host_package(
 /// failure that made `flui run` unusable whenever host and worker were built
 /// separately. Passing every `-p` flag to one `cargo build` makes cargo unify
 /// once, so both binaries link one instance and the `TypeId`s agree.
-fn run_cargo_build_packages(packages: &[&str], profile: Option<&str>, verbose: bool) -> bool {
+fn run_cargo_build_packages(
+    packages: &[&str],
+    profile: Option<&str>,
+    verbose: bool,
+    floor_env: &[(&'static str, String)],
+) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
+    cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
     for package in packages {
         cmd.args(["-p", package]);
     }
@@ -2073,7 +2104,7 @@ fn worker_dylib_path(
 }
 
 fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>> {
-    let Some((config_dir, config)) = find_flui_config()? else {
+    let Some((config_dir, config)) = crate::config::find_flui_config()? else {
         return Ok(None);
     };
     let Some(hot_reload) = config.hot_reload else {
@@ -2088,21 +2119,6 @@ fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>>
         config_dir,
         workspace_root,
     }))
-}
-
-fn find_flui_config() -> CliResult<Option<(PathBuf, FluiConfig)>> {
-    let mut dir = std::env::current_dir().context("could not read current directory")?;
-    loop {
-        let path = dir.join("flui.toml");
-        if path.exists() {
-            let config = FluiConfig::load_from(&path)?;
-            return Ok(Some((dir, config)));
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    Ok(None)
 }
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
@@ -2407,7 +2423,7 @@ mod tests {
         if let Some(root) = std::env::var_os(WORKER_FIXTURE) {
             let root = std::path::PathBuf::from(root);
             assert!(
-                super::run_cargo_build_packages(&["worker"], Some("dev"), false),
+                super::run_cargo_build_packages(&["worker"], Some("dev"), false, &[]),
                 "cargo build of the fixture failed"
             );
             let path = super::worker_dylib_path(&root, "worker", Some("dev")).expect("worker path");

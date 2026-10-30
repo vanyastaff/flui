@@ -42,4 +42,9 @@ pub trait PlatformTextInput: Send + Sync {
     /// window, in logical window coordinates (origin + size, matching
     /// [`WindowState::outer`](crate::WindowState::outer)'s convention).
     fn set_ime_cursor_area(&self, area: Bounds<f64>);
+
+    /// Make the platform forget its in-progress composition: the caller
+    /// commits the store's own copy of the composed text in place, so the
+    /// input method must not commit it again.
+    fn discard_composition(&self);
 }

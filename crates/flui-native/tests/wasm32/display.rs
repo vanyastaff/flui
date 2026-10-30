@@ -202,7 +202,13 @@ export function installDisplayProbe(windowManagement) {
     document.title = '';
     document.body = { appendChild() {} };
     document.getElementById = () => null;
-    document.createElement = () => (lastCanvas = new FakeCanvas());
+    // The window's canvas; any other element (the accessibility placeholder
+    // beside it) is a stand-in that is not the canvas.
+    document.createElement = tag => {
+        const element = new FakeCanvas();
+        if (tag === 'canvas') lastCanvas = element;
+        return element;
+    };
     define('document', document);
     define('HTMLCanvasElement', FakeCanvas);
     define('getComputedStyle', element => {

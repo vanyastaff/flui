@@ -44,7 +44,7 @@
 //! # Backends
 //!
 //! The owner speaks to its platform one of two ways ([`TextInputBackend`]).
-//! A push-model platform (winit, AppKit today) gets `set_ime_allowed` and
+//! A push-model platform (winit, UIKit) gets `set_ime_allowed` and
 //! the cursor area, and pushes [`ImeEvent`]s back. A pull-model platform
 //! (Win32 text services) hands the presentation a [`TextStoreHost`], and the
 //! owner tells it which store the focused field is: the host then reads and
@@ -811,6 +811,16 @@ impl TextInputOwner {
                 .push_back(HostOp::Complete(store));
             self.apply_host_ops(&mut calls, HostTurn::Own);
         } else {
+            // The platform forgets its preedit first, so its input method
+            // never commits again what the store commits in place. A
+            // platform that panics or reenters still has the store commit.
+            // The call reaches application code whose grants park failures,
+            // and may close this owner: the clone is released inside the
+            // scope, not by the commit's unwind.
+            if let Some(platform) = self.push_platform() {
+                let _ = calls.run_parking(&self.gate, || platform.discard_composition());
+                release_platform(platform, &mut calls);
+            }
             // The commit settles a grant, which may park an owner failure.
             // It is queued behind the shut gate inside a frame, and behind
             // the running grant when asked for from inside one on this store,
@@ -1429,6 +1439,7 @@ mod tests {
     enum PlatformCall {
         Allowed(bool),
         CursorArea(Bounds<f64>),
+        Discard,
     }
 
     #[derive(Default)]
@@ -1449,6 +1460,10 @@ mod tests {
 
         fn set_ime_cursor_area(&self, area: Bounds<f64>) {
             self.calls.lock().push(PlatformCall::CursorArea(area));
+        }
+
+        fn discard_composition(&self) {
+            self.calls.lock().push(PlatformCall::Discard);
         }
     }
 
