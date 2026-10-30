@@ -1168,7 +1168,7 @@ fn build_semantics_fragments_impl(
         blocks_user_actions,
         regions,
     );
-    if !node_excludes_semantics_subtree(node) {
+    if !node.excludes_semantics_subtree() {
         // The generation this node's last layout stamped onto the children it
         // laid out; anything else was not part of that pass.
         let parent_generation = node.layout_generation();
@@ -1614,7 +1614,7 @@ fn assembly_inputs_for(
         let mut config = describe_semantics_configuration(id, node, regions);
         blocks_user_actions = blocks_user_actions || config.blocks_user_actions();
         config.set_blocks_user_actions(blocks_user_actions);
-        if node_excludes_semantics_subtree(node) {
+        if node.excludes_semantics_subtree() {
             return None;
         }
         // The clip this node imposes on the chain's next link. The child's
@@ -1879,13 +1879,6 @@ fn apply_lazy_child_semantic_index(
     };
     if !item_declares_position(config, children) {
         stamp_position(host, config, index);
-    }
-}
-
-fn node_excludes_semantics_subtree(node: &RenderNode) -> bool {
-    match node {
-        RenderNode::Box(entry) => entry.render_object().excludes_semantics_subtree(),
-        RenderNode::Sliver(entry) => entry.render_object().excludes_semantics_subtree(),
     }
 }
 

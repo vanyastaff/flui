@@ -677,13 +677,18 @@ impl RenderBox for RenderParagraph {
             config.set_label(text);
         }
         // Selectable text is a nested merger with its runs: a node of its own
-        // inside any merge, read and selected by character (ADR-0214).
+        // inside any merge, read and selected by character (ADR-0214). With
+        // routed links it stays the boundary of its link regions instead, so
+        // each link keeps its own node and handler; it names its anchor but
+        // publishes no runs until links carry runs of their own.
         if let Some(anchor) = &self.selectable {
-            config.set_semantics_boundary(true);
-            config.set_merging_semantics_of_descendants(true);
             config.add_anchor(anchor.clone());
-            if let Some(content) = self.semantics_text_content(&span.to_plain_text()) {
-                config.set_text_content(content);
+            if !self.routes_links() {
+                config.set_semantics_boundary(true);
+                config.set_merging_semantics_of_descendants(true);
+                if let Some(content) = self.semantics_text_content(&span.to_plain_text()) {
+                    config.set_text_content(content);
+                }
             }
         }
         if let Some(direction) = self.painter.text_direction() {

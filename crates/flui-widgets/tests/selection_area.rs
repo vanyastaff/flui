@@ -466,3 +466,194 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
         }
     }
 }
+
+/// Links in selectable text keep a node and a handler each, so wrapping
+/// linked text in an area changes neither link navigation nor activation.
+///
+/// Red-check: make a linked selectable paragraph merge its descendants
+/// (the two links fold into one node with the last handler).
+pub(crate) fn links_in_a_selection_area_keep_their_own_nodes() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&opened);
+    let mut laid = mounted(SelectionArea::new(
+        RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Read the "),
+            TextSpan::new("terms").with_link("app://terms"),
+            TextSpan::new(" and the "),
+            TextSpan::new("privacy notice").with_link("app://privacy"),
+        ]))
+        .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+    ));
+    let (terms, privacy) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let links = find_all(state, Role::Link);
+        let labels: Vec<_> = links
+            .iter()
+            .map(accesskit_consumer::NodeRef::label)
+            .collect();
+        assert_eq!(
+            labels,
+            [Some("terms".to_owned()), Some("privacy notice".to_owned())],
+            "each link keeps its own node"
+        );
+        (links[0].locate().0, links[1].locate().0)
+    };
+    for link in [privacy, terms] {
+        laid.invoke_semantics_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: link,
+            data: None,
+        })
+        .expect("a link node is activated");
+        laid.tick();
+    }
+    assert_eq!(
+        *opened.borrow(),
+        ["app://privacy", "app://terms"],
+        "each link opens its own target"
+    );
+}
+
+/// An end between the pieces of a grapheme cut for the 255-byte run limit
+/// snaps to the grapheme's start, so no user-perceived character is split.
+///
+/// Red-check: snap ends to a `char` boundary only (the report holds half of
+/// the long grapheme).
+pub(crate) fn an_assistive_end_inside_a_long_grapheme_snaps_to_its_start() {
+    let grapheme = format!("e{}", "\u{301}".repeat(130));
+    let text = format!("ab{grapheme}c");
+    let (area, seen) = recorded_area(Text::new(text.clone()));
+    let mut laid = mounted(area);
+    let runs = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let node = paragraph(state, &text);
+        let runs = runs_of(&node);
+        let characters: usize = node
+            .children()
+            .filter(|run| run.role() == Role::TextRun)
+            .map(|run| run.data().character_lengths().len())
+            .sum();
+        assert_eq!(
+            characters, 5,
+            "the long grapheme is published as two pieces"
+        );
+        runs
+    };
+    assert_eq!(runs.len(), 1, "one line is one run");
+    laid.invoke_semantics_action(selection_request(runs[0], at(runs[0], 0), at(runs[0], 3)))
+        .expect("a selection inside one paragraph is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("ab".to_owned())],
+        "the end inside the grapheme moves to its start"
+    );
+}
+
+/// An offstage paragraph between two selected ones is not in the document,
+/// so it is not in the selected text either.
+///
+/// Red-check: keep offstage entries in the reading order (the report holds
+/// "Hidden" between the two visible texts).
+pub(crate) fn offstage_text_is_left_out_of_the_selection() {
+    use flui_widgets::Offstage;
+
+    let (area, seen) = recorded_area(Column::new((
+        Text::new("Alpha"),
+        Offstage::new().child(Text::new("Hidden")),
+        Text::new("Omega"),
+    )));
+    let mut laid = mounted(area);
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 5)))
+        .expect("a selection across the visible texts is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("Alpha\nOmega".to_owned())],
+        "the offstage text is not selected"
+    );
+}
+
+/// A wake that panics after the selection is committed still lets the
+/// listener hear of it, and the failure is not swallowed.
+///
+/// Red-check: call the listener after the wake without containment (the
+/// listener never hears of the committed selection).
+pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // An element keeps the frame-request hook of its mount, so the hook is
+    // installed before the area mounts and armed once it has.
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut laid = mounted(SizedBox::new(1.0, 1.0));
+    let arm = Arc::clone(&armed);
+    laid.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            assert!(!arm.load(Ordering::SeqCst), "the frame request failed");
+        });
+    });
+    let (area, seen) = recorded_area(Text::new("Alpha beta"));
+    laid.pump_widget(area);
+    laid.tick();
+    let runs = {
+        let tree = consumer(&laid);
+        runs_of(&paragraph(tree.state(), "Alpha beta"))
+    };
+    armed.store(true, Ordering::SeqCst);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.invoke_semantics_action(selection_request(runs[0], at(runs[0], 0), at(runs[0], 5)))
+    }));
+    assert!(outcome.is_err(), "the wake's failure reaches the caller");
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("Alpha".to_owned())],
+        "the listener heard of the committed selection"
+    );
+}
+
+/// The reported text follows the order the published document reads, so a
+/// column laid out bottom-up reports what an adapter selected.
+///
+/// Red-check: order the texts by their top edge (the report is "\n").
+pub(crate) fn the_reported_text_follows_the_published_document_order() {
+    use flui_objects::VerticalDirection;
+
+    let (area, seen) = recorded_area(
+        Column::new((Text::new("Alpha"), Text::new("Beta")))
+            .vertical_direction(VerticalDirection::Up),
+    );
+    let mut laid = mounted(area);
+    let (first, last, text) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, "Beta")),
+            find_all(state, Role::Document)[0].document_range().text(),
+        )
+    };
+    assert_eq!(text, "AlphaBeta", "the document reads in tree order");
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 4)))
+        .expect("a selection across both texts is accepted");
+    laid.tick();
+    assert_eq!(
+        *seen.borrow(),
+        vec![Some("Alpha\nBeta".to_owned())],
+        "the report covers what the adapter selected"
+    );
+}

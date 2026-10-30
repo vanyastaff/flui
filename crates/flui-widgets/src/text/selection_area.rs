@@ -13,13 +13,14 @@
 //!
 //! [anchor]: SemanticsAnchor
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
-use flui_foundation::geometry::Rect;
 use flui_objects::SubtreeAnchor;
-use flui_painting::typography::{TextDirection, TextLink};
+use flui_painting::text_boundaries;
+use flui_painting::typography::TextLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::semantics::{
     DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole,
@@ -32,9 +33,9 @@ use flui_view::{
 };
 
 use super::rich_text::ResolvedParagraph;
+use crate::Semantics;
 use crate::anchored_box::AnchoredBox;
 use crate::support::RefCallback;
-use crate::{Directionality, Semantics};
 
 /// What a [`SelectionArea`] holds selected, in reading order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +53,9 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 ///
 /// Every [`Text`](crate::Text) and [`RichText`](crate::RichText) beneath the
 /// area joins it, except beneath a [`SelectionContainer::disabled`]. A
-/// selection runs from one text to another in reading order: top to bottom,
-/// then from the start edge of the ambient [`Directionality`], and every text
-/// between its two ends is selected whole.
+/// selection runs from one text to another in the order the published
+/// document reads them, and every text between its two ends is selected
+/// whole.
 ///
 /// Assistive technology reads the texts by character and word and moves the
 /// selection (ADR-0214): the area is a `Document` node that publishes the
@@ -150,7 +151,6 @@ impl StatefulView for SelectionArea {
                 on_selection_changed: RefCell::new(self.on_selection_changed.clone()),
                 rebuild: RefCell::new(None),
                 pipeline: RefCell::new(None),
-                direction: Cell::new(TextDirection::Ltr),
             }),
         }
     }
@@ -185,10 +185,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .clone_from(&new_view.on_selection_changed);
     }
 
-    fn build(&self, view: &SelectionArea, ctx: &dyn BuildContext) -> impl IntoView {
-        self.model
-            .direction
-            .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
+    fn build(&self, view: &SelectionArea, _ctx: &dyn BuildContext) -> impl IntoView {
         let model = Rc::clone(&self.model);
         Semantics::new()
             .role(view.role)
@@ -213,8 +210,6 @@ struct SelectionModel {
     on_selection_changed: RefCell<Option<SelectionCallback>>,
     rebuild: RefCell<Option<RebuildHandle>>,
     pipeline: RefCell<Option<PipelineCell>>,
-    /// The ambient direction at the last build: which edge a line starts at.
-    direction: Cell<TextDirection>,
 }
 
 impl SelectionModel {
@@ -222,7 +217,8 @@ impl SelectionModel {
     /// registered text: an end naming a text this area does not hold
     /// refuses the whole request. Tells the listener after the selection is
     /// committed and no borrow is held, since it may rebuild the area or
-    /// select again.
+    /// select again. A wake that panics still lets the listener hear of the
+    /// committed selection; the first failure is resumed afterwards.
     fn select(&self, cx: &mut EventCx<'_>, selection: &DocumentSelection) {
         let Some(selection) = self.registry.snap(selection) else {
             return;
@@ -233,12 +229,19 @@ impl SelectionModel {
         let selected = self.selected_text(&selection);
         *self.selection.borrow_mut() = Some(selection);
         let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(RebuildReason::StateChange);
-        }
         let listener = self.on_selection_changed.borrow().clone();
-        if let Some(listener) = listener {
-            listener(cx, selected.as_ref());
+        let woken = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(rebuild) = rebuild {
+                rebuild.schedule(RebuildReason::StateChange);
+            }
+        }));
+        let told = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(listener) = listener {
+                listener(cx, selected.as_ref());
+            }
+        }));
+        if let Err(first) = woken.and(told) {
+            resume_unwind(first);
         }
     }
 
@@ -273,85 +276,78 @@ impl SelectionModel {
         Some(SelectedText { text })
     }
 
-    /// The registered texts' indices in reading order: by the top of each
-    /// text's box, then by its start edge in the ambient direction, ties
-    /// broken by place in the render tree. Texts the layout cannot measure
-    /// keep registration order after the measured ones.
+    /// The presented texts' indices in the order the published document
+    /// reads them: by place in the render tree, as the semantics assembly
+    /// keeps it, so the text reported for a selection is the text an adapter
+    /// selected. A text beneath an ancestor that leaves its subtree out of
+    /// semantics (offstage, excluded) is not in the document and is left
+    /// out. Texts not yet in the render tree keep registration order after
+    /// the placed ones.
+    ///
+    /// Tree order holds until pointer selection lands: geometric reading
+    /// order then replaces it for the model and the assembly at once.
     fn reading_order(&self, entries: &[Rc<SelectableEntry>]) -> Vec<usize> {
         let pipeline = self.pipeline.borrow().clone();
-        let keys: Vec<Option<OrderKey>> = pipeline
+        let places: Vec<Placement> = pipeline
             .and_then(|pipeline| {
                 pipeline.try_with_layout(|owner| {
                     entries
                         .iter()
-                        .map(|entry| OrderKey::of(owner, &entry.subtree, self.direction.get()))
+                        .map(|entry| Placement::of(owner, &entry.subtree))
                         .collect()
                 })
             })
-            .unwrap_or_else(|| vec![None; entries.len()]);
-        let mut order: Vec<usize> = (0..entries.len()).collect();
-        order.sort_by(|&a, &b| match (&keys[a], &keys[b]) {
-            (Some(a), Some(b)) => a.cmp(b),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+            .unwrap_or_else(|| vec![Placement::Unplaced; entries.len()]);
+        let mut order: Vec<usize> = (0..entries.len())
+            .filter(|&index| places[index] != Placement::Hidden)
+            .collect();
+        order.sort_by(|&a, &b| match (&places[a], &places[b]) {
+            (Placement::At(a), Placement::At(b)) => a.cmp(b),
+            (Placement::At(_), _) => Ordering::Less,
+            (_, Placement::At(_)) => Ordering::Greater,
+            _ => Ordering::Equal,
         });
         order
     }
 }
 
-/// Where a text sits in reading order.
+/// Where a registered text stands in the presented document.
 #[derive(Clone, Debug, PartialEq)]
-struct OrderKey {
-    top: f64,
-    /// The start edge, negated under right-to-left so smaller reads first.
-    start: f64,
+enum Placement {
     /// The child indices from the render root to the text's box.
-    path: Vec<usize>,
+    At(Vec<usize>),
+    /// Mounted, but beneath an ancestor that excludes it from semantics.
+    Hidden,
+    /// Not in the render tree.
+    Unplaced,
 }
 
-impl OrderKey {
-    fn of(
-        owner: &PipelineOwner,
-        subtree: &SubtreeAnchor,
-        direction: TextDirection,
-    ) -> Option<Self> {
-        let id = subtree.get()?;
-        let root = owner.root_id()?;
-        let size = owner.box_size(id)?;
-        let rect = owner
-            .transform_to(id, root)?
-            .transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height));
-        if !(rect.top().is_finite() && rect.left().is_finite() && rect.right().is_finite()) {
-            return None;
-        }
+impl Placement {
+    fn of(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> Self {
+        let Some(id) = subtree.get() else {
+            return Self::Unplaced;
+        };
         let tree = owner.render_tree();
         let mut path = Vec::new();
         let mut at = id;
-        while let Some(parent) = tree.parent(at) {
-            path.push(
-                tree.children(parent)
-                    .iter()
-                    .position(|&child| child == at)?,
-            );
+        loop {
+            let Some(node) = tree.get(at) else {
+                return Self::Unplaced;
+            };
+            if node.excludes_semantics_subtree() {
+                return Self::Hidden;
+            }
+            let Some(parent) = tree.parent(at) else {
+                break;
+            };
+            let Some(index) = tree.children(parent).iter().position(|&child| child == at) else {
+                return Self::Unplaced;
+            };
+            path.push(index);
             at = parent;
         }
         path.reverse();
-        Some(Self {
-            top: rect.top(),
-            start: match direction {
-                TextDirection::Ltr => rect.left(),
-                TextDirection::Rtl => -rect.right(),
-            },
-            path,
-        })
-    }
-
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.top
-            .total_cmp(&other.top)
-            .then(self.start.total_cmp(&other.start))
-            .then_with(|| self.path.cmp(&other.path))
+        Self::At(path)
     }
 }
 
@@ -376,14 +372,20 @@ impl SelectionRegistry {
     }
 
     /// `selection` with each end in a registered text, its byte clamped to
-    /// that text's length and moved down to a character boundary; `None`
-    /// when an end names a text this area does not hold.
+    /// that text's length and moved down to a grapheme boundary, so no end
+    /// splits a user-perceived character; `None` when an end names a text
+    /// this area does not hold.
     fn snap(&self, selection: &DocumentSelection) -> Option<DocumentSelection> {
         let entries = self.entries.borrow();
         let snap = |at: &DocumentPosition| {
             let entry = entries.iter().find(|entry| entry.anchor == *at.text())?;
             let text = entry.text.borrow();
-            let byte = text.floor_char_boundary(at.byte().min(text.len()));
+            let byte = at.byte().min(text.len());
+            let byte = if text_boundaries::is_grapheme_boundary(&text, byte) {
+                byte
+            } else {
+                text_boundaries::previous_grapheme_boundary(&text, byte)
+            };
             Some(DocumentPosition::new(at.text().clone(), byte))
         };
         Some(DocumentSelection::new(

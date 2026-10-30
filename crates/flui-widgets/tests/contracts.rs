@@ -560,6 +560,11 @@ fn selection_area_text_runs() {
             ("selection_area::nested_merger_paragraph_keeps_its_run_nodes", crate::selection_area::nested_merger_paragraph_keeps_its_run_nodes),
             ("selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node", crate::selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node),
             ("selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld", crate::selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld),
+            ("selection_area::links_in_a_selection_area_keep_their_own_nodes", crate::selection_area::links_in_a_selection_area_keep_their_own_nodes),
+            ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
+            ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
+            ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
+            ("selection_area::the_reported_text_follows_the_published_document_order", crate::selection_area::the_reported_text_follows_the_published_document_order),
         ],
     );
 }
