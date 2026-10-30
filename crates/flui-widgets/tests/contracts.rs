@@ -1050,6 +1050,7 @@ fn animation_and_visibility() {
             ("symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end", crate::symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end),
             ("symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing", crate::symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing),
             ("symbol_effect::a_path_effect_draws_the_paths_on_and_off", crate::symbol_effect::a_path_effect_draws_the_paths_on_and_off),
+            ("symbol_effect::a_new_speed_retimes_a_running_repeat", crate::symbol_effect::a_new_speed_retimes_a_running_repeat),
             ("animated_list::a_removed_item_plays_its_exit_and_then_drops", crate::animated_list::a_removed_item_plays_its_exit_and_then_drops),
             ("animated_list::a_key_returning_mid_exit_reclaims_its_element", crate::animated_list::a_key_returning_mid_exit_reclaims_its_element),
             ("animated_list::swapped_items_slide_between_their_places", crate::animated_list::swapped_items_slide_between_their_places),
@@ -1205,6 +1206,7 @@ fn layout_and_render_object_wiring() {
         "layout_and_render_object_wiring",
         &[
             ("stack_positioned::positioned_places_child_at_explicit_edges", crate::stack_positioned::positioned_places_child_at_explicit_edges as fn()),
+            ("stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child", crate::stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child),
             ("wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow", crate::wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow),
             ("wrap::wrap_starts_its_runs_at_the_reading_edge", crate::wrap::wrap_starts_its_runs_at_the_reading_edge),
             ("table::table_mounts_render_table_and_lays_out_a_grid_row_major", crate::table::table_mounts_render_table_and_lays_out_a_grid_row_major),

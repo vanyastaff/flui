@@ -683,6 +683,13 @@ impl ViewState<SymbolEffectHost> for SymbolEffectHostState {
         match (previous.trigger, self.effect.trigger) {
             (Trigger::Change(was), Trigger::Change(now)) if was != now => self.play_once(),
             (Trigger::Active(false), Trigger::Active(true)) => self.run_forever(),
+            // A running repeat keeps the period it started with; a new speed restarts it
+            // from the current phase.
+            (Trigger::Active(true), Trigger::Active(true))
+                if previous.speed != self.effect.speed =>
+            {
+                self.run_forever();
+            }
             (Trigger::Active(true), Trigger::Active(false)) => {
                 // The cycle in progress runs to its end, which is at rest.
                 let _ = self.controller().forward();

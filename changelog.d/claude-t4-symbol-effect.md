@@ -16,3 +16,8 @@
 
 - `IconThemeData` is `#[non_exhaustive]`: build it from `IconThemeData::default()` with one
   method per field (`.size(24.0).color(..)`) instead of a struct literal.
+
+### Fixed
+
+- `IndexedStack` keeps its hidden children out of the semantics tree, as its docs said, and
+  republishes semantics when its index changes.

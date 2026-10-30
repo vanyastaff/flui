@@ -396,3 +396,17 @@ pub(crate) fn a_path_effect_draws_the_paths_on_and_off() {
         "drawn whole under a muted ticker",
     );
 }
+
+/// A new speed on a running repeating effect takes hold from the current phase.
+pub(crate) fn a_new_speed_retimes_a_running_repeat() {
+    let pulse = |speed| glyph(1).symbol_effect(SymbolEffect::pulse().active(true).speed(speed));
+    let mut stage = Stage::mount(pulse(Speed::NORMAL));
+    stage.laid.pump_for(ms(250));
+    stage.show(pulse(Speed::try_new(2.0).expect("a positive speed")));
+    stage.laid.pump_for(ms(125));
+    close(
+        stage.opacity(),
+        0.35,
+        "a quarter cycle, then a quarter of the faster cycle, reaches the lowest point",
+    );
+}
