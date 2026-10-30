@@ -340,10 +340,10 @@ impl WebFrameDriver {
     /// succeed; build it from scratch when there is none, because its first
     /// build failed.
     ///
-    /// A failed build is retried by the next wake — the next animation frame
-    /// of a visible tab, or the context's restoration — and not at once: the
-    /// driver may still be resetting, and an immediate retry would ask it again
-    /// in a loop.
+    /// A failed build asks for the next animation frame and is retried there,
+    /// or at the context's restoration, and not at once: the driver may still
+    /// be resetting, and an immediate retry would ask it again in a loop. A
+    /// hidden tab runs no frames, so the retry waits for it to be shown.
     fn start_rebuild_if_owed(&self, liveness: &super::frame_driver::FrameLiveness) {
         if self
             .renderer
@@ -409,8 +409,10 @@ impl WebFrameDriver {
             }
             let Some(mut renderer) = renderer else {
                 if let Err(error) = built {
-                    tracing::error!(%error, "GPU initialization failed; retried at the next wake");
+                    tracing::error!(%error, "GPU initialization failed; retried at the next frame");
                 }
+                // No frame comes unasked, and the retry runs in one.
+                window.request_redraw();
                 return;
             };
             if let Err(error) = built {
@@ -428,11 +430,12 @@ impl WebFrameDriver {
                     // transiently, so the log is a warning.
                     tracing::warn!(
                         ?error,
-                        "GPU rebuild failed — window target unavailable; retried at the next wake"
+                        "GPU rebuild failed — window target unavailable; retried at the next frame"
                     );
                 } else {
-                    tracing::error!(?error, "GPU rebuild failed; retried at the next wake");
+                    tracing::error!(?error, "GPU rebuild failed; retried at the next frame");
                 }
+                window.request_redraw();
                 return;
             }
             // A lost WebGPU device is reported by the browser, not by a canvas
