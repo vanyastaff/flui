@@ -921,22 +921,50 @@ pub(super) fn drain_quit_notification() {
     }
 }
 
-/// Per-pool grace deadline for joining running background work at full
-/// loop-exit teardown. Bounds a hung compute job's ability to wedge process
-/// exit; running work that finishes sooner ends shutdown sooner (the
-/// deadline is a cap, not a sleep).
+/// How long the framework's part of the exit may take: the flush, the
+/// services and the pools, from the moment the flush starts (ADR-0258 §7).
+/// Application code that runs before it (destructors, `on_quit`) is not
+/// counted.
 #[cfg(not(target_arch = "wasm32"))]
-const EXECUTION_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
 
-/// Deadline for the staged SERVICE shutdown (issue #558) that runs just
-/// before the pools close: every service is cancelled first, then joined
-/// against this one shared deadline — the bounded flush window in which a
-/// service writes its final state. A service that ignores cancellation is
-/// reported (`DeadlineExceeded`) and force-abandoned by the pool shutdown
-/// that follows; it cannot wedge process exit past this deadline plus the
-/// per-pool grace above.
+/// The part of [`EXIT_BUDGET`] the flush registry and the services share:
+/// every service is cancelled first, then joined until what is left of it,
+/// the window in which a service writes its final state. A service that
+/// ignores cancellation is reported (`DeadlineExceeded`) and abandoned by
+/// the pool shutdown that follows.
 #[cfg(not(target_arch = "wasm32"))]
-const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The one deadline the exit order's framework steps share, taken when the
+/// flush starts: the flush and the services end by [`Self::services`], the
+/// pools by [`Self::end`], with every second the services did not use.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct ExitDeadline {
+    services: std::time::Instant,
+    end: std::time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExitDeadline {
+    fn start(now: std::time::Instant) -> Self {
+        Self {
+            services: now + SERVICE_SHUTDOWN_DEADLINE,
+            end: now + EXIT_BUDGET,
+        }
+    }
+
+    /// When the flush and the services end.
+    fn services(self) -> std::time::Instant {
+        self.services
+    }
+
+    /// When the pools end.
+    fn end(self) -> std::time::Instant {
+        self.end
+    }
+}
 
 /// One step of the loop's exit teardown, in the order it runs.
 #[cfg(not(target_arch = "wasm32"))]
@@ -951,6 +979,9 @@ pub enum TeardownStep {
     MainWindow,
     /// Every hosted UI runtime was shut down and dropped.
     UiRuntimes,
+    /// The flush registry was written, before the exit deadline's services
+    /// part ran out.
+    Flush,
     /// The application services were cancelled and joined.
     Services,
     /// The background execution pools were closed.
@@ -991,6 +1022,28 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     preserve_first_lifecycle_panic(&mut first_panic, failure, "installed host retirement");
     log(TeardownStep::UiRuntimes);
 
+    // The framework's part of the exit runs against one deadline taken
+    // here, after the application code above (ADR-0258 §7). The flush
+    // registry is written first, whether or not a failure is held: the
+    // services and the pools after it may abandon the IO pool's writes.
+    let exit = ExitDeadline::start(std::time::Instant::now());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let flush = APP_RUNTIME.with(|slot| slot.borrow().flush_host.clone());
+        if let Some(flush) = flush {
+            let report = flush.flush_within(exit.services());
+            if !report.is_complete() {
+                tracing::warn!(
+                    failed = report.failed.len(),
+                    unfinished = report.unfinished.len(),
+                    "the flush registry did not write everything by the exit deadline"
+                );
+            }
+        }
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "exit flush");
+    log(TeardownStep::Flush);
+
     // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
     // each against one shared deadline — the flush window in which a
@@ -999,10 +1052,8 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // hard-drops any future still running at its next await point, so a
     // service joined AFTER that would lose its flush window every time.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let report = APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)
-        });
+        let report =
+            APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(exit.services()));
         let incomplete: Vec<&'static str> = report
             .entries
             .iter()
@@ -1030,7 +1081,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
-    // work bounded by a per-pool grace deadline, and CLEAR the slot — a
+    // work until the exit deadline's end, and CLEAR the slot — a
     // second platform loop hosted on this same thread later (an embedder
     // running `run_app` twice in one process) must re-resolve fresh
     // services at its own ui_runtime install, not inherit an instance whose
@@ -1041,8 +1092,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // `ExecutionServices`' own `Drop`.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
+            slot.borrow_mut().shutdown_execution(exit.end());
         });
     }))
     .err();

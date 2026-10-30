@@ -793,16 +793,16 @@ impl AppRuntime {
     }
 
     /// The staged service shutdown (issue #558): stop admission, cancel
-    /// every running service, then join each against `deadline` — run at
+    /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
     /// services get their cooperative flush window before the pools
     /// hard-drop whatever is left. Returns the per-service join evidence.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn shutdown_lifecycles(
         &mut self,
-        deadline: std::time::Duration,
+        join_by: std::time::Instant,
     ) -> ServiceShutdownReport {
-        self.service_registry.shutdown(deadline)
+        self.service_registry.shutdown(join_by)
     }
 
     /// The resolved execution services, if any. `None` before the first
@@ -825,8 +825,8 @@ impl AppRuntime {
     }
 
     /// Shut down the execution services and **reset the slot**: stop
-    /// admission, cancel outstanding work, join running work bounded by
-    /// `grace` per pool, then take the shut-down instance out of the
+    /// admission, cancel outstanding work, join running work until
+    /// `deadline`, then take the shut-down instance out of the
     /// `OnceCell` (dropping it — its pools are already closed, so the drop
     /// is a no-op) and discard any never-resolved host-executor stash. Runs
     /// at full loop-exit teardown (`teardown_platform_ui_runtime`), never at
@@ -854,13 +854,13 @@ impl AppRuntime {
                       the wasm backend has nothing to cancel or join"
         )
     )]
-    pub(super) fn shutdown_execution(&mut self, grace: std::time::Duration) {
+    pub(super) fn shutdown_execution(&mut self, deadline: std::time::Instant) {
         // A stash the exiting loop never resolved must not leak into the
         // next loop's resolution: injection is per-run configuration, and
         // the next `run_*` stashes its own config's bundle if it has one.
         self.pending_host_executors = None;
         if let Some(services) = self.execution.take() {
-            services.shutdown(grace);
+            services.shutdown(deadline);
         }
     }
 

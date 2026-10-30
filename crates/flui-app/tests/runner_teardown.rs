@@ -4,18 +4,20 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use flui_app::app::{
-    AppConfig, AppHandle, Application, ExitPolicy, StartupWindow, WindowPolicy,
-    open_secondary_window,
+    AppConfig, AppHandle, Application, ExitPolicy, ServiceDefinition, ServiceLifetime,
+    StartupWindow, WindowPolicy, open_secondary_window,
 };
 use flui_app::testing::{HeadlessRun, RunExit, TeardownStep};
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 /// The order every loop's teardown runs in.
-const TEARDOWN_ORDER: [TeardownStep; 5] = [
+const TEARDOWN_ORDER: [TeardownStep; 6] = [
     TeardownStep::MainWindow,
     TeardownStep::UiRuntimes,
+    TeardownStep::Flush,
     TeardownStep::Services,
     TeardownStep::Execution,
     TeardownStep::NativeResources,
@@ -27,9 +29,17 @@ const TEARDOWN_ORDER: [TeardownStep; 5] = [
 fn one_window_app(
     ready: Rc<RefCell<Option<AppHandle>>>,
 ) -> Application<flui_widgets::Text, impl FnMut(&AppHandle) -> flui_widgets::Text> {
+    one_window_app_with(AppConfig::new(), ready)
+}
+
+/// [`one_window_app`] with `config`'s services.
+fn one_window_app_with(
+    config: AppConfig,
+    ready: Rc<RefCell<Option<AppHandle>>>,
+) -> Application<flui_widgets::Text, impl FnMut(&AppHandle) -> flui_widgets::Text> {
     Application::new(|_| -> flui_widgets::Text { panic!("no main window is opened") })
         .with_startup_window(StartupWindow::None)
-        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+        .with_config(config.with_exit_policy(ExitPolicy::OnLastWindowClosed))
         .on_ready(move |handle| {
             open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
                 .expect("an isolated window opens on the headless platform");
@@ -97,6 +107,45 @@ pub(crate) fn a_session_end_with_nothing_to_save_proceeds() {
     assert_eq!(report.teardown, TEARDOWN_ORDER);
 }
 
+/// How long a job blocks that never looks at its cancellation.
+const HUNG: Duration = Duration::from_secs(30);
+
+/// A service that ignores its cancellation and a compute job that never
+/// returns cost the exit no more than its budget: the services and the
+/// pools share one deadline, six seconds from the flush (ADR-0258 §7),
+/// instead of five seconds each.
+pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
+    let hung = ServiceDefinition::new("hung", ServiceLifetime::StopsWithLastWindow, |context| {
+        let job = context
+            .spawner()
+            .spawn_compute("hung compute", |_| std::thread::sleep(HUNG))
+            .expect("the compute lane takes the job");
+        Box::pin(async move {
+            // Blocks its IO worker without an await point, so neither the
+            // service's cancellation nor the pool's reaches it.
+            std::thread::sleep(HUNG);
+            drop(job);
+        })
+    });
+    let handle = Rc::new(RefCell::new(None));
+    let run = HeadlessRun::start(one_window_app_with(
+        AppConfig::new().with_service(hung),
+        Rc::clone(&handle),
+    ));
+    // The service and its job reach their workers before the exit starts.
+    std::thread::sleep(Duration::from_millis(100));
+
+    let started = Instant::now();
+    let report = run.join().expect("an exit past hung work returns Ok");
+    let took = started.elapsed();
+    assert_eq!(report.teardown, TEARDOWN_ORDER);
+    // Six seconds of budget and one of slack; the old per-step graces took
+    // ten or more.
+    assert!(
+        took < Duration::from_secs(7),
+        "the exit took {took:?}, past the six-second budget"
+    );
+}
 #[test]
 fn runner_teardown() {
     crate::run_table(
@@ -114,6 +163,10 @@ fn runner_teardown() {
             (
                 "a_session_end_with_nothing_to_save_proceeds",
                 a_session_end_with_nothing_to_save_proceeds,
+            ),
+            (
+                "a_hung_service_and_compute_job_end_within_the_exit_budget",
+                a_hung_service_and_compute_job_end_within_the_exit_budget,
             ),
         ],
     );
