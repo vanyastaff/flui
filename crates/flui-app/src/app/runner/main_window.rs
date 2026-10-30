@@ -1095,7 +1095,7 @@ mod tests {
         }
     }
 
-    fn owner_failure_defers_new_window_work_until_recovery() {
+    fn a_contained_callback_failure_runs_accepted_window_work() {
         use super::super::owner_dispatch::{
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
@@ -1119,37 +1119,22 @@ mod tests {
                 );
                 let reply = Rc::new(RefCell::new(None));
                 let requested = Rc::clone(&reply);
-                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    dispatch_platform_ui_runtime(
-                        outer,
-                        RuntimeTask::TestCallback(Box::new(move |_| {
-                            *requested.borrow_mut() = Some(
-                                handle
-                                    .request_show_main_window()
-                                    .expect("admit request before failure"),
-                            );
-                            panic!("owner callback failed");
-                        })),
-                    )
-                    .expect("admitted callback");
-                }))
-                .expect_err("preserve callback failure");
-                assert_eq!(
-                    failure.downcast_ref::<&str>(),
-                    Some(&"owner callback failed")
-                );
-                assert_eq!(calls.get(), 0, "recovery must not invoke a fresh installer");
-                assert!(
-                    reply
-                        .borrow_mut()
-                        .as_mut()
-                        .expect("accepted request")
-                        .try_result()
-                        .is_none()
-                );
-                dispatch_platform_ui_runtime(outer, RuntimeTask::TestCallback(Box::new(|_| {})))
-                    .expect("next healthy owner opportunity");
-                assert_eq!(calls.get(), 1, "accepted request survives the failed turn");
+                // The callback's panic is its operation's, contained (ADR-0258
+                // §1): the turn stays healthy and runs the window work it
+                // accepted.
+                dispatch_platform_ui_runtime(
+                    outer,
+                    RuntimeTask::TestCallback(Box::new(move |_| {
+                        *requested.borrow_mut() = Some(
+                            handle
+                                .request_show_main_window()
+                                .expect("admit request before failure"),
+                        );
+                        panic!("owner callback failed");
+                    })),
+                )
+                .expect("a contained callback failure leaves the dispatch accepted");
+                assert_eq!(calls.get(), 1, "the accepted request ran in the same turn");
                 assert!(matches!(
                     reply
                         .borrow_mut()
@@ -1234,7 +1219,7 @@ mod tests {
         crate::table_test::run_table(
             "main_window_installer_matrix",
             &[
-                ("owner_failure_defers_new_window_work_until_recovery", owner_failure_defers_new_window_work_until_recovery as fn()),
+                ("a_contained_callback_failure_runs_accepted_window_work", a_contained_callback_failure_runs_accepted_window_work as fn()),
                 (
                     "main_window_waits_for_deferred_runtime_publication",
                     main_window_waits_for_deferred_runtime_publication as fn(),
