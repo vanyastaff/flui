@@ -1332,8 +1332,9 @@ pub(crate) mod ios {
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
-            TouchInputState::hover(self, recognizer, view)
+            TouchInputState::hover(self, recognizer, view, stamp)
         }
     }
 
@@ -1370,11 +1371,14 @@ pub(crate) mod ios {
 
     impl TouchInputState {
         /// The recognizer is restricted to Stylus at registration; a mouse cannot
-        /// acquire Pencil sensors through this path.
+        /// acquire Pencil sensors through this path. `stamp` is the uptime of
+        /// the event that drove the recognizer: the clock the Pencil's touches
+        /// are stamped on, so its hover and its contact share one.
         pub(crate) fn hover(
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
             if self.pencil_touch.is_some() {
                 // Contact samples own this Pencil while its tip is down.
@@ -1383,8 +1387,12 @@ pub(crate) mod ios {
             // SAFETY: UIKit invokes this target with a live gesture recognizer;
             // `state` is its documented enum-valued getter (omitted by the bindings).
             let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
-            let time =
-                ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let time = match stamp {
+                Some(uptime) => ReadingTime::coarse(NativeTime::UptimeSeconds(uptime)),
+                None => {
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()))
+                }
+            };
             let pencil = |action| {
                 NativeReading::new(
                     PENCIL,

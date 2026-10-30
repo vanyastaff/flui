@@ -31,14 +31,16 @@ use std::sync::{
 use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::runtime::ProtocolObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_foundation::{
     NSArray, NSDefaultRunLoopMode, NSNumber, NSObjectProtocol, NSPoint, NSRunLoop, NSSet,
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
-    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
+    UIEvent, UIGestureRecognizer, UIGestureRecognizerDelegate, UIHoverGestureRecognizer,
+    UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
 use crate::host;
@@ -131,6 +133,9 @@ pub struct FluiViewIvars {
     /// Apart from `metrics`: the theme is the system's, so it needs neither a
     /// laid-out size nor an attached window to be reported.
     dark: Arc<AtomicBool>,
+    /// The uptime of the event UIKit last handed the Pencil hover
+    /// recognizer, which stamps the hover it reports.
+    hover_stamp: std::cell::Cell<Option<f64>>,
 }
 
 define_class!(
@@ -222,7 +227,8 @@ define_class!(
             os_entry("onPencilHover:", (), AfterPanic::Answer(|()| ()), || {
                 self.pin_for_native_callback();
                 if self.window().is_none() { return; }
-                let events = self.ivars().input.borrow_mut().hover(recognizer, self);
+                let stamp = self.ivars().hover_stamp.get();
+                let events = self.ivars().input.borrow_mut().hover(recognizer, self, stamp);
                 for event in events {
                     if self.window().is_none() { break; }
                     self.delivery().dispatch_input(event);
@@ -308,6 +314,21 @@ define_class!(
     }
 
     unsafe impl NSObjectProtocol for FluiView {}
+
+    // SAFETY: the view is main-thread-only and answers the one optional
+    // method it declares; UIKit holds the delegate weakly, and the view
+    // outlives the recognizer it installs.
+    unsafe impl UIGestureRecognizerDelegate for FluiView {
+        /// The Pencil hover recognizer's event: its uptime stamps the hover,
+        /// as the Pencil's touches are stamped (a recognizer has no time).
+        #[unsafe(method(gestureRecognizer:shouldReceiveEvent:))]
+        fn should_receive_event(&self, _recognizer: &UIGestureRecognizer, event: &UIEvent) -> bool {
+            os_entry("gestureRecognizer:shouldReceiveEvent:", (), AfterPanic::Answer(|()| true), || {
+                self.ivars().hover_stamp.set(Some(event.timestamp()));
+                true
+            })
+        }
+    }
 );
 
 /// What a view needs to name its display: the platform's source, the screen
@@ -348,6 +369,7 @@ impl FluiView {
             window_id: display.window,
             metrics,
             dark,
+            hover_stamp: std::cell::Cell::new(None),
         });
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
@@ -369,6 +391,7 @@ impl FluiView {
             UITouchType::Stylus.0,
         )]));
         hover.setCancelsTouchesInView(false);
+        hover.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         this.addGestureRecognizer(&hover);
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
