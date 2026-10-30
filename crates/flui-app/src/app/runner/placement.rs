@@ -117,11 +117,13 @@ pub(super) fn finish(address: PresentationAddress) {
     }
 }
 
-/// The session is ending: write every window's placement now, within one
-/// budget for all of them.
-pub(super) fn flush_all() {
+/// The session is ending: write every window's placement now, by
+/// `deadline`, the session end's own (ADR-0260), so window metadata never
+/// spends the documents' time.
+pub(super) fn flush_all_by(deadline: Instant) {
     let recorders = recorders();
-    settle(&recorders, Instant::now(), FLUSH_BUDGET);
+    let now = Instant::now();
+    settle(&recorders, now, deadline.saturating_duration_since(now));
 }
 
 /// Write the placements whose throttle interval is over. The owner calls it

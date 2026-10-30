@@ -267,6 +267,13 @@ pub(crate) struct PlatformDataTransfer {
     pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
+/// The windows that refused a session end, each with the block it holds on
+/// the session end's request.
+pub(super) type SessionEndRefusals = Vec<(
+    flui_foundation::PresentationAddress,
+    flui_platform::SessionEndBlock,
+)>;
+
 /// The loop-scoped composition root: installed host, platform event-loop
 /// capabilities and the once-resolved [`SharedEngineServices`].
 ///
@@ -292,6 +299,14 @@ pub(crate) struct AppRuntime {
     /// system is the aggregate. Kept from the query until the session end is
     /// cancelled or happens.
     pub(super) session_end: Option<flui_platform::SessionEndRequest>,
+    /// Whether that request may still tell the platform it was released:
+    /// cleared when a later query displaces it, so dropping the displaced
+    /// request's blocks never releases the session the new one holds.
+    pub(super) session_end_current: Option<Rc<std::cell::Cell<bool>>>,
+    /// The blocks the session end's query took on that request for the
+    /// windows whose handler or guard refused, each released when its window
+    /// carries the close out, or when the session end is cancelled or happens.
+    pub(super) session_end_refusals: SessionEndRefusals,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -541,6 +556,8 @@ impl AppRuntime {
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),
             session_end: None,
+            session_end_current: None,
+            session_end_refusals: Vec::new(),
             host_memory: Arc::default(),
             #[cfg(all(
                 not(target_os = "android"),
