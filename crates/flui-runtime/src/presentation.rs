@@ -2373,7 +2373,18 @@ impl PresentationState {
         self.finish_animation(&mut failure);
         if !failure.preserving() {
             failure.invoke(|| self.widgets.withdraw_root_owner(false));
+            // What an earlier frame left undrained is not this close's.
+            drop(self.widgets.take_recovered_panics());
             failure.run(|| self.widgets.detach_root_widget());
+            // The tree contains each `dispose` that panics so the rest still
+            // dispose; no frame follows to report it, so the first one is
+            // this close's failure (ADR-0258 §2).
+            failure.run(|| {
+                if let Some(first) = self.widgets.take_recovered_panics().into_iter().next() {
+                    let text = first.payload_text.map_or(first.error.message, String::from);
+                    std::panic::resume_unwind(Box::new(text));
+                }
+            });
         }
         // Reached in preserving mode, or when the healthy disposal above
         // failed part way: what the tree still owns is retained.

@@ -8,7 +8,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_interaction::{
-    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimarySelectionCapability,
+    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim, PrimaryClaims,
+    PrimarySelectionCapability, PrimarySelectionHandle,
 };
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
@@ -462,4 +463,116 @@ pub(crate) fn a_runtime_without_a_primary_selection_answers_not_registered() {
         .expect_err("nothing provides the primary selection");
     assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
     assert_eq!(refusal.capability(), Some(PrimarySelectionCapability::NAME));
+}
+
+/// A capture that, as it drops, claims the selection anew and then panics.
+struct ClaimsThenPanics {
+    selection: PrimarySelectionHandle,
+    newer: Rc<RefCell<Option<PrimaryClaim>>>,
+}
+
+impl Drop for ClaimsThenPanics {
+    fn drop(&mut self) {
+        self.newer
+            .replace(Some(self.selection.claim(|| Some("newer".to_owned()))));
+        panic!("capture dropped at teardown");
+    }
+}
+
+/// When the claim a new one replaces panics as its captures drop, the new
+/// claim, whose guard never reached its caller, is withdrawn; a claim that
+/// panicking `Drop` made in turn stays current.
+pub(crate) fn a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.primary_selection();
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+
+    let first = selection.claim({
+        let capture = PanicOnDrop;
+        move || {
+            let _ = &capture;
+            Some("first".to_owned())
+        }
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        selection.claim(|| Some("second".to_owned()))
+    }))
+    .expect_err("the replaced capture's panic reaches the claimer");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"capture dropped at teardown")
+    );
+    assert!(!first.is_current());
+    assert!(
+        !scripted.is_claimed(),
+        "the claim whose guard never reached its caller is withdrawn"
+    );
+    drop(first);
+
+    let newer = Rc::new(RefCell::new(None));
+    let first = selection.claim({
+        let capture = ClaimsThenPanics {
+            selection: selection.clone(),
+            newer: Rc::clone(&newer),
+        };
+        move || {
+            let _ = &capture;
+            Some("first".to_owned())
+        }
+    });
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        selection.claim(|| Some("second".to_owned()))
+    }))
+    .expect_err("the replaced capture's panic reaches the claimer");
+    assert_eq!(
+        scripted.text().as_deref(),
+        Some("newer"),
+        "withdrawing the failed claim leaves the one its predecessor made"
+    );
+    assert!(
+        newer
+            .borrow()
+            .as_ref()
+            .is_some_and(PrimaryClaim::is_current),
+        "the claim made while the predecessor dropped holds the selection"
+    );
+    drop(first);
+}
+
+/// The environment variable naming the case a child process of
+/// `primary_claims_keep_their_captures_while_unwinding` runs.
+pub(crate) const PRIMARY_UNWIND_CHILD: &str = "FLUI_PRIMARY_UNWIND_CHILD";
+
+/// One case of a claim whose captures panic as they drop, met while
+/// another panic unwinds: dropping them then would abort the process, so
+/// the claim is withdrawn and its captures are kept (ADR-0127). The parent
+/// runs each in a child process, where an abort is a failed exit.
+pub(crate) fn a_claim_unwound_keeps_its_captures(case: &str) {
+    let held = || {
+        let capture = PanicOnDrop;
+        move || {
+            let _ = &capture;
+            Some("held".to_owned())
+        }
+    };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match case {
+        // A widget's claim guard drops in the unwind.
+        "claim" => {
+            let mut host = HeadlessHost::new(window());
+            let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+                .expect("the headless host provides a primary selection");
+            let _claim = selection.claim(held());
+            panic!("the first failure");
+        }
+        // A backend's claims drop in the unwind with a claim still current.
+        "claims" => {
+            let mut claims = PrimaryClaims::new();
+            let (_current, _) = claims.claim(Rc::new(held()));
+            panic!("the first failure");
+        }
+        _ => unreachable!("no case {case}"),
+    }))
+    .expect_err("the case panics");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the first failure"));
 }

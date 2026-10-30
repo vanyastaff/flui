@@ -417,7 +417,7 @@ pub(in crate::app) fn install_capabilities(
 
 /// Take back the registry [`install_capabilities`] installed, when the
 /// platform failed to start and no teardown will run.
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 fn discard_capabilities() {
     let installed = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.take());
     drop(installed);

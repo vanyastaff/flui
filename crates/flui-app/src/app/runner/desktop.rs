@@ -390,6 +390,10 @@ where
         Err(AppRunError::CapabilityConflict(conflict)) => {
             Err(LaunchError::CapabilityConflict(conflict))
         }
+        Err(AppRunError::UnsupportedSystem(unsupported)) => {
+            tracing::error!(%unsupported, "FLUI cannot run on this system");
+            Err(LaunchError::UnsupportedSystem(unsupported))
+        }
         Err(AppRunError::Platform { source }) => Err(LaunchError::Platform { source }),
         Err(error) => panic!("desktop bootstrap failed: {error}"),
     }

@@ -28,9 +28,7 @@ where
     // it as a `LaunchError`.
     let platform = flui_native::current_platform().map_err(|error| {
         tracing::error!(%error, "Failed to initialize platform");
-        crate::app::LaunchError::Platform {
-            source: Arc::new(error),
-        }
+        crate::app::LaunchError::from_platform(error)
     })?;
 
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and

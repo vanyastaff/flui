@@ -721,9 +721,7 @@ where
     F: FnMut(&AppHandle) -> V + 'static,
 {
     run_with_platform_factory(application, || {
-        flui_native::current_platform().map_err(|error| AppRunError::Platform {
-            source: Arc::new(error),
-        })
+        flui_native::current_platform().map_err(AppRunError::from_platform)
     })
 }
 
@@ -795,9 +793,7 @@ impl StartedLoop {
         if let Some(error) = failure {
             return Err(error);
         }
-        result.map_err(|error| AppRunError::Platform {
-            source: Arc::new(error),
-        })
+        result.map_err(AppRunError::from_platform)
     }
 }
 
@@ -1209,6 +1205,65 @@ mod tests {
             .expect("headless recovery host");
     }
 
+    /// A platform that refuses a system below FLUI's floor fails the run with
+    /// that refusal, typed, before any window opens; another platform failure
+    /// stays a platform failure.
+    fn a_platform_below_the_floor_fails_the_run_as_unsupported() {
+        use flui_platform::{Environment, OsRelease};
+
+        use std::cell::Cell;
+
+        use crate::app::UnsupportedSystem;
+
+        fn run_refused(refusal: flui_native::PlatformError) -> (AppRunError, bool) {
+            let built = Rc::new(Cell::new(false));
+            let witness = Rc::clone(&built);
+            let app = Application::new(move |_| -> flui_widgets::Text {
+                witness.set(true);
+                panic!("never built below the floor");
+            });
+            let error = run_with_platform_factory(app, || Err(AppRunError::from_platform(refusal)))
+                .expect_err("a refused platform fails the run");
+            (error, built.get())
+        }
+
+        let (error, built) = run_refused(flui_native::PlatformError::UnsupportedOs {
+            environment: Environment::Windows,
+            found: OsRelease::from_display("build 9600"),
+            floor: OsRelease::from_display("build 10240"),
+        });
+        assert!(
+            matches!(
+                &error,
+                AppRunError::UnsupportedSystem(UnsupportedSystem::OsBelowFloor { environment: Environment::Windows, found, floor })
+                    if found.to_string() == "build 9600" && floor.to_string() == "build 10240"
+            ),
+            "{error:?}"
+        );
+        assert!(!built, "no window is built below the floor");
+
+        let (error, built) = run_refused(flui_native::PlatformError::MissingRequirement {
+            environment: Environment::Linux,
+            requirement: "the X11 RandR 1.5 extension",
+        });
+        assert!(
+            matches!(
+                &error,
+                AppRunError::UnsupportedSystem(UnsupportedSystem::MissingRequirement {
+                    environment: Environment::Linux,
+                    requirement: "the X11 RandR 1.5 extension",
+                })
+            ),
+            "{error:?}"
+        );
+        assert!(!built, "no window is built without a requirement");
+
+        let (error, _) = run_refused(flui_native::PlatformError::Init {
+            message: "no window class".to_owned(),
+        });
+        assert!(matches!(error, AppRunError::Platform { .. }), "{error:?}");
+    }
+
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -1288,6 +1343,10 @@ mod tests {
                 (
                     "main_window_pending_coalesces_and_recovers_after_installer_panic",
                     main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
+                ),
+                (
+                    "a_platform_below_the_floor_fails_the_run_as_unsupported",
+                    a_platform_below_the_floor_fails_the_run_as_unsupported as fn(),
                 ),
                 (
                     "main_window_factory_panic_is_typed_and_initial_window_is_fatal",

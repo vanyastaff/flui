@@ -113,6 +113,7 @@ pub mod capability;
 pub mod data_transfer;
 mod display;
 pub mod drag;
+mod environment;
 mod event_time;
 mod flag_set;
 mod frame_request;
@@ -153,6 +154,7 @@ pub use display::{
     DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
 };
+pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
 pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;

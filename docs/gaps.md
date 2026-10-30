@@ -287,7 +287,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no host checks them at start.
+- The floors are declared in `platform-support.toml` ([version map](version-map.md)) and the backends refuse a release below them at start, but only the Android `minSdk` is packaged from it.
 - Android packages API 23 while rendering only through Vulkan (API 24).
 - iOS and macOS bundles inherit whatever deployment target the build had.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.

@@ -220,12 +220,25 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, R12, R13, строки с паникой в
+  Остаток T9: R6, R11 `user_panic_exit_code_matrix`, строки с паникой в
   маршрутизации `flui-app`.
-  - [ ] Строки `AppHandler::session_end` и `AppHandler::host_notice` в
-    `an_application_panic_never_leaves_a_handler`: headless не даёт внедрить панику приложения в
-    `answer_session_end` и в подписчика системного уведомления; нужен шов (ответ сеанса через
-    маршрут, как `route_quit`, и подписчик уведомлений в наборе раннера).
+  - [x] Паника приложения в `AppHandler::session_end` и `AppHandler::host_notice`: таблица
+    `a_notice_subscriber_panic_never_leaves_the_handler` (`runner_teardown`; запрос, завершение,
+    системное уведомление) через подписчика уведомлений окна; шов маршрута не понадобился.
+    Характеризация: панику ловит пооперационная граница `flui-runtime`, затем catch обработчика.
+  - [x] R12 `dispose_panic_on_last_window_close_resumes_after_flush` и R13
+    `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (`runner_teardown`, на
+    headless-runner в процессе, как R7). Находка: паника `dispose` при закрытии окна
+    сдерживалась деревом (`RecoveredPanic`) и терялась — кадра после закрытия нет, выход был 0.
+    Теперь закрытие презентации (`flui-runtime`) после `detach_root_widget` делает первую
+    сдержанную панику своей ошибкой: остальные `dispose` выполнены, у последнего окна — 101 после
+    сброса. Зубы: без этого R12 падает (`Returned`). R13 — характеризация: захват наблюдателя
+    жизненного цикла падает раньше дерева, дерево удерживается, `dispose` не вызывается.
+  - [x] R9 (headless): `a_panicking_tap_handler_reports_once_and_the_next_tap_works` и
+    `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (`runner_teardown`):
+    один отчёт `CallbackPanic` с текстом паники, приложение живо, следующий тап доходит до
+    обработчика, следующий кадр выполняет свои post-frame callbacks. Характеризация: границы
+    сдерживания уже есть. Нативная строка 5 (`save-panic`) — в T19.
 - [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
   `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
   задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
@@ -295,5 +308,18 @@ graph LR
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
+  - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
+    `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
+    приёмки; `facade_consumer` требует их по имени автоматически). Шов учёта `Drop` —
+    `AcceptanceApp::with_planter(Planter)`: приложение держит выданное значение в каждом
+    состоянии, странице маршрута и слушателе контроллера черновика (`Kept`); тип из
+    `flui::testing` в приложение не попадает, пример собирается без `testing`. R1 —
+    характеризация (все `live()` > 0 после прохода Home → Note → Settings и 0 после закрытия);
+    futures не в журнале строки — загрузка к закрытию уже завершена, их покрывает R2 в
+    `runner_close`. R8: паника перенесена из `build` экрана заметки в его редактор
+    (`FailingEditor`), чтобы заголовок с Back оставался: без фокуса после замены всего экрана
+    клавиша Back (Alt+Left) никуда не доходит, и пользователь не может уйти с экрана ошибки.
+  - [ ] R23 со счётчиками `Drop` при вето: у приложения приёмки пока нет вето закрытия (guard
+    появляется со строками persistence P11); строка — вместе с ним.
 - [ ] T17 — README, Win32-строка R5, закрытие
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

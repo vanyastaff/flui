@@ -227,7 +227,15 @@ impl IosHost for Apple {
 #[cfg(target_os = "macos")]
 impl HostPlatform<Apple> {
     /// Create a new macOS platform.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::UnsupportedOs`] on a release below FLUI's floor, as a
+    /// second line behind the binary's own minimum (ADR-0244 §3);
+    /// [`PlatformError::Init`] when the application or its loop cannot be set
+    /// up.
     pub fn try_new() -> Result<Self, PlatformError> {
+        crate::version::gate::refuse_below_floor(crate::version::gate::apple::MacOSVersion::read())?;
         // The loop keeps the open windows itself; what they share is the
         // table's window-level positions.
         Self::try_from_parts(MacOSWindows::new, |_| MacOSLoop::try_new::<Apple>())
@@ -240,9 +248,12 @@ impl HostPlatform<Apple> {
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Init`] if called off the main thread, which is
-    /// where UIKit requires every window and view operation to run.
+    /// Returns [`PlatformError::UnsupportedOs`] on a release below FLUI's
+    /// floor, as a second line behind `MinimumOSVersion` (ADR-0244 §3), and
+    /// [`PlatformError::Init`] if called off the main thread, which is where
+    /// UIKit requires every window and view operation to run.
     pub fn try_new() -> Result<Self, PlatformError> {
+        crate::version::gate::refuse_below_floor(crate::version::gate::apple::AppleVersion::read())?;
         Self::try_from_parts(IOSWindows::new, |windows| {
             IOSLoop::try_new::<Apple>(Arc::clone(windows) as _)
         })

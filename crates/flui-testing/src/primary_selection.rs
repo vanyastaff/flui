@@ -154,22 +154,20 @@ struct Backend {
 }
 
 impl PrimarySelectionBackend for Backend {
-    fn claim(&self, text: Rc<dyn SelectionText>) -> PrimaryClaimId {
-        let (id, replaced) = {
-            let mut state = self.selection.state.borrow_mut();
-            let claimed = state.claims.claim(text);
-            if state.claims.is_current(claimed.0) {
-                state.foreign = None;
-            }
-            claimed
-        };
-        drop(replaced);
-        id
+    fn claim(
+        &self,
+        text: Rc<dyn SelectionText>,
+    ) -> (PrimaryClaimId, Option<Rc<dyn SelectionText>>) {
+        let mut state = self.selection.state.borrow_mut();
+        let claimed = state.claims.claim(text);
+        if state.claims.is_current(claimed.0) {
+            state.foreign = None;
+        }
+        claimed
     }
 
-    fn release(&self, claim: PrimaryClaimId) {
-        let released = self.selection.state.borrow_mut().claims.release(claim);
-        drop(released);
+    fn release(&self, claim: PrimaryClaimId) -> Option<Rc<dyn SelectionText>> {
+        self.selection.state.borrow_mut().claims.release(claim)
     }
 
     fn is_current(&self, claim: PrimaryClaimId) -> bool {

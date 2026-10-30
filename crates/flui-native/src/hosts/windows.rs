@@ -123,10 +123,14 @@ impl HostPlatform<Windows> {
     /// Create a new Windows platform instance.
     ///
     /// # Errors
+    /// [`PlatformError::UnsupportedOs`] on a build below FLUI's floor, which
+    /// a Windows manifest does not keep from launching (ADR-0244 §3);
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
     pub fn try_new() -> Result<Self, PlatformError> {
-        Self::at_build(WindowsBuild::read())
+        let build = WindowsBuild::read();
+        crate::version::gate::refuse_below_floor(build)?;
+        Self::at_build(build)
     }
 
     /// The platform as it runs on `build`, which its windows' version gates

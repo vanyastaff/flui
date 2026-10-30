@@ -30,6 +30,9 @@ pub(crate) mod view;
 
 pub(crate) mod protocol;
 
+#[cfg(all(target_os = "linux", feature = "winit-backend"))]
+pub(crate) mod floor;
+
 #[cfg(any(all(target_os = "linux", feature = "wayland"), test))]
 pub(crate) mod wayland_model;
 

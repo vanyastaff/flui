@@ -181,12 +181,12 @@ pub(super) fn keeps_frame_gate_open(
     needs_redraw || frame_scheduled || has_pending_work
 }
 
-/// The pace a BACKGROUNDED pump (frames disabled) is bounded to on the mobile
-/// backends. Android arms it as a deadline ([`BackgroundPace`]); iOS, whose
-/// frame source has no wake-deadline hook yet, still sleeps it in
-/// `bootstrap_ios`'s `PumpBackground` arm. Desktop does not sleep on the loop
-/// thread at all (ADR-0058, [`FallbackWake`]).
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+/// The pace a BACKGROUNDED pump (frames disabled) is bounded to on Android,
+/// armed as a deadline ([`BackgroundPace`]). iOS needs none: its display link
+/// runs the pump at most once per refresh and not at all while held
+/// (ADR-0268). No runner sleeps on its loop thread (ADR-0058,
+/// [`FallbackWake`]).
+#[cfg(any(target_os = "android", test))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// The bound on backgrounded pumps (frames disabled) as a deadline instead of
