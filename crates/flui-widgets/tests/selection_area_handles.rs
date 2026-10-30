@@ -831,3 +831,98 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     assert!(elsewhere.has_primary_focus());
     assert_eq!(scene.handles(), 0);
 }
+
+/// Frame requests that fail both as the focus leaves the area (taking its
+/// handles away) and as the area then asks to rebuild surface the first
+/// failure, with the handles gone.
+///
+/// Red-check: ask for the rebuild outside the containment (the second
+/// failure is the one that surfaces).
+pub(crate) fn failing_wakes_as_the_focus_leaves_surface_the_first() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let (armed, failures) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
+    laid.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            // The focus nodes' own rebuild requests come first and pass; the
+            // area's, as it hears the focus leave, fail.
+            if arm.load(Ordering::SeqCst) {
+                let request = count.fetch_add(1, Ordering::SeqCst) + 1;
+                assert!(request <= 2, "frame request {request} failed");
+            }
+        });
+    });
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    laid.pump_widget(WidgetsApp::new(Column::new((
+        Scene::area(&heard, Some(Marked::default())),
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    ))));
+    laid.pump();
+    let mut scene = Scene { laid, heard };
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+
+    armed.store(true, Ordering::SeqCst);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = elsewhere.request_focus();
+    }));
+    armed.store(false, Ordering::SeqCst);
+    let message = caught
+        .expect_err("the frame requests failed")
+        .downcast::<String>()
+        .map(|message| *message)
+        .unwrap_or_default();
+    assert!(failures.load(Ordering::SeqCst) >= 4, "{message}");
+    assert_eq!(message, "frame request 3 failed");
+    scene.settle();
+    assert_eq!(scene.handles(), 0);
+}
+
+/// Shown handles follow a text that a narrower width wraps anew without
+/// any build: the large word leaves the selected word's line, and its
+/// handles are sized to the smaller line.
+///
+/// Red-check: stop watching after the first check (the handles keep the
+/// line the large word was on).
+pub(crate) fn shown_handles_follow_a_text_wrapped_by_a_new_width() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::{AnimatedContainer, MotionBuilder, RichText};
+
+    let sized = |size: f64| TextStyle::new().with_font_size(size);
+    let marked = Marked::default();
+    let heard: Heard = Rc::default();
+    let recorded = Rc::clone(&heard);
+    let area = SelectionArea::new(RichText::new(TextSpan::with_children(vec![
+        TextSpan::styled("aaa bbb ", sized(10.0)),
+        TextSpan::styled("BIG", sized(40.0)),
+    ])))
+    .on_selection_changed(move |_cx, selected| {
+        recorded
+            .borrow_mut()
+            .push(selected.map(|selected| selected.text.clone()));
+    })
+    .handles(marked.clone());
+    let sized_to = |width: f64| {
+        WidgetsApp::new(Column::new((AnimatedContainer::new(area.clone())
+            .width(width)
+            .duration(Duration::from_millis(100)),)))
+    };
+    let mut scene = Scene::laid_out(sized_to(400.0), heard);
+    scene.long_press(scene.along(5.0));
+    assert_eq!(scene.selected().as_deref(), Some("aaa"));
+    let wide = marked.0.borrow().last().expect("built").line_height;
+
+    scene.laid.pump_widget(sized_to(60.0));
+    for _ in 0..12 {
+        scene.laid.pump_for(Duration::from_millis(16));
+    }
+    let narrow = marked.0.borrow().last().expect("built").line_height;
+    assert!(narrow < wide / 2.0, "{narrow} after {wide}");
+}

@@ -265,14 +265,6 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                 model.departed(anchor);
             }
         }));
-        let model = Rc::downgrade(&self.model);
-        // A text laid out anew under shown handles changes the line they
-        // are sized to.
-        *self.model.registry.on_rebuild.borrow_mut() = Some(Box::new(move || {
-            if let Some(model) = model.upgrade() {
-                model.check_handles_after_frame();
-            }
-        }));
     }
 
     /// Follows the overlay the handles go in.
@@ -568,7 +560,7 @@ impl SelectionModel {
         }
         let rebuild = self.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
-            rebuild.schedule(RebuildReason::StateChange);
+            failure.contain(|| rebuild.schedule(RebuildReason::StateChange));
         }
         failure.resume();
     }
@@ -926,9 +918,6 @@ fn hidden(owner: &PipelineOwner, subtree: &SubtreeAnchor) -> bool {
 /// Told the anchor of a text that left an area.
 type DepartureHook = Box<dyn Fn(&SemanticsAnchor)>;
 
-/// Told that a text rebuilt, so it may lay out anew.
-type RebuildHook = Box<dyn Fn()>;
-
 /// The texts registered with one area, in registration order.
 #[derive(Default)]
 pub(super) struct SelectionRegistry {
@@ -936,8 +925,6 @@ pub(super) struct SelectionRegistry {
     /// Told the anchor of each text that leaves, once the entries are no
     /// longer borrowed.
     on_departure: RefCell<Option<DepartureHook>>,
-    /// Told when a text rebuilds.
-    on_rebuild: RefCell<Option<RebuildHook>>,
 }
 
 impl SelectionRegistry {
@@ -1207,9 +1194,6 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     }
 
     fn build(&self, view: &SelectableParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
-        if let Some(on_rebuild) = self.registry.on_rebuild.borrow().as_ref() {
-            on_rebuild();
-        }
         let paragraph = ResolvedParagraph {
             selectable: Some(self.entry.anchor.clone()),
             highlight: self.entry.highlight.borrow().clone().and_then(|range| {

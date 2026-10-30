@@ -336,10 +336,12 @@ impl SelectionModel {
         ]
     }
 
-    /// After the frame, rebuilds shown handles built for lines that have
-    /// since been laid out again: a build runs before layout, so handles
-    /// built in the frame that changes their text read the old lines, or
-    /// none. Without a post-frame lane they keep what they were built for.
+    /// While the handles are shown, after each frame: rebuilds them when
+    /// their lines were laid out anew since they were built. A build runs
+    /// before layout, and a text can lay out anew without any build (a
+    /// narrower width wraps it), so the check follows every frame rather
+    /// than the builds; it waits for frames and never asks for one. Without
+    /// a post-frame lane the handles keep what they were built for.
     pub(super) fn check_handles_after_frame(self: &Rc<Self>) {
         if !self.handles.shown.get() || self.handles.check_pending.replace(true) {
             return;
@@ -354,6 +356,9 @@ impl SelectionModel {
                 return;
             };
             model.handles.check_pending.set(false);
+            // Watch the next frame first, so a failing rebuild below does
+            // not end the watch.
+            model.check_handles_after_frame();
             if model.handles.shown.get() && model.end_line_heights() != model.handles.built.get() {
                 let mut failure = FirstPanic::new();
                 model.handles.refresh(&mut failure);
