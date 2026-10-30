@@ -17,7 +17,7 @@ Citations below name symbols, not line numbers.
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipRSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
-| `LayerLink`, `LeaderLayer`, `FollowerLayer` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_offset`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
+| `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer<T>` | `annotated_region.rs` | Writer half only; see [Producers](#producers). |
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
 | `Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
@@ -63,7 +63,7 @@ UI runtime had to commit "as one pair" with the tree — duplicated the leader's
 is a widget-tree error; a debug build trips, a release build keeps the later one.
 
 Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
-`link.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
+`tests/follower.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
 branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
 That `push_child` under an unknown parent panics, and that a semantics-failure retry submits the
 retained tree with its leader index intact: **Unasserted:** no test pins this.
@@ -73,20 +73,31 @@ retained tree with its leader index intact: **Unasserted:** no test pins this.
 The chain math needs one dispatch point for "this layer translates its children". Flattening `OffsetLayer` into per-variant `offset` fields had lost it: the engine pushed translations for `Offset`, `Transform`, `Opacity`, `ImageFilter`
 and `Leader`, while the resolver summed only `Offset` and `Transform` — so a follower nested under
 its own leader rendered double-translated. `Layer::local_translation` is now the one place the set
-of translating variants is written down; `resolve_follower_offset` sums it along both chains
-inclusive of the common ancestor (which cancels). Known limitations, named rather than silent: a `Transform` contributes only its
-translation (the follower system is offset-only), and a follower on another follower's chain
-contributes zero.
+of translating variants is written down. `resolve_follower_transform` walks both chains from the
+common ancestor (exclusive) and multiplies, per layer, the `Transform`'s whole matrix, a nested
+`Follower`'s own resolved transform, or the translation `local_translation` answers
+([ADR-0274](../../docs/adr/ADR-0274-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
 A follower nested under its own leader resolving to zero, and an `Opacity` offset on the
 follower's chain being counted: **Unasserted:** no test pins this.
 
-### 4. Anchors and size on `FollowerLayer`, resolution at composite time
+### 4. Anchors, size and leader-clip policy on `FollowerLayer`, resolution at composite time
 
-Both anchors and the follower's own `size` live on the layer so
-`FollowerLayer::calculate_offset` (`Alignment::along_size` on both rectangles, plus
-`target_offset`) runs from the layer tree alone — the same value the GPU walk and the follower
-hit-test side table both read. Anchors outside `[-1, 1]` are legal off-rectangle pivots.
+Both anchors, the follower's own `size` and its `LeaderClip` live on the layer so
+`FollowerLayer::linked_offset` (`Alignment::along_size` on both rectangles, plus
+`target_offset`, in the leader's coordinates) and the clip test run from the layer tree alone —
+the same transform the GPU walk, the damage producers, the annotation lookup and the follower
+hit-test side table all read. Anchors outside `[-1, 1]` are legal off-rectangle pivots. Under
+`LeaderClip::Hide` the leader's anchor point is mapped up the leader's chain and tested against
+each clip layer on it; clips at or above the common ancestor already clip the follower. A
+singular or non-finite chain, a hidden nested follower and nesting past `MAX_FOLLOWER_NESTING`
+resolve to `None`, so no consumer sees a degenerate transform.
+
+Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
+(`a_scaled_leader_scales_the_follower`, `a_leader_inside_another_follower_resolves_through_it`,
+`hide_follows_the_anchor_through_the_leader_clip`,
+`a_singular_transform_on_a_chain_resolves_to_nothing`,
+`followers_nested_past_the_limit_resolve_to_nothing`, …).
 
 ### 5. `SceneBuilder` is secondary; the composer builds the frame through the tree
 

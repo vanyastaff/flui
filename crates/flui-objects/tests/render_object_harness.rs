@@ -153,7 +153,7 @@ use flui_rendering::{
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
     },
     hit_testing::{HitTestBehavior, HitTestResult, MouseRegionCallbacks},
-    layer::LayerLink,
+    layer::{LayerLink, LeaderClip},
     parent_data::{
         MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData, StackParentData,
         TableCellParentData,
@@ -7092,7 +7092,7 @@ fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
 ///
 /// With default TOP_LEFT/TOP_LEFT anchors and zero target offset, the
 /// resolved offset is exactly `branch_a`'s own Stack offset (50,60) —
-/// `resolve_follower_offset` must sum BOTH ancestor chains to their common
+/// `resolve_follower_transform` must walk BOTH ancestor chains to their common
 /// ancestor (summing `branch_a`'s (50,60) and subtracting `branch_b`'s
 /// (0,0)) rather than assuming a shared parent or a same-numbered offset.
 fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries() {
@@ -7150,6 +7150,101 @@ fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundari
     );
 }
 
+/// A follower in a full-size overlay branch with a 30x30 child at its
+/// resolved origin, the shape the rows below share.
+fn follower_overlay(follower: RenderFollowerLayer) -> TreeNode {
+    box_node(RenderRepaintBoundary::new())
+        .label("overlay")
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(300.0)
+                .with_height(300.0),
+        )
+        .child(
+            box_node(follower).label("follower").child(
+                box_node(RenderAlign::new(Alignment::TOP_LEFT))
+                    .child(box_node(RenderColoredBox::red(30.0, 30.0)).label("follower_child")),
+            ),
+        )
+}
+
+/// A leader under a scale of 2 places its follower at the scaled anchor and
+/// scales it: the leader sits at (25, 30) under the scale, (50, 60) on
+/// screen, so the 30x30 child covers (50, 60)-(110, 120). A translation-only
+/// resolution puts the child at (25, 30)-(55, 60) instead.
+fn harness_follower_layer_hit_tests_under_a_scaled_leader() {
+    let link = LayerLink::new();
+    let scaled = box_node(RenderTransform::new(Matrix4::scaling(2.0, 2.0, 1.0)))
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(150.0)
+                .with_height(150.0),
+        )
+        .child(
+            box_node(RenderPadding::new(EdgeInsets::new(30.0, 0.0, 0.0, 25.0)))
+                .child(box_node(RenderLeaderLayer::new(link)).label("leader")),
+        );
+
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(scaled)
+            .child(follower_overlay(RenderFollowerLayer::new(link))),
+    )
+    .with_size(Size::new(300.0, 300.0))
+    .run_frame();
+
+    assert_eq!(
+        run.hit_first(100.0, 110.0),
+        Some(run.id("follower_child")),
+        "the scaled half of the follower's child takes the hit"
+    );
+    assert_eq!(
+        run.hit_first(40.0, 40.0),
+        None,
+        "nothing of the follower is left at the leader's unscaled position"
+    );
+}
+
+/// Under `LeaderClip::Hide` a follower whose leader is scrolled out of the
+/// clip around it takes no hit, and takes hits again once the leader is
+/// back inside; `Escape` keeps it wherever the leader is.
+fn harness_follower_layer_hides_with_a_clipped_leader() {
+    for (leader_clip, scroll, visible) in [
+        (LeaderClip::Hide, 150.0, false),
+        (LeaderClip::Escape, 150.0, true),
+        (LeaderClip::Hide, 50.0, true),
+    ] {
+        let link = LayerLink::new();
+        let viewport = box_node(RenderClipRect::new(Clip::HardEdge))
+            .with_stack_parent_data(
+                StackParentData::new()
+                    .with_top(0.0)
+                    .with_left(0.0)
+                    .with_width(100.0)
+                    .with_height(100.0),
+            )
+            .child(
+                box_node(RenderTransform::new(Matrix4::translation(0.0, scroll, 0.0)))
+                    .child(box_node(RenderLeaderLayer::new(link)).label("leader")),
+            );
+
+        let run = RenderTester::mount(box_node(RenderStack::new()).child(viewport).child(
+            follower_overlay(RenderFollowerLayer::new(link).with_leader_clip(leader_clip)),
+        ))
+        .with_size(Size::new(300.0, 300.0))
+        .run_frame();
+
+        assert_eq!(
+            run.hit_first(10.0, scroll + 10.0),
+            visible.then(|| run.id("follower_child")),
+            "{leader_clip:?} with the leader at {scroll}"
+        );
+    }
+}
 // ============================================================================
 // RenderPhysicalModel / RenderPhysicalShape
 // ============================================================================
@@ -13238,6 +13333,14 @@ fn family_layer_links() {
             (
                 "follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries",
                 harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries,
+            ),
+            (
+                "follower_layer_hit_tests_under_a_scaled_leader",
+                harness_follower_layer_hit_tests_under_a_scaled_leader,
+            ),
+            (
+                "follower_layer_hides_with_a_clipped_leader",
+                harness_follower_layer_hides_with_a_clipped_leader,
             ),
             (
                 "subtree_anchor_attach_publishes_the_real_render_id",

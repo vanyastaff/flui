@@ -1211,21 +1211,24 @@ today.
 
 ### A follower hit-tests at its last composited position
 
-**Rule.** `PipelineOwner` keeps `last_follower_offsets: FxHashMap<RenderId, Offset>` and
+**Rule.** `PipelineOwner` keeps `last_follower_transforms: FxHashMap<RenderId, Matrix4>` and
 `last_hidden_follower_ids`, per-frame byproducts like the retained layer tree and link registry.
 During paint the fragment composer records the `RenderId → LayerId` pair of each
-`Layer::Follower` it pushes. After paint, each follower's offset is resolved with the same
-`flui_layer::resolve_follower_offset` the GPU path uses; a follower that resolves to `None`
-(unlinked, `show_when_unlinked == false`) is recorded as hidden. The hit-test walk, gated on the
-tables being non-empty, pushes `Matrix4::translation(r)` on the result's transform stack and
-shifts the position by `-r` for a follower's subtree, and skips a hidden follower's subtree.
+`Layer::Follower` it pushes. After paint, each follower's transform is resolved with the same
+`flui_layer::resolve_follower_transform` the GPU path uses; a follower that resolves to `None`
+(unlinked with `show_when_unlinked == false`, its leader's anchor clipped out under
+`LeaderClip::Hide`, or a degenerate chain) is recorded as hidden. The hit-test walk, gated on the
+tables being non-empty, pushes the transform's inverse on the result's transform stack and maps
+the position through it for a follower's subtree, and skips a hidden follower's subtree.
 `RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
-signature is unchanged.
+signature is unchanged (`harness_follower_layer_hit_tests_under_a_scaled_leader`,
+`harness_follower_layer_hides_with_a_clipped_leader`).
 
-**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The offset is
+**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The transform is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
-`resolve_follower_offset`. Translation only, like the render path.
+`resolve_follower_transform`
+([ADR-0274](../../docs/adr/ADR-0274-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
 ### Expanded hit areas are resolved after the visual walk
 
@@ -1301,7 +1304,7 @@ change or a window move, which need not composite a frame. Pinned by the widgets
 `a_degenerate_transform_drops_the_region_with_a_diagnostic`,
 `a_region_crossing_the_perspective_horizon_is_dropped`) and `harness_input_regions`.
 
-**Followers.** A follower's composite-resolved offset (`last_follower_offsets`, the shift
+**Followers.** A follower's composite-resolved transform (`last_follower_transforms`, the placement
 paint and hit-testing apply) is composed at the follower, and a follower resolved to hidden
 contributes nothing (`harness_input_regions_follow_a_follower_to_its_resolved_position`).
 Slivers report in their paint coordinates at their absolute paint size

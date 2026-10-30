@@ -3,8 +3,8 @@
 //!
 //! A [`LayerLink`] is the identity a [`LeaderLayer`] publishes and a
 //! [`FollowerLayer`] targets. The tree indexes leaders by link as they are
-//! pushed ([`LayerTree::leader`]); [`resolve_follower_offset`] turns that
-//! index plus the two ancestor chains into the offset the renderer applies at
+//! pushed ([`LayerTree::leader`]); [`resolve_follower_transform`] turns that
+//! index plus the two ancestor chains into the transform the renderer applies at
 //! the follower's tree position.
 //!
 //! [`LeaderLayer`]: crate::LeaderLayer
@@ -13,9 +13,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::LayerId;
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Matrix4, Point};
 
-use crate::LayerTree;
+use crate::tree::annotations::clip_admits;
+use crate::{Layer, LayerTree, LeaderClip};
 
 /// The identity shared by one leader and any number of followers.
 ///
@@ -49,23 +50,47 @@ impl LayerLink {
     }
 }
 
-/// Resolves the offset the renderer applies at `follower_layer_id`'s tree
+/// How many followers may stand on one another's chains before resolution
+/// gives up: a menu in a menu in a menu is a handful, and a cycle (two
+/// followers each on the other's leader chain) would never end.
+const MAX_FOLLOWER_NESTING: usize = 16;
+
+/// Why a follower resolves to nothing.
+enum Unresolved {
+    /// Nothing is painted there: unlinked and hidden, clipped under
+    /// [`LeaderClip::Hide`], a singular or non-finite chain, or a nested
+    /// follower on a chain that is itself hidden.
+    Hidden,
+    /// More than [`MAX_FOLLOWER_NESTING`] followers stand on the chains.
+    TooDeep,
+}
+
+/// Resolves the transform the renderer applies at `follower_layer_id`'s tree
 /// position so the follower's content lands on its leader.
 ///
-/// Walk the leader's and the follower's ancestor chains to their lowest
-/// common ancestor, accumulating each layer's own translation, and take the
-/// difference (the oracle is `FollowerLayer._establishTransform` in the
-/// reference `layer.dart`). FLUI's follower is offset-only, so a chain sums
-/// [`Layer::local_translation`] — a scale or rotation between the two is a
-/// documented limitation, and a follower that sits on another follower's
-/// chain contributes zero (its own offset is resolved by the walk, not stored
-/// on the layer).
+/// Both chains run from the lowest common ancestor (exclusive) down to the
+/// leader and to the follower's parent; each layer on them contributes its
+/// matrix (`Transform`), its own resolved transform (a nested `Follower`) or
+/// its [`Layer::local_translation`]. With `L` the leader's chain and `F` the
+/// follower's, the result is `F⁻¹ · L · translate(linked_offset)` (the oracle
+/// is `FollowerLayer._establishTransform` in the reference `layer.dart`): the
+/// follower's content takes the leader's scale and rotation.
 ///
-/// Returns `None` when nothing is to be painted at `follower_layer_id`: the
-/// id is not a `Follower`, or the follower is unlinked with
-/// `show_when_unlinked == false`. Unlinked with `show_when_unlinked == true`
-/// yields the follower's `target_offset` as a plain paint-origin-relative
-/// position. A leader nested *inside* the follower's subtree violates the
+/// Returns `None` when nothing is to be painted or hit at
+/// `follower_layer_id`:
+///
+/// - the id is not a `Follower`, or it is unlinked with
+///   `show_when_unlinked == false` (unlinked with `true` yields a translation
+///   by the follower's `target_offset` from its paint origin);
+/// - a transform on either chain is singular or not finite, so no geometry
+///   that is not finite is published;
+/// - under [`LeaderClip::Hide`], the leader's anchor point lies outside a clip
+///   layer on the leader's chain;
+/// - a nested follower on a chain resolves to `None`, or more than
+///   [`MAX_FOLLOWER_NESTING`] followers stand on the chains (a debug build
+///   warns once per resolution).
+///
+/// A leader nested *inside* the follower's subtree violates the
 /// leader-before-follower paint-order precondition; it takes the unlinked
 /// path with a warning rather than fabricating a position.
 ///
@@ -73,21 +98,48 @@ impl LayerLink {
 /// the layer cannot disagree.
 ///
 /// [`Layer::local_translation`]: crate::Layer::local_translation
-pub fn resolve_follower_offset(
+pub fn resolve_follower_transform(tree: &LayerTree, follower_layer_id: LayerId) -> Option<Matrix4> {
+    match resolve_at_depth(tree, follower_layer_id, 0) {
+        Ok(transform) => Some(transform),
+        Err(Unresolved::Hidden) => None,
+        Err(Unresolved::TooDeep) => {
+            #[cfg(debug_assertions)]
+            tracing::warn!(
+                ?follower_layer_id,
+                limit = MAX_FOLLOWER_NESTING,
+                "resolve_follower_transform: followers nest deeper than the limit \
+                 (or form a cycle through their leaders); painting nothing",
+            );
+            None
+        }
+    }
+}
+
+fn resolve_at_depth(
     tree: &LayerTree,
     follower_layer_id: LayerId,
-) -> Option<Offset<f64>> {
-    let follower = tree.get_layer(follower_layer_id)?.as_follower()?;
+    depth: usize,
+) -> Result<Matrix4, Unresolved> {
+    if depth > MAX_FOLLOWER_NESTING {
+        return Err(Unresolved::TooDeep);
+    }
+    let follower = tree
+        .get_layer(follower_layer_id)
+        .and_then(Layer::as_follower)
+        .ok_or(Unresolved::Hidden)?;
     let unlinked_fallback = || {
-        follower
-            .show_when_unlinked()
-            .then_some(follower.target_offset())
+        if follower.show_when_unlinked() {
+            let offset = follower.target_offset();
+            finite(Matrix4::translation(offset.dx, offset.dy, 0.0))
+        } else {
+            Err(Unresolved::Hidden)
+        }
     };
 
     let Some(leader_id) = tree.leader(follower.link()) else {
         return unlinked_fallback();
     };
-    let Some(Some(leader)) = tree.get_layer(leader_id).map(|layer| layer.as_leader()) else {
+    let Some(leader) = tree.get_layer(leader_id).and_then(Layer::as_leader) else {
         return unlinked_fallback();
     };
 
@@ -100,124 +152,81 @@ pub fn resolve_follower_offset(
         tracing::warn!(
             ?leader_id,
             ?follower_layer_id,
-            "resolve_follower_offset: leader is inside the follower's subtree \
+            "resolve_follower_transform: leader is inside the follower's subtree \
              (leader must precede its follower in paint order); using the unlinked contract",
         );
         return unlinked_fallback();
     }
 
-    // Both chains include the common ancestor's own translation, which cancels;
-    // the leader's chain starts at the leader itself so its own offset — the
-    // position it gives a hypothetical child — is on the forward side, and on the inverse side exactly when the
-    // leader is an ancestor of the follower.
-    let leader_from_ancestor = translation_through(tree, leader_id, common_ancestor);
-    let follower_from_ancestor = tree
-        .parent(follower_layer_id)
-        .map_or(Offset::ZERO, |parent| {
-            translation_through(tree, parent, common_ancestor)
-        });
-    let leader_offset_from_follower = leader_from_ancestor - follower_from_ancestor;
-
-    Some(follower.calculate_offset(leader_offset_from_follower, leader.size()))
-}
-
-/// Sums [`Layer::local_translation`] from `start` up to and including
-/// `ancestor`.
-///
-/// [`Layer::local_translation`]: crate::Layer::local_translation
-fn translation_through(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<f64> {
-    let mut sum = Offset::ZERO;
-    for id in tree.ancestors(start) {
-        if let Some(layer) = tree.get_layer(id) {
-            sum += layer.local_translation();
-        }
-        if id == ancestor {
+    // The leader's chain, walked up from the leader itself so its own offset
+    // (the position it gives a hypothetical child) is on the forward side.
+    // The anchor point rides along for the clip test: it starts in the
+    // leader's own coordinates and is mapped into each ancestor's in turn.
+    let hide_when_clipped = follower.leader_clip() == LeaderClip::Hide;
+    let anchor = follower.leader_anchor().along_size(leader.size());
+    let mut anchor = Point::new(anchor.dx, anchor.dy);
+    let mut leader_chain = Matrix4::IDENTITY;
+    for id in tree.ancestors(leader_id) {
+        if id == common_ancestor {
             break;
         }
+        let layer = tree.get_layer(id).ok_or(Unresolved::Hidden)?;
+        if hide_when_clipped && id != leader_id && !clip_admits(layer, anchor) {
+            return Err(Unresolved::Hidden);
+        }
+        let local = chain_transform(tree, id, layer, depth)?;
+        leader_chain = local * leader_chain;
+        if hide_when_clipped {
+            let (x, y) = local
+                .project_plane_point(anchor.x, anchor.y)
+                .ok_or(Unresolved::Hidden)?;
+            anchor = Point::new(x, y);
+        }
     }
-    sum
+
+    let mut follower_chain = Matrix4::IDENTITY;
+    if let Some(parent) = tree.parent(follower_layer_id) {
+        for id in tree.ancestors(parent) {
+            if id == common_ancestor {
+                break;
+            }
+            let layer = tree.get_layer(id).ok_or(Unresolved::Hidden)?;
+            follower_chain = chain_transform(tree, id, layer, depth)? * follower_chain;
+        }
+    }
+
+    let follower_from_ancestor = follower_chain.try_inverse().ok_or(Unresolved::Hidden)?;
+    let linked = follower.linked_offset(leader.size());
+    let transform =
+        follower_from_ancestor * leader_chain * Matrix4::translation(linked.dx, linked.dy, 0.0);
+    // A singular leader chain (a zero scale) collapses the follower: nothing
+    // of it can be seen or hit, and hit-testing needs the inverse.
+    transform.try_inverse().ok_or(Unresolved::Hidden)?;
+    Ok(transform)
 }
 
-#[cfg(test)]
-mod tests {
-    use flui_foundation::geometry::Size;
-
-    use super::*;
-    use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer};
-
-    fn offset(dx: f64, dy: f64) -> Layer {
-        Layer::from(OffsetLayer::new(Offset::new(dx, dy)))
-    }
-
-    fn leader(link: LayerLink, dx: f64, dy: f64) -> Layer {
-        Layer::from(LeaderLayer::with_offset(
-            link,
-            Size::new(20.0, 20.0),
-            Offset::new(dx, dy),
-        ))
-    }
-
-    fn follower(link: LayerLink) -> FollowerLayer {
-        FollowerLayer::new(link).with_size(Size::new(10.0, 10.0))
-    }
-
-    /// Leader and follower under two different `Offset` branches: both chains
-    /// are summed to the root, not assumed to share an immediate parent.
-    fn linked_across_offset_branches_sums_both_chains() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let branch_a = tree.push_child(root, offset(100.0, 0.0));
-        let _ = tree.push_child(branch_a, leader(link, 5.0, 5.0));
-        let branch_b = tree.push_child(root, offset(0.0, 200.0));
-        let follower = follower(link);
-        let follower_id = tree.push_child(branch_b, Layer::from(follower));
-
-        // Leader absolute (105,5) minus the follower's pushed position (0,200).
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(105.0, -195.0))
-        );
-    }
-
-    /// A leader painted inside the follower's subtree cannot anchor it (it
-    /// is composited after the follower); the unlinked contract applies.
-    fn leader_inside_the_follower_subtree_falls_back_to_unlinked() {
-        let link = LayerLink::new();
-        let follower = FollowerLayer::new(link)
-            .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(3.0, 4.0));
-        let mut tree = LayerTree::new(Layer::from(follower));
-        let follower_id = tree.root();
-        let _ = tree.push_child(follower_id, leader(link, 50.0, 50.0));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(3.0, 4.0))
-        );
-    }
-
-    #[test]
-    fn follower_resolution_contract() {
-        let cases: &[(&str, fn())] = &[
-            (
-                "linked_across_offset_branches_sums_both_chains",
-                linked_across_offset_branches_sums_both_chains,
-            ),
-            (
-                "leader_inside_the_follower_subtree_falls_back_to_unlinked",
-                leader_inside_the_follower_subtree_falls_back_to_unlinked,
-            ),
-        ];
-        let mut failed = Vec::new();
-        for &(name, case) in cases {
-            if std::panic::catch_unwind(case).is_err() {
-                failed.push(name);
-            }
+/// The transform `layer` (at `id`) applies to its children, as a chain sees
+/// it: a nested follower's is resolved against its own leader.
+fn chain_transform(
+    tree: &LayerTree,
+    id: LayerId,
+    layer: &Layer,
+    depth: usize,
+) -> Result<Matrix4, Unresolved> {
+    match layer {
+        Layer::Transform(transform) => finite(*transform.transform()),
+        Layer::Follower(_) => resolve_at_depth(tree, id, depth + 1),
+        _ => {
+            let offset = layer.local_translation();
+            finite(Matrix4::translation(offset.dx, offset.dy, 0.0))
         }
-        assert!(
-            failed.is_empty(),
-            "follower resolution: failing rows: {failed:?}"
-        );
+    }
+}
+
+fn finite(transform: Matrix4) -> Result<Matrix4, Unresolved> {
+    if transform.m.iter().all(|value| value.is_finite()) {
+        Ok(transform)
+    } else {
+        Err(Unresolved::Hidden)
     }
 }
