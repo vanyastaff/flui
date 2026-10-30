@@ -137,6 +137,9 @@ enum Work {
     Action(ActionRequest),
     /// The canvas may have moved in the viewport.
     Place,
+    /// The page's focus entered or left the host from outside the canvas's
+    /// focus area.
+    SyncFocus,
 }
 
 /// An element the page added, with the listeners on it.
@@ -284,12 +287,16 @@ impl Page {
             })?);
         }
         // The window reads its focus again when it leaves or enters the host
-        // from outside the canvas's focus area.
+        // from outside the canvas's focus area. The window's handler runs
+        // from the queue: a mirrored element removed while it holds focus
+        // fires `focusout` while the tree is borrowed.
         for kind in ["focusin", "focusout"] {
-            let editor = Rc::clone(&self.editor);
+            let this = self.this.clone();
             listeners.push(self.listen(target, kind, move |event| {
-                if !editor.is_handoff(&event) {
-                    editor.sync();
+                if let Some(this) = this.upgrade()
+                    && !this.editor.is_handoff(&event)
+                {
+                    this.submit(Work::SyncFocus);
                 }
             })?);
         }
@@ -371,6 +378,7 @@ impl Page {
                 }
             }
             Work::Place => self.place(),
+            Work::SyncFocus => self.editor.sync(),
         }
     }
 

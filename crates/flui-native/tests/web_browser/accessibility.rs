@@ -154,17 +154,19 @@ fn open() -> (
     Arc<dyn PlatformAccessibility>,
 ) {
     super::fresh_canvas();
-    open_on_page()
+    open_on_page(RecordingWindowHandler::new())
 }
 
-fn open_on_page() -> (
+fn open_on_page(
+    handler: Rc<RecordingWindowHandler>,
+) -> (
     WebPlatform,
     Rc<dyn HostWindow>,
     Arc<dyn PlatformAccessibility>,
 ) {
     let platform = WebPlatform::new().expect("a browser platform");
     let window = platform
-        .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+        .open_window(WindowOptions::default(), handler)
         .expect("the page's canvas opens");
     let accessibility = window
         .accessibility()
@@ -275,6 +277,45 @@ fn activating_the_focused_placeholder_keeps_focus_in_the_window() {
     window.close_now();
 }
 
+/// A publish that removes the focused element keeps the page's focus in
+/// the window, and the browser's `focusout` on the removed element is
+/// handled once the tree is no longer being changed: a handler that closes
+/// the window when told of it finds nothing borrowed.
+#[wasm_bindgen_test]
+fn removing_the_focused_element_keeps_focus_in_the_window() {
+    super::fresh_canvas();
+    let handler = RecordingWindowHandler::new();
+    let (_platform, window, accessibility) = open_on_page(Rc::clone(&handler));
+    accessibility.publish(counter(0));
+    focus_placeholder();
+    activate_placeholder();
+    accessibility.publish(TreeUpdate {
+        focus: BUTTON,
+        ..counter(0)
+    });
+    assert_eq!(focused(), "increment");
+
+    let closing = Rc::downgrade(&window);
+    handler.react_to_state_change(move || {
+        if let Some(window) = closing.upgrade() {
+            window.close_now();
+        }
+    });
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![COUNT]);
+    let mut count = Node::new(Role::Label);
+    count.set_value("Count 0");
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(ROOT, root), (COUNT, count)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(focused(), "canvas", "the root takes no DOM focus");
+    assert_eq!(tree()["children"].as_array().map(Vec::len), Some(1));
+    window.close_now();
+}
+
 /// The host covers the canvas in the viewport, and follows it when a
 /// container the canvas is in scrolls, also when that container is
 /// transformed, which makes it the host's containing block: a screen
@@ -289,7 +330,7 @@ fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
         ),
     ] {
         scrolled_canvas(style);
-        let (_platform, window, accessibility) = open_on_page();
+        let (_platform, window, accessibility) = open_on_page(RecordingWindowHandler::new());
         accessibility.publish(counter(0));
         activate_placeholder();
 
