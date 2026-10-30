@@ -1087,7 +1087,7 @@ pub(crate) mod events {
             .with_primary(true)
             .with_modifiers(modifiers);
             if let Some(point) = self.focal.get() {
-                native = native.at(point.x, point.y, 1.0);
+                native = native.at_logical(point.x, point.y);
             }
             assemble(&self.contacts, &native)
         }
@@ -1616,7 +1616,7 @@ pub(crate) mod events {
             )),
         )
         .on(SURFACE)
-        .at(point.x, point.y, 1.0)
+        .at_logical(point.x, point.y)
         .with_primary(pe.is_primary())
         .with_buttons(buttons_from_mask(pe.buttons()))
         .with_modifiers(extract_modifiers_from_mouse(pe))

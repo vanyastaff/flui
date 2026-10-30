@@ -883,7 +883,7 @@ pub(crate) mod samples {
                 action,
                 ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
             )
-            .at(x, 20.0, 1.0)
+            .at_logical(x, 20.0)
         }
 
         #[test]
@@ -1122,7 +1122,7 @@ pub(crate) mod macos {
                 let (x, y) = (location.x, view_height - location.y);
                 let placed = |reading: NativeReading| {
                     if x.is_finite() && y.is_finite() {
-                        reading.at(x, y, 1.0)
+                        reading.at_logical(x, y)
                     } else {
                         reading
                     }
@@ -1310,7 +1310,7 @@ pub(crate) mod macos {
                 .with_primary(true)
                 .with_modifiers(modifiers);
                 if x.is_finite() && y.is_finite() {
-                    reading = reading.at(x, y, 1.0);
+                    reading = reading.at_logical(x, y);
                 }
                 decode(&mut self.contacts, &reading)
                     .unwrap_or_else(DecodeError::into_inputs)
@@ -1756,7 +1756,7 @@ pub(crate) mod ios {
                 );
             }
             let moved = pencil(ReadingAction::Move)
-                .at(location.x, location.y, 1.0)
+                .at_logical(location.x, location.y)
                 .with_sensors(sensors);
             let mut events = Vec::new();
             if state == UIGestureRecognizerState::Began {
@@ -1790,7 +1790,7 @@ pub(crate) mod ios {
             };
             let placed = |reading: NativeReading| {
                 if x.is_finite() && y.is_finite() {
-                    reading.at(x, y, 1.0)
+                    reading.at_logical(x, y)
                 } else {
                     reading
                 }
@@ -2031,7 +2031,7 @@ pub(crate) mod ios {
             action,
             ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
         )
-        .at(location.x, location.y, 1.0)
+        .at_logical(location.x, location.y)
         .with_sensors(sensors);
         if contact == PENCIL || contact == CURSOR {
             reading.with_primary(true)
@@ -2104,7 +2104,7 @@ pub(crate) mod ios {
                 ReadingAction::Press(PointerButton::PRIMARY),
                 ReadingTime::epoch(EventTime::from_nanos(10)),
             )
-            .at(1.25, 2.5, 1.0)
+            .at_logical(1.25, 2.5)
             .with_sensors(sensors);
             decode(&mut contacts, &reading)
                 .expect("valid touch")

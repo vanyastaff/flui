@@ -616,7 +616,7 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .at(10.0, 10.0, 1.0)
+        .at_device(10.0, 10.0, 1.0)
         .from_device(NativeDevice(0x51));
         decode_into(this.hwnd(), hovering).expect("a valid reading");
         assert_eq!(
@@ -663,7 +663,7 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .at(10.0, 10.0, 1.0)
+        .at_device(10.0, 10.0, 1.0)
         .from_device(NativeDevice(0x51));
         decode_into(hwnd, hovering).expect("a valid reading");
 
