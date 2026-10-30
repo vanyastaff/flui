@@ -11,11 +11,12 @@
 //!   surfaces and whenever it changes while the keyboard is in one. The
 //!   device keeps the last; a drag's offer (`enter`) is let go of at
 //!   `leave`, as this host takes no drop yet.
-//! - **A read** answers at once while the application owns the selection:
+//! - **A read** answers at once while the application owns the selection of
+//!   the seat it reads (the last input's, else the first holding one):
 //!   the text it wrote is the selection, and asking the compositor for it
 //!   would have the owner thread both write and wait on the same pipe. Else
-//!   it asks the offer of the seat of the last user input (or the first seat
-//!   holding one) for its text in the form [`TextForm::preferred`] picks,
+//!   it asks that seat's offer for its text in the form
+//!   [`TextForm::preferred`] picks, under the MIME type the owner named,
 //!   and a thread of its own reads the pipe, bounded in time and size, and
 //!   answers the read's resolver.
 //! - **A write** makes a data source offering the text in every form of
@@ -100,16 +101,27 @@ impl SeatDevice {
     }
 }
 
-/// The application's selection: its text, and the source the compositor
-/// asks for it; `None` while no seat took it.
+/// The application's selection: its text, and the seat and source the
+/// compositor asks for it under; `None` while no seat took it.
 struct Owned {
     text: Arc<str>,
-    source: Option<WlDataSource>,
+    source: Option<(WlSeat, WlDataSource)>,
+}
+
+impl Owned {
+    /// Whether the application's text is the selection `seat` reads: the
+    /// seat it set its source on, or any seat while it set none.
+    fn holds(&self, seat: Option<&WlSeat>) -> bool {
+        match &self.source {
+            Some((owner, _)) => seat == Some(owner),
+            None => true,
+        }
+    }
 }
 
 impl Owned {
     fn release(self) {
-        if let Some(source) = self.source {
+        if let Some((_, source)) = self.source {
             source.destroy();
         }
     }
@@ -237,24 +249,34 @@ impl NativeClipboard for SeatClipboard {
             .shared
             .state
             .with(|state| {
-                if let Some(owned) = &state.owned {
-                    return Read::Now(Some(owned.text.to_string()));
-                }
-                let offer = state
+                // The seat read: the last input's, or else the first holding
+                // a selection.
+                let device = state
                     .devices
                     .iter()
-                    .filter(|device| device.selection.is_some())
-                    .min_by_key(|device| Some(&device.seat) != last_seat.as_ref())
-                    .and_then(|device| device.selection.as_ref());
-                let Some((offer, form)) = offer.and_then(|offer| {
-                    let form = offer.data::<OfferData>()?.preferred()?;
-                    Some((offer, form))
-                }) else {
+                    .find(|device| Some(&device.seat) == last_seat.as_ref())
+                    .or_else(|| {
+                        state
+                            .devices
+                            .iter()
+                            .find(|device| device.selection.is_some())
+                    });
+                if let Some(owned) = &state.owned
+                    && owned.holds(device.map(|device| &device.seat))
+                {
+                    return Read::Now(Some(owned.text.to_string()));
+                }
+                let Some((offer, (form, mime))) = device
+                    .and_then(|device| device.selection.as_ref())
+                    .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
+                else {
                     return Read::Now(None);
                 };
                 match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
                     Ok((reader, writer)) => {
-                        offer.receive(form.name().to_owned(), writer.as_fd());
+                        // The type as the owner offered it: an owner may match
+                        // what it is asked for exactly.
+                        offer.receive(mime, writer.as_fd());
                         // The owner holds the write end now; the loop's next
                         // flush sends the request.
                         drop(writer);
@@ -309,7 +331,7 @@ impl NativeClipboard for SeatClipboard {
                     source.offer(form.name().to_owned());
                 }
                 device.device.set_selection(Some(&source), input.serial);
-                Some(source)
+                Some((input.seat, source))
             });
             if source.is_none() {
                 tracing::debug!(
@@ -335,7 +357,8 @@ pub(crate) struct DeviceData {
 /// A data offer's user data: the forms of text it offers, as its `offer`
 /// events name them, read on the owner thread alone.
 pub(crate) struct OfferData {
-    forms: OwnerCell<Vec<TextForm>>,
+    /// Each text form offered, with the MIME type it was offered under.
+    forms: OwnerCell<Vec<(TextForm, String)>>,
 }
 
 impl OfferData {
@@ -346,10 +369,14 @@ impl OfferData {
         }
     }
 
-    /// The form a read asks the offer for.
-    fn preferred(&self) -> Option<TextForm> {
+    /// The form a read asks the offer for, with the MIME type the owner
+    /// offered it under.
+    fn preferred(&self) -> Option<(TextForm, String)> {
         self.forms
-            .with(|forms| TextForm::preferred(forms.iter().map(|form| form.name())))
+            .with(|forms| {
+                let form = TextForm::preferred(forms.iter().map(|(_, mime)| mime.as_str()))?;
+                forms.iter().find(|(offered, _)| *offered == form).cloned()
+            })
             .flatten()
     }
 }
@@ -446,7 +473,7 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
         if let wl_data_offer::Event::Offer { mime_type } = event
             && let Some(form) = TextForm::named(&mime_type)
         {
-            data.forms.with(|forms| forms.push(form));
+            data.forms.with(|forms| forms.push((form, mime_type)));
         }
     }
 }
@@ -478,11 +505,12 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Cancelled => {
                 if let Some(shared) = data.shared.upgrade() {
                     shared.state.with(|state| {
-                        if state
-                            .owned
-                            .as_ref()
-                            .is_some_and(|owned| owned.source.as_ref() == Some(source))
-                        {
+                        if state.owned.as_ref().is_some_and(|owned| {
+                            owned
+                                .source
+                                .as_ref()
+                                .is_some_and(|(_, held)| held == source)
+                        }) {
                             state.owned = None;
                         }
                     });
