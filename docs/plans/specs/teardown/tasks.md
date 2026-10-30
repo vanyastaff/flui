@@ -222,10 +222,10 @@ graph LR
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
   Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, R12, R13, строки с паникой в
   маршрутизации `flui-app`.
-  - [ ] Строки `AppHandler::session_end` и `AppHandler::host_notice` в
-    `an_application_panic_never_leaves_a_handler`: headless не даёт внедрить панику приложения в
-    `answer_session_end` и в подписчика системного уведомления; нужен шов (ответ сеанса через
-    маршрут, как `route_quit`, и подписчик уведомлений в наборе раннера).
+  - [x] Паника приложения в `AppHandler::session_end` и `AppHandler::host_notice`: таблица
+    `a_notice_subscriber_panic_never_leaves_the_handler` (`runner_teardown`; запрос, завершение,
+    системное уведомление) через подписчика уведомлений окна; шов маршрута не понадобился.
+    Характеризация: панику ловит пооперационная граница `flui-runtime`, затем catch обработчика.
 - [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
   `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
   задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без

@@ -240,6 +240,10 @@ fn runner_teardown() {
                 session_end_tears_down_only_with_time_left,
             ),
             (
+                "a_notice_subscriber_panic_never_leaves_the_handler",
+                a_notice_subscriber_panic_never_leaves_the_handler,
+            ),
+            (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
                 a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
@@ -1361,5 +1365,125 @@ pub(crate) fn session_end_tears_down_only_with_time_left() {
             dropped.get().is_some(),
             "the window's state dropped by the exit"
         );
+    }
+}
+
+/// A window root whose system-notice subscriber panics on the notices
+/// `panics_on` picks, as application code that fails does.
+#[derive(Clone)]
+struct PanickingSubscriber {
+    panics_on: fn(&flui_platform::HostNotice) -> bool,
+}
+
+struct PanickingSubscriberState {
+    panics_on: fn(&flui_platform::HostNotice) -> bool,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl flui_view::StatefulView for PanickingSubscriber {
+    type State = PanickingSubscriberState;
+
+    fn create_state(&self) -> Self::State {
+        PanickingSubscriberState {
+            panics_on: self.panics_on,
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<PanickingSubscriber> for PanickingSubscriberState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let panics_on = self.panics_on;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    assert!(!panics_on(notice), "the notice subscriber fails");
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &PanickingSubscriber,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for PanickingSubscriber {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// How a notice reaches the application in
+/// [`a_notice_subscriber_panic_never_leaves_the_handler`].
+#[derive(Clone, Copy, Debug)]
+enum NoticeCase {
+    /// `AppHandler::session_end` with the query.
+    SessionQuery,
+    /// `AppHandler::session_end` with the ending.
+    SessionEnding,
+    /// `AppHandler::host_notice`.
+    HostNotice,
+}
+
+/// A system-notice subscriber that panics never unwinds out of the
+/// application handler's method: the session end still gets its answer and
+/// the run still returns (ADR-0258 §4, ADR-0260).
+///
+/// Characterization: the runtime's per-operation containment (ADR-0258 §1)
+/// catches the subscriber before the handler's own catch does, so removing
+/// either one alone keeps the row green.
+pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
+    for case in [
+        NoticeCase::SessionQuery,
+        NoticeCase::SessionEnding,
+        NoticeCase::HostNotice,
+    ] {
+        let panics_on: fn(&flui_platform::HostNotice) -> bool = match case {
+            NoticeCase::SessionQuery => {
+                |notice| matches!(notice, flui_platform::HostNotice::SessionEnding(_))
+            }
+            NoticeCase::SessionEnding => {
+                |notice| matches!(notice, flui_platform::HostNotice::SessionEnded)
+            }
+            NoticeCase::HostNotice => |notice| matches!(notice, flui_platform::HostNotice::Sleep),
+        };
+        let root = PanickingSubscriber { panics_on };
+        let application = Application::new(move |_| root.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        let platform = flui_native::HeadlessPlatform::new();
+        let events = platform.host_events();
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+
+        let reached = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match case {
+            NoticeCase::SessionQuery => {
+                assert_eq!(
+                    run.end_session(SessionEndPhase::Query),
+                    SessionEndAnswer::Proceed,
+                    "a panicking subscriber holds no block"
+                );
+                run.end_session(SessionEndPhase::Cancelled);
+            }
+            NoticeCase::SessionEnding => {
+                assert_eq!(
+                    run.end_session(SessionEndPhase::Ending),
+                    SessionEndAnswer::Proceed
+                );
+            }
+            NoticeCase::HostNotice => events.notice(flui_platform::SystemNotice::Sleep),
+        }));
+        assert!(
+            reached.is_ok(),
+            "{case:?}: the subscriber's panic left the handler"
+        );
+        run.run_owner_turn();
+        let report = run.join().expect("the run returns");
+        assert_eq!(report.exit, RunExit::Returned, "{case:?}");
     }
 }
