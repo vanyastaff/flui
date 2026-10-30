@@ -43,18 +43,27 @@ pub fn reading_order(boxes: &[Rect], direction: TextDirection) -> Vec<usize> {
         (0..boxes.len()).partition(|&index| boxes[index].is_finite());
     placed.sort_by(|&a, &b| boxes[a].top().total_cmp(&boxes[b].top()).then(a.cmp(&b)));
 
-    // Each line keeps its band and its boxes.
+    // Each line keeps its band and its boxes. Boxes come by top edge, so a
+    // line whose band ends above a box's top can take no later box either:
+    // only the lines still open are searched, and a column of texts is
+    // ordered in linear time.
     let mut lines: Vec<((f64, f64), Vec<usize>)> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
     for index in placed {
         let rect = &boxes[index];
+        open.retain(|&line| lines[line].0.1 >= rect.top());
         let centre = f64::midpoint(rect.top(), rect.bottom());
-        match lines.iter_mut().rev().find(|((top, bottom), _)| {
-            let band_centre = f64::midpoint(*top, *bottom);
-            (*top <= centre && centre <= *bottom)
+        let joined = open.iter().rev().copied().find(|&line| {
+            let (top, bottom) = lines[line].0;
+            let band_centre = f64::midpoint(top, bottom);
+            (top <= centre && centre <= bottom)
                 || (rect.top() <= band_centre && band_centre <= rect.bottom())
-        }) {
-            Some((_, line)) => line.push(index),
-            None => lines.push(((rect.top(), rect.bottom()), vec![index])),
+        });
+        if let Some(line) = joined {
+            lines[line].1.push(index);
+        } else {
+            open.push(lines.len());
+            lines.push(((rect.top(), rect.bottom()), vec![index]));
         }
     }
 
