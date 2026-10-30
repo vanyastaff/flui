@@ -13,3 +13,12 @@
   (124) after the flush registry is written once more, instead of lingering with its window
   gone. `flui_native::end_process` ends the process without running destructors or `atexit`
   handlers.
+
+### Fixed
+
+- **A panic at the exit no longer skips the flush.** A destructor of the application's main
+  window factory or its captures that panics while the application exits, or a panic out
+  of the platform's own loop, is held until the exit has written the flush registry and
+  stopped the services and pools, and is then resumed: the process exits with 101 and the
+  panic's text. Before, such a panic was either dropped silently or resumed before the
+  flush.

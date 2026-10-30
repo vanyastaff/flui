@@ -506,6 +506,12 @@ where
     let watchdog = ExitWatchdog::start();
     teardown_platform_ui_runtime_logged(&mut |step| watchdog.reached(step));
     drop(agent);
+    drop(watchdog);
+    // The exit's outcome: a terminal failure resumes once everything above
+    // ran (ADR-0258 §3).
+    if let Some(payload) = super::terminal::take_terminal() {
+        std::panic::resume_unwind(payload);
+    }
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has

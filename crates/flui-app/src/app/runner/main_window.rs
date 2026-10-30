@@ -63,17 +63,28 @@ pub(in crate::app) struct MainController {
     /// hook.
     agent: Option<DevAgentAttachment>,
 }
+// Each field is dropped on its own, so one that panics does not keep the
+// rest; the first panic resumes once all are gone (ADR-0258 §5), and the
+// exit holds it as its terminal failure. Inside an unwind it is retained.
 impl Drop for MainController {
     fn drop(&mut self) {
         self.cancel_pending();
+        let mut first = flui_foundation::panic::FirstPanic::new();
         let watcher = self.watcher.take();
-        contain(|| drop(watcher));
+        first.contain(|| drop(watcher));
         let agent = self.agent.take();
-        contain(|| drop(agent));
+        first.contain(|| drop(agent));
         let installer = self.installer.take();
-        contain(|| drop(installer));
+        first.contain(|| drop(installer));
         let observer = self.error.take();
-        contain(|| drop(observer));
+        first.contain(|| drop(observer));
+        if std::thread::panicking() {
+            if let Some(payload) = first.into_payload() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
+        } else {
+            first.resume();
+        }
     }
 }
 enum CompletionState {
@@ -598,6 +609,11 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
         ingress.wake_owner();
     }
 }
+
+/// Shut the main window down: its intents are refused and its controller,
+/// with the application's factory and what it captured, dropped. A panic
+/// there is the loop's terminal failure (ADR-0258 §2), which the exit
+/// resumes once it has written what the application persisted.
 pub(super) fn shutdown_main_window() {
     let (controller, ingress) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
@@ -607,8 +623,8 @@ pub(super) fn shutdown_main_window() {
         ingress.close();
     }
     if let Some(mut controller) = controller {
-        contain(|| controller.cancel());
-        contain(|| drop(controller));
+        super::terminal::contain_terminal("main window cancellation", || controller.cancel());
+        super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
 }
 
@@ -704,8 +720,14 @@ pub(crate) struct StartedLoop {
 }
 
 impl StartedLoop {
-    /// Tear the loop down, then report the first fatal failure the loop
-    /// recorded, else what `run` returned.
+    /// Tear the loop down, then report its outcome (ADR-0258 §3): a terminal
+    /// failure resumes, else the first fatal failure the loop recorded is
+    /// returned, else what `run` returned.
+    ///
+    /// # Panics
+    ///
+    /// With the terminal failure's payload, once the teardown has written
+    /// what the application persisted.
     pub(crate) fn finish(self) -> Result<(), AppRunError> {
         let Self {
             teardown,
@@ -717,6 +739,9 @@ impl StartedLoop {
         drop(teardown);
         drop(owner_guard);
         drop(watchdog);
+        if let Some(payload) = super::terminal::take_terminal() {
+            std::panic::resume_unwind(payload);
+        }
         let failure = fatal.borrow_mut().take();
         if let Some(error) = failure {
             return Err(error);
@@ -753,117 +778,126 @@ where
         log: teardown_log,
         watchdog: Rc::clone(&watchdog),
     };
-    let result = platform.run(crate::app::runner::app_handler(move |owner| {
-        let Application {
-            mut factory,
-            config,
-            startup,
-            ready,
-            window_error,
-            ..
-        } = application;
-        let proxy = owner.proxy();
-        let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
-        let handle = ingress.handle();
-        install_owner_platform(owner)?;
-        APP_RUNTIME.with(|slot| {
-            let mut runtime = slot.borrow_mut();
-            runtime.main_ingress = Some(Arc::clone(&ingress));
-            runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-            if let Some(executors) = config.executors.clone() {
-                runtime.install_host_executors(executors);
-            }
-            runtime.reopen_lifecycles();
-            runtime.ensure_execution();
-        });
-        super::host::install_host_storage(&config);
-        install_exit_policy_hook(config.exit_policy);
-        install_platform_quit_hook();
-        let reopen = Arc::downgrade(&ingress);
-        super::host::route_reopen(move || {
-            if let Some(ingress) = reopen.upgrade() {
-                ingress.request_native_show();
-            }
-        });
-        let reload = WorkerReload::from_config(&config);
-        let watcher = reload.spawn_watcher(runtime_wake_callback());
-        let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
-        let installer_config = config.clone();
-        let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-        let factory_identity = Arc::clone(&identity);
-        let installer = Box::new(move |handle: &AppHandle, window, host| {
-            let root = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
-                .map_err(|payload| {
-                let message = flui_runtime::frame_failure::panic_text(
-                    installer_config.frame_failure_detail,
-                    payload.as_ref(),
-                );
-                std::mem::forget(payload);
-                AppWindowError::FactoryPanicked { message }
-            })?;
-            if !handle.ingress.accepting()
-                || !APP_RUNTIME
-                    .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity))
-            {
-                return Err(AppWindowError::Cancelled);
-            }
-            install_desktop_window(root, &installer_config, reload.clone(), window, host)
-        });
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().main_controller = Some(MainController {
-                ingress: Arc::clone(&ingress),
-                identity,
-                installer: Some(installer),
-                config: config.clone(),
-                open: None,
-                installing: None,
-                pending: None,
-                routes: None,
-                pending_wake: None,
-                closing: false,
-                initial: startup == StartupWindow::Open,
-                error: window_error,
-                fatal: recorded,
-                watcher,
-                agent,
-            });
-        });
-        for service in &config.services {
-            if let Err(error) = super::host::start_service(service) {
-                let fatal = APP_RUNTIME.with(|slot| {
-                    slot.borrow()
-                        .main_controller
-                        .as_ref()
-                        .map(|controller| Rc::clone(&controller.fatal))
-                });
-                if let Some(fatal) = fatal {
-                    fatal.replace(Some(AppRunError::Service {
-                        source: Arc::new(error),
-                    }));
-                }
-                let _ = handle.request_quit();
-                return Ok(());
-            }
-        }
-        if let Some(ready) = ready
-            && let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
-        {
-            std::mem::forget(payload);
+    // A panic out of the platform's own loop is terminal (ADR-0258 §3): held
+    // for the exit's end, and the teardown runs as after any other end.
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        platform.run(crate::app::runner::app_handler(move |owner| {
+            let Application {
+                mut factory,
+                config,
+                startup,
+                ready,
+                window_error,
+                ..
+            } = application;
+            let proxy = owner.proxy();
+            let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
+            let handle = ingress.handle();
+            install_owner_platform(owner)?;
             APP_RUNTIME.with(|slot| {
-                if let Some(controller) = slot.borrow().main_controller.as_ref() {
-                    controller
-                        .fatal
-                        .borrow_mut()
-                        .replace(AppRunError::OnReadyPanicked);
+                let mut runtime = slot.borrow_mut();
+                runtime.main_ingress = Some(Arc::clone(&ingress));
+                runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
+                if let Some(executors) = config.executors.clone() {
+                    runtime.install_host_executors(executors);
+                }
+                runtime.reopen_lifecycles();
+                runtime.ensure_execution();
+            });
+            super::host::install_host_storage(&config);
+            install_exit_policy_hook(config.exit_policy);
+            install_platform_quit_hook();
+            let reopen = Arc::downgrade(&ingress);
+            super::host::route_reopen(move || {
+                if let Some(ingress) = reopen.upgrade() {
+                    ingress.request_native_show();
                 }
             });
-            let _ = handle.request_quit();
-        }
-        drive_main_window();
-        with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
-        Ok(())
+            let reload = WorkerReload::from_config(&config);
+            let watcher = reload.spawn_watcher(runtime_wake_callback());
+            let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
+            let installer_config = config.clone();
+            let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+            let factory_identity = Arc::clone(&identity);
+            let installer = Box::new(move |handle: &AppHandle, window, host| {
+                let root =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
+                        .map_err(|payload| {
+                            let message = flui_runtime::frame_failure::panic_text(
+                                installer_config.frame_failure_detail,
+                                payload.as_ref(),
+                            );
+                            std::mem::forget(payload);
+                            AppWindowError::FactoryPanicked { message }
+                        })?;
+                if !handle.ingress.accepting()
+                    || !APP_RUNTIME
+                        .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity))
+                {
+                    return Err(AppWindowError::Cancelled);
+                }
+                install_desktop_window(root, &installer_config, reload.clone(), window, host)
+            });
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut().main_controller = Some(MainController {
+                    ingress: Arc::clone(&ingress),
+                    identity,
+                    installer: Some(installer),
+                    config: config.clone(),
+                    open: None,
+                    installing: None,
+                    pending: None,
+                    routes: None,
+                    pending_wake: None,
+                    closing: false,
+                    initial: startup == StartupWindow::Open,
+                    error: window_error,
+                    fatal: recorded,
+                    watcher,
+                    agent,
+                });
+            });
+            for service in &config.services {
+                if let Err(error) = super::host::start_service(service) {
+                    let fatal = APP_RUNTIME.with(|slot| {
+                        slot.borrow()
+                            .main_controller
+                            .as_ref()
+                            .map(|controller| Rc::clone(&controller.fatal))
+                    });
+                    if let Some(fatal) = fatal {
+                        fatal.replace(Some(AppRunError::Service {
+                            source: Arc::new(error),
+                        }));
+                    }
+                    let _ = handle.request_quit();
+                    return Ok(());
+                }
+            }
+            if let Some(ready) = ready
+                && let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
+            {
+                std::mem::forget(payload);
+                APP_RUNTIME.with(|slot| {
+                    if let Some(controller) = slot.borrow().main_controller.as_ref() {
+                        controller
+                            .fatal
+                            .borrow_mut()
+                            .replace(AppRunError::OnReadyPanicked);
+                    }
+                });
+                let _ = handle.request_quit();
+            }
+            drive_main_window();
+            with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
+            Ok(())
+        }))
     }));
+    let result = run.unwrap_or_else(|payload| {
+        super::terminal::hold_terminal(payload, "platform loop");
+        Ok(())
+    });
     Ok(StartedLoop {
         teardown,
         owner_guard,

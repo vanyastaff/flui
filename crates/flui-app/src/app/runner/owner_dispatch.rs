@@ -972,10 +972,10 @@ impl ExitDeadline {
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 pub(crate) const EXIT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// The exit code of an application whose exit the watchdog ended, after
-/// [`EXIT_WATCHDOG`]: the code GNU `timeout` returns for a command that ran
-/// out of time, so a supervisor reads a hung exit apart from a panic (101) and
-/// a crash.
+/// The exit code of an application whose exit did not end 15 seconds after
+/// it began, which the exit watchdog then ended (ADR-0258 §7): the code GNU
+/// `timeout` returns for a command that ran out of time, so a supervisor reads
+/// a hung exit apart from a panic (101) and a crash.
 pub const EXIT_CODE_HUNG: i32 = 124;
 
 /// Bounds the whole exit: started when the exit order begins, it ends the
@@ -1073,10 +1073,24 @@ pub enum TeardownStep {
     NativeResources,
 }
 
-/// [`teardown_platform_ui_runtime_logged`] for a loop that keeps no log.
+/// [`teardown_platform_ui_runtime_logged`] for a loop that keeps no log,
+/// ending with the exit's outcome: the terminal failure resumes. On iOS,
+/// whose `UIApplicationMain` never returns, it is logged instead.
 #[cfg(all(not(target_arch = "wasm32"), any(test, target_os = "ios")))]
 pub(super) fn teardown_platform_ui_runtime() {
     teardown_platform_ui_runtime_logged(&mut |_| {});
+    if let Some(payload) = super::terminal::take_terminal() {
+        #[cfg(not(target_os = "ios"))]
+        std::panic::resume_unwind(payload);
+        #[cfg(target_os = "ios")]
+        {
+            tracing::error!(
+                panic = flui_foundation::panic::payload_text(payload.as_ref()),
+                "the application ends with a terminal failure"
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
 }
 
 /// Full loop-exit teardown: drop every hosted UI runtime, close-request
@@ -1203,8 +1217,9 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "native shutdown");
     log(TeardownStep::NativeResources);
+    // Terminal (ADR-0258 §2): held for the exit's end, after the flush above.
     if let Some(payload) = first_panic {
-        std::panic::resume_unwind(payload);
+        super::terminal::hold_terminal(payload, "loop exit");
     }
 }
 

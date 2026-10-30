@@ -168,7 +168,47 @@ fn runner_teardown() {
                 "a_hung_service_and_compute_job_end_within_the_exit_budget",
                 a_hung_service_and_compute_job_end_within_the_exit_budget,
             ),
+            (
+                "teardown_panic_flushes_the_registry_before_resuming",
+                teardown_panic_flushes_the_registry_before_resuming,
+            ),
         ],
+    );
+}
+
+/// Panics when dropped, as an application value whose destructor fails.
+struct PanicsOnDrop(&'static str);
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("{}", self.0);
+    }
+}
+
+/// A destructor that panics at the exit is terminal: the exit still writes
+/// the flush registry, stops the services and pools, and only then resumes
+/// the panic, which ends the process with 101 and the panic's text
+/// (ADR-0258 §2, §3).
+pub(crate) fn teardown_panic_flushes_the_registry_before_resuming() {
+    let capture = PanicsOnDrop("the factory's capture failed to drop");
+    let application = Application::new(move |_| -> flui_widgets::Text {
+        let _held = &capture;
+        panic!("no main window is opened")
+    })
+    .with_startup_window(StartupWindow::None);
+    let run = HeadlessRun::start(application);
+
+    let report = run.join().expect("a terminal panic is no run error");
+    assert_eq!(
+        report.exit,
+        RunExit::Panicked {
+            message: "the factory's capture failed to drop".to_owned()
+        }
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+    assert_eq!(
+        report.teardown, TEARDOWN_ORDER,
+        "every exit step, the flush first among the framework's, ran before the panic resumed"
     );
 }
 

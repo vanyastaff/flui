@@ -419,6 +419,10 @@ pub(crate) struct AppRuntime {
     /// runtime: what their documents publish, written on the loop's IO pool
     /// and flushed when the application or the session ends.
     pub(super) flush_host: Option<flui_view::__runtime::FlushHost>,
+    /// The loop's terminal failure (ADR-0258 §2): the first panic nothing is
+    /// left to continue after, as text, held until the exit order has
+    /// written what the application persisted and then resumed.
+    pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
@@ -513,6 +517,7 @@ impl AppRuntime {
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
             flush_host: None,
+            terminal: None,
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),

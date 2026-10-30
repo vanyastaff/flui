@@ -103,6 +103,15 @@ where
         self
     }
     /// Run the native loop and release its services before returning.
+    ///
+    /// # Panics
+    ///
+    /// With the application's own panic, when nothing is left to go on after
+    /// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
+    /// the close of the last window. The exit first writes what the
+    /// application persisted and stops its services and pools; the panic then
+    /// resumes, so the process exits with 101 and the panic's text, printed
+    /// once.
     pub fn run(self) -> Result<(), AppRunError> {
         super::runner::run_application(self)
     }
