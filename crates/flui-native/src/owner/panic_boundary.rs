@@ -182,6 +182,7 @@ pub(crate) fn owner_callback_panicked(body: impl FnOnce()) -> bool {
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
+    target_os = "android",
     all(test, not(target_arch = "wasm32"))
 ))]
 pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
