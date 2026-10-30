@@ -4,7 +4,7 @@
 //! hit-testing are transparent single-child proxy behavior; only the
 //! semantics hooks differ.
 
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Axis, AxisDirection};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, Single};
 use flui_rendering::semantics::{CustomActionId, NumericRange, SemanticsAction};
 use flui_rendering::{
@@ -166,7 +166,7 @@ pub struct RenderSemanticsAnnotations {
     block_user_actions: bool,
     has_child: bool,
     action_route: Option<SemanticsActionRoute>,
-    scroll: Option<(ScrollPosition, Axis, bool)>,
+    scroll: Option<(ScrollPosition, AxisDirection)>,
     scroll_subscription: Option<Rc<ScrollSubscription>>,
     invalidation: Option<LocalRenderInvalidationHandle>,
     /// Custom actions added after the configuration's own, each handler
@@ -258,13 +258,13 @@ impl RenderSemanticsAnnotations {
     /// Position notifications invalidate semantics without rebuilding the viewport.
     pub fn set_scroll_source(
         &mut self,
-        source: Option<(ScrollPosition, Axis, bool)>,
+        source: Option<(ScrollPosition, AxisDirection)>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self
             .scroll
             .as_ref()
             .zip(source.as_ref())
-            .is_some_and(|(old, new)| old.0.ptr_eq(&new.0) && old.1 == new.1 && old.2 == new.2)
+            .is_some_and(|(old, new)| old.0.ptr_eq(&new.0) && old.1 == new.1)
             || self.scroll.is_none() && source.is_none()
         {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -276,7 +276,7 @@ impl RenderSemanticsAnnotations {
     }
 
     fn subscribe_scroll(&mut self) {
-        if let (Some((position, _, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
+        if let (Some((position, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
             let handle = handle.clone();
             let listener: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
                 let _ = handle.mark_needs_semantics();
@@ -506,12 +506,12 @@ impl RenderBox for RenderSemanticsAnnotations {
             self.explicit_child_nodes || self.configuration.explicit_child_nodes(),
         );
         config.set_blocks_user_actions(self.block_user_actions);
-        if let Some((position, axis, reversed)) = &self.scroll {
+        if let Some((position, direction)) = &self.scroll {
             let min = position.min_scroll_extent();
             let max = position.max_scroll_extent();
             let pixels = position.pixels();
             config.set_scroll_position(pixels);
-            config.set_scroll_axis(*axis);
+            config.set_scroll_axis_direction(*direction);
             config.set_scroll_extent_min(min);
             config.set_scroll_extent_max(max);
             if config.has_action(SemanticsAction::SetNumericValue)
@@ -524,17 +524,25 @@ impl RenderBox for RenderSemanticsAnnotations {
             {
                 config.set_numeric_range(range);
             }
-            let (decrease, increase) = match axis {
+            let (decrease, increase) = match direction.axis() {
                 Axis::Vertical => (SemanticsAction::ScrollUp, SemanticsAction::ScrollDown),
                 Axis::Horizontal => (SemanticsAction::ScrollLeft, SemanticsAction::ScrollRight),
             };
             if pixels <= min {
                 config.remove_action(SemanticsAction::Decrement);
-                config.remove_action(if *reversed { increase } else { decrease });
+                config.remove_action(if direction.is_reversed() {
+                    increase
+                } else {
+                    decrease
+                });
             }
             if pixels >= max {
                 config.remove_action(SemanticsAction::Increment);
-                config.remove_action(if *reversed { decrease } else { increase });
+                config.remove_action(if direction.is_reversed() {
+                    decrease
+                } else {
+                    increase
+                });
             }
         }
     }

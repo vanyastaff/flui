@@ -1,6 +1,6 @@
 //! The direction a scrollable or a sliver list grows along an axis.
 
-use flui_foundation::geometry::Axis;
+use crate::geometry::Axis;
 
 /// A direction along either the horizontal or vertical axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,7 +28,7 @@ impl AxisDirection {
     ///
     /// ```
     /// use flui_foundation::geometry::Axis;
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert_eq!(AxisDirection::LeftToRight.axis(), Axis::Horizontal);
     /// assert_eq!(AxisDirection::TopToBottom.axis(), Axis::Vertical);
@@ -46,7 +46,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert_eq!(
     ///     AxisDirection::LeftToRight.opposite(),
@@ -72,7 +72,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert!(AxisDirection::LeftToRight.is_positive());
     /// assert!(!AxisDirection::RightToLeft.is_positive());
@@ -90,7 +90,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert!(AxisDirection::RightToLeft.is_negative());
     /// assert!(!AxisDirection::LeftToRight.is_negative());
@@ -106,7 +106,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert!(AxisDirection::RightToLeft.is_reversed());
     /// assert!(!AxisDirection::LeftToRight.is_reversed());
@@ -124,7 +124,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert_eq!(AxisDirection::LeftToRight.sign(), 1.0);
     /// assert_eq!(AxisDirection::RightToLeft.sign(), -1.0);
@@ -141,7 +141,7 @@ impl AxisDirection {
     ///
     /// ```
     /// use flui_foundation::geometry::Axis;
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert_eq!(
     ///     AxisDirection::from_axis(Axis::Horizontal, false),
@@ -169,7 +169,7 @@ impl AxisDirection {
     /// # Examples
     ///
     /// ```
-    /// use flui_rendering::constraints::AxisDirection;
+    /// use flui_foundation::geometry::AxisDirection;
     ///
     /// assert_eq!(
     ///     AxisDirection::TopToBottom.flip(),
