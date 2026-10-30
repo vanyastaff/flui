@@ -23,7 +23,8 @@
 //!   [`TextForm::OFFERED`] and sets it as the selection of the last user
 //!   input's seat, under that input's serial: a compositor takes a selection
 //!   only from a client the user is working in. Each `send` is written by a
-//!   thread of its own; `cancelled` (another client took the selection) ends
+//!   thread of its own, at most [`MAX_WRITERS`] at once, from the text
+//!   encoded once per form; `cancelled` (another client took the selection) ends
 //!   the ownership. With no user input yet the text is held here only, and a
 //!   read answers it until another client's selection arrives.
 
@@ -54,6 +55,10 @@ const MANAGER_VERSION: u32 = 3;
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most text a read takes: past it the selection is not read.
 const MAX_TEXT: usize = 64 * 1024 * 1024;
+/// The most `send`s the application answers at once. Each holds a thread
+/// until its reader has the text or the deadline passes; a client asking
+/// faster than it reads is answered with nothing past this.
+const MAX_WRITERS: usize = 4;
 
 /// The seats' clipboard: the loop's clipboard hook. See the module docs.
 pub(crate) struct SeatClipboard {
@@ -65,6 +70,8 @@ struct Shared {
     state: OwnerCell<State>,
     /// The last user input, whose seat and serial a write is set under.
     last_input: LastInput,
+    /// The `send`s being answered now.
+    writers: transfer::Writers,
 }
 
 #[derive(Default)]
@@ -135,6 +142,7 @@ impl SeatClipboard {
             shared: Arc::new(Shared {
                 state: OwnerCell::new(),
                 last_input,
+                writers: transfer::Writers::default(),
             }),
         }
     }
@@ -325,6 +333,7 @@ impl NativeClipboard for SeatClipboard {
                     SourceData {
                         shared: Arc::downgrade(&self.shared),
                         text: Arc::clone(&text),
+                        encoded: OwnerCell::new(),
                     },
                 );
                 for form in TextForm::OFFERED {
@@ -385,6 +394,23 @@ impl OfferData {
 pub(crate) struct SourceData {
     shared: Weak<Shared>,
     text: Arc<str>,
+    /// The text in each form asked for so far, encoded once and shared by
+    /// every `send` of that form; read on the owner thread alone.
+    encoded: OwnerCell<Vec<(TextForm, Arc<[u8]>)>>,
+}
+
+impl SourceData {
+    /// The text in `form`.
+    fn bytes(&self, form: TextForm) -> Option<Arc<[u8]>> {
+        self.encoded.with(|encoded| {
+            if let Some((_, bytes)) = encoded.iter().find(|(held, _)| *held == form) {
+                return Arc::clone(bytes);
+            }
+            let bytes: Arc<[u8]> = form.encode(&self.text).into();
+            encoded.push((form, Arc::clone(&bytes)));
+            bytes
+        })
+    }
 }
 
 impl Dispatch<WlDataDeviceManager, ()> for WaylandState {
@@ -494,10 +520,19 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                 let Some(form) = TextForm::named(&mime_type) else {
                     return;
                 };
-                let bytes = form.encode(&data.text);
+                let (Some(shared), Some(bytes)) = (data.shared.upgrade(), data.bytes(form)) else {
+                    return;
+                };
+                let Some(permit) = shared.writers.permit() else {
+                    tracing::debug!("a clipboard request past {MAX_WRITERS} at once was refused");
+                    return;
+                };
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-clipboard".to_owned())
-                    .spawn(move || transfer::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT));
+                    .spawn(move || {
+                        transfer::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
+                        drop(permit);
+                    });
                 if let Err(error) = spawned {
                     tracing::warn!(%error, "no thread for a clipboard write");
                 }
@@ -526,15 +561,44 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
 
 pub(crate) mod transfer {
     //! A selection's bytes through the pipe its reader and owner share,
-    //! bounded in time and size: what the threads of a read and a write run.
+    //! bounded in time and size: what the threads of a read and a write run,
+    //! and how many writes run at once.
 
     use std::os::fd::OwnedFd;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use rustix::io::Errno;
     use web_time::Instant;
 
-    use super::MAX_TEXT;
+    use super::{MAX_TEXT, MAX_WRITERS};
+
+    /// The writes running now, at most [`MAX_WRITERS`].
+    #[derive(Debug, Default)]
+    pub(crate) struct Writers(Arc<AtomicUsize>);
+
+    /// One write's place among [`Writers`], given back when dropped.
+    #[derive(Debug)]
+    pub(crate) struct Permit(Arc<AtomicUsize>);
+
+    impl Writers {
+        /// A place for one more write; `None` while [`MAX_WRITERS`] run.
+        pub(crate) fn permit(&self) -> Option<Permit> {
+            self.0
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
+                    (running < MAX_WRITERS).then_some(running + 1)
+                })
+                .ok()
+                .map(|_| Permit(Arc::clone(&self.0)))
+        }
+    }
+
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
 
     /// Wait until `fd` is ready for `flags` or `deadline` passes; `false` on
     /// the deadline or a failed poll.
@@ -620,6 +684,19 @@ pub(crate) mod transfer {
         use std::time::Duration;
 
         use super::*;
+
+        /// At most [`MAX_WRITERS`] writes run at once; each that ends gives
+        /// its place to the next.
+        #[test]
+        fn writes_past_the_limit_wait_for_a_place() {
+            let writers = Writers::default();
+            let mut held: Vec<Permit> = (0..MAX_WRITERS)
+                .map(|_| writers.permit().expect("a place below the limit"))
+                .collect();
+            assert!(writers.permit().is_none(), "the limit is full");
+            held.pop();
+            assert!(writers.permit().is_some(), "an ended write frees its place");
+        }
 
         fn pipe() -> (OwnedFd, OwnedFd) {
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("a pipe")
