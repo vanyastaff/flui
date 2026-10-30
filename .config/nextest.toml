@@ -124,6 +124,8 @@ xtask-binary = { max-threads = 1 }
 # flui-native's X11 window tests share the one X server `xvfb-run` starts for
 # the run (see `x11-server` below).
 x11-server = { max-threads = 1 }
+# One XDND source at a time owns `XdndSelection` (see `xdnd-selection` below).
+xdnd-selection = { max-threads = 1 }
 # Named, not limited: see the trybuild and nested-cargo overrides at the top.
 nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
@@ -166,6 +168,17 @@ test-group = 'desktop-foreground'
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/^window::linux::x11::/)'
 test-group = 'x11-server'
+
+# flui-native's XDND tests each drag from a source that owns `XdndSelection`,
+# which is the X server's, one for every client: a source in another test's
+# process takes it, and a conversion meant for one test's source is answered by
+# the other's, or by nobody until the transfer times out
+# (`an_accepted_drop_is_fetched_and_finished` read `SourceGone` after five
+# seconds on CI). The `SERVER` lock in the tests covers plain `cargo test`
+# only; the group runs them one at a time under nextest.
+[[profile.default.overrides]]
+filter = 'package(flui-native) & test(/^drag::x11::tests::/)'
+test-group = 'xdnd-selection'
 
 # `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
 [[profile.default.overrides]]

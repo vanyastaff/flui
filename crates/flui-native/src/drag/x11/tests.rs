@@ -270,7 +270,8 @@ const STEP: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_secs(1);
 
 /// `XdndSelection` is the server's, one for every client: the cases take
-/// turns at it.
+/// turns at it. The lock keeps one process's cases apart; under nextest, a
+/// process per case, the `xdnd-selection` test group does.
 static SERVER: Mutex<()> = Mutex::new(());
 
 /// The transfer and one window of its connection a source drags over.
