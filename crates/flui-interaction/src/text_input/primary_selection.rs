@@ -143,6 +143,18 @@ impl Default for PrimaryClaims {
     }
 }
 
+impl Drop for PrimaryClaims {
+    fn drop(&mut self) {
+        // Dropped while unwinding, the current claim's captures are kept
+        // rather than dropped into a second panic (ADR-0127).
+        if std::thread::panicking()
+            && let Some(current) = self.current.take()
+        {
+            std::mem::forget(current);
+        }
+    }
+}
+
 impl fmt::Debug for PrimaryClaims {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrimaryClaims")
@@ -157,13 +169,20 @@ impl fmt::Debug for PrimaryClaims {
 /// Owner-local. A backend answers a read through its [`Resolver`] when the
 /// platform answers, at once or later; it never calls back into the handle,
 /// and asks a [`SelectionText`] only with no borrow of its own held.
+///
+/// What a claim or a release lets go of, the backend returns rather than
+/// drops: the handle drops it once the new claim has a guard, and keeps it
+/// instead while unwinding (ADR-0127), so a panicking capture never leaves
+/// a claim without its guard nor turns into a second panic.
 pub trait PrimarySelectionBackend: 'static {
-    /// Offer `text` as the primary selection, replacing any claim before.
-    fn claim(&self, text: Rc<dyn SelectionText>) -> PrimaryClaimId;
+    /// Offer `text` as the primary selection, replacing any claim before:
+    /// the claim's number, and what the replaced claim offered.
+    fn claim(&self, text: Rc<dyn SelectionText>)
+    -> (PrimaryClaimId, Option<Rc<dyn SelectionText>>);
 
-    /// Stop offering `claim`'s text if it is still current; nothing for a
-    /// stale claim.
-    fn release(&self, claim: PrimaryClaimId);
+    /// Stop offering `claim`'s text if it is still current, and return it;
+    /// nothing for a stale claim.
+    fn release(&self, claim: PrimaryClaimId) -> Option<Rc<dyn SelectionText>>;
 
     /// Whether `claim` still holds the selection: no claim came since and
     /// no other application selected.
@@ -198,11 +217,16 @@ impl PrimarySelectionHandle {
     /// or another claim replaces it.
     #[must_use = "dropping the claim releases the selection"]
     pub fn claim(&self, text: impl SelectionText) -> PrimaryClaim {
-        let id = self.backend.claim(Rc::new(text));
-        PrimaryClaim {
+        let (id, replaced) = self.backend.claim(Rc::new(text));
+        let claim = PrimaryClaim {
             backend: Rc::clone(&self.backend),
             id,
-        }
+        };
+        // The replaced captures drop with the new claim guarded: if their
+        // `Drop` panics, the unwind drops `claim`, which withdraws it unless
+        // that `Drop` claimed anew since.
+        drop(replaced);
+        claim
     }
 
     /// Read the primary selection's text: `None` when there is none.
@@ -242,7 +266,12 @@ impl PrimaryClaim {
 
 impl Drop for PrimaryClaim {
     fn drop(&mut self) {
-        self.backend.release(self.id);
+        let released = self.backend.release(self.id);
+        // While unwinding, what the claim offered is withdrawn but kept, not
+        // dropped into a second panic (ADR-0127).
+        if std::thread::panicking() {
+            std::mem::forget(released);
+        }
     }
 }
 
