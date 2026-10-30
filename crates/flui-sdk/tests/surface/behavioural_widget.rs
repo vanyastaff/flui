@@ -84,7 +84,7 @@ fn row() -> AlternativesSubject<Filed> {
 /// The row, its alternatives and a reading of how often it was filed.
 fn filing_row() -> (Actions, GestureAlternatives, impl Fn() -> Filed + 'static) {
     let (archived, pinned) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+    let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
         ControlSpec::new(
             GestureCommand::new("Archive row", Archive)
                 .key(SingleActivator::character("e").control().shift()),

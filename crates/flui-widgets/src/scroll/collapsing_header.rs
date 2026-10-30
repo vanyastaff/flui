@@ -50,7 +50,7 @@ use crate::{
     SizedBox, VsyncScope,
 };
 
-/// Why [`HeaderExtents::new`] refused a pair of extents.
+/// Why [`HeaderExtents::try_new`] refused a pair of extents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum HeaderExtentsError {
@@ -92,7 +92,7 @@ impl HeaderExtents {
     ///
     /// [`HeaderExtentsError`] for a NaN, infinite, negative or too large
     /// extent, or a collapsed extent above the expanded one.
-    pub fn new(collapsed: f64, expanded: f64) -> Result<Self, HeaderExtentsError> {
+    pub fn try_new(collapsed: f64, expanded: f64) -> Result<Self, HeaderExtentsError> {
         if !collapsed.is_finite() || !expanded.is_finite() {
             return Err(HeaderExtentsError::NonFinite);
         }
@@ -151,7 +151,7 @@ pub enum HeaderOrder {
 /// ```rust
 /// use flui_widgets::{CollapsingHeader, HeaderExtents, Scrollable, SizedBox};
 ///
-/// let extents = HeaderExtents::new(56.0, 200.0).expect("ordered, finite extents");
+/// let extents = HeaderExtents::try_new(56.0, 200.0).expect("ordered, finite extents");
 /// let view = CollapsingHeader::new(
 ///     extents,
 ///     SizedBox::new(400.0, 200.0),

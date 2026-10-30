@@ -598,7 +598,7 @@ impl GestureAlternatives {
                 )
             }
         };
-        Self::new(alternative)
+        Self::try_new(alternative)
     }
 }
 
@@ -755,7 +755,7 @@ impl GestureAlternatives {
     /// with one, [`GestureAlternativesError::DuplicateKey`] for two commands
     /// with one key, [`GestureAlternativesError::ForeignIntent`] for a
     /// companion command whose intent its link does not carry.
-    pub fn new(alternative: Alternative) -> Result<Self, GestureAlternativesError> {
+    pub fn try_new(alternative: Alternative) -> Result<Self, GestureAlternativesError> {
         let alternatives = Self {
             alternative,
             target: None,

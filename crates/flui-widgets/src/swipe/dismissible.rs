@@ -150,9 +150,9 @@ impl DismissSide {
 /// ```rust
 /// use flui_widgets::DismissThreshold;
 ///
-/// assert_eq!(DismissThreshold::new(0.9).map(DismissThreshold::get), Ok(0.9));
-/// assert!(DismissThreshold::new(1.5).is_err());
-/// assert!(DismissThreshold::new(f64::NAN).is_err());
+/// assert_eq!(DismissThreshold::try_new(0.9).map(DismissThreshold::get), Ok(0.9));
+/// assert!(DismissThreshold::try_new(1.5).is_err());
+/// assert!(DismissThreshold::try_new(f64::NAN).is_err());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct DismissThreshold(f64);
@@ -169,7 +169,7 @@ impl DismissThreshold {
     ///
     /// [`DismissThresholdError`] for a fraction outside `0.0..=1.0`, NaN
     /// included.
-    pub fn new(fraction: f64) -> Result<Self, DismissThresholdError> {
+    pub fn try_new(fraction: f64) -> Result<Self, DismissThresholdError> {
         if (0.0..=1.0).contains(&fraction) {
             Ok(Self(fraction))
         } else {
@@ -194,7 +194,7 @@ impl TryFrom<f64> for DismissThreshold {
     type Error = DismissThresholdError;
 
     fn try_from(fraction: f64) -> Result<Self, Self::Error> {
-        Self::new(fraction)
+        Self::try_new(fraction)
     }
 }
 
@@ -789,7 +789,7 @@ impl StatefulView for Dismissible {
 
     fn create_state(&self) -> Self::State {
         DismissibleState {
-            controller: AnchoredDragController::new(self.config().anchors(None), Stop::Closed)
+            controller: AnchoredDragController::try_new(self.config().anchors(None), Stop::Closed)
                 .expect("BUG: every dismissible has a closed stop"),
             geometry: Rc::default(),
             origin: Rc::default(),

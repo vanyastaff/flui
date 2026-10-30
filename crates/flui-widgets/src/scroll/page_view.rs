@@ -400,7 +400,7 @@ type OnPageChanged = ValueCallback<usize>;
 ///     SizedBox, Text,
 /// };
 ///
-/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+/// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
 ///     ControlSpec::new(
 ///         GestureCommand::new("Previous page", PageIntent::Previous),
 ///         Text::new("<"),

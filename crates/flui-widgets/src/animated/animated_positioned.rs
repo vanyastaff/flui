@@ -144,7 +144,7 @@ impl StatefulView for AnimatedPositioned {
             tracing::warn!("initial placement refused; the child starts unplaced");
         }
         let properties = std::array::from_fn(|index| {
-            PropertyMotion::new(
+            PropertyMotion::try_new(
                 LABELS[index],
                 self.placement[index].filter(|_| admitted),
                 self.motion.clone(),

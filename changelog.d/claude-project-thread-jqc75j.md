@@ -45,6 +45,9 @@
   `SimulationBounds` and `Tolerance`.
 - **`flui-native`**: the native platform constructors are `try_new`: `WindowsPlatform`,
   `MacOSPlatform`, `IOSPlatform`, `WaylandPlatform`, `X11Platform` and `WebPlatform`.
+- **`flui-widgets`**: the same for `Draggable`, `DropTarget`, `GestureAlternatives`,
+  `SwipeActions`, `DismissThreshold`, `AnchoredDragController`, `AnchorSnap`, `ViewportFraction`,
+  `HeaderExtents` and `SliverConstrainedCrossAxis`.
 
 ### Fixed
 

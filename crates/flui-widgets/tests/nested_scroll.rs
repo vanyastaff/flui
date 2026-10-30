@@ -2688,7 +2688,7 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: infinity rests on the far extent, at {beyond}"
         );
         let stops = || {
-            Arc::new(AnchorSnap::new([500.0, 0.0, 120.0]).expect("finite anchors"))
+            Arc::new(AnchorSnap::try_new([500.0, 0.0, 120.0]).expect("finite anchors"))
                 as Arc<dyn SnapPolicy>
         };
         let anchored = rests(stops(), slow(device, at(250.0, 150.0), at(150.0, 150.0)));
@@ -2702,7 +2702,7 @@ pub(crate) fn snap_policy_targets() {
             "{device:?}: a fling takes the next anchor, at {anchor_fling}"
         );
         let past_extent = rests(
-            Arc::new(AnchorSnap::new([0.0, 900.0]).expect("finite anchors")),
+            Arc::new(AnchorSnap::try_new([0.0, 900.0]).expect("finite anchors")),
             fling(device, at(250.0, 150.0), at(190.0, 150.0)),
         );
         assert!(
@@ -2715,7 +2715,7 @@ pub(crate) fn snap_policy_targets() {
     let metrics =
         |pixels: f64| ScrollMetrics::new(pixels, 0.0, 900.0, 300.0).with_device_pixel_ratio(2.0);
     let pages = PageSnap::new(ViewportFraction::FULL);
-    let stops = AnchorSnap::new([400.0, 0.0, 120.0, 120.0]).expect("finite anchors");
+    let stops = AnchorSnap::try_new([400.0, 0.0, 120.0, 120.0]).expect("finite anchors");
     assert_eq!(
         stops.anchors(),
         [0.0, 120.0, 400.0],
@@ -2780,9 +2780,9 @@ pub(crate) fn snap_policy_targets() {
             "page: a sub-pixel page length at {velocity} px/s"
         );
     }
-    assert_eq!(AnchorSnap::new([]), Err(AnchorSnapError::Empty));
+    assert_eq!(AnchorSnap::try_new([]), Err(AnchorSnapError::Empty));
     assert_eq!(
-        AnchorSnap::new([0.0, f64::NAN]),
+        AnchorSnap::try_new([0.0, f64::NAN]),
         Err(AnchorSnapError::NonFinite { index: 1 })
     );
 }
