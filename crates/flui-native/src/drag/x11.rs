@@ -542,15 +542,12 @@ struct State {
     names: HashMap<xproto::Atom, Option<String>>,
 }
 
-/// What a step leaves to do once the lock is let go: completers to resolve,
-/// requestor windows to make and convert into or destroy, and an event for a
-/// window.
+/// What a step leaves to do once the lock is let go: completers to resolve
+/// and an event for a window, and whether a fetch started.
 #[derive(Default)]
 struct After {
     completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)>,
-    /// A fetch's requestor, the type it asks for and the time it asks at.
-    started: Vec<(xproto::Window, xproto::Atom, xproto::Timestamp)>,
-    ended: Vec<xproto::Window>,
+    started: bool,
     dispatch: Option<(InputTarget, DragDropEvent)>,
 }
 
@@ -561,9 +558,62 @@ impl After {
     }
 
     /// `fetch` ended with `outcome`: its requestor goes.
-    fn end(&mut self, fetch: Fetch, outcome: Result<TransferPayload, TransferError>) {
-        self.ended.push(fetch.requestor);
+    fn end(
+        &mut self,
+        wire: &Wire<'_>,
+        fetch: Fetch,
+        outcome: Result<TransferPayload, TransferError>,
+    ) {
+        wire.close(fetch.requestor);
         self.completions.push((fetch.wanted.completer, outcome));
+    }
+}
+
+/// The requests that make and end a fetch's requestor, sent with the
+/// transfer's lock held: a fetch is made and ended on the wire in the order
+/// its state changes, whatever thread changes it, so no window is made for a
+/// fetch already ended. They are queued, not flushed; nothing waits for the
+/// server under the lock.
+struct Wire<'a> {
+    connection: &'a X11Connection,
+    selection: xproto::Atom,
+    property: xproto::Atom,
+}
+
+impl Wire<'_> {
+    /// Make `requestor` and ask the source to convert into it.
+    fn open(&self, requestor: xproto::Window, target: xproto::Atom, time: xproto::Timestamp) {
+        let xcb = self.connection.xcb();
+        let started = xcb
+            .create_window(
+                0,
+                requestor,
+                self.connection.root(),
+                -1,
+                -1,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+            )
+            .map(drop)
+            .and_then(|()| {
+                xcb.convert_selection(requestor, self.selection, target, self.property, time)
+                    .map(drop)
+            });
+        if let Err(error) = started {
+            // The fetch times out.
+            tracing::debug!(%error, "cannot ask the XDND source for its data");
+        }
+    }
+
+    /// Destroy `requestor`: what a source writes to it late goes nowhere.
+    fn close(&self, requestor: xproto::Window) {
+        if let Err(error) = self.connection.xcb().destroy_window(requestor) {
+            tracing::debug!(%error, "cannot destroy an XDND requestor");
+        }
     }
 }
 
@@ -571,19 +621,14 @@ impl State {
     /// Retire `id`: its fetches and waiting requests resolve as
     /// [`TransferError::SourceGone`], and what waits for another offer
     /// starts in the fetches it leaves.
-    fn retire(
-        &mut self,
-        id: DataTransferId,
-        connection: &X11Connection,
-        after: &mut After,
-    ) -> Option<Offer> {
+    fn retire(&mut self, id: DataTransferId, wire: &Wire<'_>, after: &mut After) -> Option<Offer> {
         let _ = self.table.retire(id);
         let (stale, kept): (Vec<Fetch>, Vec<Fetch>) = std::mem::take(&mut self.fetches)
             .into_iter()
             .partition(|fetch| fetch.wanted.id == id);
         self.fetches = kept;
         for fetch in stale {
-            after.end(fetch, Err(TransferError::SourceGone));
+            after.end(wire, fetch, Err(TransferError::SourceGone));
         }
         let (stale, kept): (VecDeque<Wanted>, VecDeque<Wanted>) = std::mem::take(&mut self.waiting)
             .into_iter()
@@ -592,20 +637,20 @@ impl State {
         for wanted in stale {
             after.gone(wanted.completer);
         }
-        self.start_waiting(connection, after);
+        self.start_waiting(wire, after);
         self.offers.remove(&id)
     }
 
     /// End the drag over a window: its offer, if minted and not dropped, is
     /// retired, and the window hears `Exited`.
-    fn end_hover(&mut self, connection: &X11Connection, after: &mut After) {
+    fn end_hover(&mut self, wire: &Wire<'_>, after: &mut After) {
         let Some(hover) = self.hover.take() else {
             return;
         };
         let Phase::Over(id) = hover.phase else {
             return;
         };
-        self.retire(id, connection, after);
+        self.retire(id, wire, after);
         if let Some(target) = self.windows.get(&hover.window.xid) {
             after.dispatch = Some((target.clone(), DragDropEvent::Exited { id }));
         }
@@ -613,7 +658,7 @@ impl State {
 
     /// Start the waiting requests the fetches have room for, each with a
     /// requestor of its own.
-    fn start_waiting(&mut self, connection: &X11Connection, after: &mut After) {
+    fn start_waiting(&mut self, wire: &Wire<'_>, after: &mut After) {
         while self.fetches.len() < MAX_FETCHES {
             let Some(wanted) = self.waiting.pop_front() else {
                 return;
@@ -624,7 +669,7 @@ impl State {
             }
             // An id is the client's to number: no round trip but when its
             // range runs out.
-            let requestor = match connection.xcb().generate_id() {
+            let requestor = match wire.connection.xcb().generate_id() {
                 Ok(requestor) => requestor,
                 Err(error) => {
                     tracing::debug!(%error, "no X id for an XDND requestor");
@@ -632,7 +677,8 @@ impl State {
                     continue;
                 }
             };
-            after.started.push((requestor, wanted.target, wanted.time));
+            wire.open(requestor, wanted.target, wanted.time);
+            after.started = true;
             self.fetches.push(Fetch {
                 requestor,
                 wanted,
@@ -706,49 +752,21 @@ impl X11Drag {
         }
     }
 
+    /// The requests of the fetches' requestors.
+    fn wire(&self) -> Wire<'_> {
+        Wire {
+            connection: &self.connection,
+            selection: self.atoms.selection,
+            property: self.atoms.property,
+        }
+    }
+
     /// Do what a step left, with no lock held, and flush what it sent.
     fn finish(&self, after: After) {
-        let xcb = self.connection.xcb();
-        for (requestor, target, time) in &after.started {
-            let started = xcb
-                .create_window(
-                    0,
-                    *requestor,
-                    self.connection.root(),
-                    -1,
-                    -1,
-                    1,
-                    1,
-                    0,
-                    WindowClass::INPUT_ONLY,
-                    COPY_FROM_PARENT,
-                    &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-                )
-                .map(drop)
-                .and_then(|()| {
-                    xcb.convert_selection(
-                        *requestor,
-                        self.atoms.selection,
-                        *target,
-                        self.atoms.property,
-                        *time,
-                    )
-                    .map(drop)
-                });
-            if let Err(error) = started {
-                // The fetch times out.
-                tracing::debug!(%error, "cannot ask the XDND source for its data");
-            }
-        }
-        for requestor in after.ended {
-            if let Err(error) = xcb.destroy_window(requestor) {
-                tracing::debug!(%error, "cannot destroy an XDND requestor");
-            }
-        }
-        if let Err(error) = xcb.flush() {
+        if let Err(error) = self.connection.xcb().flush() {
             tracing::debug!(%error, "cannot send the XDND transfer's requests");
         }
-        if !after.started.is_empty() {
+        if after.started {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
         }
@@ -834,7 +852,7 @@ impl X11Drag {
         let mut after = After::default();
         let entered = {
             let mut state = self.state.lock();
-            state.end_hover(&self.connection, &mut after);
+            state.end_hover(&self.wire(), &mut after);
             match state.windows.get(&window) {
                 Some(target) if version >= model::OLDEST => {
                     let target = target.window;
@@ -1042,7 +1060,7 @@ impl X11Drag {
                 .as_ref()
                 .is_some_and(|hover| hover.source == source)
             {
-                state.end_hover(&self.connection, &mut after);
+                state.end_hover(&self.wire(), &mut after);
             }
         }
         self.finish(after);
@@ -1089,7 +1107,7 @@ impl X11Drag {
                 ));
                 None
             } else {
-                state.end_hover(&self.connection, &mut after);
+                state.end_hover(&self.wire(), &mut after);
                 Some(window)
             }
         };
@@ -1147,8 +1165,8 @@ impl X11Drag {
                 let fetch = state
                     .take_fetch(requestor)
                     .expect("BUG: the fetch was found under this lock");
-                after.end(fetch, outcome);
-                state.start_waiting(&self.connection, &mut after);
+                after.end(&self.wire(), fetch, outcome);
+                state.start_waiting(&self.wire(), &mut after);
             }
         }
         self.finish(after);
@@ -1296,7 +1314,7 @@ impl LoopDrag for X11Drag {
                 .as_ref()
                 .is_some_and(|hover| hover.window.id == window.id)
             {
-                state.end_hover(&self.connection, &mut after);
+                state.end_hover(&self.wire(), &mut after);
             }
             removed
         };
@@ -1367,9 +1385,9 @@ impl LoopDrag for X11Drag {
             state.fetches = live;
             if !ended.is_empty() {
                 for fetch in ended {
-                    after.end(fetch, Err(TransferError::SourceGone));
+                    after.end(&self.wire(), fetch, Err(TransferError::SourceGone));
                 }
-                state.start_waiting(&self.connection, &mut after);
+                state.start_waiting(&self.wire(), &mut after);
             }
         }
         self.finish(after);
@@ -1410,7 +1428,7 @@ impl DataTransferSource for X11Drag {
                 limit: limits.max_bytes,
                 completer,
             });
-            state.start_waiting(&self.connection, &mut after);
+            state.start_waiting(&self.wire(), &mut after);
             request
         };
         self.finish(after);
@@ -1441,7 +1459,7 @@ impl DataTransferSource for X11Drag {
                 hover.phase = Phase::Concluded;
             }
             state
-                .retire(id, &self.connection, &mut after)
+                .retire(id, &self.wire(), &mut after)
                 .and_then(|offer| {
                     let action = offer.dropped?;
                     Some((offer.source, offer.window, action))
