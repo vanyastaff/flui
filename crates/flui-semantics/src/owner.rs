@@ -377,6 +377,9 @@ pub enum SemanticsDiagnostic {
     InapplicableAttribute(InapplicableAttribute),
     /// Siblings that share an identifier, published as written.
     DuplicateIdentifier(DuplicateIdentifier),
+    /// A text field whose runs have no identities, published without its
+    /// runs and selection.
+    TextRunsWithheld(TextRunsWithheld),
 }
 
 /// A role-dependent attribute a published node declared and its role does
@@ -407,6 +410,16 @@ pub struct DuplicateIdentifier {
     pub siblings: Vec<AccessibilityNodeId>,
 }
 
+/// A text field published without its text runs and selection: the
+/// presentation's synthetic identity space is exhausted, or the content was
+/// declared without identities. Its value still reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TextRunsWithheld {
+    /// The field.
+    pub node: AccessibilityNodeId,
+}
+
 /// Reports `diagnostic` as a warning. Called by the frame driver with no
 /// borrow of the pipeline held, since a `tracing` subscriber is user code.
 pub fn report_diagnostic(diagnostic: &SemanticsDiagnostic) {
@@ -423,7 +436,23 @@ pub fn report_diagnostic(diagnostic: &SemanticsDiagnostic) {
             siblings = ?clash.siblings,
             "siblings share a semantics identifier, which must be unique among siblings"
         ),
+        SemanticsDiagnostic::TextRunsWithheld(withheld) => tracing::warn!(
+            node = ?withheld.node,
+            "a text field is published without its text runs and selection: they have no identities"
+        ),
     }
+}
+
+/// What a publication reports about `node`: its inapplicable attributes, and
+/// text runs withheld for want of identities.
+fn findings_of(node: &SemanticsNode) -> impl Iterator<Item = SemanticsDiagnostic> + '_ {
+    let withheld = node
+        .accessibility_id()
+        .filter(|_| crate::accesskit_translation::withholds_text(node.config().attributes()))
+        .map(|node| SemanticsDiagnostic::TextRunsWithheld(TextRunsWithheld { node }));
+    inapplicable_of(node)
+        .map(SemanticsDiagnostic::InapplicableAttribute)
+        .chain(withheld)
 }
 
 /// The inapplicable attributes `node` declares, when it is published.
@@ -1003,6 +1032,60 @@ impl SemanticsOwner {
             resolved = Some((id, node));
         }
         resolved.ok_or(SemanticsActionError::NodeNotFound { node_id })
+    }
+
+    /// Decodes a platform request against this owner's tree, as
+    /// [`semantics_action_request_for`](crate::semantics_action_request_for)
+    /// does, and also what only the tree can read: a request on one of a
+    /// field's text runs goes to the field, and a `SetTextSelection`'s run
+    /// positions become bytes of the field's value.
+    ///
+    /// # Errors
+    ///
+    /// The free function's, and [`ActionDecodeError::InvalidTextPosition`]
+    /// when a selection's end is not a position in the target field's current
+    /// runs.
+    ///
+    /// [`ActionDecodeError::InvalidTextPosition`]: crate::ActionDecodeError::InvalidTextPosition
+    pub fn semantics_action_request_for(
+        &self,
+        request: &accesskit::ActionRequest,
+    ) -> Result<SemanticsActionRequest, crate::ActionDecodeError> {
+        let mut routed = request.clone();
+        if let Some(field) = AccessibilityNodeId::from_u64(request.target_node.0)
+            .and_then(|run| self.field_of_run(run))
+        {
+            routed.target_node = accesskit::NodeId(field.as_u64());
+        }
+        crate::accesskit_translation::decode_request(&routed, |target, selection| {
+            let root = self.tree.root()?;
+            let (_, field) = self.locate(root, target).ok()?;
+            let (content, runs) =
+                crate::accesskit_translation::published_text(field.config().attributes())?;
+            let position = |at: &accesskit::TextPosition| {
+                let run = AccessibilityNodeId::from_u64(at.node.0)?;
+                let index = runs.iter().position(|published| *published == run)?;
+                Some(crate::TextRunPosition::new(index, at.character_index))
+            };
+            content
+                .selection_bytes(crate::TextRunSelection::new(
+                    position(&selection.anchor)?,
+                    position(&selection.focus)?,
+                ))
+                .ok()
+        })
+    }
+
+    /// The field that publishes `run` as one of its text runs.
+    fn field_of_run(&self, run: AccessibilityNodeId) -> Option<AccessibilityNodeId> {
+        self.tree.rooted_nodes()?.into_iter().find_map(|sid| {
+            let node = self.tree.get(sid)?;
+            let (_, runs) =
+                crate::accesskit_translation::published_text(node.config().attributes())?;
+            runs.contains(&run)
+                .then(|| node.accessibility_id())
+                .flatten()
+        })
     }
 
     /// Resolves a platform request against the current rooted semantics tree,
@@ -1609,8 +1692,7 @@ impl SemanticsOwner {
             .into_iter()
             .filter_map(|sid| self.tree.get(sid))
             .filter(|node| node.is_dirty())
-            .flat_map(inapplicable_of)
-            .map(SemanticsDiagnostic::InapplicableAttribute)
+            .flat_map(findings_of)
             .collect();
         self.queue_diagnostics(findings);
         #[cfg(debug_assertions)]
@@ -1787,7 +1869,7 @@ impl SemanticsOwner {
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
-            findings.extend(inapplicable_of(node).map(SemanticsDiagnostic::InapplicableAttribute));
+            findings.extend(findings_of(node));
             let mut translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1801,6 +1883,12 @@ impl SemanticsOwner {
             }
             if held(&id) != Some(&translated) {
                 changed.push((id, translated));
+            }
+            // A field's runs change with its text or layout, which dirties it.
+            for (run, translated) in crate::accesskit_translation::text_run_nodes(data.attrs) {
+                if held(&run) != Some(&translated) {
+                    changed.push((run, translated));
+                }
             }
         }
 
