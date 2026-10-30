@@ -404,7 +404,7 @@ impl SharedPlatform {
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]
-    pub fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
+    pub fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs> {
         self.platform.data_dirs(app)
     }
 

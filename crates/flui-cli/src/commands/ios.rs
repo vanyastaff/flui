@@ -147,7 +147,7 @@ pub(super) fn configured_bundle(root: &Path) -> CliResult<Option<AppBundle>> {
     match std::fs::symlink_metadata(&path) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&path)?;
-            let mut bundle = AppBundle::new(&config.app.name, &config.app.organization);
+            let mut bundle = AppBundle::new(&config.app.name, config.app.id.apple_bundle_id());
             bundle.version = config.app.version;
             Ok(Some(bundle))
         }

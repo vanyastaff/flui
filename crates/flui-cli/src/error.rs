@@ -74,6 +74,24 @@ pub(crate) enum CliError {
         reason: String,
     },
 
+    /// An application identifier is not one every platform accepts.
+    #[error("invalid application identifier '{id}': {reason}")]
+    InvalidAppId {
+        /// The refused identifier.
+        id: String,
+        /// The rule it breaks.
+        reason: String,
+    },
+
+    /// A project file `flui` keeps a key in is not in a shape it can edit.
+    #[error("cannot update {file}: {reason}")]
+    InvalidConfig {
+        /// The file, relative to the project root.
+        file: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+
     /// A named device, emulator or simulator does not exist.
     #[error("device '{name}' not found; {hint}")]
     DeviceNotFound {

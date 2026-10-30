@@ -51,3 +51,6 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
 
 #[path = "capability.rs"]
 mod capability;
+
+#[path = "app_data_dir.rs"]
+mod app_data_dir;

@@ -1201,7 +1201,7 @@ impl host::Storage<AndroidLoop> for AndroidLoop {
     /// never backs up, for state that belongs to this device.
     fn data_dirs(
         owner: &AndroidLoop,
-        app: &flui_platform::StorageName,
+        app: &flui_platform::AppDataDir,
     ) -> Option<crate::storage::DataDirs> {
         let files = owner.app.internal_data_path()?;
         let no_backup = files.parent()?.join("no_backup");

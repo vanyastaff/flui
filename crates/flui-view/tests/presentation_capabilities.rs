@@ -2,18 +2,21 @@
 //! `LifecycleContext` as installed, and a bare owner reports every one of
 //! them absent.
 
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
+use flui_platform::{Unsupported, UnsupportedReason};
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_testing::storage::MemoryStorage;
-use flui_view::PresentationCapabilities;
+use flui_view::persist::{StorageCapability, StorageHandle};
 use flui_view::prelude::*;
+use flui_view::{CapabilitySource, PresentationCapabilities};
 
 /// What `init_state` found, one flag per capability.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -78,7 +81,7 @@ impl ViewState<Asker> for AskerState {
             haptics: ctx.haptics().is_some(),
             drag_and_drop: ctx.drag_and_drop().is_some(),
             textures: ctx.texture_registry().is_some(),
-            storage: ctx.storage().is_some(),
+            storage: ctx.capability::<StorageCapability>().is_ok(),
         });
     }
 
@@ -108,10 +111,29 @@ fn a_bare_owner_reports_every_capability_absent() {
     assert_eq!(found_after(|_| {}), Present::default());
 }
 
+/// A UI runtime's providers with storage alone registered.
+struct StorageOnly;
+
+impl CapabilitySource for StorageOnly {
+    fn acquire(
+        &self,
+        capability: TypeId,
+        _name: &'static str,
+    ) -> Result<Box<dyn Any>, Unsupported> {
+        if capability == TypeId::of::<StorageCapability>() {
+            Ok(Box::new(StorageHandle::new(Arc::new(
+                MemoryStorage::default(),
+            ))))
+        } else {
+            Err(Unsupported::new(UnsupportedReason::NotRegistered))
+        }
+    }
+}
+
 #[test]
 fn an_installed_capability_reaches_the_lifecycle_context_alone() {
     let found = found_after(|capabilities| {
-        capabilities.storage = Some(Arc::new(MemoryStorage::default()));
+        capabilities.capabilities = Some(Rc::new(StorageOnly));
     });
     assert_eq!(
         found,

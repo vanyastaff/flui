@@ -33,7 +33,7 @@ pub(crate) fn add(platforms: &[String]) -> CliResult<()> {
 
     // Derive scaffold params from config.
     let lib_name = config.app.name.replace('-', "_");
-    let package_name = config.app.app_id();
+    let package_name = config.app.id.android_package().to_owned();
     let params = ScaffoldParams {
         app: &config.app.name,
         lib: &lib_name,

@@ -398,7 +398,7 @@ impl AndroidBuilder {
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
-        let package = config.app.app_id();
+        let package = config.app.id.android_package().to_owned();
         let manifest = self
             .workspace_root
             .join("platforms")

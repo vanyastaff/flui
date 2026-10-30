@@ -342,7 +342,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 }
 
 /// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
-/// widgets reach it through `LifecycleContext::storage`. Mounting a new tree
+/// widgets acquire it as the `StorageCapability`. Mounting a new tree
 /// over the same storage after dropping the first is how a test restarts an
 /// application.
 pub fn lay_out_with_storage(

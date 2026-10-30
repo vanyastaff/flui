@@ -2,7 +2,7 @@
 
 use flui_engine::FrameLatency;
 use flui_foundation::geometry::{Point, Size};
-use flui_log::AppIdentity;
+use flui_log::{AppId, AppIdentity};
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
@@ -73,10 +73,13 @@ impl Default for DiagnosticsProfile {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct AppConfig {
-    /// Process-level application identity used by native diagnostics sinks.
+    /// Process-level application identity used by native diagnostics sinks
+    /// and the storage host.
     ///
     /// This is deliberately independent from [`Self::title`]: a multi-window
     /// application has one identity and may give every window a different title.
+    /// The default carries the identifier `flui build` and `flui run` compile
+    /// the application with (`FLUI_APP_ID`, from `flui.toml`), if any.
     pub application_identity: AppIdentity,
 
     /// Diagnostics defaults for a managed application.
@@ -280,7 +283,7 @@ pub struct AppConfig {
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
-    pub(crate) storage_dir: Option<flui_platform::StorageName>,
+    pub(crate) storage_dir: Option<flui_platform::AppDataDir>,
 
     /// The storage name a window's placement is kept under, set with
     /// [`Self::restore_placement`].
@@ -303,11 +306,27 @@ impl std::fmt::Debug for MemoryReceivers {
     }
 }
 
+/// The identity an application gets by default: the display name `FLUI App`
+/// and the identifier the build passed in `FLUI_APP_ID`, if it is one.
+fn build_identity() -> AppIdentity {
+    let identity =
+        AppIdentity::try_new("FLUI App").expect("BUG: the default application identity is valid");
+    let Some(declared) = option_env!("FLUI_APP_ID") else {
+        return identity;
+    };
+    match AppId::try_new(declared) {
+        Ok(app_id) => identity.with_app_id(app_id),
+        Err(error) => {
+            tracing::warn!(%error, "FLUI_APP_ID is not an application identifier; ignored");
+            identity
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            application_identity: AppIdentity::try_new("FLUI App")
-                .expect("BUG: the default application identity is valid"),
+            application_identity: build_identity(),
             diagnostics_profile: DiagnosticsProfile::default(),
             motion_override: MotionOverride::FollowSystem,
             title: "FLUI App".to_string(),
@@ -597,14 +616,20 @@ impl AppConfig {
         self
     }
 
-    /// Keep the application's data under `name`, which every widget reaches
-    /// through `LifecycleContext::storage`.
+    /// Keep the application's data in `dir` rather than in the directory named
+    /// after its identifier.
     ///
-    /// The directory is `name` under the platform's data roots: the current
-    /// user's data directories on desktop and iOS, the app's private `files`
-    /// and `no_backup` directories on Android, and the page's IndexedDB on
-    /// the Web. Without it, or where the platform has no data root,
-    /// widgets get no storage.
+    /// Every widget acquires the application's storage as the
+    /// `StorageCapability` (`cx.capability::<StorageCapability>()`). It lives
+    /// in one directory under the platform's data roots: the current user's
+    /// data directories on desktop and iOS, the app's private `files` and
+    /// `no_backup` directories on Android, and the page's IndexedDB on the
+    /// Web. That directory is `dir` when this is set, otherwise the
+    /// application's identifier ([`AppIdentity::with_app_id`], which
+    /// `flui build` sets from `flui.toml`); on Android, iOS and the Web, whose
+    /// roots already belong to this application alone, a fixed name stands
+    /// in when there is no identifier. With neither, or where the platform
+    /// has no data root, widgets get no storage.
     ///
     /// The host has one storage, read from the configuration the run starts
     /// with: every window shares it, and a `storage_dir` in a configuration
@@ -612,10 +637,10 @@ impl AppConfig {
     ///
     /// Outside an app sandbox the desktop roots are shared by every
     /// application of the user, so pick a name only this application uses
-    /// (`acme-notes`, not `notes`).
+    /// (`com.acme.notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_storage_dir(mut self, name: flui_platform::StorageName) -> Self {
-        self.storage_dir = Some(name);
+    pub fn with_storage_dir(mut self, dir: flui_platform::AppDataDir) -> Self {
+        self.storage_dir = Some(dir);
         self
     }
 

@@ -120,7 +120,7 @@ pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
 pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError};
 pub use identity::{
-    APPLE_CATEGORY, AppIdentity, AppleBundleId, DEFAULT_DISPLAY_NAME, IdentityError,
+    APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError,
     UNIDENTIFIED_APPLE_SUBSYSTEM,
 };
 pub use ownership::{

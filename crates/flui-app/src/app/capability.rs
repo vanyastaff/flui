@@ -2,7 +2,11 @@
 //! which this crate supplies as the composition root, and the registry a run
 //! builds from them, the application's overrides and its plugins.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaimId, PrimaryClaims,
@@ -10,12 +14,13 @@ use flui_interaction::{
 };
 use flui_native::{NativeClipboard, NativePrimarySelection};
 use flui_platform::{
-    Unsupported, UnsupportedReason,
+    Storage, Unsupported, UnsupportedReason,
     capability::{
         Capability, CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
     },
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
+use flui_view::persist::{StorageCapability, StorageHandle};
 
 /// The slot the owner platform's clipboard is installed in for a loop's life.
 pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<dyn NativeClipboard>>>>;
@@ -107,6 +112,9 @@ pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
 /// The providers this crate ships.
 fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<StorageCapability>(HostStorageProvider {
+        slot: slots.storage.clone(),
+    });
     registrar.provide::<ClipboardCapability>(PlatformClipboard {
         slot: Rc::clone(&slots.clipboard),
     });
@@ -174,6 +182,7 @@ impl NativePrimary {
 /// The slots the built-in providers read the owner platform from.
 #[derive(Clone, Default)]
 pub(crate) struct CapabilitySlots {
+    pub(crate) storage: StorageSlot,
     pub(crate) clipboard: ClipboardSlot,
     #[cfg_attr(
         not(target_os = "linux"),
@@ -347,5 +356,80 @@ mod tests {
             "the current claim's release withdraws"
         );
         assert!(!native.owns());
+    }
+}
+
+/// The host's byte storage for a loop's life, or why the run has none:
+/// [`NotRegistered`](UnsupportedReason::NotRegistered) until a run installs
+/// its storage and when it has no data directory to name,
+/// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform) when the
+/// platform has no data root.
+#[derive(Clone)]
+pub(crate) struct StorageSlot {
+    storage: Rc<RefCell<Result<Arc<dyn Storage>, Unsupported>>>,
+    /// Whether this run has said why a widget got no storage.
+    explained: Rc<Cell<bool>>,
+}
+
+impl Default for StorageSlot {
+    fn default() -> Self {
+        Self {
+            storage: Rc::new(RefCell::new(Err(Unsupported::of::<StorageCapability>(
+                UnsupportedReason::NotRegistered,
+            )))),
+            explained: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
+impl StorageSlot {
+    /// Install the run's storage, or the reason it has none.
+    pub(crate) fn install(&self, storage: Result<Arc<dyn Storage>, Unsupported>) {
+        let replaced = self.storage.replace(storage);
+        self.explained.set(false);
+        drop(replaced);
+    }
+
+    /// Release the run's storage at loop exit, leaving none installed.
+    pub(crate) fn take(&self) -> Option<Arc<dyn Storage>> {
+        self.storage
+            .replace(Err(Unsupported::of::<StorageCapability>(
+                UnsupportedReason::NotRegistered,
+            )))
+            .ok()
+    }
+
+    /// The installed storage, if the run has one.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(crate) fn storage(&self) -> Option<Arc<dyn Storage>> {
+        self.storage.borrow().as_ref().ok().map(Arc::clone)
+    }
+}
+
+/// The built-in storage: the host's, under the run's data directory.
+struct HostStorageProvider {
+    slot: StorageSlot,
+}
+
+impl CapabilityProvider<StorageCapability> for HostStorageProvider {
+    fn provide(&self, _cx: &ProviderContext<'_>) -> Result<StorageHandle, Unsupported> {
+        let refusal = match &*self.slot.storage.borrow() {
+            Ok(storage) => return Ok(StorageHandle::new(Arc::clone(storage))),
+            Err(refusal) => *refusal,
+        };
+        // The first widget refused for want of a directory says how to name
+        // one, once a run; a debug build only, since a release build that
+        // keeps nothing is the author's choice.
+        if cfg!(debug_assertions)
+            && refusal.reason == UnsupportedReason::NotRegistered
+            && !self.slot.explained.replace(true)
+        {
+            tracing::warn!(
+                "a widget asked for storage, but the application has no identifier: set \
+                 `AppIdentity::with_app_id` (`flui build` does from flui.toml) or \
+                 `AppConfig::with_storage_dir`"
+            );
+        }
+        Err(refusal)
     }
 }

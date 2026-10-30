@@ -91,9 +91,6 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// capabilities from, and where their completions settle (ADR-0152).
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
     pub(crate) completions: flui_platform::capability::CompletionSource,
-    /// The UI runtime's byte storage, if it has one, handed to widgets through
-    /// `LifecycleContext::storage`.
-    pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
     /// What the presentation closes and persists through: its close guard's
     /// vetoes and signal, and the host's flush registry.
     pub(crate) close: crate::runtime_services::CloseServices,
@@ -862,7 +859,6 @@ impl PresentationState {
                     completions: capabilities.completions,
                     window: Rc::downgrade(&window),
                 }));
-            presentation.storage = capabilities.storage;
             presentation.close_guard = Some(close_guard.guard());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline

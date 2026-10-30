@@ -3,13 +3,13 @@ use super::{DependencySource, ProjectPlan};
 /// A reusable widget library: one `StatelessView` plus a widget test, no
 /// `main.rs` and no `[[bin]]` — `flui run` detects the missing binary target
 /// via `cargo metadata` and refuses to run it.
-pub fn generate(name: &str, org: &str, source: &DependencySource) -> ProjectPlan {
+pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectPlan {
     let lib_name = name.replace('-', "_");
 
     ProjectPlan::new()
         .file("Cargo.toml", cargo_toml(name, &lib_name, source))
         .file("src/lib.rs", LIB)
-        .file("flui.toml", flui_toml(name, org))
+        .file("flui.toml", flui_toml(name, app_id))
         .file("README.md", readme(name))
 }
 
@@ -85,12 +85,12 @@ mod tests {
 }
 "#;
 
-fn flui_toml(name: &str, org: &str) -> String {
+fn flui_toml(name: &str, app_id: &str) -> String {
     format!(
         r#"[app]
 name = "{name}"
 version = "0.1.0"
-organization = "{org}"
+id = "{app_id}"
 "#
     )
 }

@@ -287,6 +287,58 @@ fn platform_build_selectors_reach_the_selected_cargo_unit_or_refuse() {
     ]);
 }
 
+/// `flui build` keeps the project's `.cargo/config.toml` naming the
+/// identifier in `flui.toml` before anything compiles, rewriting that one key
+/// and keeping every other line; a file already in line is left as it is.
+#[test]
+fn build_brings_the_cargo_env_in_line_with_the_app_identifier() {
+    let tmp = TempDir::new().expect("temp dir");
+    let root = tmp.path();
+    std::fs::write(
+        root.join("flui.toml"),
+        "[app]\nname = \"sync-check\"\nversion = \"0.1.0\"\nid = \"com.test.sync_check\"\n",
+    )
+    .expect("write flui.toml");
+    // Not a manifest cargo accepts, so the build stops at cargo.
+    std::fs::write(root.join("Cargo.toml"), "[package]\n").expect("write Cargo.toml");
+    std::fs::create_dir(root.join(".cargo")).expect("create .cargo");
+    let config = root.join(".cargo").join("config.toml");
+    std::fs::write(
+        &config,
+        "# kept by hand\n[term]\nverbose = false\n\n[env]\nFLUI_APP_ID = \"com.old.app\" # stale\nOTHER = \"kept\"\n",
+    )
+    .expect("write .cargo/config.toml");
+
+    let build = || {
+        flui()
+            .current_dir(root)
+            .args(["build", "desktop"])
+            .output()
+            .expect("run flui build desktop")
+    };
+    assert!(
+        !build().status.success(),
+        "the stand-in manifest fails cargo"
+    );
+    let synced = std::fs::read_to_string(&config).expect("read .cargo/config.toml");
+    let table: toml::Table = toml::from_str(&synced).expect("still TOML");
+    assert_eq!(
+        table["env"]["FLUI_APP_ID"].as_str(),
+        Some("com.test.sync_check"),
+        "{synced}"
+    );
+    assert_eq!(table["env"]["OTHER"].as_str(), Some("kept"), "{synced}");
+    assert_eq!(table["term"]["verbose"].as_bool(), Some(false), "{synced}");
+    assert!(synced.starts_with("# kept by hand\n"), "{synced}");
+
+    assert!(!build().status.success());
+    assert_eq!(
+        std::fs::read_to_string(&config).expect("read .cargo/config.toml"),
+        synced,
+        "a file already in line is not rewritten"
+    );
+}
+
 /// A `[platforms]` table FLUI cannot honour fails the build before anything
 /// is compiled or an SDK is looked for, naming the table and, below the floor,
 /// both values (ADR-0244 §10).
@@ -315,8 +367,8 @@ fn a_platform_min_flui_cannot_honour_is_refused_before_building() {
         std::fs::write(
             project.path().join("flui.toml"),
             format!(
-                "[app]\nname = \"floor_app\"\nversion = \"0.1.0\"\norganization = \
-                 \"com.example\"\n\n{table}"
+                "[app]\nname = \"floor_app\"\nversion = \"0.1.0\"\nid = \
+                 \"com.example.floor_app\"\n\n{table}"
             ),
         )
         .expect("write flui.toml");

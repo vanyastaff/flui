@@ -1526,27 +1526,68 @@ mod tests {
         );
     }
 
-    /// A storage directory in the main configuration reaches the UI runtimes the
-    /// host builds: the run resolves the host's storage once, at start, and
-    /// a UI runtime built afterwards holds it in its build owner, which every
-    /// `LifecycleContext::storage` under it reads. Driven through
-    /// `run_with_platform` itself, so the host's storage comes from the
-    /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
-    /// which reaches `host::build_ui_runtime` as every runner site does,
-    /// without a GPU.
+    /// The run's storage directory reaches the UI runtimes the host builds:
+    /// the run resolves the host's storage once, at start, and a UI runtime
+    /// built afterwards provides it to its widgets as the
+    /// `StorageCapability`. The directory is the configured one, else the
+    /// application's identifier; a desktop application with neither has no
+    /// storage. Driven through `run_with_platform` itself, so the host's
+    /// storage comes from the runner; the UI runtime is an `Isolated` window
+    /// opened from `on_ready`, which reaches `host::build_ui_runtime` as every
+    /// runner site does, without a GPU.
     #[test]
-    fn a_configured_storage_dir_reaches_lifecycle_context() {
+    fn the_run_storage_dir_reaches_lifecycle_context() {
+        let dir = || {
+            flui_platform::AppDataDir::try_new("storage-host-test")
+                .expect("a plain name is a valid directory")
+        };
+        let identified = || {
+            crate::AppIdentity::try_new("Storage host test")
+                .expect("a display name")
+                .with_app_id(crate::AppId::try_new("dev.flui.storage_host_test").expect("an id"))
+        };
+        let cases: [(&str, AppConfig, bool); 4] = [
+            (
+                "a configured directory",
+                AppConfig::new().with_storage_dir(dir()),
+                true,
+            ),
+            (
+                "an application identifier alone",
+                AppConfig::new().with_application_identity(identified()),
+                true,
+            ),
+            (
+                "a configured directory beside an identifier",
+                AppConfig::new()
+                    .with_application_identity(identified())
+                    .with_storage_dir(dir()),
+                true,
+            ),
+            ("neither, on a desktop", AppConfig::new(), false),
+        ];
+        for (case, config, expected) in cases {
+            assert_eq!(
+                storage_reaches_a_ui_runtime(config),
+                Some(expected),
+                "{case}"
+            );
+        }
+    }
+
+    /// Whether a UI runtime built after a run started with `config` can
+    /// acquire the `StorageCapability`; `None` when it was never observed.
+    fn storage_reaches_a_ui_runtime(config: AppConfig) -> Option<bool> {
+        use flui_platform::capability::Capability as _;
+        use flui_view::persist::StorageCapability;
+
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("no main window is opened");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(
-            AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_storage_dir(flui_platform::StorageName::from_static("storage-host-test")),
-        )
+        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),
@@ -1559,22 +1600,47 @@ mod tests {
                 dispatcher,
                 super::super::owner_dispatch::RuntimeTask::TestCallback(Box::new(
                     move |ui_runtime| {
-                        observed.set(Some(
-                            ui_runtime
-                                .widgets()
-                                .with_build_owner(|owner| owner.capabilities().storage.is_some()),
-                        ));
+                        observed.set(Some(ui_runtime.widgets().with_build_owner(|owner| {
+                            owner
+                                .capabilities()
+                                .capabilities
+                                .as_ref()
+                                .is_some_and(|source| {
+                                    source
+                                        .acquire(
+                                            std::any::TypeId::of::<StorageCapability>(),
+                                            StorageCapability::NAME,
+                                        )
+                                        .is_ok()
+                                })
+                        })));
                     },
                 )),
             )
             .expect("observe storage through the installed owner");
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
+        reached.get()
+    }
 
-        assert_eq!(
-            reached.get(),
-            Some(true),
-            "a ui_runtime built after the host started with a storage directory holds storage"
-        );
+    /// An identifier the application may declare always names a data
+    /// directory, so the run's default storage directory never refuses one.
+    #[test]
+    fn every_app_id_names_a_data_dir() {
+        let long = format!("com.{}", "a".repeat(251));
+        for id in [
+            "com.example.notes",
+            "com.aux.notes",
+            "con1.example",
+            "Lpt.example",
+            "comx.app",
+            long.as_str(),
+        ] {
+            let app_id = crate::AppId::try_new(id).expect("an accepted identifier");
+            assert!(
+                flui_platform::AppDataDir::try_new(app_id.as_str()).is_ok(),
+                "{id}"
+            );
+        }
     }
 }

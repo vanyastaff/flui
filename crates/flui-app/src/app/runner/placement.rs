@@ -31,7 +31,7 @@ pub(super) fn restore(options: &mut WindowOptions, config: &AppConfig) {
         tracing::warn!(
             storage = name.as_str(),
             "a window asks to remember its placement but the host has no storage; \
-             set `with_storage_dir`"
+             give the application an identifier or set `with_storage_dir`"
         );
         return;
     };

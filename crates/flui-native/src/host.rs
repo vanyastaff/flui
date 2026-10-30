@@ -47,7 +47,7 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics, PlatformSystemChrome, StorageName,
+    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics, PlatformSystemChrome,
     SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
     WindowHandler, WindowId, WindowOptions,
 };
@@ -394,7 +394,7 @@ pub trait Lifecycle<O> {
 /// The storage position.
 pub trait Storage<O> {
     /// [`Platform::data_dirs`].
-    fn data_dirs(owner: &O, app: &StorageName) -> Option<DataDirs>;
+    fn data_dirs(owner: &O, app: &AppDataDir) -> Option<DataDirs>;
 }
 
 /// The positions [`Absent`] is named with.
@@ -645,7 +645,7 @@ impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
 }
 
 impl<O> Storage<O> for Absent<position::Storage> {
-    fn data_dirs(_: &O, _: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(_: &O, _: &AppDataDir) -> Option<DataDirs> {
         None
     }
 }

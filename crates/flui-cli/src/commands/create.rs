@@ -1,3 +1,4 @@
+use crate::app_id::AppId;
 use crate::error::{CliResult, ResultExt};
 use crate::runner::{GitCommand, OutputStyle};
 use crate::templates::{DependencySource, PlannedFile, ProjectPlan, TemplateBuilder};
@@ -57,6 +58,7 @@ pub(crate) fn execute(
         dry_run,
     } = options;
 
+    let app_id = AppId::from_parts(&org_id, &project_name)?;
     let project_path = ProjectPath::new(&project_name, path)?;
     let project_dir = project_path.as_path();
 
@@ -68,7 +70,7 @@ pub(crate) fn execute(
         .map(std::string::ToString::to_string)
         .collect();
 
-    let builder = TemplateBuilder::new(project_name.clone(), org_id)
+    let builder = TemplateBuilder::new(project_name.clone(), app_id)
         .template(template)
         .dependency_source(source)
         .platforms(platform_names)

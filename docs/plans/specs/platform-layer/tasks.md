@@ -4682,6 +4682,26 @@ graph LR
   строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
   `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
   --all-targets`; `xtask checks`.
+- [ ] **LY52** — в части: шов. `StorageCapability` и `StorageHandle` (newtype над `Arc<dyn Storage>`)
+  в `flui_view::persist` рядом с `Persisted`; встроенный провайдер во `flui-app`
+  (`capability.rs`, `StorageSlot`) поверх `HostStorage`: без `with_storage_dir` — `NotRegistered`,
+  без корня данных — `NotOnThisPlatform`; `placement_recorder` пишет в тот же стор.
+  `LifecycleContext::storage`, поле `PresentationCapabilities::storage` и
+  `RuntimeHostServices::with_storage` удалены; `lay_out_with_storage` регистрирует `MemoryStorage`
+  встроенным провайдером headless-реестра. Место по умолчанию (решение координатора 2026-10-30):
+  `AppId` (reverse-DNS, грамматика имени пакета Android) вместо `AppleBundleId` в `AppIdentity`;
+  `AppDataDir` вместо `StorageName` у `data_dirs`; каталог — `with_storage_dir`, иначе `AppId`,
+  иначе на Android, iOS и Web (корни принадлежат одному приложению) фиксированное `app` (вместо
+  имени пакета: его даёт только JNI, а каталог и так приватный); на десктопе без идентификатора —
+  `NotRegistered` и одно предупреждение за запуск в debug при первом запросе хранилища
+  (`HostStorageProvider`). Таблица `the_run_storage_dir_reaches_lifecycle_context`, `app_id` во
+  `flui-log`, `app_data_dir` во `flui-platform`. Идентификатор из `flui.toml`:
+  `flui create` пишет `[env] FLUI_APP_ID` в `.cargo/config.toml`, `flui build`/`run` переписывают
+  только этот ключ при изменении (`cargo_config_with_app_id`, toml_edit), `AppConfig::default` читает
+  `option_env!` (тесты `created_application_builds_with_its_identifier`,
+  `build_brings_the_cargo_env_in_line_with_the_app_identifier`). Остаток (решение координатора
+  2026-10-30): один канонический `AppId` в `flui.toml`, формы платформ (bundle id Apple, пакет
+  Android) выводятся из него явными протестированными функциями в одном месте.
 
 ## Отступление от порядка, решённое владельцем
 

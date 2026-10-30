@@ -1213,7 +1213,7 @@ fn finish_open_secondary_window(
     not(target_arch = "wasm32")
 ))]
 fn warn_window_storage_dir(config: &AppConfig) {
-    if let Some(name) = config.storage_dir {
+    if let Some(name) = &config.storage_dir {
         tracing::warn!(
             storage_dir = name.as_str(),
             "a window's storage_dir is ignored: storage comes from the run's configuration"

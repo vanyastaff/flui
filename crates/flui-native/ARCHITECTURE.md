@@ -4497,7 +4497,8 @@ read limit and a base of another length decided without a value cursor (the
 stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
-`AppConfig::with_storage_dir` is the one switch.
+the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::with_storage_dir`
+is the one switch.
 
 ### Android samples its displays through JNI and refreshes them on announced change only
 

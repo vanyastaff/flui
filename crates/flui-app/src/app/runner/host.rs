@@ -51,6 +51,7 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
 /// The host's byte storage, resolved once from the run's configuration when
 /// the host started (`AppRuntime::install_host_storage`). Same borrow rule
 /// as [`runtime_wake_callback`].
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
@@ -66,26 +67,65 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
-/// executors are installed; without a configured directory, or where the
-/// platform has no data root, widgets get no storage.
+/// executors are installed. Without a directory to name
+/// ([`storage_dir`]) widgets are refused storage as not registered; where
+/// the platform has no data root, as not on this platform.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
-    let dirs = config.storage_dir.and_then(|name| {
-        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
-        if dirs.is_none() {
-            tracing::warn!(
-                storage_dir = name.as_str(),
-                "this platform has no data directory; widgets get no storage"
-            );
-        }
-        dirs
-    });
-    // Always installed, `None` included: a run without storage must not
+    let refused =
+        |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
+    let dirs = storage_dir(config)
+        .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
+        .and_then(|dir| {
+            with_owner_platform(|owner| owner.shared().data_dirs(&dir))
+                .flatten()
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        storage_dir = dir.as_str(),
+                        "this platform has no data directory; widgets get no storage"
+                    );
+                    refused(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                })
+        });
+    // Always installed, a refusal included: a run without storage must not
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
     // The run's receivers replace the last run's, for the same reason.
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
+
+/// The directory the run's storage lives in under the data roots: the one
+/// [`AppConfig::with_storage_dir`](crate::app::AppConfig::with_storage_dir)
+/// names, else the application's identifier, else, where the roots belong to
+/// this application alone, [`SANDBOXED_STORAGE_DIR`]. `None` on a desktop
+/// application with neither, whose roots every application shares.
+pub(crate) fn storage_dir(config: &crate::app::AppConfig) -> Option<flui_platform::AppDataDir> {
+    if let Some(dir) = &config.storage_dir {
+        return Some(dir.clone());
+    }
+    if let Some(app_id) = config.application_identity.app_id() {
+        let dir = flui_platform::AppDataDir::try_new(app_id.as_str())
+            .expect("BUG: an application identifier is a valid directory name");
+        return Some(dir);
+    }
+    SANDBOXED.then(|| {
+        flui_platform::AppDataDir::try_new(SANDBOXED_STORAGE_DIR)
+            .expect("BUG: the sandboxed storage directory name is valid")
+    })
+}
+
+/// Whether the platform's data roots belong to this application alone: the
+/// Android app's private directories, the iOS app container, the page's
+/// origin on the Web.
+const SANDBOXED: bool = cfg!(any(
+    target_os = "android",
+    target_os = "ios",
+    target_arch = "wasm32"
+));
+
+/// The storage directory of an application without an identifier, where the
+/// data roots are its own.
+pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
 
 /// Have the host trim the GPU memory behind a new raster lane on a
 /// memory-pressure notice, for as long as the lane exists.
@@ -318,9 +358,6 @@ pub(super) fn build_ui_runtime(
         flui_scheduler::ClockSource::Platform,
     )
     .with_capabilities(runtime_capabilities());
-    if let Some(storage) = runtime_storage() {
-        host = host.with_storage(storage);
-    }
     if let Some(registry) = APP_RUNTIME.with(|slot| slot.borrow().flush_registry()) {
         host = host.with_flush_registry(registry);
     }

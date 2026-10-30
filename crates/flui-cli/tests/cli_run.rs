@@ -46,7 +46,7 @@ fn android_run_builds_the_selected_device_native_abi() {
     );
     std::fs::write(
         app.join("flui.toml"),
-        "[app]\nname = \"app\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n",
+        "[app]\nname = \"app\"\nversion = \"0.1.0\"\nid = \"com.example.app\"\n",
     )
     .expect("application config");
     let tools = root.join("tools");
@@ -263,7 +263,7 @@ fn a_worker_project_refuses_a_floor_flui_cannot_honour() {
     package(&root.join("worker"), "worker", "");
     std::fs::write(
         root.join("flui.toml"),
-        "[app]\nname = \"host\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n\n\
+        "[app]\nname = \"host\"\nversion = \"0.1.0\"\nid = \"com.example.host\"\n\n\
          [hot_reload]\nhost_package = \"host\"\nworker_package = \"worker\"\n\
          worker_lib = \"worker\"\nlogic_watch = \"worker/src\"\n\n\
          [platforms.ios]\nmin = \"12.0\"\n",

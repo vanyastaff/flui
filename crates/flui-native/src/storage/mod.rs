@@ -27,7 +27,7 @@
 
 use std::path::PathBuf;
 
-use flui_platform::StorageName;
+use flui_platform::AppDataDir;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod file_store;
@@ -63,7 +63,7 @@ pub struct DataDirs {
 /// the platform reports none. On wasm32 both roots are `app`, the prefix of
 /// the page store's keys.
 #[must_use]
-pub fn data_dirs(app: &StorageName) -> Option<DataDirs> {
+pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         Some(DataDirs {
