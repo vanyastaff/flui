@@ -1057,7 +1057,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`), then `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland`, `winit-backend` and `testing`, with and without `--all-targets`: the part of `feature-matrix` that pull requests run; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
-| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
+| `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl`, then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
@@ -1074,10 +1074,11 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 The `Native xtask` checks are independent of the `ci` lane aggregator. The
 other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
-they do not run native validation jobs. The native runtime and GPU suites
-remain available locally through `cargo xtask platform-test`, `cli-test`,
-`gpu-test` and `device`. No `full-ci` label or hosted device-check workflow
-can enable them.
+they do not run native validation jobs. The native runtime suites remain
+available locally through `cargo xtask platform-test`, `cli-test` and
+`device`. No `full-ci` label or hosted device-check workflow can enable them.
+The GPU readback suites run in `test` on Mesa's software rasterizers, once on
+Vulkan and once on GL, and locally on the host's adapter through `gpu-test`.
 
 A scheduled `weekly.yml` workflow (Mondays, or manually via
 `workflow_dispatch`) builds and tests against a fresh `cargo update` — early
@@ -1096,7 +1097,10 @@ the full-ci label workflow are removed. `cargo xtask affected` accepts no
 full-ci label flag, and plan does not read PR labels. Native runtime checks
 remain local commands. `cargo xtask gpu-test` sets `FLUI_REQUIRE_GPU=1` for
 both the engine and facade readback suites; a missing adapter or device fails
-the gate instead of producing successful skips. Native compilation uses Linux
+the gate instead of producing successful skips. `--backend vulkan|gl|metal|dx12`
+sets `WGPU_BACKEND`, which every engine test instance reads; `test` runs it
+with `vulkan` (lavapipe) and `gl` (llvmpipe through EGL), the Linux renderer's
+preferred backend and its fallback (ADR-0244 §1). Native compilation uses Linux
 cross tools for Windows and Android, and macOS runners with Xcode's genuine
 SDKs for macOS and iOS. These legs run clippy, not native tests or applications;
 OS runtime regressions need local platform evidence.

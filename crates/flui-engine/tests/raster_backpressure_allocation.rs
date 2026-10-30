@@ -246,7 +246,8 @@ fn warm_path_recording_has_no_per_draw_vertex_allocation() {
     use flui_foundation::geometry::Point;
     use flui_painting::{Paint, paint::path::Path, styling::Color};
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         apply_limit_buckets: false,
         ..Default::default()

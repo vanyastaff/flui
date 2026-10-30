@@ -3066,7 +3066,8 @@ mod tests {
     fn a_lost_device_reaches_the_installed_hook() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
         ))
@@ -3158,7 +3159,8 @@ mod tests {
         Arc<crate::device_domain::DeviceDomain>,
         Arc<std::sync::atomic::AtomicBool>,
     ) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
         ))

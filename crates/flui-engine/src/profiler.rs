@@ -367,7 +367,8 @@ pub(crate) mod tests {
     /// Private failure seam: abandoned encoders and unwind exits cannot be
     /// manufactured through the public diagnostic snapshot API.
     pub(crate) fn failed_frames_do_not_pollute_the_next_profile() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             apply_limit_buckets: false,
             ..Default::default()
