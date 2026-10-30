@@ -207,6 +207,8 @@ fn text_editing() {
             ("editable_text_clipboard::a_selection_held_before_mounting_is_offered", crate::editable_text_clipboard::a_selection_held_before_mounting_is_offered),
             ("editable_text_clipboard::a_panicking_listener_keeps_the_middle_press_paste", crate::editable_text_clipboard::a_panicking_listener_keeps_the_middle_press_paste),
             ("editable_text_clipboard::a_selection_changed_while_the_field_claims_stands", crate::editable_text_clipboard::a_selection_changed_while_the_field_claims_stands),
+            ("editable_text_clipboard::an_unobscuring_rebuild_claims_for_the_new_controller", crate::editable_text_clipboard::an_unobscuring_rebuild_claims_for_the_new_controller),
+            ("editable_text_clipboard::the_harness_releases_the_button_it_pressed", crate::editable_text_clipboard::the_harness_releases_the_button_it_pressed),
             ("editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit", crate::editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit),
             ("editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed", crate::editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed),
             ("editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit", crate::editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit),

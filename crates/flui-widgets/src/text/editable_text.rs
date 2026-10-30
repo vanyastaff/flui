@@ -1858,11 +1858,10 @@ impl ViewState<EditableText> for EditableTextState {
         let mut calls = OwnerCalls::new();
         let was_obscured = self.obscure.replace(new_view.obscure_text);
         self.obscuring_character.set(new_view.obscuring_character);
-        if was_obscured != new_view.obscure_text {
-            // An obscured field holds no primary selection.
-            let controller = Rc::downgrade(&self.controller);
-            calls.run(|| claim_primary(&self.primary, &controller, &self.obscure));
-        }
+        // An obscured field holds no primary selection; the claim is
+        // reconciled below, once the controller is the replacement's too, so
+        // no backend sees the new flag with the old controller's text.
+        let mut reclaim = was_obscured != new_view.obscure_text;
         let was_purpose = self.input_purpose.replace(new_view.input_purpose);
         if (was_obscured != new_view.obscure_text || was_purpose != new_view.input_purpose)
             && let Some(store) = &self.text_store
@@ -1904,12 +1903,15 @@ impl ViewState<EditableText> for EditableTextState {
             // new one has not changed since it was handed over. Its selection
             // is the one the primary selection holds now.
             self.rebuild_notifier.notify_listeners();
-            let controller = Rc::downgrade(&self.controller);
-            calls.run(|| claim_primary(&self.primary, &controller, &self.obscure));
+            reclaim = true;
             // The input method's document is the replacement's too.
             if let Some(store) = &self.text_store {
                 calls.run(|| store.controller_changed());
             }
+        }
+        if reclaim {
+            let controller = Rc::downgrade(&self.controller);
+            calls.run(|| claim_primary(&self.primary, &controller, &self.obscure));
         }
 
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {

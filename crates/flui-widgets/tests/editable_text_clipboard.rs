@@ -476,3 +476,103 @@ pub(crate) fn a_selection_changed_while_the_field_claims_stands() {
     );
     drop(other);
 }
+
+/// Reads the primary selection as it drops: a selection whose owner asks
+/// the platform what replaced it.
+struct ReadsOnDrop {
+    primary: flui_testing::ScriptedPrimarySelection,
+    read: Rc<std::cell::RefCell<Vec<Option<String>>>>,
+}
+
+impl Drop for ReadsOnDrop {
+    fn drop(&mut self) {
+        self.read.borrow_mut().push(self.primary.text());
+    }
+}
+
+/// A rebuild that both unobscures a field and replaces its controller
+/// claims for the replacement: what replaced the selection never reads the
+/// old, obscured controller's text.
+pub(crate) fn an_unobscuring_rebuild_claims_for_the_new_controller() {
+    let secret = TextEditingController::with_text("secret");
+    secret.set_selection(0, 6);
+    let shown = TextEditingController::with_text("shown");
+    shown.set_selection(0, 5);
+    let focus = FocusNode::with_debug_label("rebuilt field");
+    let handle = Rc::new(std::cell::RefCell::new(None));
+    let field = |controller: &TextEditingController, obscure: bool| {
+        flui_widgets::Column::new((
+            PrimaryAcquirer {
+                handle: Rc::clone(&handle),
+            },
+            EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscure),
+        ))
+    };
+    let mut harness = crate::common::harness::mount(field(&secret, true));
+    let primary = harness.primary_selection();
+    assert!(!primary.is_claimed(), "an obscured field offers nothing");
+    let read = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let other = handle
+        .borrow()
+        .clone()
+        .expect("the headless host provides a primary selection")
+        .claim({
+            let capture = ReadsOnDrop {
+                primary: primary.clone(),
+                read: Rc::clone(&read),
+            };
+            move || {
+                let _ = &capture;
+                Some("elsewhere".to_owned())
+            }
+        });
+
+    harness.swap_root(field(&shown, false));
+    assert_eq!(
+        *read.borrow(),
+        [Some("shown".to_owned())],
+        "the replaced selection read the replacement's text"
+    );
+    assert_eq!(primary.text().as_deref(), Some("shown"));
+    drop(other);
+}
+
+/// A secondary contact through the harness is one consistent stream: its
+/// moves hold, and its release lets go of, the button the press pressed.
+pub(crate) fn the_harness_releases_the_button_it_pressed() {
+    use flui_interaction::events::{PointerButton, PointerButtons, PointerEvent};
+
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut harness = crate::common::harness::mount(
+        flui_widgets::Listener::new()
+            .behavior(flui_widgets::prelude::HitTestBehavior::Opaque)
+            .on_pointer_move({
+                let seen = Rc::clone(&seen);
+                move |_, event| {
+                    if let PointerEvent::Move(event) = event.global {
+                        seen.borrow_mut().push(format!("move {:?}", event.buttons));
+                    }
+                }
+            })
+            .on_pointer_up({
+                let seen = Rc::clone(&seen);
+                move |_, event| {
+                    if let PointerEvent::Up(event) = event.global {
+                        seen.borrow_mut().push(format!("up {:?}", event.button()));
+                    }
+                }
+            })
+            .child(flui_widgets::SizedBox::expand()),
+    );
+    harness.tick();
+    harness.dispatch_pointer_down_with_button(10.0, 10.0, PointerButton::SECONDARY);
+    harness.dispatch_pointer_move(12.0, 10.0);
+    harness.dispatch_pointer_up(12.0, 10.0);
+    assert_eq!(
+        *seen.borrow(),
+        [
+            format!("move {:?}", PointerButtons::only(PointerButton::SECONDARY)),
+            format!("up {:?}", PointerButton::SECONDARY),
+        ]
+    );
+}

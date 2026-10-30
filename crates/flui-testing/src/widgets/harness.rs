@@ -26,8 +26,8 @@ use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerButton, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
-    make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
+    PointerButton, PointerKind, make_cancel_event_for_id, make_down_event_for_id_with_button,
+    make_move_event_for_id_with_button, make_up_event_for_id_with_button,
 };
 use flui_painting::Alignment;
 use flui_platform::PlatformInput;
@@ -52,6 +52,9 @@ pub struct Harness {
     /// Per-contact pointer identity, shared with [`super::LaidOut`] so the
     /// two cannot drift.
     contacts: PointerContacts,
+    /// The button the in-flight contact pressed, which its moves hold and
+    /// its release lets go.
+    button: std::cell::Cell<PointerButton>,
 }
 
 impl std::fmt::Debug for Harness {
@@ -102,6 +105,7 @@ fn mount_in(root: impl View, window: HeadlessWindow) -> Harness {
         logical_root_type,
         pipeline_owner,
         contacts: PointerContacts::new(),
+        button: std::cell::Cell::new(PointerButton::PRIMARY),
     }
 }
 
@@ -200,15 +204,14 @@ impl Harness {
     /// Begin a new mouse contact at logical `(x, y)`, hit-testing the mounted
     /// render tree.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
-        let event =
-            make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerKind::Mouse)
-                .expect("headless pointer positions must be finite");
-        dispatch_synthetic_pointer(&self.host, event);
+        self.dispatch_pointer_down_with_button(x, y, PointerButton::PRIMARY);
     }
 
     /// Begin a new mouse contact at logical `(x, y)` with `button` pressed,
-    /// hit-testing the mounted render tree.
+    /// hit-testing the mounted render tree. The contact's moves hold
+    /// `button` and its release lets it go.
     pub fn dispatch_pointer_down_with_button(&self, x: f64, y: f64, button: PointerButton) {
+        self.button.set(button);
         let event = make_down_event_for_id_with_button(
             self.contacts.begin(),
             Offset::new(x, y),
@@ -223,10 +226,11 @@ impl Harness {
     /// after the previous event.
     pub fn dispatch_pointer_move(&self, x: f64, y: f64) {
         self.advance_pointer_clock();
-        let event = make_move_event_for_id(
+        let event = make_move_event_for_id_with_button(
             self.current_contact(),
             Offset::new(x, y),
             PointerKind::Mouse,
+            self.button.get(),
         )
         .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);
@@ -234,10 +238,11 @@ impl Harness {
 
     /// Lift the in-flight contact at logical `(x, y)`.
     pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
-        let event = make_up_event_for_id(
+        let event = make_up_event_for_id_with_button(
             self.current_contact(),
             Offset::new(x, y),
             PointerKind::Mouse,
+            self.button.get(),
         )
         .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);

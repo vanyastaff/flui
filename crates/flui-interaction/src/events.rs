@@ -327,6 +327,21 @@ pub fn make_move_event_for_id(
     )))
 }
 
+/// Construct a checked synthetic Move for a contact holding `button`.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_move_event_for_id_with_button(
+    id: PointerId,
+    position: Offset<f64>,
+    kind: PointerKind,
+    button: PointerButton,
+) -> Result<PointerEvent, InputValueError> {
+    Ok(PointerEvent::Move(PointerMove::new(
+        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerButtons::only(button),
+        test_sample(position)?,
+    )))
+}
+
 /// Construct a checked synthetic Move for a specific held button.
 #[cfg(any(test, feature = "testing"))]
 pub fn make_move_event_with_button(
