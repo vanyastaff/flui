@@ -1,16 +1,19 @@
 //! Standalone AppKit loop ownership and orderly, policy-aware stopping.
 use std::sync::{Arc, Weak};
 
+use block2::RcBlock;
+use objc2::runtime::AnyObject;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject,
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply, NSEvent, NSEventModifierFlags, NSEventType,
+    NSApplicationTerminateReply, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint};
 use parking_lot::Mutex;
+use std::ptr::NonNull;
 
 use std::time::Duration;
 
@@ -554,6 +557,56 @@ pub(super) struct LoopOwnership {
     delegate: Retained<LoopDelegate>,
     control: Arc<LoopControl>,
     previous_policy: NSApplicationActivationPolicy,
+    _key_up: Option<KeyUpRoute>,
+}
+
+/// The route of a key release made while Command is held.
+///
+/// `NSApplication`'s `sendEvent:` keeps such a `keyUp:` from the key window
+/// (it treats Command as a menu chord), so a view would see Command+K go down
+/// and never come up, and its next K read as a repeat of a held key. A local
+/// monitor sees the release before that dispatch and hands it to the key
+/// window, as GLFW does; the event goes on to AppKit, which still drops it.
+struct KeyUpRoute(Retained<AnyObject>);
+
+impl KeyUpRoute {
+    fn install() -> Option<Self> {
+        let handler = RcBlock::new(|event: NonNull<NSEvent>| {
+            os_entry(
+                "the Command key-release monitor",
+                event,
+                AfterPanic::Answer(NonNull::as_ptr),
+                || {
+                    // SAFETY: AppKit hands the monitor a live event for the
+                    // duration of the call.
+                    let key_up = unsafe { event.as_ref() };
+                    if key_up
+                        .modifierFlags()
+                        .contains(NSEventModifierFlags::Command)
+                        && let Some(window) = key_up.window(
+                            MainThreadMarker::new()
+                                .expect("BUG: AppKit runs local event monitors on main"),
+                        )
+                    {
+                        window.sendEvent(key_up);
+                    }
+                    event.as_ptr()
+                },
+            )
+        });
+        // SAFETY: the handler returns the event it was given, a valid pointer.
+        unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &handler)
+        }
+        .map(Self)
+    }
+}
+
+impl Drop for KeyUpRoute {
+    fn drop(&mut self) {
+        // SAFETY: the token is the monitor `addLocalMonitor…` returned.
+        unsafe { NSEvent::removeMonitor(&self.0) };
+    }
 }
 
 impl LoopOwnership {
@@ -582,6 +635,7 @@ impl LoopOwnership {
             delegate,
             control,
             previous_policy,
+            _key_up: KeyUpRoute::install(),
         })
     }
 

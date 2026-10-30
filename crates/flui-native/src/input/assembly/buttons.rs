@@ -114,6 +114,22 @@ impl HeldButtons {
         self.held = reported.unwrap_or(self.held).without(button);
     }
 
+    /// Forget the held buttons a mouse's `reported` set no longer holds, their
+    /// releases lost (the window lost focus mid-press); whether that ended the
+    /// sequence. A touch or pen sequence is its contact, not its reported
+    /// set, so it never resyncs here.
+    pub fn forget_lost_releases(&mut self, reported: PointerButtons) -> bool {
+        if self.contact_driven || !self.in_sequence() {
+            return false;
+        }
+        for button in self.held.iter() {
+            if !reported.contains(button) {
+                self.held = self.held.without(button);
+            }
+        }
+        !self.in_sequence()
+    }
+
     /// Record a press that could not be delivered: its release is dropped too.
     pub fn suppress(&mut self, button: PointerButton) {
         self.suppressed = self.suppressed.with(button);
