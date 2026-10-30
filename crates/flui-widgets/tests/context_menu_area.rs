@@ -97,7 +97,7 @@ impl Scene {
 
     /// Alice's area, with Delete, Archive and Pin.
     fn area() -> ContextMenuArea {
-        ContextMenuArea::new(
+        ContextMenuArea::try_new(
             GestureCommand::new(DELETE, Delete),
             [
                 GestureCommand::new(ARCHIVE, Archive),
@@ -112,7 +112,7 @@ impl Scene {
     /// The alternatives the area mounts, as `assert_gesture_alternatives`
     /// reads them.
     fn alternatives() -> GestureAlternatives {
-        GestureAlternatives::new(Alternative::ContextMenu(
+        GestureAlternatives::try_new(Alternative::ContextMenu(
             MenuSpec::new(GestureCommand::new(DELETE, Delete), |_cx, _request| {})
                 .item(GestureCommand::new(ARCHIVE, Archive))
                 .item(GestureCommand::new(PIN, Pin)),
@@ -730,7 +730,7 @@ fn long_press_card(events: &Events, own_menu: bool) -> Draggable {
         }));
     }
     let started = Rc::clone(events);
-    Draggable::new(
+    Draggable::try_new(
         commands,
         || vec![DragItem::new().with_value("card")],
         SizedBox::new(ROW.0, ROW.1).child(ColoredBox::new(Color::RED)),
@@ -769,7 +769,7 @@ fn hold_then_drag(at: Offset<f64>) -> PointerScript {
 pub(crate) fn a_held_press_moved_past_the_slop_closes_the_menu_and_drags() {
     let at = Offset::new(150.0, 25.0);
     let area = |events: &Events| {
-        ContextMenuArea::new(GestureCommand::new(DELETE, Delete), [])
+        ContextMenuArea::try_new(GestureCommand::new(DELETE, Delete), [])
             .expect("one labelled command")
             .child(long_press_card(events, false))
     };

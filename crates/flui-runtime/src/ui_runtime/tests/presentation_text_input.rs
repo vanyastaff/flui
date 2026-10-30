@@ -163,13 +163,12 @@ impl flui_platform::TextStoreHost for FocusLog {
 pub(crate) fn a_window_with_a_text_store_host_takes_input_through_it() {
     let log = Rc::new(FocusLog::default());
     let host: Rc<dyn flui_platform::TextStoreHost> = log.clone();
-    let ui_runtime = UiRuntime::new(
+    let ui_runtime = UiRuntime::try_new(
         super::test_window().with_text_store_host(Some(host)),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

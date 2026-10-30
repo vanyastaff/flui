@@ -4,13 +4,12 @@ use flui_painting::testing::font_collection_holders;
 use super::*;
 
 fn ui_runtime_over(fonts: &FontCollection) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         test_window(),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             fonts,
             flui_scheduler::ClockSource::Platform,
         ),

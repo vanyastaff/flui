@@ -34,13 +34,12 @@ impl FrameSink for DiscardSink {
 }
 
 fn runtime(clock: &ManualClock) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

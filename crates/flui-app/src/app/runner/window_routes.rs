@@ -346,6 +346,36 @@ impl RouteBook {
     }
 }
 
+/// Every route and everything held, borrowed until it drops: a handler
+/// method called meanwhile fails in the routing itself, before any route
+/// runs, which is how a test reaches a panic of the routing's own.
+#[cfg(test)]
+pub(crate) struct Jammed<'a> {
+    _input: std::cell::RefMut<'a, Option<Route<PlatformInput, DispatchEventResult>>>,
+    _state_changed: std::cell::RefMut<'a, Option<Route<(), ()>>>,
+    _frame_requested: std::cell::RefMut<'a, Option<Route<FrameRequest, ()>>>,
+    _close_requested: std::cell::RefMut<'a, Option<Route<(), CloseDecision>>>,
+    _closed: std::cell::RefMut<'a, Option<Box<dyn FnOnce()>>>,
+    _surface_changed: std::cell::RefMut<'a, Option<Route<SurfaceChange, ()>>>,
+    _held: std::cell::RefMut<'a, Held>,
+}
+
+#[cfg(test)]
+impl WindowRoutes {
+    /// Borrow every route and everything held, see [`Jammed`].
+    pub(crate) fn jam(&self) -> Jammed<'_> {
+        Jammed {
+            _input: self.input.0.borrow_mut(),
+            _state_changed: self.state_changed.0.borrow_mut(),
+            _frame_requested: self.frame_requested.0.borrow_mut(),
+            _close_requested: self.close_requested.0.borrow_mut(),
+            _closed: self.closed.borrow_mut(),
+            _surface_changed: self.surface_changed.0.borrow_mut(),
+            _held: self.held.borrow_mut(),
+        }
+    }
+}
+
 /// Opening a window with fresh routes, adopted, as the runner opens its
 /// windows: for tests that drive a window the runner installs.
 #[cfg(test)]

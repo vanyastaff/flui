@@ -23,7 +23,7 @@ use flui_native::OwnerPlatform;
 use flui_painting::{FontCollection, HostFontFeed};
 #[cfg(target_os = "android")]
 use flui_platform::WindowExecutionState;
-use flui_platform::{Clipboard, PlatformWindow, RedrawRequester};
+use flui_platform::{PlatformWindow, RedrawRequester};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,7 +53,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// of the semantics tree's collection and platform delivery.
 pub(crate) struct SharedEngineServices {
     /// The app's font collection, fed from one host scan. Every UI runtime
-    /// built on this thread gets a clone (`UiRuntime::new`'s `fonts`) and owns
+    /// built on this thread gets a clone (`UiRuntime::try_new`'s `fonts`) and owns
     /// a `TextContext` over it, so a face registered here reaches every
     /// UI runtime, and the host's faces are read once per app, not per UI runtime.
     pub(super) fonts: FontCollection,
@@ -267,6 +267,13 @@ pub(crate) struct PlatformDataTransfer {
     pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
+/// The windows that refused a session end, each with the block it holds on
+/// the session end's request.
+pub(super) type SessionEndRefusals = Vec<(
+    flui_foundation::PresentationAddress,
+    flui_platform::SessionEndBlock,
+)>;
+
 /// The loop-scoped composition root: installed host, platform event-loop
 /// capabilities and the once-resolved [`SharedEngineServices`].
 ///
@@ -292,6 +299,14 @@ pub(crate) struct AppRuntime {
     /// system is the aggregate. Kept from the query until the session end is
     /// cancelled or happens.
     pub(super) session_end: Option<flui_platform::SessionEndRequest>,
+    /// Whether that request may still tell the platform it was released:
+    /// cleared when a later query displaces it, so dropping the displaced
+    /// request's blocks never releases the session the new one holds.
+    pub(super) session_end_current: Option<Rc<std::cell::Cell<bool>>>,
+    /// The blocks the session end's query took on that request for the
+    /// windows whose handler or guard refused, each released when its window
+    /// carries the close out, or when the session end is cancelled or happens.
+    pub(super) session_end_refusals: SessionEndRefusals,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -412,7 +427,15 @@ pub(crate) struct AppRuntime {
     /// X11 connection) would stay pinned behind this `Arc` past the event
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
-    platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+    platform_clipboard: crate::app::capability::ClipboardSlot,
+    /// The platform's primary selection, installed and cleared with the
+    /// clipboard; empty where the platform has none.
+    platform_primary_selection: crate::app::capability::PrimarySelectionSlot,
+    /// The providers every UI runtime this host builds acquires platform
+    /// capabilities from (ADR-0152): the application's, checked for conflicts
+    /// before the loop starts, or the built-ins alone when a runner starts
+    /// without an [`Application`](crate::app::Application).
+    pub(super) capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
     /// The platform instance's data-transfer source and the nonce that names
     /// this platform instance's drags (ADR-0211 §3), installed and cleared
     /// with the clipboard. Every UI runtime this host builds takes both.
@@ -421,7 +444,7 @@ pub(crate) struct AppRuntime {
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
-    pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
+    pub(super) host_storage: crate::app::capability::StorageSlot,
     /// The flush registry over [`Self::host_storage`], kept outside every UI
     /// runtime: what their documents publish, written on the loop's IO pool
     /// and flushed when the application or the session ends.
@@ -456,7 +479,7 @@ impl AppRuntime {
     /// thread -- can never itself run singleton construction or full
     /// system-font enumeration. Real service resolution happens only when a
     /// UI runtime is built or installed -- [`Self::font_collection`] for
-    /// `UiRuntime::new`, or the explicit [`Self::ensure_services`] call from
+    /// `UiRuntime::try_new`, or the explicit [`Self::ensure_services`] call from
     /// `install_platform_ui_runtime` -- never from an incidental
     /// first touch such as `OwnerHostClearGuard::drop` unwinding through a
     /// virgin thread, and never from `install_owner_platform` either (every
@@ -526,15 +549,19 @@ impl AppRuntime {
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Rc::default(),
             redraw_requester: Arc::new(Mutex::new(None)),
-            platform_clipboard: Arc::new(Mutex::new(None)),
+            platform_clipboard: Rc::default(),
+            platform_primary_selection: Rc::default(),
+            capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
-            host_storage: None,
+            host_storage: crate::app::capability::StorageSlot::default(),
             flush_host: None,
             terminal: None,
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),
             session_end: None,
+            session_end_current: None,
+            session_end_refusals: Vec::new(),
             host_memory: Arc::default(),
             #[cfg(all(
                 not(target_os = "android"),
@@ -631,7 +658,7 @@ impl AppRuntime {
         self.fonts_announced.replace(now) != now
     }
 
-    /// The app's font collection, for `UiRuntime::new`'s `fonts`: a clone of
+    /// The app's font collection, for `UiRuntime::try_new`'s `fonts`: a clone of
     /// the one [`SharedEngineServices`] owns, resolving the services first if
     /// no UI runtime has been built yet. Every call returns the same collection.
     ///
@@ -1180,9 +1207,22 @@ impl AppRuntime {
     /// composition-root borrow as well as this slot's lock.
     pub(super) fn set_platform_clipboard(
         &self,
-        clipboard: Arc<dyn Clipboard>,
-    ) -> Option<Arc<dyn Clipboard>> {
-        self.platform_clipboard.lock().replace(clipboard)
+        clipboard: Rc<dyn flui_native::NativeClipboard>,
+    ) -> Option<Rc<dyn flui_native::NativeClipboard>> {
+        self.platform_clipboard.borrow_mut().replace(clipboard)
+    }
+
+    /// Install the platform's primary selection, or none where it has none.
+    /// Returns the displaced one for retirement outside the caller's borrow.
+    pub(super) fn set_platform_primary_selection(
+        &self,
+        primary: Option<Rc<dyn flui_native::NativePrimarySelection>>,
+    ) -> Option<crate::app::capability::NativePrimary> {
+        let installed = primary.map(crate::app::capability::NativePrimary::new);
+        std::mem::replace(
+            &mut *self.platform_primary_selection.borrow_mut(),
+            installed,
+        )
     }
 
     /// The explicit, deterministic teardown clear — the first of the two
@@ -1199,7 +1239,8 @@ impl AppRuntime {
         )
     )]
     pub(super) fn clear_platform_clipboard(&self) {
-        let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.borrow_mut().take();
+        let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 
@@ -1230,11 +1271,17 @@ impl AppRuntime {
     /// replaces a storage an earlier run on this thread left, whose IO pool
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
-    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
-        let Some(dirs) = dirs else {
-            self.host_storage = None;
-            self.flush_host = None;
-            return;
+    pub(super) fn install_host_storage(
+        &mut self,
+        dirs: Result<flui_native::storage::DataDirs, flui_platform::Unsupported>,
+    ) {
+        let dirs = match dirs {
+            Ok(dirs) => dirs,
+            Err(refusal) => {
+                self.host_storage.install(Err(refusal));
+                self.flush_host = None;
+                return;
+            }
         };
         let io = Arc::downgrade(self.ensure_execution());
         let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
@@ -1257,7 +1304,7 @@ impl AppRuntime {
                 Ok(())
             }),
         ));
-        self.host_storage = Some(storage);
+        self.host_storage.install(Ok(storage));
     }
 
     /// The publishing side of the host's flush registry, for the UI runtimes
@@ -1269,22 +1316,26 @@ impl AppRuntime {
     }
 
     /// The host's byte storage, if the run configured one.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform::Storage>> {
-        self.host_storage.clone()
+        self.host_storage.storage()
     }
 
-    /// Access the installed platform clipboard, if any. Every runner reads it
-    /// through `runner::host::runtime_clipboard` to hand each UI runtime it builds
-    /// the platform clipboard.
-    pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
-        let clipboard = self.platform_clipboard.lock().clone();
-        if clipboard.is_none() {
-            tracing::debug!(
-                "AppRuntime::clipboard: no platform clipboard installed (not yet \
-                 bootstrapped, or torn down)"
-            );
+    /// The providers the next UI runtime this host builds acquires platform
+    /// capabilities from: the run's registry, or the built-ins alone.
+    pub(super) fn capability_registry(&self) -> flui_runtime::capability::CapabilityRegistry {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.capability_slots()))
+    }
+
+    /// The slots the built-in providers read the owner platform from.
+    pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
+        crate::app::capability::CapabilitySlots {
+            storage: self.host_storage.clone(),
+            clipboard: Rc::clone(&self.platform_clipboard),
+            primary_selection: Rc::clone(&self.platform_primary_selection),
         }
-        clipboard
     }
 }
 
@@ -1393,7 +1444,8 @@ impl Drop for AppRuntime {
     /// particular order relative to window/surface teardown, so this may
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
-        let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_clipboard.borrow_mut().take();
+        let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
     }
 }

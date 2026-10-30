@@ -21,7 +21,7 @@ use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, P
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::TextStoreHost;
-use flui_platform::{Clipboard, CursorError, CursorIcon, PlatformWindow};
+use flui_platform::{CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
@@ -87,12 +87,10 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// [`SemanticsActionRequest`] and resolves at the next Idle drain —
     /// never on the adapter's own thread.
     pub(crate) command_sender: super::ui_runtime::UiCommandSender,
-    /// The UI runtime's platform clipboard, handed to widgets through
-    /// `LifecycleContext::clipboard_handle`.
-    pub(crate) clipboard: Arc<dyn Clipboard>,
-    /// The UI runtime's byte storage, if it has one, handed to widgets through
-    /// `LifecycleContext::storage`.
-    pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// The providers this presentation's widgets acquire platform
+    /// capabilities from, and where their completions settle (ADR-0152).
+    pub(crate) capabilities: crate::capability::CapabilityRegistry,
+    pub(crate) completions: flui_platform::capability::CompletionSource,
     /// What the presentation closes and persists through: its close guard's
     /// vetoes and signal, and the host's flush registry.
     pub(crate) close: crate::runtime_services::CloseServices,
@@ -105,14 +103,6 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's drag sessions, which this presentation's widgets reach
     /// through `LifecycleContext::drag_and_drop`.
     pub(crate) drag: flui_interaction::drag::DragHandle,
-}
-
-/// A fresh in-memory clipboard — the one the headless platform hands out —
-/// for a test UI runtime's `UiRuntime::new`.
-#[cfg(any(test, feature = "testing"))]
-#[must_use]
-pub fn test_clipboard() -> Arc<dyn Clipboard> {
-    Arc::new(flui_platform::InMemoryClipboard::new())
 }
 
 /// Pointer interpolation policy owned by one presentation.
@@ -445,6 +435,10 @@ pub struct PresentationState {
     /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
     /// and as failed when the presentation closes first. Owner thread only.
     pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
+    /// Waits an agent parked: conditions held out for until a frame makes them hold or
+    /// their deadline passes. Answered `gone` when the presentation closes first. Owner
+    /// thread only.
+    pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -858,11 +852,13 @@ impl PresentationState {
             }
             let presentation = owner.capabilities_mut();
             presentation.text_input = Some(text_input.handle());
-            presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
-                capabilities.clipboard,
-            ));
             presentation.textures = Some(textures.clone());
-            presentation.storage = capabilities.storage;
+            presentation.capabilities =
+                Some(Rc::new(crate::capability::PresentationCapabilities {
+                    registry: capabilities.capabilities,
+                    completions: capabilities.completions,
+                    window: Rc::downgrade(&window),
+                }));
             presentation.close_guard = Some(close_guard.guard());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
@@ -1051,6 +1047,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_waits: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1178,6 +1175,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_waits: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1889,12 +1887,16 @@ impl PresentationState {
         }
     }
 
-    /// Answers every reading an agent's action still owes as failed: the
-    /// presentation closes before a frame could take it. The actions ran.
-    pub(crate) fn abandon_agent_reads(&self) {
+    /// Answers every job an agent parked on this presentation when it closes before a frame
+    /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`.
+    pub(crate) fn abandon_agent_jobs(&self) {
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         for pending in owed {
             pending.abandon();
+        }
+        let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
+        for wait in waits {
+            wait.abandon();
         }
     }
 
@@ -2299,7 +2301,7 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
-        self.abandon_agent_reads();
+        self.abandon_agent_jobs();
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -2367,7 +2369,18 @@ impl PresentationState {
         self.finish_animation(&mut failure);
         if !failure.preserving() {
             failure.invoke(|| self.widgets.withdraw_root_owner(false));
+            // What an earlier frame left undrained is not this close's.
+            drop(self.widgets.take_recovered_panics());
             failure.run(|| self.widgets.detach_root_widget());
+            // The tree contains each `dispose` that panics so the rest still
+            // dispose; no frame follows to report it, so the first one is
+            // this close's failure (ADR-0258 §2).
+            failure.run(|| {
+                if let Some(first) = self.widgets.take_recovered_panics().into_iter().next() {
+                    let text = first.payload_text.map_or(first.error.message, String::from);
+                    std::panic::resume_unwind(Box::new(text));
+                }
+            });
         }
         // Reached in preserving mode, or when the healthy disposal above
         // failed part way: what the tree still owns is retained.
@@ -2419,7 +2432,7 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
-        self.abandon_agent_reads();
+        self.abandon_agent_jobs();
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

@@ -10,14 +10,15 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
-    Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, StorageName,
-    SystemNotice, SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    AppDataDir, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
     self, Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
-    Preferences as _, Services as _, Storage as _, Window as _, WindowPositions, WindowRefOf,
+    Preferences as _, PrimarySelection as _, Services as _, Storage as _, Window as _,
+    WindowPositions, WindowRefOf,
 };
 use crate::host_window::HostWindow;
 use crate::owner::{OpenWindowError, OwnerPlatform};
@@ -290,10 +291,18 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// compiled in.
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
-    // ==================== Input & Clipboard ====================
+    // ==================== Clipboard and data transfer ====================
 
-    /// Get the platform's clipboard interface
-    fn clipboard(&self) -> Arc<dyn Clipboard>;
+    /// The host's plain-text clipboard, owner-local: the application's
+    /// clipboard provider builds its handles over it (ADR-0152).
+    fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard>;
+
+    /// The host's primary selection, owner-local, where the platform has one
+    /// (X11 and Wayland); `None` elsewhere. The application's primary
+    /// selection provider builds its handles over it (ADR-0152).
+    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        None
+    }
 
     /// The data-transfer transport (ADR-0038). Contract: returns clones of
     /// ONE source instance per platform instance — the source owns
@@ -321,20 +330,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// UIKit and Android decide which application is in front; winit raises
     /// one window at a time; the Web has no way to.
     fn activate(&self, ignoring_other_apps: bool);
-
-    // ==================== Clipboard (US3 Enhanced) ====================
-
-    /// Write a rich clipboard item (text + metadata)
-    ///
-    /// A host that keeps only text writes the item's first text entry to the
-    /// [`clipboard`](Self::clipboard).
-    fn write_to_clipboard(&self, item: ClipboardItem);
-
-    /// Read a rich clipboard item
-    ///
-    /// A host that keeps only text answers the [`clipboard`](Self::clipboard)'s
-    /// text.
-    fn read_from_clipboard(&self) -> Option<ClipboardItem>;
 
     // ==================== File Operations (US3) ====================
 
@@ -389,6 +384,11 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// nothing to undo.
     fn release_session_end(&self);
 
+    /// What this platform does for the application when the user's session
+    /// ends: whether it holds the session for a [`SessionEndAnswer::Block`],
+    /// waits a bounded time, or only tells.
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport;
+
     /// Which window commands and observations this platform's windows have,
     /// known before any window exists.
     ///
@@ -430,7 +430,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// Every host but Android answers with the current user's data directories
     /// ([`crate::storage::data_dirs`]); Android's process has no such
     /// directories, so it answers with its own.
-    fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs>;
+    fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs>;
 }
 
 /// Platform executor trait for async task execution
@@ -625,8 +625,12 @@ impl<H: Host> Platform for HostPlatform<H> {
         read
     }
 
-    fn clipboard(&self) -> Arc<dyn flui_platform::Clipboard> {
+    fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard> {
         H::Clipboard::clipboard(&self.owner)
+    }
+
+    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        H::PrimarySelection::primary_selection(&self.owner)
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
@@ -635,14 +639,6 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn activate(&self, ignoring_other_apps: bool) {
         H::Lifecycle::activate(&self.owner, ignoring_other_apps);
-    }
-
-    fn write_to_clipboard(&self, item: ClipboardItem) {
-        H::Clipboard::write(&self.owner, item);
-    }
-
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        H::Clipboard::read(&self.owner)
     }
 
     fn open_url(&self, url: &str) {
@@ -684,6 +680,10 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Lifecycle::release_session_end(&self.owner);
     }
 
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        H::Lifecycle::session_end_support(&self.owner)
+    }
+
     fn window_capabilities(&self) -> WindowCapabilities {
         H::Window::capabilities(&self.owner, &self.window_shared)
     }
@@ -704,7 +704,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         self.owner.app_path()
     }
 
-    fn data_dirs(&self, app: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(&self, app: &AppDataDir) -> Option<DataDirs> {
         H::Storage::data_dirs(&self.owner, app)
     }
 }

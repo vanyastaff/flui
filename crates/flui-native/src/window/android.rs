@@ -63,7 +63,7 @@ pub struct AndroidWindow {
     id: ActivityWindowId,
     app: AndroidApp,
     delivery: Arc<WindowDelivery>,
-    redraw_requested: Arc<AtomicBool>,
+    redraw_requested: Arc<crate::owner::frame_demand::FrameDemand>,
     activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::owner::signal::OwnerSignal>,
@@ -151,7 +151,7 @@ impl AndroidWindow {
             appearance: Arc::new(Mutex::new(appearance)),
             app,
             delivery,
-            redraw_requested: Arc::new(AtomicBool::new(true)),
+            redraw_requested: Arc::new(crate::owner::frame_demand::FrameDemand::new()),
             activity,
             owner,
             owner_signal,
@@ -385,7 +385,7 @@ impl ActivityWindow for AndroidWindow {
     /// uses this only to choose its poll timeout; native lifecycle events may
     /// still suspend execution before delivery becomes possible.
     fn has_redraw_request(&self) -> bool {
-        self.redraw_requested.load(Ordering::SeqCst)
+        self.redraw_requested.pending()
     }
 
     /// Consume a redraw only when the same loop turn can deliver its frame.
@@ -506,8 +506,11 @@ fn execution_of(activity: &ActivityFlags) -> WindowExecutionState {
     }
 }
 
-fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_running: bool) -> bool {
-    execution_running && redraw_requested.swap(false, Ordering::SeqCst)
+fn take_deliverable_redraw_request(
+    redraw_requested: &crate::owner::frame_demand::FrameDemand,
+    execution_running: bool,
+) -> bool {
+    execution_running && redraw_requested.take()
 }
 
 impl crate::host_window::CoreHostWindow for AndroidWindow {
@@ -833,13 +836,13 @@ impl AndroidWindow {
 /// frame wakes the looper, from any thread.
 struct AndroidRedraw {
     app: AndroidApp,
-    requested: Arc<AtomicBool>,
+    requested: Arc<crate::owner::frame_demand::FrameDemand>,
     retirement: crate::owner::window_delivery::Retirement,
 }
 
 impl flui_platform::RedrawRequester for AndroidRedraw {
     fn request_redraw(&self) {
-        if !self.retirement.is_retired() && !self.requested.swap(true, Ordering::SeqCst) {
+        if !self.retirement.is_retired() && self.requested.request() {
             self.app.create_waker().wake();
         }
     }

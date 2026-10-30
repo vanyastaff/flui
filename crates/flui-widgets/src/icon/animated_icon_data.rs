@@ -353,6 +353,35 @@ impl AnimatedIconData {
         self.match_text_direction
     }
 
+    /// Whether `other` is this very data: the same constant tables or the same shared
+    /// allocation, with the same view box and mirroring. Copies of one data compare equal;
+    /// equal frames built twice at run time do not, and neither may one constant used from
+    /// two crates, which the compiler is free to place twice.
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        let body = match (&self.body, &other.body) {
+            (
+                Body::Static {
+                    times: a_times,
+                    curves: a_curves,
+                    paths: a_paths,
+                },
+                Body::Static {
+                    times: b_times,
+                    curves: b_curves,
+                    paths: b_paths,
+                },
+            ) => {
+                std::ptr::eq(*a_times, *b_times)
+                    && std::ptr::eq(*a_curves, *b_curves)
+                    && std::ptr::eq(*a_paths, *b_paths)
+            }
+            (Body::Shared(a), Body::Shared(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        body && self.view_box.to_bits() == other.view_box.to_bits()
+            && self.match_text_direction == other.match_text_direction
+    }
+
     /// Checks the data against every rule of [`try_new`](Self::try_new).
     ///
     /// # Errors

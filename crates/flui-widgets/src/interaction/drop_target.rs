@@ -134,7 +134,7 @@ impl DropTarget {
     /// # Errors
     ///
     /// [`GestureAlternativesError::EmptyLabel`] for a paste without a label.
-    pub fn new(
+    pub fn try_new(
         commands: DropCommands,
         accept: impl Fn(&DragView<'_>) -> Option<TransferActions> + 'static,
         builder: impl Fn(DropHover) -> BoxedView + 'static,

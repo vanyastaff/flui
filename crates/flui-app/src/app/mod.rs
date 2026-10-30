@@ -10,12 +10,14 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
+pub(crate) mod capability;
 pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;
 pub mod direct;
 pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
+mod launch;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;
 pub(crate) mod logging;
@@ -51,11 +53,13 @@ pub use flui_runtime::frame_failure::{
 };
 pub use hot_reload::DevReload;
 // The recording hook (ADR-0215 §1): the tap and the records it observes.
+pub use capability::AppCapabilities;
 pub use flui_runtime::owner::{InputOutcome, WindowObservation};
 pub use flui_runtime::{
     DecisionRow, HostInput, InputRecord, InputRow, InputTap, InputTapFactory, PreferencesRow,
     RecordingStart, RecordingWindow,
 };
+pub use launch::{AppLaunch, LaunchError, UnsupportedSystem};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
@@ -76,12 +80,12 @@ pub use runner::open_secondary_window;
     not(target_arch = "wasm32")
 ))]
 pub use runner::open_window;
+#[cfg(target_os = "android")]
+pub use runner::run_app_android;
+pub use runner::run_app_impl as run_app;
 pub use runner::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
 pub use runner::{request_presentation_close, window_handle};
-#[cfg(target_os = "android")]
-pub use runner::{run_app_android, run_app_android_with_config};
-pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
 #[cfg(not(target_os = "ios"))]
 pub use runtime::{ExitPolicy, WindowPolicy};
 

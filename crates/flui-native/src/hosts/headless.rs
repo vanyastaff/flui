@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use flui_platform::InMemoryClipboard;
+use crate::host::MemoryClipboard;
 
 use crate::accessibility::headless::FakeAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};
@@ -37,7 +37,8 @@ impl Host for Headless {
     type Input = HeadlessInputDevices;
     type Text = FakeTextInput;
     type Accessibility = FakeAccessibility;
-    type Clipboard = InMemoryClipboard;
+    type Clipboard = MemoryClipboard;
+    type PrimarySelection = crate::host::Absent<crate::host::position::PrimarySelection>;
     type Drag = DragDouble;
     type Haptics = HeadlessHaptics;
     type Preferences = HeadlessPreferences;

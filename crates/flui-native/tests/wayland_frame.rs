@@ -39,7 +39,8 @@ mod cases {
     };
     use x11rb::protocol::xtest::ConnectionExt as _;
 
-    use super::weston_x11::{Screen, Session};
+    use super::weston_x11::Session;
+    use super::weston_x11::x11_session::Screen;
 
     /// Weston's output.
     const OUTPUT: (u16, u16) = (1024, 768);

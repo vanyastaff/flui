@@ -11,7 +11,7 @@ use crate::app::AppConfig;
 // ============================================================================
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn run_web<V>(root: V, config: AppConfig)
+pub(super) fn run_web<V>(root: V, config: AppConfig) -> Result<(), crate::app::LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -24,16 +24,12 @@ where
     tracing::info!("Starting web platform via flui-native");
 
     // Platform init is an environment failure (unsupported browser, missing
-    // wasm feature, driver problem), not a `BUG:` invariant — see the
-    // matching comment in `run_desktop` above for why this is a `match` +
-    // `panic!` with a full error log instead of a bare `.expect()`.
-    let platform = match flui_native::current_platform() {
-        Ok(platform) => platform,
-        Err(error) => {
-            tracing::error!(%error, "Failed to initialize platform");
-            panic!("web bootstrap failed: platform initialization error: {error:?}");
-        }
-    };
+    // wasm feature, driver problem), not a `BUG:` invariant: the caller gets
+    // it as a `LaunchError`.
+    let platform = flui_native::current_platform().map_err(|error| {
+        tracing::error!(%error, "Failed to initialize platform");
+        crate::app::LaunchError::from_platform(error)
+    })?;
 
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —
@@ -83,7 +79,7 @@ where
         let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
 
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
-        // transform maps to the physical canvas. `UiRuntime::new` applies the
+        // transform maps to the physical canvas. `UiRuntime::try_new` applies the
         // DPR to the freshly built pipeline before returning.
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let scale_factor = geometry.scale;
@@ -193,6 +189,7 @@ where
     if let Err(err) = result {
         panic!("web bootstrap failed: {err:?}");
     }
+    Ok(())
 }
 
 pub(super) struct WebFrameDriver {
@@ -341,10 +338,10 @@ impl WebFrameDriver {
     /// succeed; build it from scratch when there is none, because its first
     /// build failed.
     ///
-    /// A failed build is retried by the next wake — the next animation frame
-    /// of a visible tab, or the context's restoration — and not at once: the
-    /// driver may still be resetting, and an immediate retry would ask it again
-    /// in a loop.
+    /// A failed build asks for the next animation frame and is retried there,
+    /// or at the context's restoration, and not at once: the driver may still
+    /// be resetting, and an immediate retry would ask it again in a loop. A
+    /// hidden tab runs no frames, so the retry waits for it to be shown.
     fn start_rebuild_if_owed(&self, liveness: &super::frame_driver::FrameLiveness) {
         if self
             .renderer
@@ -409,9 +406,22 @@ impl WebFrameDriver {
                 return;
             }
             let Some(mut renderer) = renderer else {
-                if let Err(error) = built {
-                    tracing::error!(%error, "GPU initialization failed; retried at the next wake");
+                if let Err(error) = &built
+                    && let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(error)
+                {
+                    // Neither WebGPU nor WebGL2 gave a device: the page is below
+                    // FLUI's floor, and asking again finds the same (ADR-0244
+                    // §3). The claim is settled, so no rebuild is owed and,
+                    // with no renderer, no frame runs.
+                    tracing::error!(%unsupported, "FLUI cannot run on this system");
+                    claim.complete();
+                    return;
                 }
+                if let Err(error) = built {
+                    tracing::error!(%error, "GPU initialization failed; retried at the next frame");
+                }
+                // No frame comes unasked, and the retry runs in one.
+                window.request_redraw();
                 return;
             };
             if let Err(error) = built {
@@ -429,11 +439,12 @@ impl WebFrameDriver {
                     // transiently, so the log is a warning.
                     tracing::warn!(
                         ?error,
-                        "GPU rebuild failed — window target unavailable; retried at the next wake"
+                        "GPU rebuild failed — window target unavailable; retried at the next frame"
                     );
                 } else {
-                    tracing::error!(?error, "GPU rebuild failed; retried at the next wake");
+                    tracing::error!(?error, "GPU rebuild failed; retried at the next frame");
                 }
+                window.request_redraw();
                 return;
             }
             // A lost WebGPU device is reported by the browser, not by a canvas

@@ -76,13 +76,12 @@ fn implicit_opacity_settles_under_reduce() {
 
     for preference in [MotionOverride::Full, MotionOverride::Reduce] {
         let clock = ManualClock::new();
-        let mut runtime = UiRuntime::new(
+        let mut runtime = UiRuntime::try_new(
             crate::owner_publication::window(),
             1.0,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -148,7 +147,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
     let clock = ManualClock::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let recorded_wakes = Arc::clone(&wakes);
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
@@ -156,7 +155,6 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
                 recorded_wakes.fetch_add(1, Ordering::SeqCst);
             }),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -255,13 +253,12 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         (flui_animation::MotionOverride::Reduce, MotionPolicy::Reduce),
         (flui_animation::MotionOverride::Full, MotionPolicy::Full),
     ] {
-        let mut late = UiRuntime::new(
+        let mut late = UiRuntime::try_new(
             crate::owner_publication::window(),
             1.0,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             )
@@ -615,13 +612,12 @@ fn initial_inherited_scale_matches_the_renderer() {
         (f64::NAN, 1.0),
         (f64::INFINITY, 1.0),
     ] {
-        let mut runtime = UiRuntime::new(
+        let mut runtime = UiRuntime::try_new(
             crate::owner_publication::window(),
             supplied,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -844,13 +840,12 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         )
         .expect("late runtime seed");
     let fonts = flui_painting::FontCollection::new();
-    let mut late = UiRuntime::new(
+    let mut late = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Platform,
         )
@@ -1090,13 +1085,12 @@ fn bold_text_changes_the_painted_glyphs() {
         ("RichText", Some(100)),
         ("EditableText", Some(100)),
     ] {
-        let runtime = UiRuntime::new(
+        let runtime = UiRuntime::try_new(
             crate::owner_publication::window(),
             1.0,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &fonts,
                 flui_scheduler::ClockSource::Platform,
             ),
@@ -1278,13 +1272,12 @@ fn bold_text_changes_the_painted_glyphs() {
                     &effects,
                 )
                 .expect("seed a late text runtime");
-            let mut late = UiRuntime::new(
+            let mut late = UiRuntime::try_new(
                 crate::owner_publication::window(),
                 1.0,
                 RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(AtomicBool::new(false)),
-                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1586,13 +1579,12 @@ fn preferred_locales_select_resources_and_direction() {
                     &effects,
                 )
                 .expect("language before late runtime exists");
-            let mut late = UiRuntime::new(
+            let mut late = UiRuntime::try_new(
                 crate::owner_publication::window(),
                 1.0,
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     std::sync::Arc::new(|| {}),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Platform,
                 )
@@ -1736,13 +1728,12 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         panic_next: AtomicBool::new(false),
         display: Mutex::default(),
     });
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -1895,14 +1886,13 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &fonts,
             flui_scheduler::ClockSource::Manual(clock.clone()),
         );
         if let Some(snapshot) = owner.preferences().expect("host preferences") {
             services = services.with_preferences(snapshot);
         }
-        let runtime = UiRuntime::new(
+        let runtime = UiRuntime::try_new(
             flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
             ratio,
             services,
@@ -2097,13 +2087,12 @@ fn gesture_values_follow_the_presentation_display() {
         panic_next: AtomicBool::new(false),
         display: Mutex::new(Some(display_id(1))),
     });
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -2424,13 +2413,12 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         panic_next: AtomicBool::new(false),
         panic_display: AtomicBool::new(false),
     });
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -2579,13 +2567,12 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         panic_next: AtomicBool::new(false),
         display: std::sync::Mutex::default(),
     });
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -3435,13 +3422,12 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
     ] {
         let owner = OwnerHost::new();
         let clock = ManualClock::new();
-        let runtime = UiRuntime::new(
+        let runtime = UiRuntime::try_new(
             crate::owner_publication::window(),
             1.0,
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),
@@ -3592,13 +3578,12 @@ fn accessibility_floor_holds_under_an_authored_scope() {
 
     let owner = OwnerHost::new();
     let clock = ManualClock::new();
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),
@@ -4026,13 +4011,12 @@ fn seeded_runtime(owner: &OwnerHost) -> UiRuntime {
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::{Arc, atomic::AtomicBool};
 
-    UiRuntime::new(
+    UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )

@@ -721,9 +721,7 @@ where
     F: FnMut(&AppHandle) -> V + 'static,
 {
     run_with_platform_factory(application, || {
-        flui_native::current_platform().map_err(|error| AppRunError::Platform {
-            source: Arc::new(error),
-        })
+        flui_native::current_platform().map_err(AppRunError::from_platform)
     })
 }
 
@@ -795,9 +793,7 @@ impl StartedLoop {
         if let Some(error) = failure {
             return Err(error);
         }
-        result.map_err(|error| AppRunError::Platform {
-            source: Arc::new(error),
-        })
+        result.map_err(AppRunError::from_platform)
     }
 }
 
@@ -806,7 +802,7 @@ impl StartedLoop {
 /// teardown step that ends to `teardown_log`, on unwind too. Its windows
 /// render with what `renderers` builds.
 pub(crate) fn start_loop<V, F>(
-    application: Application<V, F>,
+    mut application: Application<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: WindowRenderers,
@@ -815,6 +811,14 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    // Before anything starts, so a conflict opens no window and installs
+    // nothing (ADR-0152 §1).
+    let capabilities = std::mem::take(&mut application.capabilities);
+    // A plugin's `register` is user code: it runs with no borrow held.
+    let slots = APP_RUNTIME.with(|slot| slot.borrow().capability_slots());
+    let registry = capabilities
+        .into_registry(&slots)
+        .map_err(AppRunError::CapabilityConflict)?;
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
@@ -848,6 +852,7 @@ where
             APP_RUNTIME.with(|slot| {
                 let mut runtime = slot.borrow_mut();
                 runtime.main_ingress = Some(Arc::clone(&ingress));
+                runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                 runtime.window_renderers = renderers;
                 if let Some(executors) = config.executors.clone() {
@@ -1200,6 +1205,65 @@ mod tests {
             .expect("headless recovery host");
     }
 
+    /// A platform that refuses a system below FLUI's floor fails the run with
+    /// that refusal, typed, before any window opens; another platform failure
+    /// stays a platform failure.
+    fn a_platform_below_the_floor_fails_the_run_as_unsupported() {
+        use flui_platform::{Environment, OsRelease};
+
+        use std::cell::Cell;
+
+        use crate::app::UnsupportedSystem;
+
+        fn run_refused(refusal: flui_native::PlatformError) -> (AppRunError, bool) {
+            let built = Rc::new(Cell::new(false));
+            let witness = Rc::clone(&built);
+            let app = Application::new(move |_| -> flui_widgets::Text {
+                witness.set(true);
+                panic!("never built below the floor");
+            });
+            let error = run_with_platform_factory(app, || Err(AppRunError::from_platform(refusal)))
+                .expect_err("a refused platform fails the run");
+            (error, built.get())
+        }
+
+        let (error, built) = run_refused(flui_native::PlatformError::UnsupportedOs {
+            environment: Environment::Windows,
+            found: OsRelease::from_display("build 9600"),
+            floor: OsRelease::from_display("build 10240"),
+        });
+        assert!(
+            matches!(
+                &error,
+                AppRunError::UnsupportedSystem(UnsupportedSystem::OsBelowFloor { environment: Environment::Windows, found, floor })
+                    if found.to_string() == "build 9600" && floor.to_string() == "build 10240"
+            ),
+            "{error:?}"
+        );
+        assert!(!built, "no window is built below the floor");
+
+        let (error, built) = run_refused(flui_native::PlatformError::MissingRequirement {
+            environment: Environment::Linux,
+            requirement: "the X11 RandR 1.5 extension",
+        });
+        assert!(
+            matches!(
+                &error,
+                AppRunError::UnsupportedSystem(UnsupportedSystem::MissingRequirement {
+                    environment: Environment::Linux,
+                    requirement: "the X11 RandR 1.5 extension",
+                })
+            ),
+            "{error:?}"
+        );
+        assert!(!built, "no window is built without a requirement");
+
+        let (error, _) = run_refused(flui_native::PlatformError::Init {
+            message: "no window class".to_owned(),
+        });
+        assert!(matches!(error, AppRunError::Platform { .. }), "{error:?}");
+    }
+
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -1279,6 +1343,10 @@ mod tests {
                 (
                     "main_window_pending_coalesces_and_recovers_after_installer_panic",
                     main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
+                ),
+                (
+                    "a_platform_below_the_floor_fails_the_run_as_unsupported",
+                    a_platform_below_the_floor_fails_the_run_as_unsupported as fn(),
                 ),
                 (
                     "main_window_factory_panic_is_typed_and_initial_window_is_fatal",
@@ -1458,27 +1526,68 @@ mod tests {
         );
     }
 
-    /// A storage directory in the main configuration reaches the UI runtimes the
-    /// host builds: the run resolves the host's storage once, at start, and
-    /// a UI runtime built afterwards holds it in its build owner, which every
-    /// `LifecycleContext::storage` under it reads. Driven through
-    /// `run_with_platform` itself, so the host's storage comes from the
-    /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
-    /// which reaches `host::build_ui_runtime` as every runner site does,
-    /// without a GPU.
+    /// The run's storage directory reaches the UI runtimes the host builds:
+    /// the run resolves the host's storage once, at start, and a UI runtime
+    /// built afterwards provides it to its widgets as the
+    /// `StorageCapability`. The directory is the configured one, else the
+    /// application's identifier; a desktop application with neither has no
+    /// storage. Driven through `run_with_platform` itself, so the host's
+    /// storage comes from the runner; the UI runtime is an `Isolated` window
+    /// opened from `on_ready`, which reaches `host::build_ui_runtime` as every
+    /// runner site does, without a GPU.
     #[test]
-    fn a_configured_storage_dir_reaches_lifecycle_context() {
+    fn the_run_storage_dir_reaches_lifecycle_context() {
+        let dir = || {
+            flui_platform::AppDataDir::try_new("storage-host-test")
+                .expect("a plain name is a valid directory")
+        };
+        let identified = || {
+            crate::AppIdentity::try_new("Storage host test")
+                .expect("a display name")
+                .with_app_id(crate::AppId::try_new("dev.flui.storage_host_test").expect("an id"))
+        };
+        let cases: [(&str, AppConfig, bool); 4] = [
+            (
+                "a configured directory",
+                AppConfig::new().with_storage_dir(dir()),
+                true,
+            ),
+            (
+                "an application identifier alone",
+                AppConfig::new().with_application_identity(identified()),
+                true,
+            ),
+            (
+                "a configured directory beside an identifier",
+                AppConfig::new()
+                    .with_application_identity(identified())
+                    .with_storage_dir(dir()),
+                true,
+            ),
+            ("neither, on a desktop", AppConfig::new(), false),
+        ];
+        for (case, config, expected) in cases {
+            assert_eq!(
+                storage_reaches_a_ui_runtime(config),
+                Some(expected),
+                "{case}"
+            );
+        }
+    }
+
+    /// Whether a UI runtime built after a run started with `config` can
+    /// acquire the `StorageCapability`; `None` when it was never observed.
+    fn storage_reaches_a_ui_runtime(config: AppConfig) -> Option<bool> {
+        use flui_platform::capability::Capability as _;
+        use flui_view::persist::StorageCapability;
+
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("no main window is opened");
         })
         .with_startup_window(StartupWindow::None)
-        .with_config(
-            AppConfig::new()
-                .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_storage_dir(flui_platform::StorageName::from_static("storage-host-test")),
-        )
+        .with_config(config.with_exit_policy(ExitPolicy::ExplicitQuit))
         .on_ready(move |_| {
             let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),
@@ -1491,22 +1600,47 @@ mod tests {
                 dispatcher,
                 super::super::owner_dispatch::RuntimeTask::TestCallback(Box::new(
                     move |ui_runtime| {
-                        observed.set(Some(
-                            ui_runtime
-                                .widgets()
-                                .with_build_owner(|owner| owner.capabilities().storage.is_some()),
-                        ));
+                        observed.set(Some(ui_runtime.widgets().with_build_owner(|owner| {
+                            owner
+                                .capabilities()
+                                .capabilities
+                                .as_ref()
+                                .is_some_and(|source| {
+                                    source
+                                        .acquire(
+                                            std::any::TypeId::of::<StorageCapability>(),
+                                            StorageCapability::NAME,
+                                        )
+                                        .is_ok()
+                                })
+                        })));
                     },
                 )),
             )
             .expect("observe storage through the installed owner");
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
+        reached.get()
+    }
 
-        assert_eq!(
-            reached.get(),
-            Some(true),
-            "a ui_runtime built after the host started with a storage directory holds storage"
-        );
+    /// An identifier the application may declare always names a data
+    /// directory, so the run's default storage directory never refuses one.
+    #[test]
+    fn every_app_id_names_a_data_dir() {
+        let long = format!("com.{}", "a".repeat(251));
+        for id in [
+            "com.example.notes",
+            "com.aux.notes",
+            "con1.example",
+            "Lpt.example",
+            "comx.app",
+            long.as_str(),
+        ] {
+            let app_id = crate::AppId::try_new(id).expect("an accepted identifier");
+            assert!(
+                flui_platform::AppDataDir::try_new(app_id.as_str()).is_ok(),
+                "{id}"
+            );
+        }
     }
 }

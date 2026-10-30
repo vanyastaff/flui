@@ -322,7 +322,8 @@ impl SemanticsConfiguration {
     /// boundary that takes `SetTextSelection` (ADR-0214 §4). A request on
     /// one of those texts is routed here, and a document beneath this one
     /// holds its own texts.
-    pub(crate) fn makes_document_selections(&self) -> bool {
+    #[must_use]
+    pub fn makes_document_selections(&self) -> bool {
         self.is_merge_boundary
             && self.effective_actions_as_bits() & SemanticsAction::SetTextSelection.value() != 0
     }

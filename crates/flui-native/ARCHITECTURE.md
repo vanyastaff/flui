@@ -198,7 +198,8 @@ trait depends on `flui-platform` instead.
   that hears the system's broadcasts (`broadcast`); `owner::apple` is
   `NSApplication`'s loop with the owner lane and the wake pump (`macos`) and
   `UIApplicationMain` with its delegates and scenes (`ios`); `owner::android`
-  the looper over `android-activity`, the JNI `FluiView` and the NDK lookup;
+  the looper over `android-activity`, whose frames the choreographer paces
+  (`frame_clock`, ADR-0269), the JNI `FluiView` and the NDK lookup;
   `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
   host's loop over its libxcb connection and an eventfd doorbell;
   `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test
@@ -437,8 +438,8 @@ trait depends on `flui-platform` instead.
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
   iOS, accessibility on the Web and under winit off Linux,
-  haptics on winit. Android's clipboard is an in-process stand-in
-  until the system clipboard is reached through JNI.
+  haptics on winit. Android's clipboard is `ClipboardManager`, reached
+  through JNI from the owner thread.
 
   Accessibility has no Cargo feature (ADR-0151 §15, as amended).
   `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
@@ -2595,6 +2596,50 @@ silently), and the delivery's ordering rows pin the call itself. The Android arm
 on this host runs the Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
 
+### A frame comes only when one is asked for, and every stoppable producer stops without one
+
+**Rule:** a host whose frames come from a producer it can stop (Android's
+looper turn, iOS's `CADisplayLink`, the page's `requestAnimationFrame`) runs
+that producer only while the window owes a frame. The record of what is owed is
+one type, `owner::frame_demand::FrameDemand`, on all three. A request from any
+thread marks it, and only the first request since the last frame wakes the
+producer. The producer takes the mark before the frame runs, so a request made
+during the frame is served by the next one, and an older wake never clears a
+newer request. After a frame that left nothing marked, the producer stops.
+
+**Choice:**
+
+- **Android** wakes the looper on the first request, and the looper turn takes
+  the mark only when it can deliver the frame.
+- **iOS** pauses the link after a tick that left nothing marked. Its requester
+  resumes the link on the main thread: inline from there, otherwise through the
+  main queue. The lifecycle hold (background, no published attachment) is
+  separate from the demand, and a release always owes a frame.
+- **The Web** loop asks the browser for the next frame only when one is marked,
+  or while the refresh estimate is still measuring. The estimate measures for a
+  window of intervals from start and after each restart (scale, screen,
+  visibility). A request wakes the owner, and the owner's turn resumes the loop.
+  The time the loop stood still is not an interval.
+
+The runtime asks through `request_redraw` for every frame it needs (`wake_frame`,
+animations, a failed frame the handler asks for again), so a host that waits
+for a request never misses a frame the runtime wants. Win32, AppKit, Wayland,
+X11 and winit already paint only on request and keep their own mechanisms:
+`WM_PAINT`, the display pass, the compositor's frame callback, and the event
+loop's redraw. None of them has a producer that ticks on its own.
+
+**Rejected:** ticking every refresh and letting the runner skip frames that are
+not dirty. A still screen then pays a callback per refresh, and on iOS it keeps
+the main thread awake. A second, per-host demand record would let the hosts
+drift apart.
+
+**Enforced by:**
+- `owner::frame_demand`'s `a_frame_is_owed_only_until_a_frame_takes_it`.
+- `owner::animation_frame`'s
+  `a_turn_goes_on_only_while_a_frame_is_asked_for_or_measured`.
+- The estimator table's `measures_until_a_window_and_again_after_a_restart`.
+- The wasm32 suite's `web_frames_run_only_while_one_is_asked_for`.
+
 ### AppKit's frame source stays the view's display pass, and its re-arm crosses one owner-lane turn
 
 **Rule:** a display-driven backend's produce signal must be able to re-arm itself
@@ -4522,7 +4567,8 @@ read limit and a base of another length decided without a value cursor (the
 stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
-`AppConfig::with_storage_dir` is the one switch.
+the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::with_storage_dir`
+is the one switch.
 
 ### Android samples its displays through JNI and refreshes them on announced change only
 

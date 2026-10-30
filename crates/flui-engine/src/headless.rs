@@ -102,7 +102,10 @@ impl HeadlessRenderer {
     async fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
         #[cfg(test)]
         INSTANCES_CREATED.with(|created| created.set(created.get() + 1));
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // `WGPU_BACKEND` picks the backend a readback suite runs on, so the same
+        // suite runs on the GL fallback with `WGPU_BACKEND=gl` (ADR-0244 §1).
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let adapter = instance
             .request_adapter(&crate::adapter::trusted_adapter_options(
                 wgpu::PowerPreference::HighPerformance,

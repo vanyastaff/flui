@@ -96,7 +96,7 @@ impl Drop for Refresh {
 // ---------------------------------------------------------------------------
 
 fn alternatives() -> GestureAlternatives {
-    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         RefreshIntent::command(LABEL),
         SizedBox::new(24.0, 24.0),
     )))
@@ -751,7 +751,7 @@ pub(crate) fn a_first_command_without_the_refresh_intent_is_reported() {
     struct Reload;
     impl flui_widgets::Intent for Reload {}
 
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+    let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
         flui_widgets::GestureCommand::new(LABEL, Reload),
         SizedBox::new(24.0, 24.0),
     )))

@@ -131,11 +131,10 @@ android-activity = { workspace = true }
 # Windows/macOS builds stay on their native backends and never pull in
 # `winit-backend`'s `arboard` (clipboard) dependency.
 #
-# Same pattern for flui-engine: `Renderer::select_backend()` picks Vulkan on
-# Linux, but wgpu compiles only the GPU API backends named in flui-engine's
-# Cargo features — nothing else in flui-app's closure requests `vulkan`, so
-# without this the surface never gets a usable adapter (`SurfaceCreation`
-# fails at GPU init).
+# Same pattern for flui-engine: wgpu compiles only the GPU API backends named
+# in its Cargo features. flui-engine's own Linux entry already names `vulkan`
+# and its `gles` fallback; this one keeps `vulkan` named where the app asks
+# for its GPU.
 [target.'cfg(target_os = "linux")'.dependencies]
 flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["winit-backend"] }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vulkan"] }

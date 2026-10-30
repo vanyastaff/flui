@@ -13,7 +13,8 @@
 //! navigators outward, as `maybe_pop`'s "bubble" asks, and a request no
 //! navigator handles is reported unperformed, so the key reaches the host.
 
-use flui_view::{BoxedView, EventCx, IntoView, ViewExt};
+use flui_view::element::ElementKind;
+use flui_view::{BoxedView, BuildContext, EventCx, IntoView, StatelessView, View, ViewExt};
 
 use super::navigator::NavigatorHandle;
 use crate::interaction::{Action, ActionOutcome, Actions, BackIntent, DismissIntent};
@@ -56,19 +57,36 @@ impl Action<DismissIntent> for PopOnDismiss {
     }
 }
 
-/// `page` with the route's key actions around it. Without a navigator in
-/// context there is nothing to pop and `page` is returned as it is.
-pub(super) fn route_keys(
-    navigator: Option<NavigatorHandle>,
-    dismissible: bool,
-    page: BoxedView,
-) -> BoxedView {
-    let Some(navigator) = navigator else {
-        return page;
-    };
-    let mut actions = Actions::new(page).action(PopOnBack(navigator.clone()));
-    if dismissible {
-        actions = actions.action(PopOnDismiss(navigator));
+/// The route's key actions around its focus scope.
+///
+/// They sit above the scope, not inside it: a page with nothing focusable
+/// (an `ErrorView` in place of a page whose build failed, a page of plain
+/// text) leaves the focus on the route's scope itself, and the key's actions
+/// are looked up from the focused node outward.
+#[derive(Clone)]
+pub(super) struct RouteKeys {
+    /// The route is a dismissible modal, so `DismissIntent` pops it.
+    pub(super) dismissible: bool,
+    /// The route's focus scope.
+    pub(super) scope: BoxedView,
+}
+
+impl View for RouteKeys {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
     }
-    actions.into_view().boxed()
+}
+
+impl StatelessView for RouteKeys {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // Without a navigator in context there is nothing to pop.
+        let Some(navigator) = NavigatorHandle::maybe_of(ctx) else {
+            return self.scope.clone();
+        };
+        let mut actions = Actions::new(self.scope.clone()).action(PopOnBack(navigator.clone()));
+        if self.dismissible {
+            actions = actions.action(PopOnDismiss(navigator));
+        }
+        actions.into_view().boxed()
+    }
 }

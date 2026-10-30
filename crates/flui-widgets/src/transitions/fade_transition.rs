@@ -26,6 +26,7 @@ use flui_view::{
 pub struct FadeTransition {
     opacity: std::rc::Rc<dyn Animation<f64>>,
     child: BoxedView,
+    always_include_semantics: bool,
 }
 
 impl FadeTransition {
@@ -34,7 +35,16 @@ impl FadeTransition {
         Self {
             opacity,
             child: child.into_view().boxed(),
+            always_include_semantics: false,
         }
+    }
+
+    /// Whether the child stays in the semantics tree while fully transparent; the default
+    /// is `false`, which leaves an invisible child out.
+    #[must_use]
+    pub fn always_include_semantics(mut self, include: bool) -> Self {
+        self.always_include_semantics = include;
+        self
     }
 }
 
@@ -55,10 +65,11 @@ pub struct FadeTransitionState {
 }
 
 impl ViewState<FadeTransition> for FadeTransitionState {
-    fn build(&self, _view: &FadeTransition, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &FadeTransition, _ctx: &dyn BuildContext) -> impl IntoView {
         FadeTransitionRenderView {
             proxy: self.proxy.clone(),
             child: self.child.clone(),
+            always_include_semantics: view.always_include_semantics,
         }
     }
 
@@ -87,6 +98,7 @@ impl StatefulView for FadeTransition {
 struct FadeTransitionRenderView {
     proxy: ProxyAnimation<f64>,
     child: BoxedView,
+    always_include_semantics: bool,
 }
 
 impl std::fmt::Debug for FadeTransitionRenderView {
@@ -102,15 +114,15 @@ impl RenderView for FadeTransitionRenderView {
     type RenderObject = RenderAnimatedOpacity;
 
     fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderAnimatedOpacity::new(self.proxy.clone(), false)
+        RenderAnimatedOpacity::new(self.proxy.clone(), self.always_include_semantics)
     }
 
     fn update_render_object(
         &self,
         _ctx: &RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
+        render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+        render_object.set_always_include_semantics(self.always_include_semantics)
     }
 
     fn has_children(&self) -> bool {

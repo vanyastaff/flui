@@ -15,7 +15,7 @@ use flui_interaction::focus::{
 use flui_interaction::ids::FocusNodeId;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey},
+    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey},
 };
 
 fn run_rows(rows: &[(&str, fn())]) {
@@ -706,6 +706,14 @@ fn keyboard_focus_contracts() {
             forgotten_keys_stop_repeating,
         ),
         (
+            "a key-down no release follows is held by nobody",
+            a_key_down_no_release_follows_is_held_by_nobody,
+        ),
+        (
+            "an orphan release is reported with the ledger let go",
+            an_orphan_release_is_reported_with_the_ledger_let_go,
+        ),
+        (
             "a panicking handler keeps its key's record",
             panicking_handler_keeps_its_keys_record,
         ),
@@ -1077,6 +1085,83 @@ fn forgotten_keys_stop_repeating() {
     let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
     assert_eq!(node_keys.get(), 1);
     assert_eq!(cancelled.borrow().len(), 1, "once");
+}
+
+/// A character a host posts without a key (Windows' Alt+numpad entry) reaches
+/// the focus as a press, and nothing holds it: no release follows, so losing
+/// activation later cancels nothing on its path.
+fn a_key_down_no_release_follows_is_held_by_nobody() {
+    let (manager, nodes, _attachments) = manager_with_nodes(1);
+    let _ = nodes[0].request_focus();
+    let node_keys = count_keys(&nodes[0]);
+    let (cancelled, _registration) = record_cancels(&nodes[0]);
+    let stray = key(KeyState::Down, Key::character("é"), Code::Unidentified)
+        .with_release(KeyRelease::Never);
+    assert!(manager.dispatch_key_event(&stray).is_handled());
+    assert_eq!(node_keys.get(), 1, "the character reaches the focus");
+    manager.forget_pressed_keys();
+    assert!(
+        cancelled.borrow().is_empty(),
+        "a key nobody holds is not cancelled"
+    );
+}
+
+thread_local! {
+    /// What `ReenteringWarning` runs at a focus warning, once.
+    static AT_FOCUS_WARNING: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+/// A log subscriber that calls back into the focus manager at its first
+/// warning, as a subscriber that forwards to the app may.
+struct ReenteringWarning;
+
+impl tracing::Subscriber for ReenteringWarning {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().contains("::focus::") && *metadata.level() == tracing::Level::WARN
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        if let Some(action) = AT_FOCUS_WARNING.with(|slot| slot.borrow_mut().take()) {
+            action();
+        }
+    }
+}
+
+/// The release of a code-less key nobody holds is reported, and the report
+/// may call back into the manager: the ledger is let go before it.
+fn an_orphan_release_is_reported_with_the_ledger_let_go() {
+    let (manager, nodes, _attachments) = manager_with_nodes(1);
+    let _ = nodes[0].request_focus();
+    let node_keys = count_keys(&nodes[0]);
+    let reentered = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reentered);
+    let reentrant = Rc::clone(&manager);
+    AT_FOCUS_WARNING.with(|slot| {
+        *slot.borrow_mut() = Some(Rc::new(move || {
+            reentrant.forget_pressed_keys();
+            seen.set(true);
+        }));
+    });
+    flui_testing::log_capture::disarm_interest_cache();
+    let release = key(KeyState::Up, Key::character("é"), Code::Unidentified);
+    let result = tracing::subscriber::with_default(ReenteringWarning, || {
+        catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&release)))
+    });
+    AT_FOCUS_WARNING.with(|slot| *slot.borrow_mut() = None);
+    assert!(
+        !result
+            .expect("the report may reenter the manager")
+            .is_handled(),
+        "an orphan release is no key event"
+    );
+    assert!(reentered.get(), "the release was reported");
+    assert_eq!(node_keys.get(), 0, "the walk does not see it");
 }
 
 fn panicking_handler_keeps_its_keys_record() {

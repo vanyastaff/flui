@@ -128,6 +128,22 @@ pub enum KeyRepeat {
     AutoRepeat,
 }
 
+/// Whether a key-down's release will arrive.
+///
+/// A key a host reports has a release unless it says otherwise. A host that has a character but
+/// no key for it (Windows' Alt+numpad entry, which posts the character alone) reports a key-down
+/// whose release never comes: nothing holds that key, so nothing waits for its repeats or its
+/// release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum KeyRelease {
+    /// A release follows this key-down, or this is the release.
+    #[default]
+    Follows,
+    /// No release or repeat follows this key-down.
+    Never,
+}
+
 /// Whether an input method was composing text when a key changed.
 ///
 /// A shortcut must not fire on a key that arrives during a composition: the input method owns
@@ -148,6 +164,11 @@ pub enum ImeComposition {
 /// One key press, repeat or release.
 ///
 /// Built with [`KeyEvent::new`] and the `with_*` methods.
+///
+/// A key a host can't place physically has [`Code::Unidentified`] and is known by its
+/// [`key`](Self::key) alone, so a host gives such a key's repeats and release the `key` it
+/// reported at the key-down, even when a modifier changed the key's meaning while it was held.
+/// A host that has no release to report marks the key-down [`KeyRelease::Never`].
 ///
 /// # Examples
 ///
@@ -183,6 +204,7 @@ pub struct KeyEvent {
     /// a modifier key's own change. Source facts are not command interpretation.
     pub modifiers: Modifiers,
     repeat: KeyRepeat,
+    release: KeyRelease,
     /// Whether an input method was composing when the key changed.
     pub composition: ImeComposition,
     /// When the platform observed the change.
@@ -203,6 +225,13 @@ impl KeyEvent {
         self.repeat
     }
 
+    /// Whether this key-down's release will arrive; always [`KeyRelease::Follows`] on a
+    /// release.
+    #[must_use]
+    pub const fn release(&self) -> KeyRelease {
+        self.release
+    }
+
     /// A first press or a release with no modifiers, at the standard location, outside any
     /// composition.
     #[must_use]
@@ -214,6 +243,7 @@ impl KeyEvent {
             location: Location::Standard,
             modifiers: Modifiers::NONE,
             repeat: KeyRepeat::First,
+            release: KeyRelease::Follows,
             composition: ImeComposition::Inactive,
             time,
         }
@@ -240,6 +270,17 @@ impl KeyEvent {
             KeyState::Up => KeyRepeat::First,
         };
         Self { repeat, ..self }
+    }
+
+    /// This event as `release`. A release is the key's own, so a [`KeyState::Up`] event stays
+    /// [`KeyRelease::Follows`].
+    #[must_use]
+    pub fn with_release(self, release: KeyRelease) -> Self {
+        let release = match self.state {
+            KeyState::Down => release,
+            KeyState::Up => KeyRelease::Follows,
+        };
+        Self { release, ..self }
     }
 
     /// This event arriving during or outside an input method's `composition`.

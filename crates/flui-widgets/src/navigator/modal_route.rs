@@ -88,7 +88,7 @@ use super::overlay_route::{
 use super::page_transitions::{AdoptedTransition, transitions_of};
 use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
-use super::route_keys::route_keys;
+use super::route_keys::RouteKeys;
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, unit_end_animation, unit_start_animation,
@@ -291,7 +291,6 @@ impl ModalInner {
                 pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
                 local_history: super::lifecycle::Terminal::new(self.local_history_handle()),
                 back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
-                dismissible: self.barrier_dismissible.load(Ordering::Relaxed),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -301,10 +300,10 @@ impl ModalInner {
 
         Offstage::new()
             .offstage(self.offstage.load(Ordering::Relaxed))
-            .child(FocusScope::with_external_node(
-                Rc::clone(&self.focus_scope),
-                scope,
-            ))
+            .child(RouteKeys {
+                dismissible: self.barrier_dismissible.load(Ordering::Relaxed),
+                scope: FocusScope::with_external_node(Rc::clone(&self.focus_scope), scope).boxed(),
+            })
             .boxed()
     }
 
@@ -426,9 +425,6 @@ struct ModalScope {
     /// detector — a per-route, construction-time flag (`ModalRoute::back_gesture`),
     /// never toggled mid-life.
     back_gesture_enabled: bool,
-    /// Whether Escape pops this route: the barrier is dismissible. Fixed at
-    /// construction, like the barrier itself.
-    dismissible: bool,
 }
 
 impl Clone for ModalScope {
@@ -445,7 +441,6 @@ impl Clone for ModalScope {
             local_history: super::lifecycle::Terminal::new(self.local_history.clone()),
             subtree: self.subtree.clone(),
             back_gesture_enabled: self.back_gesture_enabled,
-            dismissible: self.dismissible,
         }
     }
 }
@@ -550,11 +545,7 @@ impl ViewState<ModalScope> for ModalScopeState {
         } else {
             anchored
         };
-        route_keys(
-            NavigatorHandle::maybe_of(ctx),
-            view.dismissible,
-            (view.transitions)(ctx, &primary, &secondary, anchored),
-        )
+        (view.transitions)(ctx, &primary, &secondary, anchored)
     }
 }
 

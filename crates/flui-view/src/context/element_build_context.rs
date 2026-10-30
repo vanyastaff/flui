@@ -599,8 +599,13 @@ impl LifecycleContext for ElementBuildContext {
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.owner.read().capabilities().text_input.clone()
     }
-    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
-        self.owner.read().capabilities().clipboard.clone()
+    fn capability_erased(
+        &self,
+        capability: std::any::TypeId,
+        name: &'static str,
+    ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {
+        let source = self.owner.read().capabilities().capabilities.clone();
+        acquire_capability(source.as_deref(), capability, name)
     }
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.owner.read().capabilities().announcer.clone()
@@ -617,9 +622,6 @@ impl LifecycleContext for ElementBuildContext {
     }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.owner.read().capabilities().textures.clone()
-    }
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
-        self.owner.read().capabilities().storage.clone()
     }
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.owner.read().capabilities().close_guard.clone()
@@ -1054,8 +1056,13 @@ impl LifecycleContext for BuildCtx<'_> {
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.presentation.text_input.clone()
     }
-    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
-        self.capabilities.presentation.clipboard.clone()
+    fn capability_erased(
+        &self,
+        capability: std::any::TypeId,
+        name: &'static str,
+    ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {
+        let source = self.capabilities.presentation.capabilities.clone();
+        acquire_capability(source.as_deref(), capability, name)
     }
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.capabilities.presentation.announcer.clone()
@@ -1072,9 +1079,6 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.capabilities.presentation.textures.clone()
-    }
-    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform::Storage>> {
-        self.capabilities.presentation.storage.clone()
     }
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.capabilities.presentation.close_guard.clone()
@@ -1174,5 +1178,22 @@ impl ElementBuildContextBuilder {
         let owner = Arc::new(RwLock::new(BuildOwner::new()));
 
         (self.tree(tree.clone()).owner(owner.clone()), tree, owner)
+    }
+}
+
+/// Ask `source` for a capability's handle; a bare owner has no source and
+/// answers `NotRegistered`. The source is cloned out first, so a provider
+/// that reaches back into the owner finds no borrow held.
+fn acquire_capability(
+    source: Option<&dyn crate::CapabilitySource>,
+    capability: std::any::TypeId,
+    name: &'static str,
+) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {
+    match source {
+        Some(source) => source.acquire(capability, name),
+        None => Err(flui_platform::Unsupported::named(
+            name,
+            flui_platform::UnsupportedReason::NotRegistered,
+        )),
     }
 }

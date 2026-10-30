@@ -623,13 +623,12 @@ fn run_platform_ownership_child(kind: &str) {
     *external_window.borrow_mut() = Some(window.clone() as Rc<dyn flui_platform::PlatformWindow>);
     *external_bridge.lock() =
         Some(bridge.clone() as Arc<dyn flui_semantics::platform::PlatformAccessibility>);
-    let mut ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::try_new(
         crate::presentation::PresentationWindow::new(window.clone(), Some(bridge.clone())),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -1845,12 +1844,19 @@ fn failing_teardown_runtime() -> UiRuntime {
 }
 
 /// A `dispose` that panics and a pending future whose `Drop` panics, in one
-/// runtime's drop: each is contained where it runs, the future is dropped
-/// once, and the process does not abort.
+/// runtime's drop: each is contained where it runs, so the rest of the tree
+/// still disposes and the future is dropped once; the first contained
+/// failure is then the drop's own (ADR-0258 §2: destroying a runtime is
+/// terminal at loop exit), and the process does not abort.
 fn a_failing_dispose_and_future_drop_do_not_abort() {
     let ui_runtime = failing_teardown_runtime();
     let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime)));
-    assert!(dropped.is_ok(), "each failure was contained where it ran");
+    let failure = dropped.expect_err("a contained teardown failure is the drop's");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("a pending future's destructor failed"),
+        "the first contained failure, the future's, is the drop's"
+    );
     assert_eq!(
         FUTURES_DROPPED.load(std::sync::atomic::Ordering::SeqCst),
         1,

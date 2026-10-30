@@ -14,7 +14,7 @@
 //! // Reads `FLUI_AGENT_ENDPOINT` and `FLUI_AGENT_TOKEN`, which the tool that
 //! // launched the app set.
 //! let server = AgentServer::from_env();
-//! // flui_app::run_app_with_config(App, AppConfig::new().with_dev_agent(server));
+//! // flui_app::run_app(App, AppLaunch::new().config(AppConfig::new().with_dev_agent(server)));
 //! # drop(server);
 //! ```
 //!

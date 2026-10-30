@@ -656,13 +656,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     };
 
     let native_store_host = flui_testing::RecordingTextStoreHost::new();
-    let mut runtime = flui_runtime::ui_runtime::UiRuntime::new(
+    let mut runtime = flui_runtime::ui_runtime::UiRuntime::try_new(
         crate::owner_publication::window().with_text_store_host(Some(native_store_host.clone())),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),
@@ -979,13 +978,12 @@ fn prepared_runtime(
     std::rc::Rc<flui_testing::RecordingTextStoreHost>,
 ) {
     let host = flui_testing::RecordingTextStoreHost::new();
-    let runtime = flui_runtime::ui_runtime::UiRuntime::new(
+    let runtime = flui_runtime::ui_runtime::UiRuntime::try_new(
         crate::owner_publication::window().with_text_store_host(Some(host.clone())),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

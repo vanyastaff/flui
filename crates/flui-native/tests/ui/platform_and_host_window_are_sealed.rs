@@ -11,13 +11,14 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_native::storage::DataDirs;
 use flui_native::{
-    AppHandler, HostWindow, OpenWindowError, PathPromptOptions, Platform, PlatformError,
+    AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
+    PlatformError,
     PlatformExecutor, Task,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
-    Clipboard, ClipboardItem, CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
-    StorageName, SystemPreferences,
+    CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
+    AppDataDir, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowHandler, WindowOptions, WindowState,
 };
@@ -58,7 +59,7 @@ impl Platform for OutsidePlatform {
         unreachable!("the impl never compiles")
     }
 
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
+    fn clipboard(&self) -> Rc<dyn NativeClipboard> {
         unreachable!("the impl never compiles")
     }
 
@@ -67,12 +68,6 @@ impl Platform for OutsidePlatform {
     }
 
     fn activate(&self, _: bool) {}
-
-    fn write_to_clipboard(&self, _: ClipboardItem) {}
-
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        None
-    }
 
     fn open_url(&self, _: &str) {}
 
@@ -103,6 +98,10 @@ impl Platform for OutsidePlatform {
 
     fn release_session_end(&self) {}
 
+    fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::NotifyOnly
+    }
+
     fn window_capabilities(&self) -> WindowCapabilities {
         WindowCapabilities::NONE
     }
@@ -123,7 +122,7 @@ impl Platform for OutsidePlatform {
         Ok(PathBuf::new())
     }
 
-    fn data_dirs(&self, _: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(&self, _: &AppDataDir) -> Option<DataDirs> {
         None
     }
 }

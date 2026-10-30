@@ -3,6 +3,9 @@
 - **Superseded-by:** [ADR-0183](ADR-0183-explicit-numeric-text-sizing.md) for
   raw query capability boundaries and fallible text-loan acquisition (§10, 3a).
   Runtime ownership of reusable shaping resources remains in force.
+  [ADR-0270](ADR-0270-the-emoji-generic-starts-with-the-platforms-colour-face.md) for §7's
+  clause "The common list is the emoji generic": the emoji generic starts with the platform's
+  colour emoji faces.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
@@ -293,7 +296,7 @@ offers `register_font` and no removal, so the rule is the API's, not a conventio
 the host's (`flui-app`'s) shared engine services (`SharedEngineServices`, one per owner thread,
 which is one per app while ADR-0091 fixes a single owner thread), held in the host's granted
 ADR-0097 trampoline cell with no global of its own, and reaches each UI runtime only through
-`UiRuntime::new`. Registering a font adds it to the collection and raises the collection's
+`UiRuntime::try_new`. Registering a font adds it to the collection and raises the collection's
 generation: that generation is the font-collection-changed event. The app notifies every UI runtime it owns (`UiRuntime::fonts_changed`,
 on each UI runtime's owner turn), and at the next frame each pipeline marks for layout and paint every
 render object that measured through the UI runtime's context since the last change — closing
@@ -428,7 +431,7 @@ Measurement and paint read one layout, so one set of rules picks a face:
   sans-serif generic names (`FallbackChain`, over `fallback_tables`: per-platform lists FLUI
   owns, ported from cosmic-text 0.19 and keyed by ISO 15924 code; the host locale's language,
   script and region subtags pick the Han list, where cosmic-text matched the tag whole and gave
-  `ja-JP` the Simplified Chinese faces). The common list is the emoji generic. fontique has no walk over every other face, so a
+  `ja-JP` the Simplified Chinese faces). The emoji generic is the platform's colour emoji faces, then the common list (ADR-0270). fontique has no walk over every other face, so a
   character no listed family covers is `.notdef`;
 - **one set of generics**: with `bundled-fonts` the collection binds every generic to Roboto and
   a host feed rebinds none; without it an unbound generic takes the scan's pick, a carried family
@@ -523,7 +526,7 @@ that wires what it adds.
    `cargo xtask reach` are green.
 2. **Per-UI runtime text context**, in two halves that land separately: 2a in `flui-painting`
    (the types, the lint and their tests), 2b in the runtime (the bullet on shared engine
-   services and `UiRuntime::new`). 2a and 2b have landed.
+   services and `UiRuntime::try_new`). 2a and 2b have landed.
    - `flui_painting::FontCollection` wraps the shared fontique `Collection` (no host scan; with
      `bundled-fonts`, the bundled faces registered and the generic families bound to Roboto) and
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
@@ -531,7 +534,7 @@ that wires what it adds.
      every build, so a UI runtime's constructor has one signature with or without `parley`; shaping
      and registration sat behind the `parley` feature until step 4a folded it.
    - (2b) The runtime's shared engine services hold the collection, and each UI runtime owns a
-     `TextContext` built from the collection passed to `UiRuntime::new`.
+     `TextContext` built from the collection passed to `UiRuntime::try_new`.
    - The cosmic-text path is unchanged, and `FONT_SYSTEM` and `shared_font_system()` stay until
      step 6: this step adds the Parley path beside it rather than routing cosmic-text through a
      new handle, so the handle's shape is Parley's from the start.
@@ -949,7 +952,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `crates/flui-painting/src/text_layout/fallback_chain.rs`,
   `fontique_fallbacks_follow_the_chain_in_order`,
   `the_sans_serif_family_ends_every_script_fallback` and
-  `the_emoji_generic_is_the_common_list`; in `crates/flui-painting/src/parley_text/shape.rs`,
+  `the_emoji_generic_starts_with_the_colour_faces`; in `crates/flui-painting/src/parley_text/shape.rs`,
   `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
   `a_style_resolves_by_the_family_rule` of `family_resolution` (`context.rs`);
   `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in

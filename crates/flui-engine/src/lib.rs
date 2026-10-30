@@ -284,6 +284,9 @@ mod frame_protocol;
 /// Alpha is unchanged.  [`gamma::GammaPipeline`] owns the pipeline and
 /// bind-group layout.
 pub(crate) mod gamma;
+/// Which GPU backend the renderer draws with and the order it tries them in
+/// (ADR-0244 §1).
+mod gpu_backend;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
@@ -489,6 +492,7 @@ pub use headless::HeadlessRenderer;
 pub use painter::WgpuPainter;
 // Renderer (the one externally-consumed wgpu/* type)
 pub use frame_latency::FrameLatency;
+pub use gpu_backend::{BackendFailure, GpuBackend};
 pub use renderer::{GpuCapabilities, Renderer};
 pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 // What a windowed `Renderer` draws into (issue #1043); exported beside

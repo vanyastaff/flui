@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "capability_seam.rs"]
+mod capability_seam;
 #[path = "close_guard.rs"]
 mod close_guard;
 #[path = "controller_restart.rs"]
@@ -200,4 +202,102 @@ fn containment_and_isolation_matrix() {
 #[test]
 fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
+}
+
+/// Each case runs in a child process: without retention, a capture dropped
+/// while unwinding panics again and aborts the process.
+#[test]
+fn primary_claims_keep_their_captures_while_unwinding() {
+    if let Ok(case) = std::env::var(capability_seam::PRIMARY_UNWIND_CHILD) {
+        capability_seam::a_claim_unwound_keeps_its_captures(&case);
+        return;
+    }
+    for case in ["claim", "claims"] {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "primary_claims_keep_their_captures_while_unwinding",
+                "--test-threads=1",
+            ])
+            .env(capability_seam::PRIMARY_UNWIND_CHILD, case)
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .expect("child test process");
+        assert!(
+            output.status.success(),
+            "case {case} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn capability_seam() {
+    run_table(
+        "capability_seam",
+        &[
+            (
+                "capability_seam::a_runtime_with_no_provider_answers_not_registered",
+                capability_seam::a_runtime_with_no_provider_answers_not_registered as fn(),
+            ),
+            (
+                "capability_seam::a_provider_refusal_reaches_the_widget_unchanged",
+                capability_seam::a_provider_refusal_reaches_the_widget_unchanged as fn(),
+            ),
+            (
+                "capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard",
+                capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
+            ),
+            (
+                "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
+                capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
+            ),
+            (
+                "capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired",
+                capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped",
+                capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
+            ),
+            (
+                "capability_seam::a_dropped_handle_ends_its_subscription",
+                capability_seam::a_dropped_handle_ends_its_subscription as fn(),
+            ),
+            (
+                "capability_seam::conflicting_registrations_fail_when_the_registry_is_built",
+                capability_seam::conflicting_registrations_fail_when_the_registry_is_built
+                    as fn(),
+            ),
+            (
+                "capability_seam::an_override_answers_in_place_of_the_built_in",
+                capability_seam::an_override_answers_in_place_of_the_built_in as fn(),
+            ),
+            (
+                "capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner",
+                capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
+                capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
+            ),
+            (
+                "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",
+                capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_runtime_without_a_primary_selection_answers_not_registered",
+                capability_seam::a_runtime_without_a_primary_selection_answers_not_registered
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
+                capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
+                    as fn(),
+            ),
+        ],
+    );
 }

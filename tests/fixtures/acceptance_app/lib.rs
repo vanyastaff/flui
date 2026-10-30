@@ -15,3 +15,6 @@ mod smoke;
 
 #[cfg(test)]
 mod keyboard;
+
+#[cfg(test)]
+mod teardown;

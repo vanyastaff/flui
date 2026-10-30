@@ -487,7 +487,7 @@ impl ContactRegistry {
     }
 
     /// The last position of that open contact, in logical pixels and as the
-    /// device pixels it was read in.
+    /// raw units it was read in.
     #[must_use]
     pub fn position(
         &self,

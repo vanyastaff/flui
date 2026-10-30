@@ -108,12 +108,15 @@ pub struct NativeDevice(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NativeContact(pub u64);
 
-/// A position as the OS reported it, in device pixels of the surface.
+/// A position as the OS reported it, in the reading's raw unit:
+/// [`NativeReading::scale`] of them make one logical pixel. That unit is the
+/// device pixel for a reading placed with [`NativeReading::at_device`] and the
+/// logical pixel for one placed with [`NativeReading::at_logical`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawPoint {
-    /// Horizontal device pixels.
+    /// Horizontal raw units.
     pub x: f64,
-    /// Vertical device pixels.
+    /// Vertical raw units.
     pub y: f64,
 }
 
@@ -149,7 +152,7 @@ pub struct RawSensors {
     pub angles: Option<PenAngles>,
     /// Clockwise twist in degrees within `[0, 360)`.
     pub twist_degrees: Option<f64>,
-    /// Contact width and height in device pixels.
+    /// Contact width and height in the reading's raw unit (see [`RawPoint`]).
     pub contact_size: Option<(f64, f64)>,
 }
 
@@ -240,10 +243,10 @@ pub struct NativeReading {
     pub click_count: Option<NonZeroU8>,
     /// When it was measured.
     pub time: ReadingTime,
-    /// Where, in device pixels; `None` when the event carries no position and
+    /// Where, in the raw unit [`RawPoint`] names; `None` when the event carries no position and
     /// the contact's last one applies.
     pub position: Option<RawPoint>,
-    /// Device pixels per logical pixel.
+    /// Raw units per logical pixel: one for a backend that reports points.
     pub scale: f64,
     /// Sensor values.
     pub sensors: RawSensors,
@@ -284,12 +287,25 @@ impl NativeReading {
     }
 
     /// This reading at device-pixel `(x, y)` with `scale` device pixels per
-    /// logical pixel.
+    /// logical pixel: a backend whose OS reports physical pixels (Win32,
+    /// Android, X11, winit).
     #[must_use]
-    pub const fn at(self, x: f64, y: f64, scale: f64) -> Self {
+    pub const fn at_device(self, x: f64, y: f64, scale: f64) -> Self {
         Self {
             position: Some(RawPoint { x, y }),
             scale,
+            ..self
+        }
+    }
+
+    /// This reading at logical-pixel `(x, y)`: a backend whose OS already
+    /// reports positions in points (AppKit, UIKit, the DOM, Wayland surface
+    /// coordinates), so its raw unit is the logical pixel and its scale one.
+    #[must_use]
+    pub const fn at_logical(self, x: f64, y: f64) -> Self {
+        Self {
+            position: Some(RawPoint { x, y }),
+            scale: 1.0,
             ..self
         }
     }

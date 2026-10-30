@@ -48,3 +48,9 @@ fn run_table(table: &str, cases: &[(&str, fn())]) {
         .collect();
     assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
 }
+
+#[path = "capability.rs"]
+mod capability;
+
+#[path = "app_data_dir.rs"]
+mod app_data_dir;

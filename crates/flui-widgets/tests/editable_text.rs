@@ -1304,7 +1304,6 @@ pub(crate) fn a_field_measures_and_hit_tests_the_current_text_scale() {
 /// the caret inside a composition that is still open), or from the paste
 /// action (a paste is refused while composing).
 pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
-    use flui_platform::Clipboard as _;
     use flui_testing::StoreHostCall;
 
     fn composing(text: &str) -> (crate::common::harness::Harness, TextEditingController) {
@@ -1343,8 +1342,8 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
         "pointer: then the caret moves"
     );
 
-    let (harness, controller) = composing("ab");
-    harness.clipboard().write_text("!".to_owned());
+    let (mut harness, controller) = composing("ab");
+    harness.clipboard().set_text("!");
     assert!(
         harness
             .focus_manager()
@@ -1371,6 +1370,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
         !controller.is_composing(),
         "paste: the composition is committed"
     );
+    harness.tick();
     assert_eq!(
         controller.text(),
         "ab東京!",

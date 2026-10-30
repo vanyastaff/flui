@@ -235,6 +235,100 @@ const fn is_reserved_device(name: &[u8]) -> bool {
     }
 }
 
+/// The name of the directory an application's stored values live in, under
+/// each of the platform's data roots: ASCII letters, digits, `.`, `_` and `-`,
+/// starting with a letter or digit, not ending with `.`, at most 255 bytes,
+/// and never a name Windows reserves for a device (`con`, `con.txt`, any
+/// case).
+///
+/// It is usually the application's identifier (`com.example.notes`), which
+/// keeps two applications' values apart on a desktop where every application
+/// shares one data root.
+///
+/// ```
+/// use flui_platform::AppDataDir;
+///
+/// assert!(AppDataDir::try_new("com.example.notes").is_ok());
+/// assert!(AppDataDir::try_new("../notes").is_err());
+/// assert!(AppDataDir::try_new("Con.example").is_err());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AppDataDir(String);
+
+/// Why a name is not a valid [`AppDataDir`].
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("`{name}` is not an application data directory: {reason}")]
+pub struct InvalidAppDataDir {
+    name: String,
+    reason: &'static str,
+}
+
+impl InvalidAppDataDir {
+    /// The refused name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// The longest application data directory name, in bytes: the longest file
+/// name the desktop file systems accept.
+const MAX_DIR_LEN: usize = 255;
+
+impl AppDataDir {
+    /// Check `name` against the rules on [`AppDataDir`].
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidAppDataDir`] naming the first rule `name` breaks.
+    pub fn try_new(name: impl Into<String>) -> Result<Self, InvalidAppDataDir> {
+        let name = name.into();
+        match validate_dir(name.as_bytes()) {
+            Ok(()) => Ok(Self(name)),
+            Err(reason) => Err(InvalidAppDataDir { name, reason }),
+        }
+    }
+
+    /// The directory name's text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for AppDataDir {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Why `name` is not a valid [`AppDataDir`], if it is not.
+fn validate_dir(name: &[u8]) -> Result<(), &'static str> {
+    let Some((&first, _)) = name.split_first() else {
+        return Err("it is empty");
+    };
+    if name.len() > MAX_DIR_LEN {
+        return Err("it is longer than 255 bytes");
+    }
+    if !first.is_ascii_alphanumeric() {
+        return Err("it must start with an ASCII letter or a digit");
+    }
+    if !name
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err("it may hold only ASCII letters, digits, `.`, `_` and `-`");
+    }
+    if name.ends_with(b".") {
+        return Err("it must not end with `.`, which Windows drops");
+    }
+    let stem = name.split(|byte| *byte == b'.').next().unwrap_or(name);
+    if is_reserved_device(&stem.to_ascii_lowercase()) {
+        return Err("it must not be a name Windows reserves for a device");
+    }
+    Ok(())
+}
+
 /// Which stored value an edit was based on.
 ///
 /// Equal bytes have equal versions. A version is compared only within the

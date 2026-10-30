@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use flui_protocol::{
     ActOutcome, ActionRequest, Actionability, ActionabilityParams, LocateParams, Matches,
-    ReadQuery, Snapshot, Tree, WindowId,
+    ReadQuery, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
 };
 use flui_scheduler::AppLifecycleState;
 
@@ -37,7 +37,7 @@ pub use crate::close_guard::{CloseGuardSource, SettledClose};
 use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
-    FlushWriter,
+    FlushWriter, SESSION_END_BUDGET,
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
@@ -93,6 +93,14 @@ pub trait AgentPort: Send + Sync {
         &self,
         params: ActionabilityParams,
     ) -> Result<AgentAnswer<Actionability>, AgentFault>;
+
+    /// Enqueue a wait for a condition on the window: the owner answers once a frame makes it
+    /// hold or its timeout passes.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault>;
 
     /// Enqueue a playback request for this exact window's animation clock.
     ///

@@ -33,3 +33,44 @@ pub(crate) fn positioned_places_child_at_explicit_edges() {
 // explicit-alignment/fit behavior with plain non-positioned children were
 // never directly exercised.
 // ============================================================================
+
+/// An indexed stack is heard only through the child it shows, and switching the index
+/// switches what is heard.
+pub(crate) fn an_indexed_stack_is_heard_only_through_its_shown_child() {
+    use flui_view::ViewExt;
+    use flui_widgets::{IndexedStack, Semantics};
+    let stack = |index| {
+        IndexedStack::new(vec![
+            Semantics::new()
+                .label("first")
+                .child(SizedBox::new(20.0, 20.0))
+                .boxed(),
+            Semantics::new()
+                .label("second")
+                .child(SizedBox::new(20.0, 20.0))
+                .boxed(),
+        ])
+        .index(Some(index))
+    };
+    let mut laid = lay_out(stack(0), tight(100.0, 100.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    assert!(tree.find_by_label("first").is_ok(), "the shown child");
+    assert!(
+        tree.find_by_label("second").is_err(),
+        "the hidden child is not heard"
+    );
+
+    laid.pump_widget(stack(1));
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    assert!(
+        tree.find_by_label("second").is_ok(),
+        "the newly shown child"
+    );
+    assert!(
+        tree.find_by_label("first").is_err(),
+        "the newly hidden child"
+    );
+}

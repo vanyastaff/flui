@@ -87,6 +87,25 @@ pub mod platform {
     pub use flui_platform::WindowState;
     pub use flui_platform::text_store::TextInputPurpose;
 
+    /// The capability seam (ADR-0152): what a package declares, provides and
+    /// registers a platform capability with, and the owner-thread result of a
+    /// call the operating system finishes later. A widget acquires a
+    /// capability with `view::LifecycleContextExt::capability`.
+    pub mod capability {
+        pub use flui_platform::capability::Abandoned;
+        pub use flui_platform::capability::Capability;
+        pub use flui_platform::capability::CapabilityProvider;
+        pub use flui_platform::capability::CapabilityRegistrar;
+        pub use flui_platform::capability::Completion;
+        pub use flui_platform::capability::CompletionSource;
+        pub use flui_platform::capability::OwnerPoster;
+        pub use flui_platform::capability::OwnerRetired;
+        pub use flui_platform::capability::Plugin;
+        pub use flui_platform::capability::ProviderContext;
+        pub use flui_platform::capability::Resolver;
+        pub use flui_platform::capability::WindowRef;
+    }
+
     /// Handle-less input capabilities (ADR-0213). Unstable: present only
     /// under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
@@ -138,6 +157,9 @@ pub mod interaction {
     pub use flui_interaction::AxisLock;
     pub use flui_interaction::BeginContactError;
     pub use flui_interaction::CancelOutcome;
+    pub use flui_interaction::ClipboardBackend;
+    pub use flui_interaction::ClipboardCapability;
+    pub use flui_interaction::ClipboardHandle;
     pub use flui_interaction::ContactEnd;
     pub use flui_interaction::ContactId;
     pub use flui_interaction::ContactSnapshot;
@@ -165,7 +187,14 @@ pub mod interaction {
     pub use flui_interaction::PointerId;
     pub use flui_interaction::PointerKind;
     pub use flui_interaction::PointerKindSet;
+    pub use flui_interaction::PrimaryClaim;
+    pub use flui_interaction::PrimaryClaimId;
+    pub use flui_interaction::PrimaryClaims;
     pub use flui_interaction::PrimaryContact;
+    pub use flui_interaction::PrimarySelectionBackend;
+    pub use flui_interaction::PrimarySelectionCapability;
+    pub use flui_interaction::PrimarySelectionHandle;
+    pub use flui_interaction::SelectionText;
     pub use flui_interaction::SwipeDetails;
     pub use flui_interaction::SwipeGestureRecognizer;
     pub use flui_interaction::SwipeStart;

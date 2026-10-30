@@ -148,7 +148,7 @@ flui-devtools = { version = "0.2.0-dev", default-features = false, features = ["
 let config = AppConfig::new();
 #[cfg(feature = "dev-agent")]
 let config = config.with_dev_agent(flui_devtools::agent::AgentServer::from_env());
-run_app_with_config(App, config);
+run_app(App, AppLaunch::new().config(config))?;
 ```
 
 `AgentServer::from_env()` reads `FLUI_AGENT_ENDPOINT` (a pipe name on Windows,

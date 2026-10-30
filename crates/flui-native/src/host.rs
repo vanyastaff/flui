@@ -33,6 +33,11 @@
 //! names no feature's platform file. A table that leaves one of them
 //! [`Absent`] gets windows that hand out [`Absent`].
 
+mod clipboard;
+
+pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
+pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
+
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -42,9 +47,9 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    ClipboardItem, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics,
-    PlatformSystemChrome, StorageName, SystemPreferences, SystemUiOverlayStyle, Unsupported,
-    UnsupportedReason, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics, PlatformSystemChrome,
+    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -83,6 +88,8 @@ pub trait Host: 'static {
     type Accessibility: Accessibility<WindowRefOf<Self>>;
     /// The clipboard.
     type Clipboard: Clipboard<Self::Loop>;
+    /// The primary selection, where the platform has one.
+    type PrimarySelection: PrimarySelection<Self::Loop>;
     /// The drag-and-drop transport.
     type Drag: Drag<Self::Loop>;
     /// Haptic feedback a window hands out.
@@ -348,21 +355,13 @@ pub trait Input<O> {
 /// The clipboard position.
 pub trait Clipboard<O> {
     /// [`Platform::clipboard`].
-    fn clipboard(owner: &O) -> Arc<dyn flui_platform::Clipboard>;
+    fn clipboard(owner: &O) -> Rc<dyn NativeClipboard>;
+}
 
-    /// [`Platform::write_to_clipboard`]: the item's text, through
-    /// [`clipboard`](Self::clipboard), unless the host keeps richer items.
-    fn write(owner: &O, item: ClipboardItem) {
-        if let Some(text) = item.text_content() {
-            Self::clipboard(owner).write_text(text.to_string());
-        }
-    }
-
-    /// [`Platform::read_from_clipboard`]: the clipboard's text, unless the host
-    /// keeps richer items.
-    fn read(owner: &O) -> Option<ClipboardItem> {
-        Self::clipboard(owner).read_text().map(ClipboardItem::text)
-    }
+/// The primary selection position.
+pub trait PrimarySelection<O> {
+    /// [`Platform::primary_selection`].
+    fn primary_selection(owner: &O) -> Option<Rc<dyn NativePrimarySelection>>;
 }
 
 /// The drag-and-drop position.
@@ -385,6 +384,9 @@ pub trait Lifecycle<O> {
     /// [`Platform::release_session_end`].
     fn release_session_end(owner: &O);
 
+    /// [`Platform::session_end_support`].
+    fn session_end_support(owner: &O) -> flui_platform::SessionEndSupport;
+
     /// [`Platform::activate`].
     fn activate(owner: &O, ignoring_other_apps: bool);
 }
@@ -392,7 +394,7 @@ pub trait Lifecycle<O> {
 /// The storage position.
 pub trait Storage<O> {
     /// [`Platform::data_dirs`].
-    fn data_dirs(owner: &O, app: &StorageName) -> Option<DataDirs>;
+    fn data_dirs(owner: &O, app: &AppDataDir) -> Option<DataDirs>;
 }
 
 /// The positions [`Absent`] is named with.
@@ -415,6 +417,9 @@ pub mod position {
     /// The clipboard position.
     #[derive(Debug)]
     pub enum Clipboard {}
+    /// The primary selection position.
+    #[derive(Debug)]
+    pub enum PrimarySelection {}
     /// The drag-and-drop position.
     #[derive(Debug)]
     pub enum Drag {}
@@ -547,19 +552,28 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
     }
 }
 
-impl flui_platform::Clipboard for Absent<position::Clipboard> {
-    fn read_text(&self) -> Option<String> {
+/// A host without a clipboard holds nothing: a read answers `None`, a write
+/// is dropped.
+impl SyncClipboard for Absent<position::Clipboard> {
+    fn read_now(&self) -> Option<String> {
         None
     }
 
-    fn write_text(&self, text: String) {
+    fn write_now(&self, text: String) {
         drop(text);
     }
 }
 
 impl<O> Clipboard<O> for Absent<position::Clipboard> {
-    fn clipboard(_: &O) -> Arc<dyn flui_platform::Clipboard> {
-        Arc::new(Self::NEW)
+    fn clipboard(_: &O) -> Rc<dyn NativeClipboard> {
+        Rc::new(Self::NEW)
+    }
+}
+
+/// A platform without a primary selection hands out none.
+impl<O> PrimarySelection<O> for Absent<position::PrimarySelection> {
+    fn primary_selection(_: &O) -> Option<Rc<dyn NativePrimarySelection>> {
+        None
     }
 }
 
@@ -608,6 +622,10 @@ impl<O> Preferences<O> for Absent<position::Preferences> {
 impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
     fn release_session_end(_: &O) {}
 
+    fn session_end_support(_: &O) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::NotifyOnly
+    }
+
     fn activate(_: &O, _: bool) {}
 }
 
@@ -627,7 +645,7 @@ impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
 }
 
 impl<O> Storage<O> for Absent<position::Storage> {
-    fn data_dirs(_: &O, _: &StorageName) -> Option<DataDirs> {
+    fn data_dirs(_: &O, _: &AppDataDir) -> Option<DataDirs> {
         None
     }
 }

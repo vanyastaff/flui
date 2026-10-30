@@ -135,6 +135,16 @@ pub enum UiCommand {
         /// Where the outcome goes.
         reply: super::agent::ReplySender<flui_protocol::ActOutcome>,
     },
+    /// Hold out for a condition on the addressed presentation: answered when a frame makes it
+    /// hold or its deadline passes (not at the drain, unless it holds already).
+    SemanticsAgentWait {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The condition, window and timeout.
+        params: Box<flui_protocol::WaitParams>,
+        /// Where the outcome goes.
+        reply: super::agent::ReplySender<flui_protocol::WaitOutcome>,
+    },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
     SemanticsLocate {
@@ -246,6 +256,13 @@ impl std::fmt::Debug for UiCommand {
                 .field("element", &request.element)
                 .field("action", &request.action)
                 .field("snapshot", snapshot)
+                .finish_non_exhaustive(),
+            // The condition's text stays out for the same reason.
+            UiCommand::SemanticsAgentWait {
+                presentation_id, ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentWait")
+                .field("presentation_id", presentation_id)
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -637,7 +654,7 @@ impl UiRuntime {
         .err();
         let mut first_panic = Some(payload);
         preserve_first_input_panic(&mut first_panic, answered, "semantics agent reply");
-        if !self.rx.is_empty() {
+        if self.has_queued_work() {
             let wake_panic = catch_unwind(AssertUnwindSafe(|| {
                 self.sender_prototype.wake_owner();
             }))
@@ -645,6 +662,12 @@ impl UiRuntime {
             preserve_first_input_panic(&mut first_panic, wake_panic, "semantics agent action wake");
         }
         resume_unwind(first_panic.expect("BUG: the semantics agent job panic must be preserved"));
+    }
+
+    /// Whether a command or an owner job waits for a later turn: what a
+    /// panicking drain must leave a wake for.
+    fn has_queued_work(&self) -> bool {
+        !self.rx.is_empty() || self.owner_jobs.has_queued()
     }
 
     fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
@@ -900,6 +923,18 @@ impl UiRuntime {
                         }
                     }
                 }
+                UiCommand::SemanticsAgentWait {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    // It answers itself: now if it holds, else after a frame or its deadline.
+                    if self.park_agent_wait(presentation_id, *params, reply) {
+                        report.invoked += 1;
+                    } else {
+                        report.dropped_stale += 1;
+                    }
+                }
                 UiCommand::SemanticsLocate {
                     presentation_id,
                     params,
@@ -993,7 +1028,7 @@ impl UiRuntime {
                         // tail has a future owner turn before its opaque drop
                         // glue runs; two field panics cannot be contained by
                         // an outer catch in Rust.
-                        if !self.rx.is_empty()
+                        if self.has_queued_work()
                             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.wake_owner();
                             }))
@@ -1057,6 +1092,15 @@ impl UiRuntime {
                 }
             }
         }
+        // Then what providers posted back: settled completions run their
+        // waiting closures here, at the owner turn, never on the thread that
+        // answered. A panicking closure keeps the queued tail live, as a
+        // command's does, before resuming.
+        report.invoked += self.owner_jobs.drain(|job, scope| {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job.run(scope))) {
+                self.rearm_after_command_panic(payload);
+            }
+        });
         // A prior rearm wake may have panicked after leaving queue/redraw
         // demand durable. This completed owner boundary has made progress;
         // retry the delivery now so any work enqueued during this turn still

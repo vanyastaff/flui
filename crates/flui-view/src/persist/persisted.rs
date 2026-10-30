@@ -4,14 +4,14 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use flui_platform::{Storage, Unsupported, UnsupportedReason};
+use flui_platform::{Unsupported, UnsupportedReason};
 
 use super::{Document, PersistError, Revision, SaveStatus};
-use crate::LifecycleContext;
+use super::{StorageCapability, StorageHandle};
 use crate::context::CrateToken;
 use crate::flush_registry::FlushRegistry;
+use crate::{LifecycleContext, LifecycleContextExt};
 
 /// What a document asks of storage while nothing provides it.
 const NOT_WIRED: Unsupported = Unsupported::new(UnsupportedReason::NotRegistered);
@@ -35,8 +35,8 @@ pub struct Persisted<D: Document> {
 
 /// What the clones of one [`Persisted`] share.
 struct OpenDocument<D> {
-    /// The UI runtime's storage, if it has one.
-    storage: Option<Arc<dyn Storage>>,
+    /// The UI runtime's storage, or why it has none.
+    storage: Result<StorageHandle, Unsupported>,
     /// The host's flush registry, which `set` publishes into.
     #[expect(dead_code, reason = "published into once set writes")]
     registry: Option<FlushRegistry>,
@@ -68,7 +68,7 @@ impl<D: Document> Persisted<D> {
     pub fn open(cx: &dyn LifecycleContext) -> Self {
         Self {
             document: Rc::new(OpenDocument {
-                storage: cx.storage(),
+                storage: cx.capability::<StorageCapability>(),
                 registry: cx.flush_registry_in_crate(CrateToken::new()),
                 value_type: PhantomData,
             }),
@@ -119,7 +119,7 @@ impl<D: Document> Persisted<D> {
     /// Where the document stands against its storage.
     #[must_use]
     pub fn status(&self) -> SaveStatus {
-        if self.document.storage.is_some() {
+        if self.document.storage.is_ok() {
             SaveStatus::NotLoaded(None)
         } else {
             SaveStatus::Unavailable

@@ -241,13 +241,12 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 if matches!(change, NativeChange::InitiallyUnfocused) {
                     native.simulate_focus(false);
                 }
-                let runtime = crate::app::ui_runtime::UiRuntime::new(
+                let runtime = crate::app::ui_runtime::UiRuntime::try_new(
                     Rc::clone(&window),
                     1.0,
                     RuntimeHostServices::new(
                         Arc::new(|| {}),
                         Arc::new(AtomicBool::new(false)),
-                        Arc::new(flui_platform::InMemoryClipboard::new()),
                         &flui_painting::FontCollection::new(),
                         flui_scheduler::ClockSource::Platform,
                     ),
@@ -646,6 +645,73 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     deterministic.run_until_idle();
     assert!(ran.load(std::sync::atomic::Ordering::Acquire));
 
+    teardown_platform_ui_runtime();
+}
+
+/// A session end whose service shutdown panics (here a subscriber failing on
+/// the shutdown's per-service diagnostic) still shuts the execution services
+/// down before the platform may end the process, and holds the panic as the
+/// exit's terminal failure.
+///
+/// If reverted: run both steps under one containment and the execution slot
+/// is still filled after the session end.
+#[cfg(not(target_arch = "wasm32"))]
+fn a_failed_session_end_service_shutdown_still_shuts_execution_down() {
+    use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+    use flui_runtime::execution::DeterministicExecutors;
+
+    const SUBSCRIBER_PANIC: &str = "the subscriber fails";
+
+    struct PanicsOnEvent;
+    impl tracing::Subscriber for PanicsOnEvent {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            panic!("{SUBSCRIBER_PANIC}");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let deterministic = DeterministicExecutors::new();
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .install_host_executors(deterministic.host_executors());
+    });
+    install_test_ui_runtime();
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .start_service(&ServiceDefinition::new(
+                "parked",
+                ServiceLifetime::StopsWithLastWindow,
+                |context| {
+                    let signal = context.cancellation().clone();
+                    Box::pin(async move { signal.cancelled().await })
+                },
+            ))
+            .expect("the service starts");
+    });
+
+    tracing::subscriber::with_default(PanicsOnEvent, || end_session_teardown(false));
+
+    APP_RUNTIME.with(|slot| {
+        assert!(
+            slot.borrow().execution().is_none(),
+            "the failed service shutdown skipped the execution shutdown"
+        );
+    });
+    let held = crate::app::runner::terminal::take_terminal()
+        .expect("the service shutdown's panic is held as the exit's failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(held.as_ref()),
+        Some(SUBSCRIBER_PANIC)
+    );
     teardown_platform_ui_runtime();
 }
 
@@ -1658,17 +1724,17 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
                         );
                     }),
                     woken,
-                    super::super::host::runtime_clipboard(),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
-                );
+                )
+                .with_capabilities(super::super::host::runtime_capabilities());
                 if let Some(accepted) =
                     APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?
                 {
                     services = services.with_preferences(accepted);
                 }
                 let runtime =
-                    crate::app::ui_runtime::UiRuntime::new(Rc::clone(&window), 1.0, services)?;
+                    crate::app::ui_runtime::UiRuntime::try_new(Rc::clone(&window), 1.0, services)?;
                 Ok(present_sizing_reader(runtime, window, log))
             },
         );
@@ -2070,9 +2136,9 @@ fn platform_replacement_contains_reentrant_retirement() {
         scale: f64,
         failure: Option<&'static str>,
     }
-    impl flui_platform::Clipboard for RetiredProducer {
-        fn read_text(&self) -> Option<String> {
-            None
+    impl flui_native::NativeClipboard for RetiredProducer {
+        fn read_text(&self, answer: flui_platform::capability::Resolver<Option<String>>) {
+            drop(answer);
         }
         fn write_text(&self, _: String) {}
     }
@@ -2109,7 +2175,7 @@ fn platform_replacement_contains_reentrant_retirement() {
                     scale: 1.5,
                     failure: wake_fails.then_some("retired wake"),
                 };
-                let clipboard = Arc::new(RetiredProducer {
+                let clipboard = Rc::new(RetiredProducer {
                     retired: first_retired,
                     scale: 2.5,
                     failure: clipboard_fails.then_some("retired clipboard"),
@@ -3093,6 +3159,11 @@ fn owner_dispatch_matrix() {
             (
                 "install_resolves_execution_services_and_teardown_shuts_them_down",
                 install_resolves_execution_services_and_teardown_shuts_them_down as fn(),
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            (
+                "a_failed_session_end_service_shutdown_still_shuts_execution_down",
+                a_failed_session_end_service_shutdown_still_shuts_execution_down as fn(),
             ),
             (
                 "system_key_default_follows_the_ui_runtimes_decision",

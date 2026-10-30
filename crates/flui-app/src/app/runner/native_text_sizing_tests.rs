@@ -26,7 +26,7 @@ fn installed_capture(
             let window = owner
                 .open_routed(flui_platform::WindowOptions::default())?
                 .try_ready()?;
-            let runtime = UiRuntime::new(
+            let runtime = UiRuntime::try_new(
                 flui_runtime::presentation::PresentationWindow::new(
                     Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                     None,
@@ -36,7 +36,6 @@ fn installed_capture(
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     Arc::new(|| {}),
                     Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    Arc::new(flui_platform::InMemoryClipboard::new()),
                     &flui_painting::FontCollection::new(),
                     flui_scheduler::ClockSource::Platform,
                 ),

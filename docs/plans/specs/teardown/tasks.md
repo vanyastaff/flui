@@ -86,8 +86,36 @@ graph LR
 
 - **T8** — доставка закрытия с защёлкой и `UiRuntime::report_contained_panic` есть. Остаток —
   задача T8 ниже.
-- **T14** — доставка завершения сеанса до `flui-app` есть (`runner/host.rs`,
-  `answer_session_end`). Остаток — задача T14 ниже.
+- **T14** — сделано: S1 (вопрос `CloseReason::SessionEnd` обработчику и guard каждой presentation
+  в слоте, сначала обработчик, потом guard; извлечённый runtime не спрашивается,
+  `RuntimeStatus::checked_out`), S2 (отзыв только
+  записи `SessionEnd`; отказ окна держит блок на запросе до закрытия окна), S3 (уведомление и
+  `Detached` с коммитом композиции, если осталось ≥ 1 с; извлечённому — уведомление в FIFO), S4
+  (размещение окон и `flush_within` от начала
+  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit). У `NotifyOnly` (остановка Android, pagehide в web) приложение остаётся живым: уведомление и flush идут, `Detached` и quit — нет. В web (`pagehide`) только уведомление: синхронного бюджета нет, `std::time::Instant` там паникует.
+  Вето сеанса зависит от `SessionEndSupport` платформы (`Hold` — Windows, macOS, headless;
+  `Delay` — Linux/logind; `NotifyOnly` — Android, iOS, web), а не от cfg. Строки:
+  `a_session_end_query_asks_each_window_guard`,
+  `a_notify_only_session_end_leaves_the_application_running`,
+  `a_refused_session_end_is_released_when_an_earlier_close_carries_out`,
+  `session_end_skips_detached_once_the_notice_spent_the_margin`,
+  `a_repeated_session_end_query_does_not_release_the_session`,
+  `a_slow_observer_stops_the_session_end_delivery`,
+  `a_refused_session_end_is_released_by_an_explicit_close`,
+  `a_window_closed_during_the_query_does_not_hold_the_session`,
+  `a_session_end_handler_panic_with_a_panicking_payload_refuses`,
+  `a_cancelled_logoff_withdraws_only_the_session_entry`,
+  `a_session_end_with_a_checked_out_runtime_calls_no_user_code`,
+  `a_session_end_asks_the_handler_before_the_guard`,
+  `a_refused_session_end_is_released_when_its_window_closes`,
+  `session_end_commits_composition_before_the_flush`,
+  `a_session_end_with_nothing_to_save_proceeds` (quit). S5 и S6: при ≥ 1 с и без извлечённых
+  `Ending` сам разбирает UI-runtime (деструкторы приложения), затем отменяет сервисы и гасит пулы
+  без ожидания; иначе оставляет всё системе — `session_end_tears_down_only_with_time_left`.
+  Остаток: строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
+  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
+  persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
+  байты пока нечем.
 
 ## Устаревшие задачи
 
@@ -192,12 +220,32 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, R12, R13, строки с паникой в
-  маршрутизации `flui-app`.
-  - [ ] Строки `AppHandler::session_end` и `AppHandler::host_notice` в
-    `an_application_panic_never_leaves_a_handler`: headless не даёт внедрить панику приложения в
-    `answer_session_end` и в подписчика системного уведомления; нужен шов (ответ сеанса через
-    маршрут, как `route_quit`, и подписчик уведомлений в наборе раннера).
+  Остаток T9: R6 (ждёт persistence).
+  - [x] Строки с паникой в маршрутизации `flui-app`: 11 строк `routing: …` в
+    `an_application_panic_never_leaves_a_handler`, по одной на метод `AppHandler` и `WindowHandler`.
+    Паника самой маршрутизации вызывается занятым заимствованием (`WindowRoutes::jam` под
+    `cfg(test)`, занятые маршруты `RunnerHandler`). Зубы проверены: без catch метода строка падает.
+  - [x] R11 `user_panic_exit_code_matrix` (`runner_teardown`, 7 строк): обычное закрытие, паника
+    обработчика касания, post-frame, `build` и обработчика запроса закрытия дают 0 (каждая строка
+    сначала доказывает, что отказ случился); `dispose` при закрытии последнего окна и деструктор
+    захвата на выходе дают 101 после сброса. Код 124 — ребёнок `runner_exit_codes`.
+  - [x] Паника приложения в `AppHandler::session_end` и `AppHandler::host_notice`: таблица
+    `a_notice_subscriber_panic_never_leaves_the_handler` (`runner_teardown`; запрос, завершение,
+    системное уведомление) через подписчика уведомлений окна; шов маршрута не понадобился.
+    Характеризация: панику ловит пооперационная граница `flui-runtime`, затем catch обработчика.
+  - [x] R12 `dispose_panic_on_last_window_close_resumes_after_flush` и R13
+    `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (`runner_teardown`, на
+    headless-runner в процессе, как R7). Находка: паника `dispose` при закрытии окна
+    сдерживалась деревом (`RecoveredPanic`) и терялась — кадра после закрытия нет, выход был 0.
+    Теперь закрытие презентации (`flui-runtime`) после `detach_root_widget` делает первую
+    сдержанную панику своей ошибкой: остальные `dispose` выполнены, у последнего окна — 101 после
+    сброса. Зубы: без этого R12 падает (`Returned`). R13 — характеризация: захват наблюдателя
+    жизненного цикла падает раньше дерева, дерево удерживается, `dispose` не вызывается.
+  - [x] R9 (headless): `a_panicking_tap_handler_reports_once_and_the_next_tap_works` и
+    `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (`runner_teardown`):
+    один отчёт `CallbackPanic` с текстом паники, приложение живо, следующий тап доходит до
+    обработчика, следующий кадр выполняет свои post-frame callbacks. Характеризация: границы
+    сдерживания уже есть. Нативная строка 5 (`save-panic`) — в T19.
 - [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
   `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
   задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
@@ -258,8 +306,28 @@ graph LR
     неактивен) и не держит дерево. R3 `a_close_that_holds_a_failure_never_detaches`: закрытие с
     удержанным сбоем не роняет владельца, `detached()` не вызван, наблюдатель жив; паника `dispose`
     сдерживается на месте и такого закрытия не даёт.
-- [ ] T13 — IME-шаг закрытия
+- [x] T13 — IME-шаг закрытия. Подтверждение стоит в общем пути к Detached
+  (`reconcile_lifecycle_after_failure` в `flui-runtime`): перед наблюдателями Detached
+  сфокусированное поле подтверждает композицию, текст остаётся. Так покрыт любой путь —
+  принятое закрытие, окно, уничтоженное платформой (на headless-runner Detached приходит из
+  наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
+  `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
+  `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
+  - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
+    `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
+    приёмки; `facade_consumer` требует их по имени автоматически). Шов учёта `Drop` —
+    `AcceptanceApp::with_planter(Planter)`: приложение держит выданное значение в каждом
+    состоянии, странице маршрута и слушателе контроллера черновика (`Kept`); тип из
+    `flui::testing` в приложение не попадает, пример собирается без `testing`. R1 —
+    характеризация (все `live()` > 0 после прохода Home → Note → Settings и 0 после закрытия);
+    futures не в журнале строки — загрузка к закрытию уже завершена, их покрывает R2 в
+    `runner_close`. R8: паника перенесена из `build` экрана заметки в его редактор
+    (`FailingEditor`), чтобы заголовок с Back оставался. Клавиша Back (Alt+Left) с экрана ошибки на
+    всю страницу раньше никуда не доходила: действия маршрута стояли внутри его focus scope, а фокус
+    лежит на самом scope; исправлено в `flui-widgets` (`back_keys_leave_a_page_with_nothing_focusable`).
+  - [ ] R23 со счётчиками `Drop` при вето: у приложения приёмки пока нет вето закрытия (guard
+    появляется со строками persistence P11); строка — вместе с ним.
 - [ ] T17 — README, Win32-строка R5, закрытие
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

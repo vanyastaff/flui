@@ -134,8 +134,16 @@ fn human_size(bytes: u64) -> String {
 /// they all need is a `Cargo.toml` at the workspace root. Checking it up
 /// front turns "some tool 40 seconds in reported a confusing cargo error"
 /// into an immediate, exact diagnosis.
+///
+/// A project with a `flui.toml` also gets its `.cargo/config.toml` brought in
+/// line with the application identifier there, before anything compiles.
 fn ensure_flui_project(root: &Path) -> CliResult<()> {
     if root.join("Cargo.toml").is_file() {
+        let manifest = root.join("flui.toml");
+        if manifest.is_file() {
+            let config = crate::config::FluiConfig::load_from(&manifest)?;
+            crate::config::sync_app_id_env(root, &config)?;
+        }
         Ok(())
     } else {
         Err(CliError::NotFluiProject {
@@ -287,7 +295,7 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
 /// Resolve application-bundle metadata for a macOS build, from `flui.toml`.
 ///
 /// A `.app` needs a display name and a bundle identifier; `flui.toml`'s
-/// `[app].name`/`[app].organization` are exactly those. When the file is absent
+/// `[app].name`/`[app].id` are exactly those. When the file is absent
 /// (e.g. building an in-repo example), the directory name stands in — a bundle
 /// still gets staged, with a derived identifier, rather than the build silently
 /// degrading to a bare binary.
@@ -301,7 +309,10 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
     match std::fs::symlink_metadata(&manifest) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&manifest)?;
-            Ok(AppBundle::new(&config.app.name, &config.app.organization))
+            Ok(AppBundle::new(
+                &config.app.name,
+                config.app.id.apple_bundle_id(),
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let name = root
@@ -312,7 +323,10 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
                         "Application directory has no usable bundle name".into(),
                     )
                 })?;
-            Ok(AppBundle::new(name, "dev.flui"))
+            Ok(AppBundle::new(
+                name,
+                crate::app_id::AppId::unconfigured(name).apple_bundle_id(),
+            ))
         }
         Err(error) => Err(crate::error::CliError::context(
             error,
@@ -334,10 +348,13 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         Profile::Debug
     };
 
+    // Before SDK discovery: a refused `flui.toml` needs no SDK to report.
+    let floors = crate::config::project_floors(&workspace_root)?;
     let android_builder =
         AndroidBuilder::new(&workspace_root).context("failed to initialize Android builder")?;
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         })
@@ -411,7 +428,9 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     let ios_builder = IosBuilder::new();
 
     let bundle = super::ios::configured_bundle(&workspace_root)?;
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Ios { targets })
         .with_target(options.cargo_target())
         .with_profile(profile);
@@ -474,7 +493,9 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let web_builder = WebBuilder::new(&workspace_root);
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_floors(floors)
         .with_platform(Platform::Web {
             target: "web".to_string(),
         })
@@ -527,7 +548,9 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     let desktop_builder = DesktopBuilder::new();
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop { target: None })
         .with_target(options.cargo_target())
         .with_profile(profile);
@@ -604,7 +627,9 @@ fn build_specific_platform(
 
     let desktop_builder = DesktopBuilder::new();
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
@@ -692,7 +717,9 @@ fn build_macos_universal(
         Profile::Debug
     };
 
+    let floors = crate::config::project_floors(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_floors(floors)
         .with_platform(Platform::Desktop {
             target: Some(SLICES[0].to_string()),
         })
@@ -719,7 +746,9 @@ fn build_macos_universal(
         );
 
         let builder_inst = DesktopBuilder::new();
+        let floors = crate::config::project_floors(&workspace_root)?;
         let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
+            .with_floors(floors)
             .with_platform(Platform::Desktop {
                 target: Some(triple.to_string()),
             })

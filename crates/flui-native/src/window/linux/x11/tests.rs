@@ -59,6 +59,7 @@ impl Host for X11Windows {
     type Text = Absent<position::Text>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WinitLoop;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WinitLoop;
     type Haptics = Absent<position::Haptics>;
     type Preferences = WinitLoop;

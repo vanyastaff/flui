@@ -153,13 +153,12 @@ impl PlatformWindow for CountingWindow {
 }
 
 fn runtime_on(window: PresentationWindow) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

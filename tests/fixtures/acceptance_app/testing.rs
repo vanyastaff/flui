@@ -73,6 +73,13 @@ impl AppRun {
         self.settle();
     }
 
+
+    /// The user closes the last window and the application exits: what the
+    /// run holds is dropped, as the runner drops the UI runtime.
+    pub fn close(mut self) {
+        self.request_close();
+        drop(self);
+    }
     /// The operating system ends the session.
     pub fn end_session(&mut self) {
         self.laid.end_session();

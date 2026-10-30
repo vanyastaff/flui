@@ -148,7 +148,7 @@ impl StatefulView for AnimatedContainer {
     fn create_state(&self) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
         let transform = self.transform.filter(|m| m.m.iter().all(|v| v.is_finite()));
-        let transform_progress = PropertyMotion::new(
+        let transform_progress = PropertyMotion::try_new(
             "AnimatedContainer.transform",
             transform.map(|_| 1.0),
             self.motion.clone(),
@@ -157,7 +157,7 @@ impl StatefulView for AnimatedContainer {
         )
         .expect("BUG: initial transform progress is finite");
         AnimatedContainerState {
-            alignment: PropertyMotion::new(
+            alignment: PropertyMotion::try_new(
                 "AnimatedContainer.alignment",
                 self.alignment.filter(finite),
                 self.motion.clone(),
@@ -165,7 +165,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: initial alignment was made finite"),
-            padding: PropertyMotion::new(
+            padding: PropertyMotion::try_new(
                 "AnimatedContainer.padding",
                 self.padding.filter(finite),
                 self.motion.clone(),
@@ -173,7 +173,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: initial padding was made finite"),
-            color: PropertyMotion::new(
+            color: PropertyMotion::try_new(
                 "AnimatedContainer.color",
                 self.color,
                 self.motion.clone(),
@@ -181,7 +181,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: color components are finite"),
-            width: PropertyMotion::new(
+            width: PropertyMotion::try_new(
                 "AnimatedContainer.width",
                 self.width.filter(finite),
                 self.motion.clone(),
@@ -189,7 +189,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: initial width was made finite"),
-            height: PropertyMotion::new(
+            height: PropertyMotion::try_new(
                 "AnimatedContainer.height",
                 self.height.filter(finite),
                 self.motion.clone(),
@@ -197,7 +197,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: initial height was made finite"),
-            margin: PropertyMotion::new(
+            margin: PropertyMotion::try_new(
                 "AnimatedContainer.margin",
                 self.margin.filter(finite),
                 self.motion.clone(),

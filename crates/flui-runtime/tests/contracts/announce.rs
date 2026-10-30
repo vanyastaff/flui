@@ -86,7 +86,7 @@ fn an_idle_presentation_speaks_an_announcement() {
         )
         .expect("headless window");
     let wakes = Arc::new(AtomicUsize::new(0));
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         PresentationWindow::new(window, Some(Arc::clone(&bridge) as Arc<_>)),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
@@ -97,7 +97,6 @@ fn an_idle_presentation_speaks_an_announcement() {
                 })
             },
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

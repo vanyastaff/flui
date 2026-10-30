@@ -655,18 +655,7 @@ impl PipelineCache {
         };
 
         let targets = if isolation {
-            vec![
-                Some(wgpu::ColorTargetState {
-                    format: self.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ]
+            isolation_targets(self.format).to_vec()
         } else {
             vec![Some(wgpu::ColorTargetState {
                 format: self.format,
@@ -781,6 +770,26 @@ pub(crate) fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
         // `DrawItem::AdvancedShape` segments before the key reaches the cache.
         PipelineKey::with_blend(mode)
     }
+}
+
+/// The two targets an isolation pass writes: the paint in `paint_format`, and
+/// its geometric coverage in `R8Unorm`.
+///
+/// Each replaces what it covers, and says so as a blend state rather than as
+/// no blend: wgpu's GL backend disables blending for a target without one but
+/// leaves the blend function, and Mesa refuses a draw into two buffers while
+/// that function still names a dual-source factor (`EXT_blend_func_extended`)
+/// left by an earlier coverage-correct draw. `REPLACE` writes the function.
+pub(crate) fn isolation_targets(
+    paint_format: wgpu::TextureFormat,
+) -> [Option<wgpu::ColorTargetState>; 2] {
+    [paint_format, wgpu::TextureFormat::R8Unorm].map(|format| {
+        Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })
+    })
 }
 
 /// Shared structural layout for cropped source/coverage isolation.

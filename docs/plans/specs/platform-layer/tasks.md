@@ -3608,6 +3608,53 @@ graph LR
   рисует пером с нажимом (`a_pen_plugged_in_mid_batch_draws_as_a_pen`), одно изменение — по запросу
   на каждое названное устройство (`a_hierarchy_change_asks_only_for_what_it_names`);
   `XIDeviceChanged` берёт классы из события без запроса (`a_device_change_brings_its_own_classes`).
+- [ ] **LY80** (не закрыта: из трёх PR — clipboard, IME через `text-input-v3`, drag and drop —
+  этот — первый; primary selection — отдельная возможность `PrimarySelection` на шве, решение
+  координатора 2026-10-30, после него) — ветка `platform/wayland-clipboard` от `main` @
+  `4c78404`. **Clipboard.** Позиция clipboard таблицы `Wayland` — `WaylandLoop`; цикл держит
+  clipboard через хук `owner::linux::wayland::WaylandClipboard`, который заполняет таблица
+  (`WaylandHost::clipboard` → `clipboard::linux::wayland::SeatClipboard`). Цикл предлагает
+  каждый глобал и вводу, и clipboard (`WaylandState::offer_global`); clipboard связывает
+  `wl_data_device_manager` (до v3) и держит data device на каждом сидении, которое держит ввод:
+  `WaylandInput::seats` отдаёт прокси сидений, цикл передаёт их `WaylandClipboard::seats` в
+  `try_new` (первое окно открывается до первого хода, а выделение сидения приходит только
+  устройству, которое существует к входу клавиатуры) и на каждом ходу. Выделение сидения —
+  последний offer из `selection`; offer перетаскивания (`enter`) отпускается на `leave`/`drop`,
+  DnD у хоста пока нет. **Чтение:** пока выделением владеет приложение, ответ — его текст сразу
+  (спросить композитор значило бы владельцу и писать, и ждать в один pipe); иначе offer сидения
+  последнего ввода (или первого сидения с выделением) получает `receive` в форме
+  `TextForm::preferred`, pipe читает своя нить с пределом 5 с и 64 МиБ и отвечает resolver'у.
+  **Запись:** data source предлагает все формы `TextForm::OFFERED` и ставится выделением
+  сидения последнего ввода под его serial; каждый `send` пишет своя нить (неблокирующий pipe,
+  тот же предел), `cancelled` снимает владение. Без пользовательского ввода текст держится в
+  процессе и отвечает чтению, пока не придёт чужое выделение. Формы текста —
+  `clipboard::linux::text` (чистый, общий с будущим X11: `text/plain;charset=utf-8`,
+  `UTF8_STRING`, `text/plain`, `STRING` как ISO 8859-1). `rustix` получает фичу `pipe`.
+  **Тесты** (откат проверен): `the_selection_crosses_between_clients` (`tests/wayland_clipboard.rs`,
+  своя обвязка: Xvfb, Weston 13 на X11-бэкенде с kiosk-shell, два клиента на двух нитях —
+  первый пишет и читает своё, второй при фокусе читает текст первого через композитор и пишет
+  свой, первый после возврата фокуса читает текст второго; с чтением, не спрашивающим offer,
+  падает), `a_reader_asks_for_utf8_first`, `text_round_trips_through_each_form`,
+  `a_selection_crosses_the_pipe_whole`, `a_transfer_ends_at_its_deadline_or_its_peer`.
+  `docs/platform-parity.md` (заметка, колонка Wayland остаётся winit) и `docs/gaps.md`
+  (записи 5 и 6) обновлены.
+  **Primary selection** — ветка `platform/primary-selection-wayland` поверх
+  `platform/primary-selection` (возможность `PrimarySelectionCapability` на шве, headless-кит).
+  Позиция таблицы `PrimarySelection` (`Absent` везде, кроме Wayland; X11 — в LY84),
+  `Platform::primary_selection` → `Option<Rc<dyn NativePrimarySelection>>`. Wayland:
+  `clipboard::linux::wayland::primary` на тех же хуке, `text` и `transfer`, свои устройства
+  `zwp_primary_selection_device_v1` на каждом сидении. Выделение приложения ленивое: замыкание
+  спрашивается только при чтении; `send` диспетчер записывает с дескриптором, а отвечает ход
+  цикла (`WaylandClipboard::deliver`), без замков цикла и выделения, так что замыкание может
+  войти обратно в выделение. `flui-app` на Linux регистрирует провайдер поверх
+  `NativePrimary` (общий `PrimaryClaims` всех ручек; `is_current` — реестр и `owns()` хоста).
+  **Тесты** (откат проверен: без `deliver` второй клиент читает `None`):
+  `the_primary_selection_is_asked_at_the_turn` (`tests/wayland_primary_selection.rs`, sway 1.9
+  на X11-бэкенде под Xvfb, у Weston нет primary selection; замыкание при запросе проверяет
+  `owns()`), `claims_over_one_host_selection_share_their_currency` (`flui-app`). Обвязка
+  тестов разделена: `support/x11_session.rs` (Xvfb, сессия, экран) и стартеры
+  `weston_x11.rs`, `sway_x11.rs`. Дальше: общий помощник выделения для `EditableText` и
+  `SelectionArea` и вставка средней кнопкой.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук
@@ -4635,6 +4682,26 @@ graph LR
   строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
   `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
   --all-targets`; `xtask checks`.
+- [ ] **LY52** — в части: шов. `StorageCapability` и `StorageHandle` (newtype над `Arc<dyn Storage>`)
+  в `flui_view::persist` рядом с `Persisted`; встроенный провайдер во `flui-app`
+  (`capability.rs`, `StorageSlot`) поверх `HostStorage`: без `with_storage_dir` — `NotRegistered`,
+  без корня данных — `NotOnThisPlatform`; `placement_recorder` пишет в тот же стор.
+  `LifecycleContext::storage`, поле `PresentationCapabilities::storage` и
+  `RuntimeHostServices::with_storage` удалены; `lay_out_with_storage` регистрирует `MemoryStorage`
+  встроенным провайдером headless-реестра. Место по умолчанию (решение координатора 2026-10-30):
+  `AppId` (reverse-DNS, грамматика имени пакета Android) вместо `AppleBundleId` в `AppIdentity`;
+  `AppDataDir` вместо `StorageName` у `data_dirs`; каталог — `with_storage_dir`, иначе `AppId`,
+  иначе на Android, iOS и Web (корни принадлежат одному приложению) фиксированное `app` (вместо
+  имени пакета: его даёт только JNI, а каталог и так приватный); на десктопе без идентификатора —
+  `NotRegistered` и одно предупреждение за запуск в debug при первом запросе хранилища
+  (`HostStorageProvider`). Таблица `the_run_storage_dir_reaches_lifecycle_context`, `app_id` во
+  `flui-log`, `app_data_dir` во `flui-platform`. Идентификатор из `flui.toml`:
+  `flui create` пишет `[env] FLUI_APP_ID` в `.cargo/config.toml`, `flui build`/`run` переписывают
+  только этот ключ при изменении (`cargo_config_with_app_id`, toml_edit), `AppConfig::default` читает
+  `option_env!` (тесты `created_application_builds_with_its_identifier`,
+  `build_brings_the_cargo_env_in_line_with_the_app_identifier`). Остаток (решение координатора
+  2026-10-30): один канонический `AppId` в `flui.toml`, формы платформ (bundle id Apple, пакет
+  Android) выводятся из него явными протестированными функциями в одном месте.
 
 ## Отступление от порядка, решённое владельцем
 

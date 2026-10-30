@@ -7,17 +7,21 @@
 //!
 //! - `windows`: `OpenClipboard` with an owner window of its own;
 //! - `apple`: `NSPasteboard` on macOS, `UIPasteboard` on iOS;
-//! - `android`: an in-process stand-in until the system clipboard is reached
-//!   through JNI;
-//! - `web`: `navigator.clipboard`, read back from what the page wrote;
+//! - `android`: `ClipboardManager`, through JNI;
+//! - `web`: `navigator.clipboard`, whose read answers when its promise
+//!   settles;
+//! - `linux`: the Wayland seats' selection through `wl_data_device`, and
+//!   the text forms the Linux desktops exchange;
 //! - `winit`: `arboard`;
-//! - `headless`: the contract's in-memory clipboard.
+//! - `headless`: a `MemoryClipboard`, one per loop.
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 mod headless;
+#[cfg(wayland_host)]
+pub(crate) mod linux;
 #[cfg(windows)]
 mod lock;
 #[cfg(target_arch = "wasm32")]

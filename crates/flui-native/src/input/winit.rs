@@ -255,6 +255,9 @@ pub(crate) struct WinitInput {
     /// reports `wl_touch.frame` to no one, so the events one dispatch of the
     /// compositor's socket delivered, which hold whole frames, are the frame.
     touch_frame: Vec<(flui_platform::WindowId, owned::PointerEvent)>,
+    /// Keys held down winit names no physical key for, with the key each
+    /// was pressed as.
+    unplaced: crate::input::keys::UnplacedKeys<winit::keyboard::PhysicalKey>,
 }
 
 /// Whether `event` starts, moves or ends a touch contact: what a frame groups.
@@ -286,6 +289,7 @@ impl WinitInput {
             session: None,
             held: None,
             touch_frame: Vec::new(),
+            unplaced: crate::input::keys::UnplacedKeys::default(),
         }
     }
 
@@ -502,7 +506,7 @@ impl WinitInput {
             // A gesture is centred on the device's cursor; once it moves on,
             // the gesture keeps its own last position.
             if let Some((_, raw)) = self.contacts.position(surface, Some(cursor), MOUSE) {
-                native = native.at(raw.x, raw.y, scale);
+                native = native.at_device(raw.x, raw.y, scale);
             }
             native
         } else {
@@ -515,7 +519,7 @@ impl WinitInput {
                         self.label(*device_id, KindClass::Cursor),
                         ReadingAction::Move,
                     )
-                    .at(position.x, position.y, scale);
+                    .at_device(position.x, position.y, scale);
                     self.held = Some(HeldMove {
                         window,
                         reading: native,
@@ -585,7 +589,7 @@ impl WinitInput {
                         owned::PointerKind::Touch,
                         action,
                     )
-                    .at(touch.location.x, touch.location.y, scale)
+                    .at_device(touch.location.x, touch.location.y, scale)
                     .with_sensors(touch_sensors(touch.force));
                     if touch.phase == TouchPhase::Moved {
                         self.held = Some(HeldMove {
@@ -867,11 +871,21 @@ impl LoopInput for WinitInput {
     }
 
     fn key(
-        &self,
+        &mut self,
         event: winit::event::KeyEvent,
         modifiers: winit::keyboard::ModifiersState,
     ) -> Option<PlatformInput> {
-        Some(keyboard_event(event, modifiers))
+        // `NativeKeyCode::Unidentified` names no key.
+        let id = match event.physical_key {
+            winit::keyboard::PhysicalKey::Unidentified(
+                winit::keyboard::NativeKeyCode::Unidentified,
+            ) => None,
+            key => Some(key),
+        };
+        Some(match keyboard_event(event, modifiers) {
+            PlatformInput::Keyboard(key) => PlatformInput::Keyboard(self.unplaced.settle(id, key)),
+            other => other,
+        })
     }
 
     fn ime(&self, event: &winit::event::Ime) -> Option<PlatformInput> {

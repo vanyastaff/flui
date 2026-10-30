@@ -307,7 +307,7 @@ struct ViewerConfig {
 /// };
 /// use flui_painting::styling::Color;
 ///
-/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+/// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
 ///     ControlSpec::new(GestureCommand::new("Zoom in", ZoomIntent::In), SizedBox::new(16.0, 16.0))
 ///         .control(GestureCommand::new("Zoom out", ZoomIntent::Out), SizedBox::new(16.0, 16.0)),
 /// ))

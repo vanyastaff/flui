@@ -20,7 +20,7 @@
 //!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
 //!     -> MainEvent::Stop/SaveState   -> session end notice (once per start-to-stop cycle)
 //!     -> MainEvent::Destroy          -> break loop
-//!     -> each tick                   -> dispatch_request_frame()
+//!     -> the choreographer's frame  -> dispatch_frame() (ADR-0269)
 //!   -> loop exit                     -> window released, callbacks cleared, quit hook
 //! ```
 //!
@@ -79,8 +79,9 @@ use crate::{
     owner::android::activity_callbacks::ActivityEvent,
     owner::android::activity_callbacks::ActivityTarget,
     owner::android::activity_callbacks::Reaction,
-    owner::android::ndk::LoadedLibraries,
-    owner::android::ndk::SymbolSource,
+    owner::android::frame_clock::{FrameClock, FrameStamp},
+    owner::android::ndk::{FrameCallbacks, SymbolSource},
+    owner::android::poll::DueDeadline,
     owner::android::poll::LoopTurn,
     owner::android::poll::poll_timeout,
     owner::app_delivery::AppDelivery,
@@ -239,7 +240,7 @@ pub struct AndroidLoop {
     notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
-    pub(crate) clipboard: Arc<dyn flui_platform::Clipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     /// The input of the Activity's queue, as the table made it
     /// ([`AndroidHost::input`]).
     pub(crate) input: Box<dyn ActivityInput>,
@@ -252,6 +253,9 @@ pub struct AndroidLoop {
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     pub(crate) api: AndroidApi,
+    /// The NDK the level was read from, where the choreographer's frame
+    /// callback is looked up.
+    library: Arc<dyn SymbolSource>,
     /// The identities of the windows it opens.
     pub(crate) window_ids: ActivityWindowIds,
 }
@@ -279,23 +283,19 @@ impl AndroidLoop {
     /// The loop of host `H`, whose table makes the displays, the preference
     /// source, the notice channel, the meaning of the Activity's callbacks, the
     /// input, the clipboard and the drag-and-drop transport, and names what
-    /// `FluiView` reports to.
-    pub(crate) fn new<H: AndroidHost>(app: AndroidApp) -> Self {
+    /// `FluiView` reports to. `library` is the NDK the level `api` was read
+    /// from, kept for the platform's life: every function pointer looked up in
+    /// it is valid until the last handle to it is gone.
+    pub(crate) fn new<H: AndroidHost>(
+        app: AndroidApp,
+        library: Arc<dyn SymbolSource>,
+        api: AndroidApi,
+    ) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
             waker.wake();
             Ok(())
         }));
-        // Opened once and kept for the platform's life: every function pointer
-        // looked up in it is valid until the last handle to it is gone.
-        let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
-        let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
-            tracing::warn!(
-                "Android: the API level could not be read; nothing above the floor is attempted"
-            );
-            AndroidApi::UNKNOWN
-        });
-        tracing::info!(api = %api, "Android API level");
         let java_view = java_view::JavaView::start(
             app.clone(),
             Arc::downgrade(&owner_signal),
@@ -305,6 +305,7 @@ impl AndroidLoop {
         );
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
+        let clipboard = H::clipboard(&app);
         let activity_callbacks = H::activity(&app);
         let app_delivery = Arc::new(AppDelivery::new());
         Self {
@@ -317,12 +318,13 @@ impl AndroidLoop {
             activity_callbacks,
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
-            clipboard: H::clipboard(),
+            clipboard,
             input: H::input(),
             owner_signal,
             preferences,
-            displays: H::displays(api, library, owner),
+            displays: H::displays(api, Arc::clone(&library), owner),
             api,
+            library,
             window_ids: ActivityWindowIds::default(),
         }
     }
@@ -607,9 +609,21 @@ impl host::Loop for AndroidLoop {
         // When preferences, scroll factors and insets are read next; `None`
         // waits for a change to be reported.
         let mut next_preference_sample = Some(web_time::Instant::now());
+        let mut due_deadline = DueDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
+        // The choreographer paces the frames where the system can post a
+        // callback for its next one; elsewhere a frame runs on the turn that
+        // has one (ADR-0269).
+        let frame_clock = FrameCallbacks::resolve(&self.library, self.api)
+            .and_then(|callbacks| FrameClock::start(callbacks, self.app.create_waker()));
+        if frame_clock.is_none() {
+            tracing::debug!(
+                api = %self.api,
+                "Android: no choreographer frame callback; frames are not paced by vsync"
+            );
+        }
 
         let mut handler = Some(handler);
         // No owner lane on this backend: every `OwnerPlatform::open_window`
@@ -676,9 +690,12 @@ impl host::Loop for AndroidLoop {
             // The handler re-enters `flui-app`, so it is asked through the
             // call point with no lock held (ADR-0038 §5).
             let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
-            let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
-            if deadline_due {
+            let now = web_time::Instant::now();
+            let deadline_due = is_deadline_due(wake_deadline, now);
+            if due_deadline.offer(wake_deadline, now) {
                 // Owner services remain deliverable while execution gates frames.
+                // Once per deadline: the wake also wakes the looper, and a
+                // deadline only a frame clears stays behind until one runs.
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive() {
                     self.running.store(false, Ordering::Relaxed);
@@ -701,9 +718,19 @@ impl host::Loop for AndroidLoop {
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
+                    // Where the choreographer paces the frames, the frame waits
+                    // for its next one, whose callback wakes the poll.
+                    let awaiting_vsync = match frame_clock.as_ref() {
+                        Some(clock) if should_render => {
+                            clock.arm();
+                            true
+                        }
+                        _ => false,
+                    };
                     let timeout = poll_timeout(
                         LoopTurn {
-                            should_render,
+                            should_render: should_render && !awaiting_vsync,
+                            awaiting_vsync,
                             resumed,
                             wake_deadline,
                             next_preference_sample: self.next_sample(next_preference_sample),
@@ -965,12 +992,20 @@ impl host::Loop for AndroidLoop {
             // Resume rather than stranding an acknowledged continuation. The
             // window is cloned out of its lock: the frame runs embedder code
             // that may call back into the platform.
+            // Where the choreographer paces the frames, only the turn whose
+            // poll ran its callback delivers one, stamped with its vsync; a
+            // tick this turn cannot deliver is dropped (ADR-0269).
             let window = self.window.lock().clone();
+            let stamp = match frame_clock.as_ref() {
+                Some(clock) => clock.take(),
+                None => Some(FrameStamp::Now),
+            };
             if let Some(ref w) = window
+                && let Some(stamp) = stamp
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {
-                w.delivery().dispatch_request_frame();
+                w.delivery().dispatch_frame(stamp.request());
             }
         }
 
@@ -1133,8 +1168,8 @@ impl host::Preferences<AndroidLoop> for AndroidLoop {
 /// The clipboard position: the clipboard the host's
 /// [`AndroidHost::clipboard`] made, which the loop holds.
 impl host::Clipboard<AndroidLoop> for AndroidLoop {
-    fn clipboard(owner: &AndroidLoop) -> Arc<dyn flui_platform::Clipboard> {
-        Arc::clone(&owner.clipboard)
+    fn clipboard(owner: &AndroidLoop) -> std::rc::Rc<dyn crate::NativeClipboard> {
+        std::rc::Rc::new(Arc::clone(&owner.clipboard))
     }
 }
 
@@ -1166,7 +1201,7 @@ impl host::Storage<AndroidLoop> for AndroidLoop {
     /// never backs up, for state that belongs to this device.
     fn data_dirs(
         owner: &AndroidLoop,
-        app: &flui_platform::StorageName,
+        app: &flui_platform::AppDataDir,
     ) -> Option<crate::storage::DataDirs> {
         let files = owner.app.internal_data_path()?;
         let no_backup = files.parent()?.join("no_backup");

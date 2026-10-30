@@ -264,6 +264,8 @@ export function installDisplayProbe(windowManagement) {
     };
 }
 export function restoreDisplayProbe() { restore(); }
+// How many animation-frame callbacks wait for the next frame.
+export function queuedFrames() { return rafQueue.length; }
 // Run `count` animation frames `interval` milliseconds apart from `start`; each
 // runs every callback queued for it. The timestamp after the last frame.
 export function runFrames(start, interval, count) {
@@ -435,6 +437,8 @@ extern "C" {
     fn restore_probe();
     #[wasm_bindgen(js_name = runFrames)]
     fn run_frames(start: f64, interval: f64, count: u32) -> f64;
+    #[wasm_bindgen(js_name = queuedFrames)]
+    fn queued_frames() -> u32;
     #[wasm_bindgen(js_name = setPixelRatio)]
     fn set_pixel_ratio(next: f64);
     #[wasm_bindgen(js_name = driftRatioOnNextQuery)]
@@ -663,16 +667,48 @@ async fn web_period_is_estimated_from_animation_frames() {
     assert!(near(primary_period(&measured), 16.667));
     assert!(measured.revision() > before.revision());
 
-    // Jitter around the same rate neither wakes the owner nor moves the value.
-    run_frames(1000.0, 16.9, 60);
+    // Measured, and no frame asked for: the loop stands still.
+    assert_eq!(
+        queued_frames(),
+        0,
+        "an idle page asks the browser for no frame"
+    );
+    running.quit();
     settle().await;
-    assert_eq!(running.wakes(), 1, "jitter inside the band stays quiet");
-    assert_eq!(running.snapshot().revision(), measured.revision());
+}
 
-    // A display that really runs at 120 Hz is published once the estimate moves.
-    run_frames(3000.0, 8.333, 80);
+/// Once the estimate is in, the loop runs only while a frame is asked for: a
+/// request resumes it on the owner's turn, the frame it asked for is
+/// delivered, and the loop stands still after it. The time it stood still is
+/// no interval: jitter around the same rate after it keeps the period.
+#[wasm_bindgen_test]
+async fn web_frames_run_only_while_one_is_asked_for() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    let (window, _) = open_recorded_window(&running);
+    let now = run_frames(0.0, 16.667, 35);
     settle().await;
-    assert!(near(primary_period(&running.snapshot()), 8.333));
+    let measured = running.snapshot();
+    assert!(near(primary_period(&measured), 16.667));
+    assert_eq!(queued_frames(), 0, "measured and nothing asked for");
+
+    window.request_redraw();
+    window.request_redraw();
+    settle().await;
+    assert_eq!(queued_frames(), 1, "a request resumes the loop once");
+    run_frames(now + 10_000.0, 16.9, 1);
+    settle().await;
+    assert_eq!(
+        queued_frames(),
+        0,
+        "the frame asked for ran, and none is asked after it"
+    );
+    assert_eq!(
+        running.snapshot().revision(),
+        measured.revision(),
+        "the time the loop stood still is no interval"
+    );
     running.quit();
     settle().await;
 }
@@ -757,6 +793,8 @@ async fn web_scale_change_measures_the_period_again() {
     // The window moves to a 120 Hz display with another scale: the old
     // intervals describe the previous display and are forgotten.
     set_pixel_ratio(2.0);
+    // The restart resumes the loop that stood still, on the owner's turn.
+    settle().await;
     run_frames(now + 5.0, 8.333, 26);
     settle().await;
     assert!(near(primary_period(&running.snapshot()), 8.333));
@@ -775,6 +813,7 @@ async fn web_visibility_restarts_the_estimate() {
 
     set_hidden(true);
     set_hidden(false);
+    settle().await;
     // Few enough frames that only a restart can have forgotten the old ones.
     run_frames(now + 60_000.0, 8.333, 26);
     settle().await;

@@ -116,11 +116,13 @@
 pub mod a11y;
 pub mod backend_conformance;
 pub mod bootstrap;
+pub mod clipboard;
 pub mod drop_ledger;
 pub mod gesture_alternatives;
 pub mod host;
 pub mod log_capture;
 pub mod ownership;
+pub mod primary_selection;
 pub mod recording;
 pub mod replay;
 pub mod storage;
@@ -137,6 +139,7 @@ pub use a11y::{
 };
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{
@@ -148,6 +151,7 @@ pub use host::{
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
+pub use primary_selection::ScriptedPrimarySelection;
 pub use replay::{
     MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
     ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,

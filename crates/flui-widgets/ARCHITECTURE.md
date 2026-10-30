@@ -767,7 +767,7 @@ Pinned by `a_vertical_drag_slot_claims_only_vertical_motion`,
 A behavioural widget's constructor takes a `GestureAlternatives` (ADR-0216).
 Its commands live inside the `Alternative` — a `ControlSpec`'s controls or a
 `MenuSpec`'s items — so no command can exist without its single-pointer path,
-and `GestureAlternatives::new` refuses an empty or repeated label, which
+and `GestureAlternatives::try_new` refuses an empty or repeated label, which
 assistive technology could not tell apart. Each command is an `Intent`
 resolved through the `Actions` chain where the alternatives are mounted: the
 gesture through `CommandHandle::perform` (from `handle(ctx)` in the widget's
@@ -832,7 +832,7 @@ behavioural widget in the same frame, which is why the question waits for the
 frame to end; `unfulfilled_companion_alternatives_are_reported`), and
 `assert_gesture_alternatives` resolves the anchor in the published tree and
 activates that node. The type erasure sits in `CompanionSpec` so that
-`Alternative` stays one non-generic enum; `GestureAlternatives::new` refuses a
+`Alternative` stays one non-generic enum; `GestureAlternatives::try_new` refuses a
 command whose intent is not the link's (`ForeignIntent`). Rows:
 `page_view_with_buttons_beside_it`, and flui-material's `TabBar` beside a
 `TabBarView`.
@@ -1079,6 +1079,26 @@ runtime parser.
 
 `animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
 `animated_icon::theme_and_direction_shape_the_icon` pin the three.
+
+### A symbol effect moves the painted box, never the layout or the label
+
+`SymbolEffect` wraps an icon's built content in a crate-private host that owns one controller
+and turns its progress into scale, turn and opacity tracks (`Keyframes` over a one-second
+cycle, stretched to the effect's duration and `Speed`), so an effect is a transform and an
+opacity on the icon's own box and layout never changes. What plays it is part of the type: a
+one-shot effect needs `on_change(u64)` and a repeating one `active(bool)`, so a bounce with no
+trigger does not compile. A one-shot or repeating effect ends at rest, which is where an
+inactive repeating effect stops: it runs the cycle in progress to its end. Transitions play
+when first applied, which keeps them declarative: an app toggles by switching `appear` and
+`disappear`. A replace keeps the outgoing content under an `ExcludeSemantics` until the fade
+ends, so assistive technology hears one label. A trim belongs to paths, so `PathEffect` is a
+method of `AnimatedIcon` only and a glyph icon cannot be handed one. `IconThemeData` carries
+an ambient effect for icons a container did not build itself, the way `NavigationBar` bounces
+whatever icon view a destination holds.
+
+`symbol_effect::each_effect_peaks_where_its_timing_says`,
+`symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard` and
+`symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end` pin the three.
 
 ### A carousel is a `Scrollable` over keylines, and every move goes through its position
 
@@ -3391,6 +3411,17 @@ alternatives: what they move stays reachable by the scroll keys, the scroll sema
 (ADR-0157) and the focus reveal, and their motion operates nothing. Tests: `tests/page_view.rs`
 and the matrix row `page_view_with_page_controls` in `gesture_alternatives`.
 
+`PageIndicator` lives in `scroll`, beside the pager it names: `controls` sits below `scroll` and
+cannot see `PageController`. Its source is a type, not a flag. `controlled` reads
+`PageController::page`, or `initial_page` before the first layout, and offers a tap and the
+increase and decrease actions only toward a page that exists. `observed` reads an
+`Animation<f64>` and offers neither. The state keeps the last finite position, so a non-finite
+sample never moves the dots, and it rebuilds only when the nearest page changes, which is when
+the announced "page n of N" (`page_label` again) and the offered actions change. The painter
+reads the position at paint time from the source's listenable and draws no motion of its own.
+Under reduced motion a tap or a step jumps the pager rather than animating it. Tests:
+`tests/page_indicator.rs`.
+
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,
@@ -3564,7 +3595,7 @@ For assistive technology the header is a labelled `Banner` landmark. ARIA admits
 expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
 where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
 part expands it; content it clips entirely is not published. Equal extents give a header that
-takes nothing and offers no scroll action; `HeaderExtents::new` refuses extents that are not
+takes nothing and offers no scroll action; `HeaderExtents::try_new` refuses extents that are not
 finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
 (and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
 what scrolling the body does, never an operation, and what it clips stays reachable by the
@@ -3770,9 +3801,11 @@ route's scope, so a key never reaches the page a push covers or the page a pop i
 A navigator's first route takes no focus (the first Tab enters it). A route's first entry
 is a provisional focus, which an `autofocus` control in its page replaces until the user
 moves the focus; returning to a route restores the focus it had and that is final, so a
-late `autofocus` does not take it back. The route's scope answers `BackIntent` (pop, declined
+late `autofocus` does not take it back. The route's key actions answer `BackIntent` (pop, declined
 at the bottom of the stack) and, for a dismissible barrier, `DismissIntent`, so Escape never
-pops a page. `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
+pops a page. They sit around the route's scope, not inside it, so they answer with the focus on
+the scope itself, as it is on a page with nothing focusable (an `ErrorView` in place of a page
+whose build failed). `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
 disable or restore, so none of this applies to it, and an app that wants keyboard
 navigation across screens uses `PageRoute`. Giving it a scope would make it a second
 `ModalRoute` without a barrier or animation. For that reason `WidgetsApp` seeds its home

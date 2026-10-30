@@ -61,6 +61,8 @@ pub struct WebWindow {
     facets: RefCell<Option<WindowFacets>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<dyn HostDisplays>,
+    /// How any thread asks for a frame: set when the loop opens the window.
+    redraw: std::cell::OnceCell<Arc<crate::owner::web::FrameRequests>>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
 }
@@ -433,6 +435,7 @@ impl WebWindow {
             state,
             delivery: Arc::new(delivery),
             displays,
+            redraw: std::cell::OnceCell::new(),
             snapshot: Arc::new(WindowStateCell::new(initial)),
         })
     }
@@ -1054,6 +1057,7 @@ impl host::Window<WebLoop> for WebWindow {
             Arc::clone(&owner.displays),
             WindowDelivery::new(handler, owner.input.availability()),
         )?;
+        let _ = window.redraw.set(Arc::new(owner.frame_requests()));
 
         // The RAF loop and the owner's wake reach the window's delivery
         // through the loop's state.
@@ -1117,19 +1121,26 @@ impl PlatformWindow for WebWindow {
         self.id
     }
 
-    /// Served by the page's next animation frame: the platform's
-    /// `requestAnimationFrame` loop dispatches a frame request on every one,
-    /// and the embedder's frame skips when nothing is dirty. Never inside
-    /// this call: a frame that asks for the next one (a running animation)
-    /// would get it at once, at the same frame time, inside its own
+    /// Served by the page's next animation frame: the request marks the
+    /// window's frame demand, and the platform's `requestAnimationFrame` loop,
+    /// which runs only while a frame is asked for, delivers it; a loop that
+    /// stood still is resumed by the owner turn the request wakes. Never
+    /// inside this call: a frame that asks for the next one (a running
+    /// animation) would get it at once, at the same frame time, inside its own
     /// dispatch, in a loop that holds the page's only thread.
-    fn request_redraw(&self) {}
+    fn request_redraw(&self) {
+        if let Some(redraw) = self.redraw.get() {
+            flui_platform::RedrawRequester::request_redraw(&**redraw);
+        }
+    }
 
-    /// The page's animation frames serve every request, as
-    /// [`request_redraw`](PlatformWindow::request_redraw) says: there is
-    /// nothing to carry, from the page's only thread or any other.
+    /// The same request as [`request_redraw`](PlatformWindow::request_redraw),
+    /// from the page's only thread or any other.
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        Arc::new(|| {})
+        match self.redraw.get() {
+            Some(redraw) => Arc::clone(redraw) as _,
+            None => Arc::new(|| {}),
+        }
     }
 
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {

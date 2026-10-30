@@ -1187,7 +1187,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
     // A threshold is a fraction of the extent: anything else is refused
     // where it is made, never stored and then ignored.
     for refused in [f64::NAN, -0.1, 1.5, f64::INFINITY] {
-        let error = DismissThreshold::new(refused).expect_err("outside 0.0..=1.0");
+        let error = DismissThreshold::try_new(refused).expect_err("outside 0.0..=1.0");
         assert_eq!(error.fraction().is_nan(), refused.is_nan());
     }
     // A threshold for the axis holds both of its sides: released slowly at
@@ -1198,7 +1198,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
         let vsync = Vsync::new();
         let held = card(&dismissed).dismiss_threshold(
             DismissDirection::Horizontal,
-            DismissThreshold::new(0.9).expect("0.9 is a fraction of the extent"),
+            DismissThreshold::try_new(0.9).expect("0.9 is a fraction of the extent"),
         );
         let mut laid = lay_out_animated(
             VsyncScope::new(vsync.clone(), held),

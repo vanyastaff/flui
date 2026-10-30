@@ -75,8 +75,13 @@ impl IosBuilder {
             let mut args = cargo_args_for(ctx, target);
             args.extend(selected.cargo_args());
             outputs.push(
-                crate::build::util::cargo::build_artifact(&ctx.workspace_root, &args, &selected)
-                    .await?,
+                crate::build::util::cargo::build_artifact(
+                    &ctx.workspace_root,
+                    &args,
+                    &selected,
+                    &ctx.floors.cargo_env(target),
+                )
+                .await?,
             );
         }
         if application {

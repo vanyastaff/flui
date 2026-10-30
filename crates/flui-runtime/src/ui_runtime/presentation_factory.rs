@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use flui_interaction::InteractionDispatchHandle;
-use flui_platform::{Clipboard, Storage};
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
 use flui_view::{BuildInProgress, GlobalKeyScope};
 
@@ -22,8 +21,8 @@ pub struct PresentationFactory {
     scheduler: WeakUpdateScheduler,
     wake: Arc<dyn Fn() + Send + Sync>,
     sender: UiCommandSender,
-    clipboard: Arc<dyn Clipboard>,
-    storage: Option<Arc<dyn Storage>>,
+    capabilities: crate::capability::CapabilityRegistry,
+    completions: flui_platform::capability::CompletionSource,
     close: crate::runtime_services::CloseServices,
     clock: ClockSource,
     text: flui_rendering::TextContextHandle,
@@ -50,8 +49,8 @@ impl UiRuntime {
             scheduler: self.scheduler.downgrade(),
             wake: Arc::clone(&self.wake),
             sender: self.sender_prototype.clone(),
-            clipboard: Arc::clone(&self.clipboard),
-            storage: self.storage.clone(),
+            capabilities: self.capabilities.clone(),
+            completions: self.owner_jobs.completions().clone(),
             close: self.close.clone(),
             clock: self.clock.clone(),
             text: self.text.clone(),
@@ -110,8 +109,8 @@ impl PresentationFactory {
                 scheduler: &scheduler,
                 wake: Arc::clone(&self.wake),
                 command_sender,
-                clipboard: Arc::clone(&self.clipboard),
-                storage: self.storage.clone(),
+                capabilities: self.capabilities.clone(),
+                completions: self.completions.clone(),
                 close: self.close.clone(),
                 clock: &self.clock,
                 text: self.text.clone(),

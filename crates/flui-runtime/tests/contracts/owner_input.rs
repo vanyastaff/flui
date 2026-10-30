@@ -639,7 +639,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
         )
         .expect("headless window");
     let wakes = std::sync::Arc::new(AtomicUsize::new(0));
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         PresentationWindow::new(
             window,
             Some(std::sync::Arc::clone(&bridge) as std::sync::Arc<_>),
@@ -653,7 +653,6 @@ fn accessibility_input_reaches_the_semantics_owner() {
                 })
             },
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         ),

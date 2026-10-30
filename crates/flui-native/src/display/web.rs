@@ -453,6 +453,20 @@ pub(crate) mod refresh_estimate {
         /// have changed (the tab became visible, the page moved to a display with
         /// another rate) and the time since the last frame is not an interval. The
         /// published period stays until a fresh estimate leaves its band.
+        /// Whether the estimator still wants frames: until a full window of
+        /// intervals was seen since it started or last restarted. The page's
+        /// animation-frame loop runs for it then, even when no frame is asked
+        /// for, and stands still after.
+        pub(crate) fn measuring(&self) -> bool {
+            self.intervals.len < WINDOW
+        }
+
+        /// The animation-frame loop stood still and runs again: the time since
+        /// the last frame is no interval, and what was measured before stays.
+        pub(crate) fn skip_gap(&mut self) {
+            self.previous = None;
+        }
+
         pub(crate) fn restart(&mut self) {
             self.previous = None;
             self.intervals.clear();
@@ -661,6 +675,24 @@ pub(crate) mod refresh_estimate {
             assert_millis(estimator.published(), 8.33);
         }
 
+        fn measures_until_a_window_and_again_after_a_restart() {
+            let mut estimator = RefreshEstimator::new();
+            assert!(estimator.measuring(), "a new estimator wants frames");
+            let (now, _) = feed(&mut estimator, 0.0, &[16.7; WINDOW - 1]);
+            assert!(estimator.measuring(), "one interval short of a window");
+            let (now, _) = feed(&mut estimator, now, &[16.7]);
+            assert!(!estimator.measuring(), "a full window was seen");
+            // The loop stood still for ten seconds: the gap is no interval,
+            // and what was measured stays.
+            estimator.skip_gap();
+            let (_, published) = feed(&mut estimator, now + 10_000.0, &[16.7; 2]);
+            assert_eq!(published.len(), 0, "the gap republished: {published:?}");
+            assert!(!estimator.measuring());
+            assert_millis(estimator.published(), 16.7);
+            estimator.restart();
+            assert!(estimator.measuring(), "a restart measures again");
+        }
+
         fn the_old_period_stays_until_a_new_estimate_exists() {
             let mut estimator = RefreshEstimator::new();
             let (now, _) = feed(&mut estimator, 0.0, &[16.7; 30]);
@@ -812,6 +844,10 @@ pub(crate) mod refresh_estimate {
                     (
                         "re_estimates_after_visibility",
                         re_estimates_after_visibility,
+                    ),
+                    (
+                        "measures_until_a_window_and_again_after_a_restart",
+                        measures_until_a_window_and_again_after_a_restart,
                     ),
                     (
                         "the_old_period_stays_until_a_new_estimate_exists",
@@ -1253,6 +1289,14 @@ pub(crate) mod source {
             }
             self.source.invalidate();
             true
+        }
+
+        fn measuring(&self) -> bool {
+            self.state.lock().estimator.measuring()
+        }
+
+        fn frames_resumed(&self) {
+            self.state.lock().estimator.skip_gap();
         }
 
         fn observe(
@@ -1737,7 +1781,7 @@ mod events {
                     },
                 )
             });
-            let visibility = visibility_listener(displays, &active);
+            let visibility = visibility_listener(displays, signal, &active);
             let ratio = pixel_ratio.as_ref().map(PixelRatioWatch::handle);
             let resize = ratio
                 .clone()
@@ -1820,12 +1864,14 @@ mod events {
 
     fn visibility_listener(
         displays: &Arc<WebDisplays>,
+        signal: &Arc<OwnerSignal>,
         active: &Rc<Cell<bool>>,
     ) -> Option<Listener> {
         let document = web_sys::window()?.document()?;
         let displays = Arc::downgrade(displays);
         let active = Rc::clone(active);
         let watched = document.clone();
+        let signal = Arc::downgrade(signal);
         let registered = Listener::add(document.as_ref(), "visibilitychange", move |_| {
             if active.get()
                 && !watched.hidden()
@@ -1834,6 +1880,9 @@ mod events {
                 // Frames did not run while the tab was hidden: the cadence is
                 // measured again from the first one after it returns.
                 displays.restart_estimate();
+                // The animation-frame loop may stand still: the owner's turn
+                // resumes it to measure.
+                wake(&signal);
             }
         });
         match registered {

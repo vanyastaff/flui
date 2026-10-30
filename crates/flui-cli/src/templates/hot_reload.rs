@@ -19,7 +19,7 @@ fn member_dep(sibling: &str) -> String {
     toml::Value::Table(dependency).to_string()
 }
 
-pub fn generate(name: &str, org: &str, source: &DependencySource) -> ProjectPlan {
+pub fn generate(name: &str, app_id: &str, source: &DependencySource) -> ProjectPlan {
     let lib_name = name.replace('-', "_");
     let types_package = format!("{name}-types");
     let worker_package = format!("{name}-logic");
@@ -33,7 +33,7 @@ pub fn generate(name: &str, org: &str, source: &DependencySource) -> ProjectPlan
         )
         .file(
             "flui.toml",
-            flui_config(name, org, &host_package, &worker_package, &worker_lib),
+            flui_config(name, app_id, &host_package, &worker_package, &worker_lib),
         )
         .file(
             "README.md",
@@ -88,7 +88,7 @@ strip = "debuginfo"
 
 fn flui_config(
     name: &str,
-    org: &str,
+    app_id: &str,
     host_package: &str,
     worker_package: &str,
     worker_lib: &str,
@@ -101,7 +101,7 @@ fn flui_config(
         r#"[app]
 name = "{name}"
 version = "0.1.0"
-organization = "{org}"
+id = "{app_id}"
 
 [build]
 target_platforms = ["windows", "linux", "macos"]
@@ -416,7 +416,7 @@ const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
-use flui::app::{AppConfig, run_app_with_config};
+use flui::app::{AppConfig, AppLaunch, LaunchError, run_app};
 use flui::hot_reload::{WorkerReloadHook, engine::env};
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
@@ -442,7 +442,7 @@ fn default_worker_path() -> std::path::PathBuf {
     path
 }
 
-fn main() {
+fn main() -> Result<(), LaunchError> {
     let worker_path = std::env::var(env::WORKER_PLUGIN)
         .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
 
@@ -464,11 +464,12 @@ fn main() {
         .with_size(480, 320)
         .with_dev_reload(WorkerReloadHook::new(worker_path));
 
-    run_app_with_config(root, config);
+    run_app(root, AppLaunch::new().config(config))?;
 
     tracing::info!(
         final_count = count.load(std::sync::atomic::Ordering::Relaxed),
         "Application exited"
     );
+    Ok(())
 }
 "#;

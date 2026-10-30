@@ -128,6 +128,8 @@ mod overlay;
 mod owner_code;
 #[path = "owner_local_values.rs"]
 mod owner_local_values;
+#[path = "page_indicator.rs"]
+mod page_indicator;
 #[path = "page_route.rs"]
 mod page_route;
 #[path = "page_transitions.rs"]
@@ -150,6 +152,8 @@ mod router;
 mod scroll;
 #[path = "selection_area.rs"]
 mod selection_area;
+#[path = "selection_area_input.rs"]
+mod selection_area_input;
 #[path = "semantics.rs"]
 mod semantics;
 #[path = "shortcuts.rs"]
@@ -165,6 +169,8 @@ mod stack_positioned;
 #[path = "stream_builder.rs"]
 mod stream_builder;
 mod swipe_actions;
+#[path = "symbol_effect.rs"]
+mod symbol_effect;
 #[path = "system_gesture_exclusion.rs"]
 mod system_gesture_exclusion;
 #[path = "table.rs"]

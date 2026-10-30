@@ -1083,13 +1083,12 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     let authored_size = Rc::new(Cell::new(14.0));
     let rebuild = Rc::new(RefCell::new(None));
     let runtime = if case == TextServiceCase::Unavailable {
-        UiRuntime::new(
+        UiRuntime::try_new(
             window().with_text_store_host(Some(host.clone())),
             1.0,
             flui_runtime::ui_runtime::RuntimeHostServices::new(
                 std::sync::Arc::new(|| {}),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                std::sync::Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             ),

@@ -34,20 +34,13 @@ pub(super) fn start_service(
     }
 }
 
-/// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::new`]'s
-/// `clipboard` parameter. Same borrow rule as [`runtime_wake_callback`].
-///
-/// # Panics
-///
-/// If no platform clipboard is installed: [`install_owner_platform`] installs
-/// it, and every runner calls that before it builds any ui_runtime.
-pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::Clipboard> {
-    APP_RUNTIME
-        .with(|slot| slot.borrow().clipboard())
-        .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
+/// The providers a UI runtime this host builds acquires platform capabilities
+/// from (ADR-0152). Same borrow rule as [`runtime_wake_callback`].
+pub(super) fn runtime_capabilities() -> flui_runtime::capability::CapabilityRegistry {
+    APP_RUNTIME.with(|slot| slot.borrow().capability_registry())
 }
 
-/// The app's font collection for [`crate::app::ui_runtime::UiRuntime::new`]'s
+/// The app's font collection for [`crate::app::ui_runtime::UiRuntime::try_new`]'s
 /// `fonts` parameter (ADR-0092 §2). Same borrow rule as
 /// [`runtime_wake_callback`]. The first call on a thread resolves the shared
 /// engine services.
@@ -58,6 +51,7 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
 /// The host's byte storage, resolved once from the run's configuration when
 /// the host started (`AppRuntime::install_host_storage`). Same borrow rule
 /// as [`runtime_wake_callback`].
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
@@ -73,26 +67,65 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
-/// executors are installed; without a configured directory, or where the
-/// platform has no data root, widgets get no storage.
+/// executors are installed. Without a directory to name
+/// ([`storage_dir`]) widgets are refused storage as not registered; where
+/// the platform has no data root, as not on this platform.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
-    let dirs = config.storage_dir.and_then(|name| {
-        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
-        if dirs.is_none() {
-            tracing::warn!(
-                storage_dir = name.as_str(),
-                "this platform has no data directory; widgets get no storage"
-            );
-        }
-        dirs
-    });
-    // Always installed, `None` included: a run without storage must not
+    let refused =
+        |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
+    let dirs = storage_dir(config)
+        .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
+        .and_then(|dir| {
+            with_owner_platform(|owner| owner.shared().data_dirs(&dir))
+                .flatten()
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        storage_dir = dir.as_str(),
+                        "this platform has no data directory; widgets get no storage"
+                    );
+                    refused(flui_platform::UnsupportedReason::NotOnThisPlatform)
+                })
+        });
+    // Always installed, a refusal included: a run without storage must not
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
     // The run's receivers replace the last run's, for the same reason.
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
+
+/// The directory the run's storage lives in under the data roots: the one
+/// [`AppConfig::with_storage_dir`](crate::app::AppConfig::with_storage_dir)
+/// names, else the application's identifier, else, where the roots belong to
+/// this application alone, [`SANDBOXED_STORAGE_DIR`]. `None` on a desktop
+/// application with neither, whose roots every application shares.
+pub(crate) fn storage_dir(config: &crate::app::AppConfig) -> Option<flui_platform::AppDataDir> {
+    if let Some(dir) = &config.storage_dir {
+        return Some(dir.clone());
+    }
+    if let Some(app_id) = config.application_identity.app_id() {
+        let dir = flui_platform::AppDataDir::try_new(app_id.as_str())
+            .expect("BUG: an application identifier is a valid directory name");
+        return Some(dir);
+    }
+    SANDBOXED.then(|| {
+        flui_platform::AppDataDir::try_new(SANDBOXED_STORAGE_DIR)
+            .expect("BUG: the sandboxed storage directory name is valid")
+    })
+}
+
+/// Whether the platform's data roots belong to this application alone: the
+/// Android app's private directories, the iOS app container, the page's
+/// origin on the Web.
+const SANDBOXED: bool = cfg!(any(
+    target_os = "android",
+    target_os = "ios",
+    target_arch = "wasm32"
+));
+
+/// The storage directory of an application without an identifier, where the
+/// data roots are its own.
+pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
 
 /// Have the host trim the GPU memory behind a new raster lane on a
 /// memory-pressure notice, for as long as the lane exists.
@@ -266,31 +299,32 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
-/// The closes this platform lets the application refuse (ADR-0260): a
-/// desktop asks before a window closes, and Windows and macOS also ask before
-/// the session ends; Android, iOS and the web never ask.
-#[cfg(any(windows, target_os = "macos"))]
-const CLOSE_VETOES: &[flui_view::CloseReason] = &[
-    flui_view::CloseReason::User,
-    flui_view::CloseReason::Program,
-    flui_view::CloseReason::SessionEnd,
-];
-#[cfg(not(any(
-    windows,
-    target_os = "macos",
-    target_os = "android",
-    target_os = "ios",
-    target_arch = "wasm32"
-)))]
-const CLOSE_VETOES: &[flui_view::CloseReason] = &[
+/// The window closes this platform lets the application refuse (ADR-0260): a
+/// desktop asks before a window closes; Android, iOS and the web never ask.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+const WINDOW_CLOSE_VETOES: &[flui_view::CloseReason] = &[
     flui_view::CloseReason::User,
     flui_view::CloseReason::Program,
 ];
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
-const CLOSE_VETOES: &[flui_view::CloseReason] = &[];
+const WINDOW_CLOSE_VETOES: &[flui_view::CloseReason] = &[];
+
+/// Every close the installed platform lets the application refuse: the window
+/// closes, and the session's end where the platform holds the session for a
+/// block (Windows, macOS). A platform that only delays it (logind) or only
+/// tells cannot be refused, so a guard's holds never refuse it there.
+fn close_vetoes() -> Vec<flui_view::CloseReason> {
+    let mut vetoes = WINDOW_CLOSE_VETOES.to_vec();
+    if with_owner_platform(flui_native::OwnerPlatform::session_end_support)
+        == Some(flui_platform::SessionEndSupport::Hold)
+    {
+        vetoes.push(flui_view::CloseReason::SessionEnd);
+    }
+    vetoes
+}
 
 /// Builds a runner's UI runtime with its own window wake and redraw debt,
-/// the platform clipboard and the app's font
+/// the platform capabilities and the app's font
 /// collection and the host's byte storage. Every runner site and secondary
 /// window builds its UI runtime through this one call, so a UI runtime cannot be
 /// handed a stand-in for any of them.
@@ -320,17 +354,14 @@ pub(super) fn build_ui_runtime(
     let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
         wake,
         redraw,
-        runtime_clipboard(),
         &fonts,
         flui_scheduler::ClockSource::Platform,
-    );
-    if let Some(storage) = runtime_storage() {
-        host = host.with_storage(storage);
-    }
+    )
+    .with_capabilities(runtime_capabilities());
     if let Some(registry) = APP_RUNTIME.with(|slot| slot.borrow().flush_registry()) {
         host = host.with_flush_registry(registry);
     }
-    host = host.with_close_vetoes(CLOSE_VETOES);
+    host = host.with_close_vetoes(&close_vetoes());
     if let Some(transfer) = APP_RUNTIME.with(|slot| slot.borrow().data_transfer()) {
         host = host
             .with_data_transfer(transfer.source)
@@ -340,81 +371,354 @@ pub(super) fn build_ui_runtime(
         host = host.with_preferences(preferences);
     }
     let native = Rc::clone(window.window());
-    let ui_runtime = crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host)?;
+    let ui_runtime = crate::app::ui_runtime::UiRuntime::try_new(window, scale_factor, host)?;
     attach_window_control(&ui_runtime, &native);
     Ok(ui_runtime)
 }
 
-/// Answer one phase of the user's session ending (ADR-0237).
+/// Answer one phase of the user's session ending (ADR-0237, ADR-0260).
 ///
-/// A query becomes one [`flui_platform::HostNotice::SessionEnding`] for every
-/// presentation, all sharing one request: the answer is `Block` while any
-/// subscriber holds a block on it. The request is kept until the session end is
-/// cancelled or happens, so the blocks outlive the query. Cancelling and ending
-/// are notices to the same subscribers and release what is still held.
+/// A query asks the close of every presentation whose UI runtime is in its
+/// slot with [`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd):
+/// its close handler, then its guard. A UI runtime that is checked out is not
+/// asked and counts as `Proceed`, since its published bytes are written when
+/// the session ends. The query also becomes one
+/// [`flui_platform::HostNotice::SessionEnding`] for every runtime, all sharing
+/// one request kept until the session end is cancelled or happens, so its
+/// blocks outlive the query. The answer is `Block` when a presentation
+/// refused or a subscriber holds a block, `Proceed` otherwise. Subscribers of
+/// a runtime whose turn is busy hear the notice later, after the request's
+/// book has closed with the answer, so a block taken then is refused instead
+/// of silently too late.
 ///
-/// The query is answered only after every subscriber has run. When a runtime's
-/// turn is busy (a session end arriving from inside another callback) its
-/// subscribers cannot run yet, so no block could be known: the answer is
-/// `Proceed`, with a diagnostic, rather than a `Proceed` that looks like "nobody
-/// objects". Either way the request's book closes with the answer, so a block
-/// taken afterwards is refused instead of silently too late.
-///
-/// When the last block is later released, the platform is told
+/// Cancelling withdraws only the session-end closes the query recorded.
+/// Ending delivers the notice, writes the flush registry inline within
+/// [`SESSION_END_BUDGET`](flui_view::__runtime::SESSION_END_BUDGET) and asks
+/// the loop to quit. Both release what subscribers still hold, and when the
+/// last block is released the platform is told
 /// (`Platform::release_session_end`) so it can let the session go on.
 fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer {
     use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
 
     match phase {
         SessionEndPhase::Query => {
-            let request = SessionEndRequest::new().on_release(|| {
+            let current = Rc::new(std::cell::Cell::new(true));
+            let live = Rc::clone(&current);
+            let request = SessionEndRequest::new().on_release(move || {
+                // A request a later query displaced answers nothing: the
+                // platform waits on the later one.
+                if !live.get() {
+                    return;
+                }
                 // The platform is told the application is done with the
-                // session end it asked to wait for.
-                let _ = with_owner_platform(flui_native::OwnerPlatform::release_session_end);
+                // session end it asked to wait for: every window that refused
+                // carried its close out, and every subscriber let go.
+                let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
             });
             let displaced = APP_RUNTIME.with(|slot| {
-                slot.try_borrow_mut()
-                    .ok()
-                    .and_then(|mut state| state.session_end.replace(request.clone()))
+                slot.try_borrow_mut().ok().map(|mut state| {
+                    let request = state.session_end.replace(request.clone());
+                    if let Some(displaced) = state.session_end_current.replace(current) {
+                        displaced.set(false);
+                    }
+                    let refusals = std::mem::take(&mut state.session_end_refusals);
+                    (request, refusals)
+                })
             });
             drop(displaced);
+            refuse_session_end(&request);
             // A subscriber that panics still gets the platform its answer, and
             // the book still closes: the panic is contained here, a native
-            // callback boundary, and reported.
+            // callback boundary, and reported. A panicking subscriber holds
+            // no block (R25).
             let delivery = deliver_contained(&HostNotice::SessionEnding(request.clone()));
-            let answer = request.answer();
-            match delivery {
-                Some(delivery) if delivery.is_complete() => answer,
-                Some(delivery) => {
-                    tracing::warn!(
-                        queued = delivery.queued,
-                        refused = delivery.refused,
-                        "a session end arrived while the owner was busy; its subscribers could \
-                         not run before the answer, so the session is allowed to end"
-                    );
-                    SessionEndAnswer::Proceed
-                }
-                // A panicking subscriber counts as "proceed" (R25).
-                None => SessionEndAnswer::Proceed,
+            let held = request.answer();
+            if let Some(delivery) = delivery
+                && !delivery.is_complete()
+            {
+                tracing::warn!(
+                    queued = delivery.queued,
+                    refused = delivery.refused,
+                    "a session end arrived while a UI runtime was busy; its subscribers hear it \
+                     after the answer and cannot hold the session"
+                );
+            }
+            if delivery.is_some() || has_session_end_refusals() {
+                held
+            } else {
+                SessionEndAnswer::Proceed
             }
         }
-        SessionEndPhase::Cancelled | SessionEndPhase::Ending => {
-            let released = APP_RUNTIME.with(|slot| {
-                slot.try_borrow_mut()
-                    .ok()
-                    .and_then(|mut state| state.session_end.take())
-            });
-            drop(released);
-            let notice = if phase == SessionEndPhase::Cancelled {
-                HostNotice::SessionEndCancelled
-            } else {
-                HostNotice::SessionEnded
-            };
-            deliver_contained(&notice);
+        SessionEndPhase::Cancelled => {
+            withdraw_session_end();
+            drop(take_session_end());
+            deliver_contained(&HostNotice::SessionEndCancelled);
+            SessionEndAnswer::Proceed
+        }
+        SessionEndPhase::Ending => {
+            drop(take_session_end());
+            end_session_now();
             SessionEndAnswer::Proceed
         }
         // A phase this host does not know asks for nothing.
         _ => SessionEndAnswer::Proceed,
+    }
+}
+
+/// The least of the session end's budget that must be left for a step that
+/// runs application code to start, so the flush keeps time to write
+/// (ADR-0260, "the 1 s threshold").
+#[cfg(not(target_arch = "wasm32"))]
+const SESSION_END_USER_CODE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Whether a window still refuses the session end the host is answering.
+fn has_session_end_refusals() -> bool {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .is_ok_and(|state| !state.session_end_refusals.is_empty())
+    })
+}
+
+/// The session end's request and the windows' refusals, taken from the loop
+/// state; dropping them releases what they held.
+fn take_session_end() -> Option<(
+    Option<flui_platform::SessionEndRequest>,
+    crate::app::runtime::SessionEndRefusals,
+)> {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut().ok().map(|mut state| {
+            (
+                state.session_end.take(),
+                std::mem::take(&mut state.session_end_refusals),
+            )
+        })
+    })
+}
+
+/// The window at `address` carried out the session-end close it refused: its
+/// refusal no longer holds the session. Once nothing else holds it, the
+/// platform is released.
+pub(super) fn release_session_end_refusal(address: flui_foundation::PresentationAddress) {
+    let released = APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut().ok().map(|mut state| {
+            let (released, kept) = std::mem::take(&mut state.session_end_refusals)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(refused, _)| *refused == address);
+            state.session_end_refusals = kept;
+            released
+        })
+    });
+    // Outside the borrow: the last release tells the platform.
+    drop(released);
+}
+
+/// The session's end happens (ADR-0260 §3, §4, §6): what the documents
+/// published is written inline within the session end's budget, application
+/// code runs only while at least [`SESSION_END_USER_CODE_THRESHOLD`] of it is
+/// left, and the loop is asked to quit where the application ends with the
+/// session.
+#[cfg(not(target_arch = "wasm32"))]
+fn end_session_now() {
+    use flui_platform::HostNotice;
+
+    let deadline = std::time::Instant::now() + session_end_budget();
+    // A platform that only tells (Android's stop, iOS) reports that the
+    // process may be killed, not that the application is over: it may come
+    // back to the same UI. Only a platform that holds or delays the session
+    // ends the application here.
+    let ends_application = session_end_platform(flui_native::OwnerPlatform::session_end_support)
+        .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
+    // What the host keeps itself is written first, within the same deadline
+    // as the documents.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+    super::placement::flush_all_by(deadline);
+    // Application code runs while the budget can absorb it: a subscriber or a
+    // Detached observer may still publish what the flush then writes. Each
+    // runtime's code starts only while the margin is left, whatever the
+    // runtimes before it spent. A UI runtime that is checked out queues the
+    // notice and runs none of its code before the process ends.
+    let margin_left = || {
+        deadline.saturating_duration_since(std::time::Instant::now())
+            >= SESSION_END_USER_CODE_THRESHOLD
+    };
+    deliver_contained_while(&HostNotice::SessionEnded, margin_left);
+    if ends_application {
+        deliver_session_end_close(deadline);
+    }
+    flush_for_session_end(deadline);
+    if ends_application {
+        // The UI runtimes are torn down here only while their destructors
+        // can start within the budget and none is on the stack; otherwise
+        // they are left as they are and the system ends the process.
+        let tear_down = margin_left() && !super::owner_dispatch::any_runtime_checked_out();
+        super::owner_dispatch::end_session_teardown(tear_down);
+        let _ = session_end_platform(flui_native::OwnerPlatform::quit);
+    }
+}
+
+/// The web's `pagehide`: the browser grants no synchronous budget and the
+/// page may come back from its cache, so the notice is delivered and the
+/// flush registry keeps writing on its own; nothing waits, closes or quits.
+#[cfg(target_arch = "wasm32")]
+fn end_session_now() {
+    deliver_contained(&flui_platform::HostNotice::SessionEnded);
+}
+
+/// Deliver the session's end to every UI runtime in its slot while the
+/// margin for application code is left before `deadline`, containing and
+/// reporting a panic: the caller answers a native callback.
+#[cfg(not(target_arch = "wasm32"))]
+fn deliver_session_end_close(deadline: std::time::Instant) {
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    failure.contain(|| {
+        super::owner_dispatch::deliver_session_end_close(deadline, SESSION_END_USER_CODE_THRESHOLD);
+    });
+    if let Some(payload) = failure.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(&*payload),
+            "a Detached observer panicked at the session's end"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+/// The owner platform, for a session end. The operating system may report one
+/// from a nested loop inside a frame (a modal dialog in a callback), where
+/// [`with_owner_platform`] refuses: what is asked here (the platform's support
+/// and its quit) touches no frame state. `None` while the loop state is busy
+/// or no platform is installed.
+fn session_end_platform<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> Option<R> {
+    let owner = APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|state| state.owner_platform.clone())
+    });
+    owner.as_deref().map(f)
+}
+
+/// The presentations a session-end query may ask: every registered one whose
+/// UI runtime is in its slot. A checked-out runtime's code cannot run now, and
+/// none is asked while the loop state itself is busy.
+fn askable_presentations() -> Option<(
+    Rc<crate::app::close_request::CloseRequestRouter>,
+    Vec<flui_foundation::PresentationAddress>,
+)> {
+    APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        let router = state.close_requests();
+        let logical = state.installed_host.logical();
+        let addresses = router
+            .addresses()
+            .into_iter()
+            .filter(|address| {
+                logical
+                    .runtime_status(address.ui_runtime_id)
+                    .is_ok_and(|status| !status.checked_out)
+            })
+            .collect();
+        Some((router, addresses))
+    })
+}
+
+/// Ask every askable presentation whether the session may end (ADR-0260 §1),
+/// its handler first, then its guard, and take a block on `request` for each
+/// one that refuses: the session stays held until that window carries its
+/// close out, whatever the notice's subscribers do. Each refusal is also
+/// recorded as a `PendingClose(SessionEnd)`. Where the platform does not
+/// hold a session end for a block, nothing can be refused and nobody is
+/// asked.
+///
+/// Each refusal is published before the next window is asked: a later
+/// handler that finishes the work and closes a window that already refused
+/// releases it through that close.
+fn refuse_session_end(request: &flui_platform::SessionEndRequest) {
+    if session_end_platform(flui_native::OwnerPlatform::session_end_support)
+        != Some(flui_platform::SessionEndSupport::Hold)
+    {
+        return;
+    }
+    let Some((router, addresses)) = askable_presentations() else {
+        return;
+    };
+    for address in addresses {
+        if router.consult_session_end(address) != crate::app::close_request::CloseResponse::KeepOpen
+        {
+            continue;
+        }
+        let block = match request.block("a window waits for the user's decision") {
+            Ok(block) => block,
+            Err(error) => {
+                tracing::warn!(?address, %error, "a window's refusal holds no block");
+                continue;
+            }
+        };
+        let unpublished = APP_RUNTIME.with(|slot| match slot.try_borrow_mut() {
+            Ok(mut state) => {
+                state.session_end_refusals.push((address, block));
+                None
+            }
+            Err(_) => Some(block),
+        });
+        if let Some(block) = unpublished {
+            tracing::warn!(?address, "a window's refusal could not be recorded");
+            drop(block);
+        }
+    }
+}
+
+/// Withdraw the session-end closes a cancelled session end recorded, leaving
+/// every other recorded close in place.
+fn withdraw_session_end() {
+    let Some(router) =
+        APP_RUNTIME.with(|slot| slot.try_borrow().ok().map(|state| state.close_requests()))
+    else {
+        return;
+    };
+    for address in router.addresses() {
+        router.withdraw(address, flui_view::CloseReason::SessionEnd);
+    }
+}
+
+/// How long the framework's part of a session end may take: the budget, or
+/// less where the platform waits a shorter bounded time.
+#[cfg(not(target_arch = "wasm32"))]
+fn session_end_budget() -> std::time::Duration {
+    use flui_view::__runtime::SESSION_END_BUDGET;
+    match session_end_platform(flui_native::OwnerPlatform::session_end_support) {
+        Some(flui_platform::SessionEndSupport::Delay { max }) => max.min(SESSION_END_BUDGET),
+        _ => SESSION_END_BUDGET,
+    }
+}
+
+/// Write what the documents published, inline, by `deadline`: the process may
+/// be ended at any moment once the session-end handler returns. Runs no
+/// application code; a panic in the writer is contained and reported.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_for_session_end(deadline: std::time::Instant) {
+    let flush = APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|state| state.flush_host.clone())
+    });
+    let Some(flush) = flush else {
+        return;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        flush.flush_within(deadline)
+    })) {
+        Ok(report) if !report.is_complete() => tracing::warn!(
+            failed = report.failed.len(),
+            unfinished = report.unfinished.len(),
+            "the session ended before the flush registry was written"
+        ),
+        Ok(_) => {}
+        Err(payload) => {
+            tracing::error!(
+                panic = flui_foundation::panic::payload_text(&*payload),
+                "the session-end flush panicked"
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
     }
 }
 
@@ -425,8 +729,18 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
 fn deliver_contained(
     notice: &flui_platform::HostNotice,
 ) -> Option<super::owner_dispatch::NoticeDelivery> {
+    deliver_contained_while(notice, || true)
+}
+
+/// [`deliver_contained`], starting each runtime's subscribers only while
+/// `may_start` allows.
+fn deliver_contained_while(
+    notice: &flui_platform::HostNotice,
+    may_start: impl Fn() -> bool,
+) -> Option<super::owner_dispatch::NoticeDelivery> {
     let mut failure = flui_foundation::panic::FirstPanic::new();
-    let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
+    let delivery =
+        failure.contain(|| super::owner_dispatch::deliver_host_notice_while(notice, may_start));
     if let Some(payload) = failure.into_payload() {
         tracing::error!(
             panic = flui_foundation::panic::payload_text(&*payload),
@@ -609,9 +923,10 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
-    // The platform clipboard (ADR-0038 §9) is installed with the owner, so
-    // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
-    let clipboard = owner.shared().clipboard();
+    // The platform clipboard is installed with the owner, so every ui_runtime
+    // a runner builds afterwards acquires it (`runtime_capabilities`).
+    let clipboard = owner.clipboard();
+    let primary_selection = owner.primary_selection();
     let data_transfer = owner.shared().data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
@@ -624,6 +939,7 @@ pub(crate) fn install_owner_platform(
             let previous_clipboard = (
                 state.set_platform_clipboard(clipboard),
                 state.set_platform_data_transfer(data_transfer),
+                state.set_platform_primary_selection(primary_selection),
             );
             let previous_host =
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());

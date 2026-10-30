@@ -38,6 +38,9 @@ pub(crate) struct ApkSpec<'a> {
     pub(crate) work_dir: &'a Path,
     /// Where the signed APK is written.
     pub(crate) output: &'a Path,
+    /// The `minSdk` the APK declares: FLUI's floor, or the application's
+    /// when `flui.toml` raises it (ADR-0244 §10).
+    pub(crate) min_sdk: u32,
 }
 
 /// The SDK pieces the packager runs, resolved once.
@@ -52,8 +55,6 @@ pub(crate) struct BuildTools {
     java_home: Option<PathBuf>,
 }
 
-// The floor (ADR-0244); `View.getRootWindowInsets`, the safe-area read, is one of what sets it.
-const MIN_SDK: u32 = super::platform_floor::ANDROID_MIN_SDK;
 /// The oldest `android.jar` the scaffolded manifest links against: its
 /// `configChanges` names `fontWeightAdjustment`, a flag from API 31.
 const MIN_COMPILE_SDK: u32 = 31;
@@ -114,7 +115,12 @@ impl BuildTools {
         let base = spec.work_dir.join("base.apk");
         let aligned = spec.work_dir.join("aligned.apk");
 
-        process::run(Command::new(&self.aapt2).args(self.link_args(&manifest, &base))).await?;
+        process::run(Command::new(&self.aapt2).args(self.link_args(
+            &manifest,
+            &base,
+            spec.min_sdk,
+        )))
+        .await?;
         add_native_libs(&base, spec.native_libs)?;
         process::run(
             Command::new(&self.zipalign)
@@ -139,7 +145,7 @@ impl BuildTools {
         process::run(&mut sign).await
     }
 
-    fn link_args(&self, manifest: &Path, output: &Path) -> Vec<String> {
+    fn link_args(&self, manifest: &Path, output: &Path, min_sdk: u32) -> Vec<String> {
         vec![
             "link".into(),
             "--manifest".into(),
@@ -147,7 +153,7 @@ impl BuildTools {
             "-I".into(),
             self.android_jar.display().to_string(),
             "--min-sdk-version".into(),
-            MIN_SDK.to_string(),
+            min_sdk.to_string(),
             "--target-sdk-version".into(),
             self.api_level.to_string(),
             "-o".into(),
@@ -328,10 +334,10 @@ mod tests {
             api_level: 35,
             java_home: None,
         };
-        let args = tools.link_args(Path::new("AndroidManifest.xml"), Path::new("base.apk"));
+        let args = tools.link_args(Path::new("AndroidManifest.xml"), Path::new("base.apk"), 26);
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["--min-sdk-version", "23"])
+                .any(|pair| pair == ["--min-sdk-version", "26"])
         );
     }
 

@@ -51,7 +51,7 @@ use flui_objects::{
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
-use flui_platform::{EventTime, InMemoryClipboard};
+use flui_platform::EventTime;
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::storage::IntrinsicDimension;
@@ -342,7 +342,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 }
 
 /// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
-/// widgets reach it through `LifecycleContext::storage`. Mounting a new tree
+/// widgets acquire it as the `StorageCapability`. Mounting a new tree
 /// over the same storage after dropping the first is how a test restarts an
 /// application.
 pub fn lay_out_with_storage(
@@ -473,10 +473,16 @@ impl LaidOut {
             .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
 
-    /// The clipboard this tree's widgets reach through
-    /// `LifecycleContext::clipboard_handle`.
-    pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
+    /// The clipboard this tree's widgets acquire through
+    /// `cx.capability::<ClipboardCapability>()`.
+    pub fn clipboard(&self) -> crate::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
+    }
+
+    /// The primary selection this tree's widgets acquire through
+    /// `cx.capability::<PrimarySelectionCapability>()`.
+    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+        self.host.ui_runtime().primary_selection()
     }
 
     /// The UI runtime's own scheduler, for a probe that must observe frame

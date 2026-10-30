@@ -14,61 +14,71 @@ use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
     retry_surface_recreation, settle_surface_availability,
 };
-use crate::app::AppConfig;
+use crate::app::{AppConfig, AppLaunch, LaunchError};
 
 // ============================================================================
 // Android Implementation
 // ============================================================================
 
-/// Run a FLUI application on Android with default configuration.
+/// Run a FLUI application on Android: `root` in the Activity's window, with
+/// `launch`'s configuration and capability providers.
 ///
-/// This is the primary entry point for Android apps. Call this from your
-/// `android_main()` function:
-///
-/// ```rust,ignore
-/// #[no_mangle]
-/// fn android_main(app: AndroidApp) {
-///     flui_app::run_app_android(app, MyRootView);
-/// }
-/// ```
-#[cfg(target_os = "android")]
-pub fn run_app_android<V>(app: android_activity::AndroidApp, root: V)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    run_app_android_with_config(app, root, AppConfig::default());
-}
-
-/// Run a FLUI application on Android with custom configuration.
-///
-/// Like [`run_app_android`] but allows specifying app configuration.
+/// This is the entry point on Android. Call it from your `android_main()`
+/// function:
 ///
 /// ```rust,ignore
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
-///     let config = AppConfig::new()
-///         .with_title("My App")
-///         .with_size(800, 600);
-///     flui_app::run_app_android_with_config(app, MyRootView, config);
+///     let launch = AppLaunch::new()
+///         .config(AppConfig::new().with_title("My App"))
+///         .capabilities(AppCapabilities::new().plugin(MyPlugin));
+///     // `run_app_android` logs why it could not start.
+///     let _started = flui_app::run_app_android(app, MyRootView, launch);
 /// }
 /// ```
+///
+/// # Errors
+///
+/// [`LaunchError::CapabilityConflict`] when `launch`'s registrations
+/// conflict, found before the platform starts and logged.
 #[cfg(target_os = "android")]
-pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V, config: AppConfig)
+pub fn run_app_android<V>(
+    app: android_activity::AndroidApp,
+    root: V,
+    launch: AppLaunch,
+) -> Result<(), LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
+    let AppLaunch {
+        config,
+        capabilities,
+    } = launch;
+    // Logging first: `android_main` has no stderr, so the log is where a
+    // conflict can be read.
     let _installation = crate::app::logging::init_managed_logging(&config);
+    // Before the platform starts, so a conflict starts nothing (ADR-0152 §1).
+    super::install_capabilities(capabilities).inspect_err(|error| {
+        tracing::error!(%error, "FLUI could not start");
+    })?;
 
     tracing::info!(
         title = %config.title,
         "Starting FLUI application on Android"
     );
 
-    run_android(root, config, app);
+    run_android(root, config, app).inspect_err(|error| {
+        super::discard_capabilities();
+        tracing::error!(%error, "FLUI could not start");
+    })
 }
 
 #[cfg(target_os = "android")]
-fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
+fn run_android<V>(
+    root: V,
+    config: AppConfig,
+    app: android_activity::AndroidApp,
+) -> Result<(), crate::app::LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -93,7 +103,8 @@ where
         .as_ref()
         .and_then(crate::app::dev_agent::DevAgent::attach);
 
-    let platform: Box<dyn Platform> = flui_native::android_platform(app);
+    let platform: Box<dyn Platform> =
+        flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
@@ -213,7 +224,7 @@ where
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
-        // `UiRuntime::new` applies the DPR to the freshly built pipeline
+        // `UiRuntime::try_new` applies the DPR to the freshly built pipeline
         // before returning.
         let scale_factor = geometry.scale;
         let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
@@ -490,6 +501,11 @@ where
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
+    // A bootstrap that found no GPU backend leaves its refusal here, typed,
+    // for the launch's result (ADR-0244 §3).
+    let refused: std::rc::Rc<std::cell::Cell<Option<crate::app::UnsupportedSystem>>> =
+        std::rc::Rc::default();
+    let refusal = std::rc::Rc::clone(&refused);
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
@@ -499,7 +515,13 @@ where
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.
-        bootstrap_android(root, config, hot_reload)?;
+        bootstrap_android(root, config, hot_reload).inspect_err(|error| {
+            refusal.set(
+                error
+                    .downcast_ref::<flui_engine::EngineError>()
+                    .and_then(|error| crate::app::UnsupportedSystem::from_renderer(error)),
+            );
+        })?;
         Ok(())
     }));
     // The exit is bounded end to end, as on the desktop (ADR-0258 §7).
@@ -516,9 +538,14 @@ where
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has
     // exited.
+    if let Some(unsupported) = refused.take() {
+        tracing::error!(%unsupported, "FLUI cannot run on this system");
+        return Err(crate::app::LaunchError::UnsupportedSystem(unsupported));
+    }
     if let Err(err) = result {
         panic!("android bootstrap failed: {err:?}");
     }
+    Ok(())
 }
 
 pub(super) struct AndroidFrameDriver {

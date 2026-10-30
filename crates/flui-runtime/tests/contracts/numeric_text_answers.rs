@@ -44,13 +44,12 @@ impl GestureArenaMember for FailingQuery {
 
 fn abandoned_numeric_answers_are_released(reject_sampling: bool) {
     let mut clock = ManualClock::new();
-    let mut runtime = UiRuntime::new(
+    let mut runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock.clone()),
         ),

@@ -202,6 +202,13 @@ fn text_editing() {
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
             ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),
+            ("editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection", crate::editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection),
+            ("editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands", crate::editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands),
+            ("editable_text_clipboard::a_selection_held_before_mounting_is_offered", crate::editable_text_clipboard::a_selection_held_before_mounting_is_offered),
+            ("editable_text_clipboard::a_panicking_listener_keeps_the_middle_press_paste", crate::editable_text_clipboard::a_panicking_listener_keeps_the_middle_press_paste),
+            ("editable_text_clipboard::a_selection_changed_while_the_field_claims_stands", crate::editable_text_clipboard::a_selection_changed_while_the_field_claims_stands),
+            ("editable_text_clipboard::an_unobscuring_rebuild_claims_for_the_new_controller", crate::editable_text_clipboard::an_unobscuring_rebuild_claims_for_the_new_controller),
+            ("editable_text_clipboard::the_harness_releases_the_button_it_pressed", crate::editable_text_clipboard::the_harness_releases_the_button_it_pressed),
             ("editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit", crate::editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit),
             ("editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed", crate::editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed),
             ("editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit", crate::editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit),
@@ -538,6 +545,10 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root,
             ),
             (
+                "keyboard_focus::routes::back_keys_leave_a_page_with_nothing_focusable",
+                crate::keyboard_focus::routes::back_keys_leave_a_page_with_nothing_focusable,
+            ),
+            (
                 "raw_button::raw_button_activates_from_the_keyboard",
                 crate::raw_button::raw_button_activates_from_the_keyboard,
             ),
@@ -554,6 +565,8 @@ fn selection_area_text_runs() {
         &[
             ("selection_area::selection_area_text_publishes_runs", crate::selection_area::selection_area_text_publishes_runs as fn()),
             ("selection_area::selection_area_accepts_assistive_selection", crate::selection_area::selection_area_accepts_assistive_selection),
+            ("selection_area::selection_area_offers_its_selection_as_the_primary_selection", crate::selection_area::selection_area_offers_its_selection_as_the_primary_selection),
+            ("selection_area::the_primary_selection_snaps_to_a_paragraph_rebuilt_since", crate::selection_area::the_primary_selection_snaps_to_a_paragraph_rebuilt_since),
             ("selection_area::selection_area_refuses_stale_or_foreign_positions", crate::selection_area::selection_area_refuses_stale_or_foreign_positions),
             ("selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs),
             ("selection_area::static_text_outside_selection_area_publishes_no_runs", crate::selection_area::static_text_outside_selection_area_publishes_no_runs),
@@ -564,12 +577,39 @@ fn selection_area_text_runs() {
             ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
             ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
             ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
-            ("selection_area::the_reported_text_follows_the_published_document_order", crate::selection_area::the_reported_text_follows_the_published_document_order),
+            ("selection_area::a_document_reads_its_texts_where_they_are_laid_out", crate::selection_area::a_document_reads_its_texts_where_they_are_laid_out),
             ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
             ("selection_area::a_silenced_text_is_left_out_of_the_selection", crate::selection_area::a_silenced_text_is_left_out_of_the_selection),
             ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
+            ("selection_area::the_highlight_colour_follows_the_area_style", crate::selection_area::the_highlight_colour_follows_the_area_style),
+            ("selection_area::a_selection_highlights_the_parts_it_covers", crate::selection_area::a_selection_highlights_the_parts_it_covers),
+            ("selection_area::an_edited_text_keeps_its_highlight_current", crate::selection_area::an_edited_text_keeps_its_highlight_current),
             ("selection_area::sort_keys_order_the_reported_text", crate::selection_area::sort_keys_order_the_reported_text),
             ("selection_area::a_line_limit_bounds_what_a_paragraph_reports", crate::selection_area::a_line_limit_bounds_what_a_paragraph_reports),
+        ],
+    );
+}
+
+/// A `SelectionArea` selects with a mouse and the keyboard, copies, clears and dims its
+/// highlight on a blur, reading its texts where they are laid out.
+#[test]
+fn selection_area_input() {
+    run_cases(
+        "selection_area_input",
+        &[
+            ("selection_area_input::a_drag_selects_across_texts_and_a_click_clears", crate::selection_area_input::a_drag_selects_across_texts_and_a_click_clears as fn()),
+            ("selection_area_input::multi_clicks_select_a_word_or_a_text_and_shift_click_extends", crate::selection_area_input::multi_clicks_select_a_word_or_a_text_and_shift_click_extends),
+            ("selection_area_input::keys_extend_select_everything_copy_and_clear", crate::selection_area_input::keys_extend_select_everything_copy_and_clear),
+            ("selection_area_input::a_drag_without_semantics_reads_where_the_texts_are_laid_out", crate::selection_area_input::a_drag_without_semantics_reads_where_the_texts_are_laid_out),
+            ("selection_area_input::a_blur_dims_the_highlight_and_keeps_the_selection", crate::selection_area_input::a_blur_dims_the_highlight_and_keeps_the_selection),
+            ("selection_area_input::a_removed_text_hands_its_end_to_the_text_beside_it", crate::selection_area_input::a_removed_text_hands_its_end_to_the_text_beside_it),
+            ("selection_area_input::a_drag_ends_where_it_is_released", crate::selection_area_input::a_drag_ends_where_it_is_released),
+            ("selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end", crate::selection_area_input::a_click_targets_the_keys_which_cross_at_the_shown_end),
+            ("selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection", crate::selection_area_input::a_panicking_blur_listener_keeps_the_clicked_selection),
+            ("selection_area_input::line_keys_keep_their_column_and_their_line", crate::selection_area_input::line_keys_keep_their_column_and_their_line),
+            ("selection_area_input::the_nearest_text_is_nearest_on_screen", crate::selection_area_input::the_nearest_text_is_nearest_on_screen),
+            ("selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss", crate::selection_area_input::esc_clears_then_reaches_the_enclosing_dismiss),
+            ("selection_area_input::a_panicking_listener_keeps_what_the_keys_remember", crate::selection_area_input::a_panicking_listener_keeps_what_the_keys_remember),
         ],
     );
 }
@@ -1038,6 +1078,16 @@ fn animation_and_visibility() {
             ("animated_icon::theme_and_direction_shape_the_icon", crate::animated_icon::theme_and_direction_shape_the_icon),
             ("animated_icon::reduced_motion_shows_the_target_frame", crate::animated_icon::reduced_motion_shows_the_target_frame),
             ("animated_icon::the_label_lives_on_the_icon", crate::animated_icon::the_label_lives_on_the_icon),
+            ("symbol_effect::each_effect_peaks_where_its_timing_says", crate::symbol_effect::each_effect_peaks_where_its_timing_says),
+            ("symbol_effect::a_one_shot_effect_plays_per_change_and_repeat", crate::symbol_effect::a_one_shot_effect_plays_per_change_and_repeat),
+            ("symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off", crate::symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off),
+            ("symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard", crate::symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard),
+            ("symbol_effect::a_replace_sizes_to_the_new_icon_only", crate::symbol_effect::a_replace_sizes_to_the_new_icon_only),
+            ("symbol_effect::transitions_play_when_first_applied", crate::symbol_effect::transitions_play_when_first_applied),
+            ("symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end", crate::symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end),
+            ("symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing", crate::symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing),
+            ("symbol_effect::a_path_effect_draws_the_paths_on_and_off", crate::symbol_effect::a_path_effect_draws_the_paths_on_and_off),
+            ("symbol_effect::a_new_speed_retimes_a_running_repeat", crate::symbol_effect::a_new_speed_retimes_a_running_repeat),
             ("animated_list::a_removed_item_plays_its_exit_and_then_drops", crate::animated_list::a_removed_item_plays_its_exit_and_then_drops),
             ("animated_list::a_key_returning_mid_exit_reclaims_its_element", crate::animated_list::a_key_returning_mid_exit_reclaims_its_element),
             ("animated_list::swapped_items_slide_between_their_places", crate::animated_list::swapped_items_slide_between_their_places),
@@ -1193,7 +1243,9 @@ fn layout_and_render_object_wiring() {
         "layout_and_render_object_wiring",
         &[
             ("stack_positioned::positioned_places_child_at_explicit_edges", crate::stack_positioned::positioned_places_child_at_explicit_edges as fn()),
+            ("stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child", crate::stack_positioned::an_indexed_stack_is_heard_only_through_its_shown_child),
             ("wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow", crate::wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow),
+            ("wrap::wrap_starts_its_runs_at_the_reading_edge", crate::wrap::wrap_starts_its_runs_at_the_reading_edge),
             ("table::table_mounts_render_table_and_lays_out_a_grid_row_major", crate::table::table_mounts_render_table_and_lays_out_a_grid_row_major),
             ("flex_parent_data::two_expandeds_split_main_axis_by_flex_factor", crate::flex_parent_data::two_expandeds_split_main_axis_by_flex_factor),
             ("flex_parent_data::vertical_direction_updates_mounted_flex_children", crate::flex_parent_data::vertical_direction_updates_mounted_flex_children),

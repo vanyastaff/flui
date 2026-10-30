@@ -4,8 +4,9 @@
 //! storage positions, and keep the session's sources (the Settings portal,
 //! logind, the kernel's memory pressure) in the same shape
 //! (`owner::linux`). Both fill the input position: Wayland with its seats'
-//! input, X11 with XInput 2 and XKB. Text input, the clipboard and drag and
-//! drop are `Absent` until each host speaks their protocols; a desktop has no
+//! input, X11 with XInput 2 and XKB. Wayland fills the clipboard position
+//! with its seats' selection. Text input, drag and drop and X11's clipboard
+//! are `Absent` until each host speaks their protocols; a desktop has no
 //! haptics and no system bars.
 
 use std::sync::Arc;
@@ -56,11 +57,12 @@ mod wayland {
         LinuxPreferences, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility,
         UserDataDirs, position,
     };
+    use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
     use crate::display::linux::wayland::WaylandDisplaySource;
     use crate::input::linux::wayland::SeatInput;
     use crate::owner::linux::wayland::{
-        LastInput, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
+        LastInput, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
     };
     use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
@@ -77,7 +79,8 @@ mod wayland {
         type Input = WaylandLoop;
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
-        type Clipboard = Absent<position::Clipboard>;
+        type Clipboard = WaylandLoop;
+        type PrimarySelection = WaylandLoop;
         type Drag = Absent<position::Drag>;
         // A desktop compositor has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
@@ -97,6 +100,11 @@ mod wayland {
         /// pinches of every seat, with the cursor each window shows.
         fn input(last_input: LastInput) -> Arc<dyn WaylandInput> {
             Arc::new(SeatInput::new(last_input))
+        }
+
+        /// The seats' selection, through `wl_data_device`.
+        fn clipboard(last_input: LastInput) -> Arc<dyn WaylandClipboard> {
+            Arc::new(SeatClipboard::new(last_input))
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
@@ -174,6 +182,7 @@ mod x11 {
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = Absent<position::Clipboard>;
+        type PrimarySelection = Absent<position::PrimarySelection>;
         type Drag = Absent<position::Drag>;
         // A desktop has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;

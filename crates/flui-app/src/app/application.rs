@@ -3,6 +3,7 @@ use super::{
     AppConfig,
     application_control::{AppHandle, AppWindowError},
 };
+use flui_platform::capability::{Capability, CapabilityProvider, Plugin};
 use flui_view::View;
 use std::marker::PhantomData;
 
@@ -23,6 +24,10 @@ pub enum AppRunError {
     /// A configuration setting cannot be honored by the host.
     #[error("application configuration failed: {0}")]
     Configuration(#[source] AppWindowError),
+    /// The system is below FLUI's floor (ADR-0244 §3), found when the platform
+    /// is built, before any window opens.
+    #[error("this system cannot run FLUI: {0}")]
+    UnsupportedSystem(#[source] crate::app::UnsupportedSystem),
     /// Native platform initialization or event-loop failure.
     #[error("platform startup or event loop failed: {source}")]
     Platform {
@@ -43,6 +48,24 @@ pub enum AppRunError {
         #[source]
         source: std::sync::Arc<dyn std::error::Error + Send + Sync>,
     },
+    /// Two capability registrations the run cannot choose between: two
+    /// plugins, or two overrides, for one capability, or two capabilities
+    /// sharing a name. Found before the platform starts, so no window opens.
+    #[error("capability registration failed: {0}")]
+    CapabilityConflict(#[source] flui_runtime::capability::CapabilityConflict),
+}
+
+impl AppRunError {
+    /// A platform failure: the refusal of a system below FLUI's floor, or
+    /// any other failure as [`Platform`](Self::Platform).
+    pub(crate) fn from_platform(error: flui_native::PlatformError) -> Self {
+        match crate::app::UnsupportedSystem::from_platform(error) {
+            Ok(unsupported) => Self::UnsupportedSystem(unsupported),
+            Err(error) => Self::Platform {
+                source: std::sync::Arc::new(error),
+            },
+        }
+    }
 }
 
 pub(crate) type ReadyObserver = Box<dyn FnOnce(&AppHandle)>;
@@ -59,6 +82,7 @@ pub struct Application<V, F> {
     pub(crate) startup: StartupWindow,
     pub(crate) ready: Option<ReadyObserver>,
     pub(crate) window_error: Option<WindowErrorObserver>,
+    pub(crate) capabilities: super::capability::AppCapabilities,
     marker: PhantomData<fn() -> V>,
 }
 impl<V, F> Application<V, F>
@@ -74,6 +98,7 @@ where
             startup: StartupWindow::Open,
             ready: None,
             window_error: None,
+            capabilities: super::capability::AppCapabilities::default(),
             marker: PhantomData,
         }
     }
@@ -100,6 +125,26 @@ where
     #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn on_window_error(mut self, callback: impl FnMut(&AppWindowError) + 'static) -> Self {
         self.window_error = Some(Box::new(callback));
+        self
+    }
+    /// Provide the capability `C` with `provider`, in place of the built-in
+    /// provider and of any plugin's (ADR-0152). A widget acquires it with
+    /// `cx.capability::<C>()` in a lifecycle hook.
+    ///
+    /// Overriding one capability twice fails [`run`](Self::run) with
+    /// [`AppRunError::CapabilityConflict`] before any window opens.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
+    pub fn capability<C: Capability>(mut self, provider: impl CapabilityProvider<C>) -> Self {
+        self.capabilities = std::mem::take(&mut self.capabilities).capability::<C>(provider);
+        self
+    }
+    /// Register the providers of `plugin`. A plugin provides what neither the
+    /// application nor the framework does; two plugins providing one
+    /// capability fail [`run`](Self::run) with
+    /// [`AppRunError::CapabilityConflict`] before any window opens.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
+    pub fn plugin(mut self, plugin: impl Plugin) -> Self {
+        self.capabilities = std::mem::take(&mut self.capabilities).plugin(plugin);
         self
     }
     /// Run the native loop and release its services before returning.

@@ -3,15 +3,16 @@
 //! This crate holds what the framework, plugins and tests program against
 //! when they talk to the platform, and nothing that implements it:
 //!
-//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
-//!   [`Clipboard`] and the data-transfer transport
+//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
+//!   the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
 //!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
 //! - the byte-storage capability [`Storage`] and its vocabulary
-//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
+//!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
+//!   the directory an application's values live in ([`AppDataDir`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
@@ -109,10 +110,11 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 mod brightness;
-mod clipboard;
+pub mod capability;
 pub mod data_transfer;
 mod display;
 pub mod drag;
+mod environment;
 mod event_time;
 mod flag_set;
 mod frame_request;
@@ -143,7 +145,6 @@ mod window_handler;
 mod window_state;
 
 pub use brightness::Brightness;
-pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
@@ -154,13 +155,14 @@ pub use display::{
     DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
 };
+pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
 pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use host_notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
-    SessionEndPhase, SessionEndRequest, SystemNotice,
+    SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
 };
 pub use ime::ImeEvent;
 pub use input::{
@@ -184,7 +186,8 @@ pub use preferences::{
     WheelStep,
 };
 pub use storage::{
-    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
+    AppDataDir, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName, Stored,
+    StoredVersion, WriteMode,
 };
 pub use surface_target::{
     DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,

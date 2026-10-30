@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use flui_platform::Clipboard;
+use crate::host::SharedClipboard;
 
 #[cfg(target_os = "linux")]
 use crate::accessibility::linux::UnixAccessibility;
@@ -64,6 +64,7 @@ impl Host for Winit {
     #[cfg(not(target_os = "linux"))]
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WinitLoop;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WinitLoop;
     // Desktop winit targets have no haptic hardware to drive.
     type Haptics = Absent<position::Haptics>;
@@ -111,7 +112,7 @@ impl WinitHost for Winit {
 
     /// The system clipboard through `arboard`, or an inert one where it
     /// cannot open (a headless session).
-    fn clipboard() -> Arc<dyn Clipboard> {
+    fn clipboard() -> Arc<dyn SharedClipboard> {
         ArboardClipboard::or_inert()
     }
 

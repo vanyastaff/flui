@@ -707,13 +707,13 @@ impl RenderIndexedStack {
         self.index
     }
 
-    /// Updates the displayed child index and reports layout when changed.
+    /// Updates the displayed child index and reports layout and semantics when changed.
     pub fn set_index(&mut self, index: Option<usize>) -> flui_rendering::RenderUpdateImpact {
         if self.index == index {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.index = index;
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Returns the current fit.
@@ -996,6 +996,12 @@ impl RenderBox for RenderIndexedStack {
         } else {
             paint_displayed_child(ctx);
         }
+    }
+
+    /// Only the displayed child is in the semantics tree; the others are laid out but
+    /// neither seen nor heard.
+    fn visits_child_for_semantics(&self, child_slot: usize, _size: Size) -> bool {
+        self.displayed_index(self.stack.child_count) == Some(child_slot)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {

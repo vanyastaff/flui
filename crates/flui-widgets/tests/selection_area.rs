@@ -626,36 +626,99 @@ pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
     );
 }
 
-/// The reported text follows the order the published document reads, so a
-/// column laid out bottom-up reports what an adapter selected.
+/// A document reads its texts where they are laid out: line by line from the
+/// top, along each line in the area's direction, whatever order the tree
+/// holds them in. A selection from the first text read to the last reports
+/// them in that order.
 ///
-/// Red-check: order the texts by their top edge (the report is "\n").
-pub(crate) fn the_reported_text_follows_the_published_document_order() {
+/// Red-check: leave a document's children in tree order (every case but
+/// the RTL row reads its texts in authored order).
+pub(crate) fn a_document_reads_its_texts_where_they_are_laid_out() {
     use flui_objects::VerticalDirection;
-
-    let (area, seen) = recorded_area(
-        Column::new((Text::new("Alpha"), Text::new("Beta")))
-            .vertical_direction(VerticalDirection::Up),
-    );
-    let mut laid = mounted(area);
-    let (first, last, text) = {
-        let tree = consumer(&laid);
-        let state = tree.state();
-        (
-            runs_of(&paragraph(state, "Alpha")),
-            runs_of(&paragraph(state, "Beta")),
-            find_all(state, Role::Document)[0].document_range().text(),
-        )
+    use flui_painting::typography::TextStyle;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::prelude::Axis;
+    use flui_widgets::{
+        CrossAxisAlignment, Directionality, Positioned, Row, SizedBox, Stack, Wrap,
     };
-    assert_eq!(text, "AlphaBeta", "the document reads in tree order");
-    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 4)))
-        .expect("a selection across both texts is accepted");
-    laid.tick();
-    assert_eq!(
-        *seen.borrow(),
-        vec![Some("Alpha\nBeta".to_owned())],
-        "the report covers what the adapter selected"
-    );
+
+    fn cell(text: &'static str) -> SizedBox {
+        SizedBox::new(60.0, 20.0).child(Text::new(text))
+    }
+    type Case = (&'static str, TextDirection, BoxedView, [&'static str; 3]);
+    let cases: Vec<Case> = vec![
+        (
+            "a column laid out upwards reads from the top",
+            TextDirection::Ltr,
+            Column::new((Text::new("Aa"), Text::new("Bb"), Text::new("Cc")))
+                .vertical_direction(VerticalDirection::Up)
+                .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+        (
+            "a stack reads its texts by where they are placed",
+            TextDirection::Ltr,
+            SizedBox::new(200.0, 120.0)
+                .child(Stack::new((
+                    Positioned::new(Text::new("Aa")).top(80.0).left(0.0),
+                    Positioned::new(Text::new("Bb")).top(0.0).left(100.0),
+                    Positioned::new(Text::new("Cc")).top(0.0).left(0.0),
+                )))
+                .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+        (
+            "a row in a right-to-left area reads from the right",
+            TextDirection::Rtl,
+            Row::new((Text::new("Aa"), Text::new("Bb"), Text::new("Cc"))).boxed(),
+            ["Aa", "Bb", "Cc"],
+        ),
+        (
+            "a wrap that runs down in columns reads across them",
+            TextDirection::Ltr,
+            SizedBox::new(200.0, 50.0)
+                .child(Wrap::new((cell("Aa"), cell("Bb"), cell("Cc"))).direction(Axis::Vertical))
+                .boxed(),
+            ["Aa", "Cc", "Bb"],
+        ),
+        (
+            "a small text beside a tall one shares its line",
+            TextDirection::Ltr,
+            Directionality::new(
+                TextDirection::Rtl,
+                Row::new((
+                    Text::new("Aa").style(TextStyle::new().with_font_size(40.0)),
+                    Text::new("Bb").style(TextStyle::new().with_font_size(10.0)),
+                    Text::new("Cc").style(TextStyle::new().with_font_size(40.0)),
+                ))
+                .cross_axis_alignment(CrossAxisAlignment::End),
+            )
+            .boxed(),
+            ["Cc", "Bb", "Aa"],
+        ),
+    ];
+    for (name, direction, content, expected) in cases {
+        let (area, seen) = recorded_area(content);
+        let mut laid = mounted(Directionality::new(direction, area));
+        let (first, last, text) = {
+            let tree = consumer(&laid);
+            let state = tree.state();
+            (
+                runs_of(&paragraph(state, expected[0])),
+                runs_of(&paragraph(state, expected[2])),
+                find_all(state, Role::Document)[0].document_range().text(),
+            )
+        };
+        assert_eq!(text, expected.concat(), "{name}: the document's reading");
+        laid.invoke_semantics_action(selection_request(first[0], at(first[0], 0), at(last[0], 2)))
+            .expect("a selection across the texts is accepted");
+        laid.tick();
+        assert_eq!(
+            *seen.borrow(),
+            vec![Some(expected.join("\n"))],
+            "{name}: the report reads as the document does"
+        );
+    }
 }
 
 /// A paragraph cut by a line limit contributes only its shown lines to a
@@ -835,5 +898,206 @@ pub(crate) fn span_overrides_keep_their_reading_in_a_selection_area() {
             .iter()
             .any(|node| node.label().as_deref() == Some("Doctor")),
         "the override is still the label"
+    );
+}
+
+/// The `selection` property of every paragraph, sorted so the rows read
+/// independently of render-tree order.
+fn painted_selections(laid: &LaidOut) -> Vec<String> {
+    let mut selections: Vec<String> = laid
+        .find_all_by_render_type("RenderParagraph")
+        .into_iter()
+        .map(|id| {
+            laid.render_property(id, "selection")
+                .expect("a paragraph reports its selection")
+        })
+        .collect();
+    selections.sort();
+    selections
+}
+
+/// The selection highlights each text it covers, a text between its ends
+/// whole, and moves off the texts a later selection leaves.
+///
+/// Red-check: never hand the paragraphs their parts (every paragraph
+/// reports `None`).
+pub(crate) fn a_selection_highlights_the_parts_it_covers() {
+    let (area, _seen) = recorded_area(Column::new((
+        Text::new("Alpha beta"),
+        Text::new("Gamma delta"),
+        Text::new("Omega"),
+    )));
+    let mut laid = mounted(area);
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 6), at(last[0], 2)))
+        .expect("a selection across three texts is accepted");
+    laid.tick();
+    assert_eq!(
+        painted_selections(&laid),
+        ["Some(0..11)", "Some(0..2)", "Some(6..10)"],
+        "each text paints its part, the middle one whole"
+    );
+    laid.invoke_semantics_action(selection_request(last[0], at(last[0], 1), at(last[0], 4)))
+        .expect("a selection in one text is accepted");
+    laid.tick();
+    assert_eq!(
+        painted_selections(&laid),
+        ["None", "None", "Some(1..4)"],
+        "the texts the selection left paint nothing"
+    );
+}
+
+/// A text edited while selected highlights what it holds now: a text between
+/// the selection's ends stays covered whole, and the text the selection
+/// starts in stays covered to its end.
+///
+/// Red-check: hand the paragraphs parts bounded by their text at selection
+/// time (the edited texts keep `0..11` and `6..10`).
+pub(crate) fn an_edited_text_keeps_its_highlight_current() {
+    let view = |first: &str, middle: &str| {
+        SelectionArea::new(Column::new((
+            Text::new(first.to_owned()),
+            Text::new(middle.to_owned()),
+            Text::new("Omega"),
+        )))
+    };
+    let mut laid = mounted(view("Alpha beta", "Gamma delta"));
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 6), at(last[0], 2)))
+        .expect("a selection across three texts is accepted");
+    laid.tick();
+    laid.pump_widget(view("Alpha beta gamma", "Gamma delta epsilon"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["Some(0..19)", "Some(0..2)", "Some(6..16)"],
+        "the edited texts highlight their new text"
+    );
+    laid.pump_widget(view("Alpha", "Gamma"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["None", "Some(0..2)", "Some(0..5)"],
+        "a text shrunk under the selection's start highlights nothing"
+    );
+}
+
+/// The highlight takes the area's own style, else the nearest
+/// `DefaultSelectionStyle`'s, else the default.
+///
+/// Red-check: ignore the area's own style (the first case paints the
+/// inherited colour).
+pub(crate) fn the_highlight_colour_follows_the_area_style() {
+    use flui_painting::styling::Color;
+    use flui_widgets::{DefaultSelectionStyle, SelectionStyle};
+
+    let own = SelectionStyle::new(Color::RED, Color::BLACK);
+    let inherited = SelectionStyle::new(Color::GREEN, Color::BLACK);
+    for (wrap, own_style, expected) in [
+        (true, true, own.active),
+        (true, false, inherited.active),
+        (false, false, SelectionStyle::default().active),
+    ] {
+        let area = SelectionArea::new(Text::new("Alpha"));
+        let area = if own_style { area.style(own) } else { area };
+        let mut laid = if wrap {
+            mounted(DefaultSelectionStyle::new(inherited, area))
+        } else {
+            mounted(area)
+        };
+        let runs = {
+            let tree = consumer(&laid);
+            runs_of(&paragraph(tree.state(), "Alpha"))
+        };
+        laid.invoke_semantics_action(selection_request(runs[0], at(runs[0], 0), at(runs[0], 3)))
+            .expect("a selection is accepted");
+        laid.tick();
+        let paragraph = laid.find_all_by_render_type("RenderParagraph")[0];
+        assert_eq!(
+            laid.render_property(paragraph, "selection_color"),
+            Some(format!("{expected:?}")),
+            "own style {own_style}, inherited {wrap}"
+        );
+    }
+}
+
+/// An area's selection is offered as the primary selection and read when
+/// asked, so it answers with what the area holds selected then; another
+/// application selecting takes it, the next selection claims again, and a
+/// collapsed selection lets go.
+///
+/// Fails without the change: nothing claimed the primary selection.
+pub(crate) fn selection_area_offers_its_selection_as_the_primary_selection() {
+    let mut laid = mounted(SelectionArea::new(Column::new((
+        Text::new("Alpha beta"),
+        Text::new("Gamma delta"),
+    ))));
+    let (first, second) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Gamma delta")),
+        )
+    };
+    let primary = laid.primary_selection();
+    let mut select = |anchor: TextPosition, focus: TextPosition| {
+        laid.invoke_semantics_action(selection_request(first[0], anchor, focus))
+            .expect("the selection is accepted");
+        laid.tick();
+    };
+
+    select(at(first[0], 0), at(first[0], 5));
+    assert_eq!(primary.text().as_deref(), Some("Alpha"));
+    select(at(first[0], 6), at(second[0], 5));
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("beta\nGamma"),
+        "the claim reads the selection when asked"
+    );
+
+    primary.select("elsewhere");
+    assert!(!primary.is_claimed(), "another application selected");
+    select(at(second[0], 6), at(second[0], 11));
+    assert_eq!(primary.text().as_deref(), Some("delta"), "claimed again");
+
+    select(at(second[0], 2), at(second[0], 2));
+    assert!(!primary.is_claimed(), "a collapsed selection lets go");
+}
+
+/// A paragraph rebuilt with other text keeps the selection's stored ends,
+/// which may now split a character: the primary selection answers with the
+/// ends snapped against the text as it is, as the highlight paints it.
+pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
+    let mut laid = mounted(SelectionArea::new(Column::new((Text::new("Hello"),))));
+    let first = runs_of(&paragraph(consumer(&laid).state(), "Hello"));
+    let primary = laid.primary_selection();
+    laid.invoke_semantics_action(selection_request(
+        first[0],
+        at(first[0], 0),
+        at(first[0], 4),
+    ))
+    .expect("the selection is accepted");
+    laid.tick();
+    assert_eq!(primary.text().as_deref(), Some("Hell"));
+
+    laid.pump_widget(SelectionArea::new(Column::new((Text::new("東京"),))));
+    laid.tick();
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("東"),
+        "byte 4 splits 京, so the end moves down to the boundary before it"
     );
 }

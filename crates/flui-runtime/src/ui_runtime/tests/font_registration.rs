@@ -19,13 +19,12 @@ const PROBE_SANS: &[u8] =
     include_bytes!("../../../../flui-painting/assets/fonts/probe-sans-400.ttf");
 
 fn ui_runtime_over(fonts: &FontCollection) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         test_window(),
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            crate::presentation::test_clipboard(),
             fonts,
             flui_scheduler::ClockSource::Platform,
         ),

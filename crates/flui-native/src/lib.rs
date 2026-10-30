@@ -105,7 +105,7 @@
 //!
 //! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
 //!   created)
-//! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
+//! - **In-Memory Clipboard**: a clipboard that reads back what the application wrote
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
@@ -246,6 +246,7 @@ pub use window::installation::{
 // this crate's public API (the window-open family lives with its
 // capability types in `owner`).
 pub use error::{BootstrapError, PlatformError, PlatformResult};
+pub use host::{NativeClipboard, NativePrimarySelection};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;
@@ -511,13 +512,12 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
     }
 }
 
-/// The winit host, as [`current_platform`] starts it on Linux.
+/// The winit host, as [`current_platform`] starts it on Linux, after the
+/// display server it will open is checked against Linux's floor: winit's own
+/// connection never reports a missing `xdg_wm_base` or RandR 1.5 as one.
 #[cfg(all(target_os = "linux", feature = "winit-backend"))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the signature a build without the winit host answers with an error"
-)]
 fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
+    display::linux::floor::probe(&display::linux::protocol::Environment::current())?;
     Ok(Box::new(WinitPlatform::new()))
 }
 
@@ -660,15 +660,23 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// ```rust,ignore
 /// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
-///     let platform = flui_native::android_platform(app);
+///     let platform = flui_native::android_platform(app).expect("API level at FLUI's floor");
 ///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
 ///     let _ = platform.run(Rc::new(App::default()));
 /// }
 /// ```
+///
+/// # Errors
+///
+/// [`PlatformError::UnsupportedOs`] on an API level below FLUI's floor, as a
+/// second line behind the APK's `minSdk` (ADR-0244 §3).
 #[cfg(target_os = "android")]
-#[must_use]
-pub fn android_platform(app: android_activity::AndroidApp) -> Box<dyn Platform> {
-    Box::new(HostPlatform::<hosts::android::Android>::new(app))
+pub fn android_platform(
+    app: android_activity::AndroidApp,
+) -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(HostPlatform::<hosts::android::Android>::try_new(
+        app,
+    )?))
 }
 
 #[cfg(test)]

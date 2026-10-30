@@ -670,10 +670,30 @@ impl UiRuntime {
                 );
             }
             for (presentation, _, step) in changed {
-                if presentation.closing_requested.get()
-                    && terminal_close_mode(first_panic.is_some())
-                        == flui_interaction::__runtime::CloseMode::PreservingFailure
-                {
+                // Every path to Detached (an accepted close, the window
+                // destroyed, the session's end) commits the focused field's
+                // composition first, keeping its text, so the observers and
+                // the save see the preedit as text (ADR-0142 item 4). The
+                // field's own unmount then finds nothing left to commit. A
+                // close already holding a failure runs no more owner code, and
+                // a commit that fails turns this close into one that does.
+                let preserving = |failed: bool| {
+                    presentation.closing_requested.get()
+                        && terminal_close_mode(failed)
+                            == flui_interaction::__runtime::CloseMode::PreservingFailure
+                };
+                if step == AppLifecycleState::Detached && !preserving(first_panic.is_some()) {
+                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                        presentation.text_input().complete_composition();
+                    }))
+                    .err();
+                    self.record_lifecycle_failure(
+                        &mut first_panic,
+                        failure,
+                        "presentation composition commit",
+                    );
+                }
+                if preserving(first_panic.is_some()) {
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         presentation
                             .widgets()
@@ -1057,6 +1077,74 @@ mod tests {
         assert_eq!(store.text(), "ab東京", "a second request changes nothing");
     }
 
+    /// A close whose composition commit fails holds that failure: the
+    /// presentation's observers, scoped and legacy, hear no Detached after it
+    /// (ADR-0123), and the close resumes the commit's failure.
+    ///
+    /// Red-check: drop the preserving check after the commit — the legacy
+    /// observer hears Detached.
+    fn a_failed_close_commit_withholds_the_detached_notice() {
+        use flui_interaction::testing::InMemoryTextStore;
+        use flui_platform::text_store::{
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+        };
+
+        #[derive(Default)]
+        struct Heard(parking_lot::Mutex<Vec<AppLifecycleState>>);
+
+        impl flui_view::WidgetsBindingObserver for Heard {
+            fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+                self.0.lock().push(state);
+            }
+        }
+
+        let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
+            std::sync::Arc::new(flui_native::FakeTextInput::new());
+        let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
+        let id = ui_runtime.presentation_id();
+        let _sibling = ui_runtime.install_second_presentation_for_test();
+        let store = InMemoryTextStore::new("ab");
+        let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+        let _token = ui_runtime
+            .text_input_handle()
+            .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+            .expect("headless presentation supports text input");
+        let composing = Composition {
+            range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+            hides_caret: false,
+        };
+        assert_eq!(
+            erased.request_lock(
+                LockGrant::read_write(move |session| {
+                    session.insert_at_selection("東京").expect("in range");
+                    session.set_composition(Some(composing)).expect("in range");
+                }),
+                LockTiming::Sync,
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        store.set_owner_listener(Some(Rc::new(|| panic!("the field's on_changed failed"))));
+        let heard = std::sync::Arc::new(Heard::default());
+        ui_runtime
+            .presentation_widgets_for_test(id)
+            .add_observer(std::sync::Arc::clone(&heard)
+                as std::sync::Arc<dyn flui_view::WidgetsBindingObserver>);
+
+        let closed = catch_unwind(AssertUnwindSafe(|| {
+            ui_runtime.close_presentation_entered(id)
+        }));
+        let payload = closed.expect_err("the close resumes the commit's failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("the field's on_changed failed")
+        );
+        assert!(
+            !heard.0.lock().contains(&AppLifecycleState::Detached),
+            "no Detached after the failed commit: {:?}",
+            heard.0.lock()
+        );
+    }
+
     #[test]
     fn presentation_lifecycle_matrix() {
         crate::table_test::run_table(
@@ -1075,6 +1163,10 @@ mod tests {
                 (
                     "an_accepted_close_commits_the_preedit_before_the_guard",
                     an_accepted_close_commits_the_preedit_before_the_guard as fn(),
+                ),
+                (
+                    "a_failed_close_commit_withholds_the_detached_notice",
+                    a_failed_close_commit_withholds_the_detached_notice as fn(),
                 ),
             ],
         );

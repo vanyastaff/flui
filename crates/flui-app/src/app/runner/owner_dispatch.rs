@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -47,7 +47,7 @@ impl RuntimeDispatcher {
         ))
     }
 
-    #[cfg(all(test, not(target_os = "android")))]
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -572,6 +572,9 @@ fn close_presentation(
 /// would tear down an ENTIRE `WindowPolicy::Shared` group out from under a still-open
 /// sibling window.
 pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
+    // A window that closes no longer holds the session end it refused, however
+    // the close came: its guard, the user, or `request_presentation_close`.
+    super::host::release_session_end_refusal(dispatcher.address);
     if let Err(error) = close_presentation(dispatcher, dispatcher.address.presentation_id) {
         tracing::warn!(?dispatcher, ?error, "close_this_window: dispatch refused");
     }
@@ -646,16 +649,17 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
 pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
-    // The process may be gone before a subscriber has finished: write what the
-    // host itself keeps first.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
-        super::placement::flush_all();
-    }
+    deliver_host_notice_while(notice, || true)
+}
+
+/// [`deliver_host_notice`], starting each runtime's subscribers only while
+/// `may_start` allows: the session's end stops once its margin for application
+/// code is spent, whatever the runtimes before spent. A runtime not started is
+/// counted refused.
+pub(super) fn deliver_host_notice_while(
+    notice: &flui_platform::HostNotice,
+    may_start: impl Fn() -> bool,
+) -> NoticeDelivery {
     // The host's shared memory is reclaimed once, ahead of every runtime's own
     // caches and of every subscriber: the notice reaches subscribers on later
     // owner turns.
@@ -683,6 +687,14 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     });
     let mut outcome = NoticeDelivery::default();
     for dispatcher in dispatchers {
+        if !may_start() {
+            outcome.refused += 1;
+            tracing::warn!(
+                ?dispatcher,
+                "the notice's budget is spent; this runtime hears it no more"
+            );
+            continue;
+        }
         match dispatcher.host_notice(notice.clone()) {
             Ok(flui_runtime::owner::Delivery::Driven) => outcome.ran += 1,
             Ok(_) => outcome.queued += 1,
@@ -694,6 +706,52 @@ pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeD
     }
     failure.resume();
     outcome
+}
+
+/// Tell every UI runtime in its slot that the session is ending, as the close
+/// delivery does (ADR-0259 §6, ADR-0260 §3): each presentation commits its
+/// composition and its observers hear `Detached`, so what they publish reaches
+/// the flush after it. A runtime that is checked out runs none of its code; its
+/// composition is lost, a documented limit. A runtime's observers start only
+/// while `margin` is left before `deadline`, whatever the runtimes before it
+/// spent, so the flush keeps the rest. The first panic is contained and
+/// reported by the caller.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: std::time::Duration) {
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        let logical = runtime.installed_host.logical();
+        logical
+            .runtime_ids()
+            .map(|ids| {
+                ids.into_iter()
+                    .filter(|id| {
+                        logical
+                            .runtime_status(*id)
+                            .is_ok_and(|status| !status.checked_out)
+                    })
+                    .map(|id| RuntimeDispatcher { owner_thread, id })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    for dispatcher in dispatchers {
+        if deadline.saturating_duration_since(std::time::Instant::now()) < margin {
+            tracing::warn!(
+                ?dispatcher,
+                "the session end's budget is spent; the remaining windows hear no Detached"
+            );
+            break;
+        }
+        if let Err(error) = dispatcher.lifecycle(AppLifecycleState::Detached) {
+            tracing::debug!(?dispatcher, ?error, "session-end close not delivered");
+        }
+    }
 }
 
 /// How a system notice reached the UI runtimes: on the spot, queued behind a
@@ -1049,6 +1107,83 @@ impl ExitWatchdog {
     }
 }
 
+/// Shut down and drop every hosted UI runtime, leaving an empty host in the
+/// slot. The first panic, the runtimes' destructors included, is kept in
+/// `first_panic`.
+#[cfg(not(target_arch = "wasm32"))]
+fn retire_installed_host(first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+    let displaced = APP_RUNTIME.with(|slot| {
+        std::mem::replace(
+            &mut slot.borrow_mut().installed_host,
+            super::InstalledHost::new(),
+        )
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        displaced.shutdown();
+    }))
+    .err();
+    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
+    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+}
+
+/// Whether a hosted UI runtime is checked out: its code is on the stack.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn any_runtime_checked_out() -> bool {
+    APP_RUNTIME.with(|slot| {
+        let Ok(state) = slot.try_borrow() else {
+            return true;
+        };
+        let logical = state.installed_host.logical();
+        logical.runtime_ids().is_ok_and(|ids| {
+            ids.into_iter().any(|id| {
+                logical
+                    .runtime_status(id)
+                    .is_ok_and(|status| status.checked_out)
+            })
+        })
+    })
+}
+
+/// The session end's teardown and release (ADR-0260 §5, §6): with
+/// `tear_down`, every UI runtime is shut down and dropped, which runs the
+/// application's destructors; then the services are cancelled and the pools
+/// shut down, neither waited for. A panic is held as the exit's terminal
+/// failure (ADR-0258 §2); the steps after it still run. The loop's exit then
+/// finds an empty host.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn end_session_teardown(tear_down: bool) {
+    let mut first_panic = None;
+    if tear_down {
+        retire_installed_host(&mut first_panic);
+    }
+    // Each step has its own containment, as at the loop's exit: a failed
+    // service shutdown still closes execution admission and the pools before
+    // the platform may end the process.
+    let now = std::time::Instant::now();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            if let Ok(mut state) = slot.try_borrow_mut() {
+                drop(state.shutdown_lifecycles(now));
+            }
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end service shutdown");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            if let Ok(mut state) = slot.try_borrow_mut() {
+                state.shutdown_execution(now);
+            }
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end execution shutdown");
+    if let Some(payload) = first_panic {
+        super::terminal::hold_terminal(payload, "session end");
+    }
+}
+
 /// One step of the loop's exit teardown, in the order it runs.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1103,17 +1238,9 @@ pub(super) fn teardown_platform_ui_runtime() {
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
-    let displaced = APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_thread = None;
-        std::mem::replace(&mut state.installed_host, super::InstalledHost::new())
-    });
-    let mut first_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        displaced.shutdown();
-    }))
-    .err();
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "installed host retirement");
+    APP_RUNTIME.with(|slot| slot.borrow_mut().owner_thread = None);
+    let mut first_panic = None;
+    retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);
 
     // The framework's part of the exit runs against one deadline taken
@@ -1203,9 +1330,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // instance) — see that impl's doc.
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let released = APP_RUNTIME.with(|slot| {
-            let state = slot.borrow();
+            let mut state = slot.borrow_mut();
             state.clear_platform_clipboard();
-            state.clear_redraw_window()
+            // The run's providers are user code: they drop outside the borrow.
+            (state.capabilities.take(), state.clear_redraw_window())
         });
         // Ordinarily `None` already: the window-close path released this pin
         // (`release_redraw_window_for`) while the event loop was still alive,

@@ -97,7 +97,8 @@ impl DesktopBuilder {
             args.push(profile_flag.to_string());
         }
 
-        let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected).await?;
+        let env = ctx.floors.cargo_env(&target);
+        let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected, &env).await?;
 
         Ok(BuildArtifacts {
             rust_libs: Vec::new(),
@@ -219,6 +220,14 @@ impl DesktopBuilder {
             std::fs::set_permissions(&staged_exe, perms)?;
         }
 
+        // The release rustc linked the binary for (`MACOSX_DEPLOYMENT_TARGET`),
+        // so the bundle and the binary state the same minimum.
+        let triple = match &ctx.platform {
+            crate::build::platform::Platform::Desktop {
+                target: Some(target),
+            } => target.clone(),
+            _ => format!("{}-apple-darwin", std::env::consts::ARCH),
+        };
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -238,6 +247,8 @@ impl DesktopBuilder {
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>{minimum}</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
@@ -248,6 +259,7 @@ impl DesktopBuilder {
             name = xml_escape(&bundle.name),
             identifier = xml_escape(&bundle.identifier),
             executable = xml_escape(&exe_name),
+            minimum = ctx.floors.macos(&triple),
         );
         std::fs::write(contents.join("Info.plist"), plist)?;
 

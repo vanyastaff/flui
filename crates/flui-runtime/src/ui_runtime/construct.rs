@@ -48,7 +48,7 @@ impl UiRuntime {
     ///
     /// [`UiRuntimeError::InteractionLane`] if the owner-local interaction lane
     /// could not be created.
-    pub fn new(
+    pub fn try_new(
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
         host: RuntimeHostServices<'_>,
@@ -56,7 +56,7 @@ impl UiRuntime {
         Self::with_capacity(DEFAULT_COMMAND_CAPACITY, window, device_pixel_ratio, host)
     }
 
-    /// [`Self::new`] with an explicit inbox capacity.
+    /// [`Self::try_new`] with an explicit inbox capacity.
     ///
     /// # Errors
     ///
@@ -122,8 +122,7 @@ impl UiRuntime {
             scheduler,
             wake,
             needs_redraw,
-            clipboard,
-            storage,
+            capabilities,
             clock,
             text,
             data_transfer,
@@ -145,6 +144,18 @@ impl UiRuntime {
         // with an unwired scheduler wake is not constructible.
         scheduler.set_on_frame_scheduled(Some(Arc::clone(&wake)));
 
+        let sender_prototype = UiCommandSender {
+            tx,
+            capacity,
+            redraw_pending: Arc::clone(&redraw_pending),
+            wake_debt: command_wake_debt,
+            presentation_id,
+            wake: Arc::clone(&wake),
+        };
+        // A provider's answer wakes the owner the way a command does, so the
+        // drain that settles it comes even to an idle loop.
+        let job_wake = sender_prototype.clone();
+        let owner_jobs = crate::capability::OwnerJobs::new(move || job_wake.wake_owner());
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
         let build_in_progress = BuildInProgress::new();
@@ -167,16 +178,9 @@ impl UiRuntime {
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&wake),
-                command_sender: UiCommandSender {
-                    tx: tx.clone(),
-                    capacity,
-                    redraw_pending: Arc::clone(&redraw_pending),
-                    wake_debt: Arc::clone(&command_wake_debt),
-                    presentation_id,
-                    wake: Arc::clone(&wake),
-                },
-                clipboard: Arc::clone(&clipboard),
-                storage: storage.clone(),
+                command_sender: sender_prototype.clone(),
+                capabilities: capabilities.clone(),
+                completions: owner_jobs.completions().clone(),
                 close: close.clone(),
                 clock: &clock,
                 text: text.clone(),
@@ -221,22 +225,15 @@ impl UiRuntime {
             needs_redraw,
             input_taps: crate::InputTaps::new(Arc::clone(&wake)),
             decision_recorder: super::recording::DecisionRecorder::default(),
-            wake: Arc::clone(&wake),
-            clipboard,
-            storage,
+            wake,
+            capabilities,
+            owner_jobs,
             close,
             text,
             #[cfg(any(test, feature = "testing"))]
             now_secs_override: AtomicU64::new(0),
             rx,
-            sender_prototype: UiCommandSender {
-                tx,
-                capacity,
-                redraw_pending: Arc::clone(&redraw_pending),
-                wake_debt: command_wake_debt,
-                presentation_id,
-                wake,
-            },
+            sender_prototype,
             redraw_pending,
             scheduler,
             frame_failure_handler: Rc::new(RefCell::new(None)),
@@ -300,7 +297,6 @@ impl UiRuntime {
             RuntimeServices::construct(RuntimeHostServices::new(
                 wake,
                 needs_redraw,
-                crate::presentation::test_clipboard(),
                 &FontCollection::new(),
                 ClockSource::Platform,
             )),

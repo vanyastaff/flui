@@ -883,7 +883,7 @@ pub(crate) mod samples {
                 action,
                 ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
             )
-            .at(x, 20.0, 1.0)
+            .at_logical(x, 20.0)
         }
 
         #[test]
@@ -1033,6 +1033,9 @@ pub(crate) mod macos {
             contacts: ContactRegistry,
             scrolling: ScrollPhases,
             force: crate::input::apple::force::ForceClick,
+            /// Keys held down whose key code names no code, with the key each
+            /// was pressed as.
+            unplaced: crate::input::keys::UnplacedKeys<u16>,
         }
 
         impl Default for MacInputState {
@@ -1049,6 +1052,7 @@ pub(crate) mod macos {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
                     force: crate::input::apple::force::ForceClick::default(),
+                    unplaced: crate::input::keys::UnplacedKeys::default(),
                 }
             }
         }
@@ -1072,26 +1076,27 @@ pub(crate) mod macos {
                 if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
                     let key_code = event.keyCode();
                     let code = crate::input::apple::keys::keycode_to_code(key_code);
+                    let key = KeyEvent::new(
+                        if event_type == NSEventType::KeyDown {
+                            KeyState::Down
+                        } else {
+                            KeyState::Up
+                        },
+                        extract_key(event, key_code),
+                        code,
+                        time,
+                    )
+                    .with_location(crate::input::keys::location_for_code(code))
+                    .with_modifiers(extract_modifiers(event))
+                    .with_repeat(
+                        if event_type == NSEventType::KeyDown && event.isARepeat() {
+                            KeyRepeat::AutoRepeat
+                        } else {
+                            KeyRepeat::First
+                        },
+                    );
                     return vec![PlatformInput::Keyboard(
-                        KeyEvent::new(
-                            if event_type == NSEventType::KeyDown {
-                                KeyState::Down
-                            } else {
-                                KeyState::Up
-                            },
-                            extract_key(event, key_code),
-                            code,
-                            time,
-                        )
-                        .with_location(crate::input::keys::location_for_code(code))
-                        .with_modifiers(extract_modifiers(event))
-                        .with_repeat(
-                            if event_type == NSEventType::KeyDown && event.isARepeat() {
-                                KeyRepeat::AutoRepeat
-                            } else {
-                                KeyRepeat::First
-                            },
-                        ),
+                        self.unplaced.settle(Some(key_code), key),
                     )];
                 }
                 if event_type == NSEventType::FlagsChanged {
@@ -1122,7 +1127,7 @@ pub(crate) mod macos {
                 let (x, y) = (location.x, view_height - location.y);
                 let placed = |reading: NativeReading| {
                     if x.is_finite() && y.is_finite() {
-                        reading.at(x, y, 1.0)
+                        reading.at_logical(x, y)
                     } else {
                         reading
                     }
@@ -1310,7 +1315,7 @@ pub(crate) mod macos {
                 .with_primary(true)
                 .with_modifiers(modifiers);
                 if x.is_finite() && y.is_finite() {
-                    reading = reading.at(x, y, 1.0);
+                    reading = reading.at_logical(x, y);
                 }
                 decode(&mut self.contacts, &reading)
                     .unwrap_or_else(DecodeError::into_inputs)
@@ -1756,7 +1761,7 @@ pub(crate) mod ios {
                 );
             }
             let moved = pencil(ReadingAction::Move)
-                .at(location.x, location.y, 1.0)
+                .at_logical(location.x, location.y)
                 .with_sensors(sensors);
             let mut events = Vec::new();
             if state == UIGestureRecognizerState::Began {
@@ -1790,7 +1795,7 @@ pub(crate) mod ios {
             };
             let placed = |reading: NativeReading| {
                 if x.is_finite() && y.is_finite() {
-                    reading.at(x, y, 1.0)
+                    reading.at_logical(x, y)
                 } else {
                     reading
                 }
@@ -2031,7 +2036,7 @@ pub(crate) mod ios {
             action,
             ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
         )
-        .at(location.x, location.y, 1.0)
+        .at_logical(location.x, location.y)
         .with_sensors(sensors);
         if contact == PENCIL || contact == CURSOR {
             reading.with_primary(true)
@@ -2104,7 +2109,7 @@ pub(crate) mod ios {
                 ReadingAction::Press(PointerButton::PRIMARY),
                 ReadingTime::epoch(EventTime::from_nanos(10)),
             )
-            .at(1.25, 2.5, 1.0)
+            .at_logical(1.25, 2.5)
             .with_sensors(sensors);
             decode(&mut contacts, &reading)
                 .expect("valid touch")

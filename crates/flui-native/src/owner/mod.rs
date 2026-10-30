@@ -67,10 +67,14 @@
 pub(crate) mod accessibility_slot;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod animation_frame;
 pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test))]
+pub(crate) mod frame_demand;
 pub mod handlers;
 pub(crate) mod headless;
 #[cfg(any(wayland_host, x11_host, test))]
@@ -136,7 +140,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
-use flui_platform::{Clipboard, ClipboardItem, WindowHandler, WindowId, WindowOptions};
+use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
 // ============================================================================
@@ -194,10 +198,32 @@ impl OwnerPlatform {
         self.hooks.on_wake(callback)
     }
 
+    /// The host's plain-text clipboard, owner-local: the application's
+    /// clipboard provider builds its handles over it (ADR-0152).
+    #[must_use]
+    pub fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard> {
+        self.platform.clipboard()
+    }
+
+    /// The host's primary selection, owner-local, where the platform has
+    /// one: the application's primary selection provider builds its handles
+    /// over it (ADR-0152).
+    #[must_use]
+    pub fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        self.platform.primary_selection()
+    }
+
     /// Tell the platform the application released the session end it asked to
     /// wait for. See [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known
@@ -270,7 +296,7 @@ impl OwnerPlatform {
     }
 
     /// Escapes to the residual thread-safe surface: `background_executor`,
-    /// `clipboard`, callback registration, and the rest of §2's "stays on
+    /// callback registration, and the rest of §2's "stays on
     /// `Platform`" list, wrapped in a `Clone + Send + Sync` handle a
     /// `std::thread::scope` worker can freely hold — see
     /// [`SharedPlatform`]'s own doc for why this can no longer be
@@ -378,14 +404,8 @@ impl SharedPlatform {
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]
-    pub fn data_dirs(&self, app: &flui_platform::StorageName) -> Option<crate::storage::DataDirs> {
+    pub fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs> {
         self.platform.data_dirs(app)
-    }
-
-    /// The platform's clipboard interface.
-    #[must_use]
-    pub fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.platform.clipboard()
     }
 
     /// The data-transfer transport (ADR-0038).
@@ -398,6 +418,13 @@ impl SharedPlatform {
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known
@@ -466,17 +493,6 @@ impl SharedPlatform {
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         self.platform.prompt_for_new_path(directory, suggested_name)
-    }
-
-    /// Writes a rich clipboard item (text + metadata).
-    pub fn write_to_clipboard(&self, item: ClipboardItem) {
-        self.platform.write_to_clipboard(item);
-    }
-
-    /// Reads a rich clipboard item.
-    #[must_use]
-    pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        self.platform.read_from_clipboard()
     }
 }
 

@@ -31,8 +31,9 @@
 //! [ADR-0042](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0042-theming-ownership.md);
 //! the app-shell widgets that implement it are tracked in issue #573.
 //!
-//! Applications normally enter through [`run_app`] or
-//! [`run_app_with_config`]; the runner constructs and owns the UI ui_runtime.
+//! Applications normally enter through [`run_app`], with an [`AppLaunch`]
+//! naming the configuration and capabilities; the runner constructs and owns
+//! the UI ui_runtime.
 
 // Proving `flui_engine::Renderer: Send` (for the `Send` frame
 // callbacks that capture it) descends through wgpu-core past the default
@@ -95,10 +96,10 @@ mod table_test;
 
 // Primary exports
 pub use app::{
-    AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling, RootRenderElement,
-    RootRenderView, run_app, run_app_with_config,
+    AppCapabilities, AppConfig, AppLaunch, DiagnosticsProfile, LaunchError, MotionOverride,
+    PointerResampling, RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
 };
-pub use flui_engine::FrameLatency;
+pub use flui_engine::{BackendFailure, FrameLatency, GpuBackend};
 // The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{
@@ -174,14 +175,14 @@ pub use app::open_window;
 #[cfg(target_os = "android")]
 pub use android_activity;
 #[cfg(target_os = "android")]
-pub use app::{run_app_android, run_app_android_with_config};
+pub use app::run_app_android;
 // Bindings re-exports
 pub use bindings::{
     GestureBinding, PipelineCell, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.
-pub use flui_log::{AppIdentity, AppleBundleId};
+pub use flui_log::{AppId, AppIdentity};
 // Convenience re-exports from flui-view
 pub use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
@@ -207,7 +208,7 @@ pub mod prelude {
 
     #[cfg(not(target_os = "ios"))]
     pub use crate::run_direct;
-    pub use crate::{AppConfig, run_app, run_app_with_config};
+    pub use crate::{AppCapabilities, AppConfig, AppLaunch, LaunchError, run_app};
     // Bindings
     pub use crate::{
         GestureBinding, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,

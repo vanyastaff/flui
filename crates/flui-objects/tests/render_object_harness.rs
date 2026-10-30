@@ -1736,6 +1736,50 @@ fn harness_paragraph_publishes_runs_only_while_selectable() {
     }
 }
 
+/// A paragraph's selection paints one box per selected line, behind the
+/// glyphs, and nothing for no range, an empty range, a range past the text
+/// or a transparent colour.
+///
+/// Red-check: paint the selection after the glyphs (the order assertion
+/// fails), or drop `paint_selection` (no box is painted).
+fn harness_paragraph_paints_its_selection_behind_the_glyphs() {
+    for (selection, color, expected_boxes) in [
+        (Some(0..7), Color::BLUE, 2_usize),
+        (Some(4..7), Color::BLUE, 1),
+        (Some(2..99), Color::BLUE, 2),
+        (Some(3..3), Color::BLUE, 0),
+        (None, Color::BLUE, 0),
+        (Some(0..7), Color::TRANSPARENT, 0),
+    ] {
+        let mut paragraph = RenderParagraph::new(TextSpan::new("one\ntwo"), TextDirection::Ltr);
+        let _ = paragraph.set_selection(selection.clone());
+        let _ = paragraph.set_selection_color(color);
+        let run = RenderTester::mount(box_node(paragraph))
+            .with_constraints(loose(200.0))
+            .run_frame();
+        let commands = run.display_commands();
+        let boxes: Vec<usize> = commands
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| command.line.contains("DrawRect"))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            boxes.len(),
+            expected_boxes,
+            "{selection:?} in {color:?}; commands: {commands:#?}"
+        );
+        let glyphs = commands
+            .iter()
+            .position(|command| command.line.contains("Paragraph"))
+            .unwrap_or_else(|| panic!("the text must paint; commands: {commands:#?}"));
+        assert!(
+            boxes.iter().all(|&index| index < glyphs),
+            "the highlight precedes the glyphs; commands: {commands:#?}"
+        );
+    }
+}
+
 fn harness_icon_resolves_square_and_optional_glyph_together() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
     use flui_painting::TextSizing;
@@ -12940,6 +12984,10 @@ fn family_text_and_image() {
             (
                 "paragraph_publishes_runs_only_while_selectable",
                 harness_paragraph_publishes_runs_only_while_selectable,
+            ),
+            (
+                "paragraph_paints_its_selection_behind_the_glyphs",
+                harness_paragraph_paints_its_selection_behind_the_glyphs,
             ),
             (
                 "icon_resolves_square_and_optional_glyph_together",

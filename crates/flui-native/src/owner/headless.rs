@@ -14,9 +14,9 @@ use std::{
     thread::{self, ThreadId},
 };
 
+use crate::host::MemoryClipboard;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
-use flui_platform::InMemoryClipboard;
 use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
@@ -205,7 +205,7 @@ pub(crate) struct HeadlessState {
     /// Called when a test changes the keyboard layout.
     pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
     background_executor: Arc<TestExecutor>,
-    pub(crate) clipboard: Arc<InMemoryClipboard>,
+    pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The windows the platform tracks: the window feature's.
     pub(crate) windows: Arc<dyn TrackedWindows>,
@@ -250,6 +250,10 @@ pub(crate) struct HeadlessState {
     /// How many times the host told this platform it released a session end it
     /// had answered with a block.
     pub(crate) session_end_releases: usize,
+    /// How this platform stands in for the session's end: `Hold`, a desktop
+    /// that waits for a block, until
+    /// [`HeadlessPlatform::with_session_end_support`](crate::HeadlessPlatform::with_session_end_support).
+    pub(crate) session_end_support: flui_platform::SessionEndSupport,
     /// What `Platform::preferences` reports: unknown until
     /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
     pub(crate) preferences: flui_platform::SystemPreferences,
@@ -323,7 +327,7 @@ impl HeadlessLoop {
             app,
             keyboard_layout_changed: None,
             background_executor: Arc::new(TestExecutor::new("background")),
-            clipboard: Arc::new(InMemoryClipboard::new()),
+            clipboard: Arc::new(MemoryClipboard::new()),
             is_running: false,
             windows,
             keyboard_layout: "en-US".to_string(),
@@ -336,6 +340,7 @@ impl HeadlessLoop {
             devices: H::devices(),
             displays: H::displays(),
             session_end_releases: 0,
+            session_end_support: flui_platform::SessionEndSupport::Hold,
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
             display_failure: None,

@@ -219,13 +219,12 @@ fn manual_runtime(clock: ManualClock) -> (UiRuntime, ManualWindow) {
         _native: Rc::clone(window.window()),
         handler,
     };
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Manual(clock),
         ),

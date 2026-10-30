@@ -16,19 +16,23 @@
 //!
 //! The loop names no feature. What it keeps of one, it keeps through a hook
 //! declared here that the host's table fills (`WaylandHost`): the displays,
-//! the seats' input, the Settings portal's preferences, the notice channel
-//! and the sources of logind's and the kernel's notices. The input binds the
+//! the seats' input, the clipboard, the Settings portal's preferences, the
+//! notice channel and the sources of logind's and the kernel's notices. The
+//! input binds the
 //! globals it speaks as the compositor announces them, records what its
 //! objects report, and delivers it to the windows on each turn before they
 //! settle (`WaylandInput`). The last user input the seats report, which an
 //! activation token names, is kept here too (`LastInput`): the input feature
 //! records it, the window feature reads it. A window's own frame reaches the
 //! input the same way (`FramePointer`): the window feature draws it, the
-//! input tells it what the pointer does over its surfaces. Its windows are
-//! the window feature's
-//! (`window::linux::wayland`): the loop holds them as `LoopWindow`s and asks
-//! each to settle after every read, and the window feature implements the
-//! dispatch of its own protocol objects on `WaylandState`.
+//! input tells it what the pointer does over its surfaces. The clipboard
+//! binds `wl_data_device_manager` the same way and keeps a data device on each
+//! seat the input holds, which the loop hands it every turn
+//! (`WaylandClipboard`); it sets its selection under the last user input. Its
+//! windows are the window feature's (`window::linux::wayland`): the loop
+//! holds them as `LoopWindow`s and asks each to settle after every read, and
+//! the window feature implements the dispatch of its own protocol objects on
+//! `WaylandState`.
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use event_loop::OutputName;
@@ -41,8 +45,8 @@ pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts,
-    PresentationTime, SeatWindow, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
-    WaylandState, WindowSeed, WindowTable,
+    PresentationTime, SeatWindow, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput,
+    WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -428,6 +432,10 @@ mod event_loop {
         /// the windows' activation tokens name.
         fn input(last_input: LastInput) -> Arc<dyn WaylandInput>;
 
+        /// The clipboard, made on the owner thread, which sets its selection
+        /// under the user input `last_input` records last.
+        fn clipboard(last_input: LastInput) -> Arc<dyn WaylandClipboard>;
+
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
@@ -568,12 +576,60 @@ mod event_loop {
         /// Call `callback` on the owner thread each time the layout changes.
         fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
 
+        /// The seats the input holds now, which the clipboard keeps a data
+        /// device on.
+        fn seats(&self) -> Vec<WlSeat>;
+
         /// The loop ends: let go of the windows and the callbacks.
         fn release(&self);
 
         /// The cursor the input last showed, for a test.
         #[cfg(any(test, feature = "testing"))]
         fn shown_cursor(&self) -> Option<ShownCursor>;
+    }
+
+    /// What the loop asks of the clipboard: the clipboard feature's
+    /// (`clipboard::linux::wayland`), which the table registers, and what
+    /// [`Platform::clipboard`] hands out, with the primary selection
+    /// [`Platform::primary_selection`] hands out where the compositor has
+    /// one.
+    ///
+    /// Reached on the owner thread. The dispatch of its objects records what
+    /// they report and runs no handler; a read answers through its resolver,
+    /// and a request for the application's primary selection waits for
+    /// [`deliver`](Self::deliver).
+    pub(crate) trait WaylandClipboard:
+        host::NativeClipboard + host::NativePrimarySelection + Send + Sync
+    {
+        /// Whether the compositor has a primary selection the clipboard
+        /// bound.
+        fn has_primary_selection(&self) -> bool;
+
+        /// Answer the requests for the application's primary selection the
+        /// dispatch recorded, asking its text with no lock of the loop or of
+        /// the clipboard held.
+        fn deliver(&self);
+
+        /// The compositor announced global `name`: bind it if the clipboard
+        /// speaks its interface.
+        fn global(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        );
+
+        /// The compositor removed global `name`.
+        fn global_removed(&self, name: u32);
+
+        /// The seats the input holds now: each has a data device, and a seat
+        /// gone lets go of its own.
+        fn seats(&self, seats: &[WlSeat]);
+
+        /// The loop ends: let go of the devices and the selection.
+        fn release(&self);
     }
 
     /// An output by its global's name, which the compositor numbers alike for
@@ -879,9 +935,25 @@ mod event_loop {
         live: LiveOutputs,
         /// The seats' input, offered every global the loop does not bind.
         input: Arc<dyn WaylandInput>,
+        /// The clipboard, offered the same globals.
+        clipboard: Arc<dyn WaylandClipboard>,
     }
 
     impl WaylandState {
+        /// Offer global `name` to the features that bind theirs.
+        fn offer_global(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<Self>,
+        ) {
+            self.input.global(registry, name, interface, version, queue);
+            self.clipboard
+                .global(registry, name, interface, version, queue);
+        }
+
         fn bind_output(
             &mut self,
             registry: &WlRegistry,
@@ -942,12 +1014,11 @@ mod event_loop {
                     name,
                     interface,
                     version,
-                } => state
-                    .input
-                    .global(registry, name, &interface, version, queue),
+                } => state.offer_global(registry, name, &interface, version, queue),
                 wl_registry::Event::GlobalRemove { name } => {
                     state.remove_output(name);
                     state.input.global_removed(name);
+                    state.clipboard.global_removed(name);
                 }
                 _ => {}
             }
@@ -1198,6 +1269,7 @@ mod event_loop {
         owner_thread: ThreadId,
         displays: Arc<dyn WaylandDisplays>,
         input: Arc<dyn WaylandInput>,
+        clipboard: Arc<dyn WaylandClipboard>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -1252,8 +1324,9 @@ mod event_loop {
         ///
         /// # Errors
         /// [`PlatformError::Init`] when no compositor answers, libwayland
-        /// cannot be loaded, or the compositor lacks `wl_compositor` or
-        /// `xdg_wm_base`.
+        /// cannot be loaded, or the compositor lacks `wl_compositor`;
+        /// [`PlatformError::MissingRequirement`] when it lacks `xdg_wm_base`,
+        /// part of Linux's floor (ADR-0244 §3).
         pub(crate) fn try_new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
@@ -1270,7 +1343,10 @@ mod event_loop {
                 .map_err(|error| init("wl_compositor", &error))?;
             let wm_base = globals
                 .bind::<XdgWmBase, _, _>(&handle, 1..=WM_BASE_VERSION, ())
-                .map_err(|error| init("xdg_wm_base", &error))?;
+                .map_err(|error| {
+                    tracing::error!(%error, "Wayland: xdg_wm_base");
+                    crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
+                })?;
             let viewporter = globals
                 .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())
                 .ok();
@@ -1300,10 +1376,12 @@ mod event_loop {
             let live = LiveOutputs::default();
             let last_input = LastInput::default();
             let input = H::input(last_input.clone());
+            let clipboard = H::clipboard(last_input.clone());
             let mut state = WaylandState {
                 outputs: Vec::new(),
                 live: live.clone(),
                 input: Arc::clone(&input),
+                clipboard: Arc::clone(&clipboard),
             };
             let announced = globals.contents().with_list(|list| {
                 list.iter()
@@ -1314,9 +1392,14 @@ mod event_loop {
                 if interface == WlOutput::interface().name {
                     state.bind_output(globals.registry(), name, version, &handle);
                 } else {
-                    input.global(globals.registry(), name, &interface, version, &handle);
+                    state.offer_global(globals.registry(), name, &interface, version, &handle);
                 }
             }
+            // The seats bound so far get their data devices now: the first
+            // window opens before the loop's first turn, and a seat's
+            // selection reaches only a device that exists when the keyboard
+            // enters.
+            clipboard.seats(&input.seats());
             let waker = Arc::new(
                 LoopWaker::try_new().map_err(|error| init("the loop's wake descriptor", &error))?,
             );
@@ -1366,6 +1449,7 @@ mod event_loop {
                 owner_thread: std::thread::current().id(),
                 displays: H::displays(),
                 input,
+                clipboard,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
@@ -1559,11 +1643,17 @@ mod event_loop {
         /// loop is to end.
         fn turn(&self, limit: Option<Duration>) -> Result<bool, PlatformError> {
             self.dispatch_pending()?;
+            // Each seat the input holds has a data device before a window it
+            // focuses is told the seat's selection.
+            self.clipboard.seats(&self.input.seats());
             // The input the seats reported reaches the windows before they
             // settle, so a frame they deliver follows the input it shows.
             // Neither holds a lock of the loop: a handler may open, close or
             // quit.
             self.input.deliver();
+            // The application's selection is asked for its text here, at the
+            // turn, not inside the dispatch that recorded the request.
+            self.clipboard.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1749,6 +1839,7 @@ mod event_loop {
                 window.release();
             }
             self.input.release();
+            self.clipboard.release();
             let quit = self.app.quit_requested();
             self.app.release();
             quit.or_resume(());
@@ -1888,6 +1979,26 @@ mod event_loop {
     impl host::Displays<WaylandLoop> for WaylandLoop {
         fn snapshot(owner: &WaylandLoop) -> Result<DisplaySnapshot, PlatformError> {
             owner.displays.snapshot()
+        }
+    }
+
+    /// The clipboard position is the loop's: the seats' selection, through
+    /// the clipboard the table registered.
+    impl host::Clipboard<WaylandLoop> for WaylandLoop {
+        fn clipboard(owner: &WaylandLoop) -> Rc<dyn host::NativeClipboard> {
+            Rc::new(Arc::clone(&owner.clipboard))
+        }
+    }
+
+    /// The primary selection position is the loop's too, where the
+    /// compositor has `zwp_primary_selection_device_manager_v1`.
+    impl host::PrimarySelection<WaylandLoop> for WaylandLoop {
+        fn primary_selection(owner: &WaylandLoop) -> Option<Rc<dyn host::NativePrimarySelection>> {
+            owner.clipboard.has_primary_selection().then(
+                || -> Rc<dyn host::NativePrimarySelection> {
+                    Rc::new(Arc::clone(&owner.clipboard))
+                },
+            )
         }
     }
 

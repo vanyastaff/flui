@@ -7,6 +7,7 @@ use super::{DispatchError, OwnerHost, Residence, RuntimeEntry};
 
 /// Current scheduling state of one published UI runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RuntimeStatus {
     /// Current primary presentation, including while a close is awaiting delivery.
     pub primary: PresentationAddress,
@@ -14,6 +15,10 @@ pub struct RuntimeStatus {
     pub phase: SchedulerPhase,
     /// Whether the runtime's lifecycle currently allows frames.
     pub frames_enabled: bool,
+    /// Whether the runtime is leased to an operation now: its own code is
+    /// running, so none of its callbacks (subscribers, close handlers) can
+    /// run until the lease returns.
+    pub checked_out: bool,
 }
 
 impl RuntimeEntry {
@@ -32,6 +37,7 @@ impl RuntimeEntry {
             },
             phase: scheduler.phase(),
             frames_enabled: scheduler.frames_enabled(),
+            checked_out: !matches!(self.residence, Residence::Resident(_)),
         }
     }
 }

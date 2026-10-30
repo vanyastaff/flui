@@ -33,9 +33,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
-use super::frame_pacing::{
-    BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
-};
+use super::frame_pacing::{FallbackGate, WakeAction, frame_is_dirty, wake_action};
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
     with_owner_platform,
@@ -48,28 +46,8 @@ use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
     retry_surface_recreation, settle_surface_availability,
 };
-use crate::app::AppConfig;
 use crate::app::hot_reload::WorkerReload;
-
-/// Run a FLUI application on iOS with default configuration.
-///
-/// Call this from the Rust application entry point. UIKit owns the process loop.
-pub fn run_app_ios<V>(root: V)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    run_app_ios_with_config(root, AppConfig::default());
-}
-
-/// Run a FLUI application on iOS with custom configuration.
-pub fn run_app_ios_with_config<V>(root: V, config: AppConfig)
-where
-    V: View + StatelessView + Clone + 'static,
-{
-    let _installation = crate::app::logging::init_managed_logging(&config);
-    tracing::info!(title = %config.title, "Starting FLUI application on iOS");
-    run_ios(root, config);
-}
+use crate::app::{AppConfig, LaunchError};
 
 use super::session_controller::{SessionController, contain};
 pub(in crate::app) type IOSController = SessionController<IOSSceneSessionId>;
@@ -200,18 +178,15 @@ fn stop_process() {
     teardown_platform_ui_runtime();
 }
 
-fn run_ios<V>(root: V, config: AppConfig)
+pub(super) fn run_ios<V>(root: V, config: AppConfig) -> Result<(), LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
-    let platform = match IOSPlatform::try_new() {
-        Ok(platform) => platform,
-        Err(error) => {
-            tracing::error!(%error, "iOS initialization failed");
-            return;
-        }
-    };
+    let platform = IOSPlatform::try_new().map_err(|error| {
+        tracing::error!(%error, "iOS initialization failed");
+        LaunchError::from_platform(error)
+    })?;
     // The loop makes a session's window, with its handler, before the
     // session connects; the connection names the session and its window, so
     // the routes made for that session are adopted for that window, whatever
@@ -240,10 +215,12 @@ where
         }
         scene_event(event)
     });
-    if let Err(error) = platform.on_scene_event(events, handlers) {
+    platform.on_scene_event(events, handlers).map_err(|error| {
         tracing::error!(%error, "iOS scene registration failed");
-        return;
-    }
+        LaunchError::Platform {
+            source: std::sync::Arc::new(error),
+        }
+    })?;
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     let result = Box::new(platform).run(crate::app::runner::app_handler(move |owner| {
         install_owner_platform(owner)?;
@@ -277,9 +254,12 @@ where
         });
         Ok(())
     }));
-    if let Err(error) = result {
+    result.map_err(|error| {
         tracing::error!(%error, "iOS platform failed");
-    }
+        LaunchError::Platform {
+            source: std::sync::Arc::new(error),
+        }
+    })
 }
 
 /// The iOS bootstrap: window, GPU renderer, UI runtime, and callback wiring.
@@ -348,7 +328,13 @@ where
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
+            // UIKit owns the process by now, so a refusal cannot reach
+            // `run_app`'s caller: it is logged as one, and the scene fails.
+            if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&e) {
+                tracing::error!(%unsupported, "this system cannot run FLUI");
+            } else {
+                tracing::error!("GPU init failed: {:?}", e);
+            }
             return Err(anyhow::anyhow!(e).context("GPU init failed"));
         }
     };
@@ -589,9 +575,10 @@ impl IosFrameDriver {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
                 // Frames disabled: service owner commands, async tasks, and
-                // input deadlines, then pace a self-re-arming task.
+                // input deadlines. A task that asks for another wake is paced
+                // by the display link, which ticks at most once per refresh and
+                // not at all while backgrounded (ADR-0268).
                 ui_runtime.pump_background();
-                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
                 return;
             }
             WakeAction::Render => {}

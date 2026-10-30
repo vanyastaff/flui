@@ -186,6 +186,52 @@ fn covered(painter: &TextPainter) -> bool {
         .all(|run| run.glyphs().iter().all(|glyph| glyph.id != 0))
 }
 
+/// The colour emoji families the hosts ship.
+const COLOUR_EMOJI_FAMILIES: [&str; 3] =
+    ["Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji"];
+
+/// Whether `font`'s face `index` carries colour glyphs: a `COLR`, `CBDT`,
+/// `sbix` or `SVG ` table in its table directory.
+fn has_colour_table(font: &[u8], index: u32) -> bool {
+    let read_u32 = |at: usize| {
+        font.get(at..at + 4)
+            .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+    let directory = if font.starts_with(b"ttcf") {
+        read_u32(12 + 4 * index as usize)
+    } else {
+        Some(0)
+    };
+    let Some(directory) = directory.map(|at| at as usize) else {
+        return false;
+    };
+    let Some(tables) = font
+        .get(directory + 4..directory + 6)
+        .map(|bytes| usize::from(u16::from_be_bytes([bytes[0], bytes[1]])))
+    else {
+        return false;
+    };
+    (0..tables).any(|table| {
+        let record = directory + 12 + 16 * table;
+        font.get(record..record + 4).is_some_and(|tag| {
+            [b"COLR", b"CBDT", b"sbix", b"SVG "]
+                .iter()
+                .any(|colour| colour.as_slice() == tag)
+        })
+    })
+}
+
+/// Whether every glyph of `painter`'s paragraph is mapped and the run of its
+/// last line comes from a face with colour glyphs.
+fn colour_covered(painter: &TextPainter) -> bool {
+    let paragraph = recorded(painter);
+    covered(painter)
+        && paragraph.runs().last().is_some_and(|run| {
+            let face = run.face();
+            has_colour_table((**face.blob().bytes()).as_ref(), face.key().index)
+        })
+}
+
 /// `painter` painted at [`ORIGIN`] under a uniform `scale`, read back from a
 /// [`WIDE`] white target.
 fn read_back(
@@ -353,19 +399,35 @@ fn cjk_breaks_at_a_line_separator(renderer: &crate::headless::HeadlessRenderer) 
 
 /// A colour emoji after U+2028 paints its colour on line 2, and nothing
 /// colourful on line 1.
+///
+/// The style names the host's colour emoji family: fallback alone can hand
+/// the emoji to a monochrome face that also maps it (DejaVu Sans on Linux),
+/// and a monochrome glyph says nothing about the colour page.
 fn colour_emoji_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
-    let painter = laid_out(
-        &fonts,
-        "A\u{2028}😀",
-        black(32.0),
-        TextDirection::Ltr,
-        f64::from(WIDE.0) - 16.0,
-    );
-    if !covered(&painter) {
-        println!("colour_emoji_on_line_two: skipped, no host face covers the emoji");
+    let lay_out = |style| {
+        laid_out(
+            &fonts,
+            "A\u{2028}😀",
+            style,
+            TextDirection::Ltr,
+            f64::from(WIDE.0) - 16.0,
+        )
+    };
+    if !COLOUR_EMOJI_FAMILIES
+        .into_iter()
+        .any(|family| colour_covered(&lay_out(black(32.0).with_font_family(family))))
+    {
+        println!("colour_emoji_on_line_two: skipped, no host colour emoji face");
         return;
     }
+    // The style names no emoji family: the emoji generic must reach the
+    // host's colour face ahead of a text face that maps emoji in monochrome.
+    let painter = lay_out(black(32.0));
+    assert!(
+        colour_covered(&painter),
+        "the default style shapes the emoji in the host's colour face"
+    );
     let pixels = read_back(renderer, &painter, 1.0);
     assert!(
         ink_in(&pixels, band(&painter, 0), everywhere(), saturated).is_empty(),

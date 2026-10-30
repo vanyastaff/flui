@@ -79,11 +79,16 @@ mod arbiter;
 mod clipboard;
 mod composition_ledger;
 mod generation;
+mod primary_selection;
 
 pub use arbiter::LockArbiter;
-pub use clipboard::ClipboardHandle;
+pub use clipboard::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 pub use composition_ledger::{CompositionLedger, committed_text};
 pub use generation::EditGeneration;
+pub use primary_selection::{
+    PrimaryClaim, PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend,
+    PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
+};
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///

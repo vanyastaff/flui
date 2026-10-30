@@ -117,13 +117,12 @@ impl Rig {
         let window = crate::owner_publication::window();
         // A native host owns the window; the runtime holds it weakly.
         let native_window = Rc::clone(window.window());
-        let runtime = UiRuntime::new(
+        let runtime = UiRuntime::try_new(
             window,
             1.0,
             RuntimeHostServices::new(
                 Arc::new(|| {}),
                 Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform::InMemoryClipboard::new()),
                 &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Manual(clock.clone()),
             ),

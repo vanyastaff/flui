@@ -584,29 +584,34 @@ fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
 /// headless renderer, which only the facade depends on together).
 /// `--test-threads 1`: each test builds its own `wgpu::Device`, and a software
 /// rasterizer serializes submission, so parallel tests saturate it.
-fn gpu_test_plan() -> Vec<Step> {
-    vec![
-        Cmd::cargo([
-            "nextest",
-            "run",
-            "-p",
-            "flui-engine",
-            "--features",
-            "testing",
-            "--lib",
-            "--test",
-            "raster_backpressure_allocation",
-        ])
-        .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
-        .env("FLUI_REQUIRE_GPU", "1")
-        .into(),
-        Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
-            .args(["--features", "gpu-readback-tests"])
-            .args(["--test", "composited_layer_update_readback"])
-            .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
-            .env("FLUI_REQUIRE_GPU", "1")
-            .into(),
-    ]
+fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
+    let engine = Cmd::cargo([
+        "nextest",
+        "run",
+        "-p",
+        "flui-engine",
+        "--features",
+        "testing",
+        "--lib",
+        "--test",
+        "raster_backpressure_allocation",
+    ]);
+    let facade = Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
+        .args(["--features", "gpu-readback-tests"])
+        .args(["--test", "composited_layer_update_readback"]);
+    [engine, facade]
+        .into_iter()
+        .map(|suite| {
+            let suite = suite
+                .args(["--locked", "--no-fail-fast", "--test-threads", "1"])
+                .env("FLUI_REQUIRE_GPU", "1");
+            match backend {
+                Some(backend) => suite.env("WGPU_BACKEND", backend.env_value()),
+                None => suite,
+            }
+            .into()
+        })
+        .collect()
 }
 
 /// CI's `miri` job: selected ownership and containment contracts under Miri.
@@ -888,7 +893,7 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
         runner.dry_run || installed(program, &["--version"])
     }))?;
     runner.steps(&miri_plan())?;
-    runner.steps(&gpu_test_plan())?;
+    runner.steps(&gpu_test_plan(None))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1053,17 +1058,41 @@ pub(crate) fn wasm_test(args: &WasmTestArgs) -> anyhow::Result<ExitCode> {
 /// Arguments for `cargo xtask gpu-test`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct GpuTestArgs {
+    /// The wgpu backend the suites render on; the host's choice when absent.
+    #[arg(long, value_enum)]
+    pub(crate) backend: Option<GpuBackend>,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
 
+/// A backend `gpu-test` can pin through `WGPU_BACKEND`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum GpuBackend {
+    Vulkan,
+    Gl,
+    Metal,
+    Dx12,
+}
+
+impl GpuBackend {
+    /// The name `WGPU_BACKEND` takes for it.
+    fn env_value(self) -> &'static str {
+        match self {
+            Self::Vulkan => "vulkan",
+            Self::Gl => "gl",
+            Self::Metal => "metal",
+            Self::Dx12 => "dx12",
+        }
+    }
+}
+
 /// `cargo xtask gpu-test`: the GPU readback suites.
 ///
-/// CI renders on Windows' WARP software rasterizer; locally the host adapter
-/// renders, so a pixel mismatch CI does not show is a host difference to
-/// investigate, not a CI result.
+/// CI renders them on Mesa's lavapipe (Vulkan) and llvmpipe (GL); locally the
+/// host adapter renders, so a pixel mismatch CI does not show is a host
+/// difference to investigate, not a CI result.
 pub(crate) fn gpu_test(args: &GpuTestArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().steps(&gpu_test_plan()))
+    done(args.run.runner().steps(&gpu_test_plan(args.backend)))
 }
 
 /// Arguments for `cargo xtask miri`.
@@ -1171,10 +1200,17 @@ mod tests {
 
     fn gpu_gate_requires_an_adapter_for_both_suites() {
         assert_eq!(
-            lines(&gpu_test_plan()),
+            lines(&gpu_test_plan(None)),
             [
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
+            ]
+        );
+        assert_eq!(
+            lines(&gpu_test_plan(Some(GpuBackend::Gl))),
+            [
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
     }

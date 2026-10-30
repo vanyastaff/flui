@@ -121,6 +121,25 @@ pub(crate) struct AChoreographer {
     _opaque: [u8; 0],
 }
 
+/// See the Android re-export.
+#[cfg(not(target_os = "android"))]
+#[repr(C)]
+pub(crate) struct AChoreographerFrameCallbackData {
+    _opaque: [u8; 0],
+}
+/// What a vsync callback is handed; on Android the NDK's own.
+#[cfg(target_os = "android")]
+pub(crate) use android_activity::ndk_sys::AChoreographerFrameCallbackData;
+
+/// `void (*)(int64_t frameTimeNanos, void* data)`, the frame callback of both
+/// posts: `AChoreographer_frameCallback64`, and on a 64-bit process
+/// `AChoreographer_frameCallback`, whose `long` is the same 64 bits.
+pub(crate) type FrameCallback = unsafe extern "C" fn(i64, *mut c_void);
+
+/// `void (*)(const AChoreographerFrameCallbackData*, void* data)`.
+pub(crate) type VsyncCallback =
+    unsafe extern "C" fn(*const AChoreographerFrameCallbackData, *mut c_void);
+
 /// `void (*)(int64_t vsyncPeriodNanos, void* data)`.
 pub(crate) type RefreshRateCallback = unsafe extern "C" fn(i64, *mut c_void);
 
@@ -170,7 +189,7 @@ ndk_function!(
     /// (`<android/choreographer.h>`).
     ChoreographerInstance,
     c"AChoreographer_getInstance",
-    30,
+    24,
     unsafe extern "C" fn() -> *mut AChoreographer
 );
 ndk_function!(
@@ -190,6 +209,57 @@ ndk_function!(
     unsafe extern "C" fn(*mut AChoreographer, RefreshRateCallback, *mut c_void)
 );
 
+#[cfg(target_pointer_width = "64")]
+ndk_function!(
+    /// `void AChoreographer_postFrameCallback(AChoreographer*,
+    /// AChoreographer_frameCallback, void*)`, whose callback takes the frame
+    /// time as a `long`: 64 bits only on a 64-bit process, so a 32-bit one
+    /// never posts it.
+    PostFrameCallback,
+    c"AChoreographer_postFrameCallback",
+    24,
+    unsafe extern "C" fn(*mut AChoreographer, FrameCallback, *mut c_void)
+);
+ndk_function!(
+    /// `void AChoreographer_postFrameCallback64(AChoreographer*,
+    /// AChoreographer_frameCallback64, void*)`.
+    PostFrameCallback64,
+    c"AChoreographer_postFrameCallback64",
+    29,
+    unsafe extern "C" fn(*mut AChoreographer, FrameCallback, *mut c_void)
+);
+ndk_function!(
+    /// `void AChoreographer_postVsyncCallback(AChoreographer*,
+    /// AChoreographer_vsyncCallback, void*)`.
+    PostVsyncCallback,
+    c"AChoreographer_postVsyncCallback",
+    33,
+    unsafe extern "C" fn(*mut AChoreographer, VsyncCallback, *mut c_void)
+);
+ndk_function!(
+    /// `int64_t AChoreographerFrameCallbackData_getFrameTimeNanos(const
+    /// AChoreographerFrameCallbackData*)`.
+    VsyncFrameTime,
+    c"AChoreographerFrameCallbackData_getFrameTimeNanos",
+    33,
+    unsafe extern "C" fn(*const AChoreographerFrameCallbackData) -> i64
+);
+ndk_function!(
+    /// `size_t AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex(const
+    /// AChoreographerFrameCallbackData*)`.
+    VsyncPreferredTimeline,
+    c"AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex",
+    33,
+    unsafe extern "C" fn(*const AChoreographerFrameCallbackData) -> usize
+);
+ndk_function!(
+    /// `int64_t AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(const
+    /// AChoreographerFrameCallbackData*, size_t)`.
+    VsyncExpectedPresent,
+    c"AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos",
+    33,
+    unsafe extern "C" fn(*const AChoreographerFrameCallbackData, usize) -> i64
+);
 /// A function of the NDK, found by name on a system new enough to have it.
 ///
 /// Holds the source of the symbol, so the library the pointer points into is not
@@ -240,6 +310,55 @@ impl RefreshRateWatch {
             register: NdkFn::resolve(library, api)?,
             unregister: NdkFn::resolve(library, api)?,
         })
+    }
+}
+
+/// How the loop posts a callback for the choreographer's next frame: the
+/// newest post the system has.
+pub(crate) enum FramePost {
+    /// The vsync callback (API 33), whose frame timelines name when the frame
+    /// is expected on screen.
+    Vsync {
+        post: NdkFn<PostVsyncCallback>,
+        frame_time: NdkFn<VsyncFrameTime>,
+        preferred: NdkFn<VsyncPreferredTimeline>,
+        expected_present: NdkFn<VsyncExpectedPresent>,
+    },
+    /// The frame callback with a 64-bit frame time (API 29).
+    Frame64(NdkFn<PostFrameCallback64>),
+    /// The first frame callback (API 24), on a 64-bit process only.
+    #[cfg(target_pointer_width = "64")]
+    Frame(NdkFn<PostFrameCallback>),
+}
+
+/// The choreographer of the calling thread and how a frame callback is posted
+/// to it, all or none.
+pub(crate) struct FrameCallbacks {
+    pub(crate) instance: NdkFn<ChoreographerInstance>,
+    pub(crate) post: FramePost,
+}
+
+impl FrameCallbacks {
+    /// Resolve them on a system that has them: the vsync callback with each of
+    /// the three readings of its data, else a frame callback.
+    pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Option<Self> {
+        let instance = NdkFn::resolve(library, api)?;
+        let vsync = || {
+            Some(FramePost::Vsync {
+                post: NdkFn::resolve(library, api)?,
+                frame_time: NdkFn::resolve(library, api)?,
+                preferred: NdkFn::resolve(library, api)?,
+                expected_present: NdkFn::resolve(library, api)?,
+            })
+        };
+        #[cfg(target_pointer_width = "64")]
+        let first = || NdkFn::resolve(library, api).map(FramePost::Frame);
+        #[cfg(not(target_pointer_width = "64"))]
+        let first = || None;
+        let post = vsync()
+            .or_else(|| NdkFn::resolve(library, api).map(FramePost::Frame64))
+            .or_else(first)?;
+        Some(Self { instance, post })
     }
 }
 
@@ -438,6 +557,94 @@ mod tests {
         assert!(RefreshRateWatch::resolve(&library(all), AndroidApi::from_level(29)).is_none());
     }
 
+    /// Every frame callback a system can post, each at an address of its own.
+    fn frame_callback_symbols() -> FakeSymbols {
+        FakeSymbols::default()
+            .with(c"AChoreographer_getInstance", address(1))
+            .with(c"AChoreographer_postFrameCallback", address(2))
+            .with(c"AChoreographer_postFrameCallback64", address(3))
+            .with(c"AChoreographer_postVsyncCallback", address(4))
+            .with(
+                c"AChoreographerFrameCallbackData_getFrameTimeNanos",
+                address(5),
+            )
+            .with(
+                c"AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex",
+                address(6),
+            )
+            .with(
+                c"AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos",
+                address(7),
+            )
+    }
+
+    /// The post each system gets: the newest it has, and the vsync callback
+    /// only with all three readings of its data.
+    fn the_frame_callback_is_the_newest_the_system_has() {
+        let posted = |symbols: FakeSymbols, level| {
+            FrameCallbacks::resolve(&library(symbols), AndroidApi::from_level(level)).map(
+                |callbacks| match callbacks.post {
+                    FramePost::Vsync {
+                        post,
+                        frame_time,
+                        preferred,
+                        expected_present,
+                    } => {
+                        assert_eq!(callbacks.instance.get() as *const (), address(1));
+                        assert_eq!(
+                            [
+                                frame_time.get() as *const (),
+                                preferred.get() as *const (),
+                                expected_present.get() as *const (),
+                            ],
+                            [address(5), address(6), address(7)],
+                            "each reading is the function of its own name"
+                        );
+                        post.get() as *const ()
+                    }
+                    FramePost::Frame64(post) => post.get() as *const (),
+                    #[cfg(target_pointer_width = "64")]
+                    FramePost::Frame(post) => post.get() as *const (),
+                },
+            )
+        };
+        let no_expected_present = {
+            let mut symbols = frame_callback_symbols();
+            symbols.0.remove(
+                c"AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos",
+            );
+            symbols
+        };
+        let no_instance = {
+            let mut symbols = frame_callback_symbols();
+            symbols.0.remove(c"AChoreographer_getInstance");
+            symbols
+        };
+        // (case, symbols, level, the post's address)
+        let rows: [(&str, FakeSymbols, u32, Option<*const ()>); 6] = [
+            ("API 34", frame_callback_symbols(), 34, Some(address(4))),
+            ("API 33", frame_callback_symbols(), 33, Some(address(4))),
+            (
+                "API 33 without a reading of the vsync data",
+                no_expected_present,
+                33,
+                Some(address(3)),
+            ),
+            ("API 29", frame_callback_symbols(), 29, Some(address(3))),
+            ("API 23", frame_callback_symbols(), 23, None),
+            ("no choreographer", no_instance, 34, None),
+        ];
+        for (case, symbols, level, expected) in rows {
+            assert_eq!(posted(symbols, level), expected, "{case}");
+        }
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            posted(frame_callback_symbols(), 24),
+            Some(address(2)),
+            "a 64-bit process below API 29 posts the first frame callback"
+        );
+    }
+
     fn the_api_level_comes_from_the_ndk_function_when_the_system_has_it() {
         let symbols = FakeSymbols::default()
             .with(c"android_get_device_api_level", level_33 as *const ())
@@ -491,8 +698,8 @@ mod tests {
         ));
         failures.extend(row::<ChoreographerInstance>(
             "ChoreographerInstance",
-            api(29),
-            api(30),
+            api(23),
+            api(24),
             unknown,
         ));
         failures.extend(row::<RegisterRefreshRate>(
@@ -505,6 +712,43 @@ mod tests {
             "UnregisterRefreshRate",
             api(29),
             api(30),
+            unknown,
+        ));
+        failures.extend(row::<PostFrameCallback64>(
+            "PostFrameCallback64",
+            api(28),
+            api(29),
+            unknown,
+        ));
+        #[cfg(target_pointer_width = "64")]
+        failures.extend(row::<PostFrameCallback>(
+            "PostFrameCallback",
+            api(23),
+            api(24),
+            unknown,
+        ));
+        failures.extend(row::<PostVsyncCallback>(
+            "PostVsyncCallback",
+            api(32),
+            api(33),
+            unknown,
+        ));
+        failures.extend(row::<VsyncFrameTime>(
+            "VsyncFrameTime",
+            api(32),
+            api(33),
+            unknown,
+        ));
+        failures.extend(row::<VsyncPreferredTimeline>(
+            "VsyncPreferredTimeline",
+            api(32),
+            api(33),
+            unknown,
+        ));
+        failures.extend(row::<VsyncExpectedPresent>(
+            "VsyncExpectedPresent",
+            api(32),
+            api(33),
             unknown,
         ));
         assert!(failures.is_empty(), "{failures:#?}");
@@ -530,6 +774,10 @@ mod tests {
                 (
                     "the_choreographer_watch_needs_all_three_functions",
                     the_choreographer_watch_needs_all_three_functions as fn(),
+                ),
+                (
+                    "the_frame_callback_is_the_newest_the_system_has",
+                    the_frame_callback_is_the_newest_the_system_has as fn(),
                 ),
                 (
                     "the_api_level_comes_from_the_ndk_function_when_the_system_has_it",

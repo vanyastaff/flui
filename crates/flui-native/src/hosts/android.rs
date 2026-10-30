@@ -6,17 +6,19 @@ use std::sync::{Arc, Weak};
 use android_activity::AndroidApp;
 
 use crate::accessibility::android::AndroidAccessibility;
-use crate::clipboard::android::MockClipboard;
+use crate::clipboard::android::AndroidClipboard;
 use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
+use crate::error::PlatformError;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::Host;
+use crate::host::SharedClipboard;
 use crate::input::android::AndroidInput;
 use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::android::activity_callbacks::ActivityCallbacks;
 use crate::owner::android::java_view::{InputMethod, JavaView, ViewTransfer};
-use crate::owner::android::ndk::SymbolSource;
+use crate::owner::android::ndk::{LoadedLibraries, SymbolSource};
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays,
 };
@@ -44,6 +46,7 @@ impl Host for Android {
     type Accessibility = AndroidAccessibility;
     // The loop holds the clipboard and the transport `AndroidHost` makes.
     type Clipboard = AndroidLoop;
+    type PrimarySelection = crate::host::Absent<crate::host::position::PrimarySelection>;
     type Drag = AndroidLoop;
     type Haptics = AndroidHaptics;
     type Preferences = AndroidLoop;
@@ -58,10 +61,9 @@ impl AndroidHost for Android {
         Box::new(ViewInputMethod::default())
     }
 
-    /// An in-process stand-in until the system clipboard is reached through
-    /// JNI.
-    fn clipboard() -> Arc<dyn flui_platform::Clipboard> {
-        Arc::new(MockClipboard::new())
+    /// The system `ClipboardManager`, through JNI.
+    fn clipboard(app: &AndroidApp) -> Arc<dyn SharedClipboard> {
+        Arc::new(AndroidClipboard::new(app.clone()))
     }
 
     /// `FluiView`'s drag and drop.
@@ -103,7 +105,25 @@ impl AndroidHost for Android {
 impl HostPlatform<Android> {
     /// The Android platform over the Activity `android_main` was handed; the
     /// crate root's `android_platform` is its one caller.
-    pub(crate) fn new(app: AndroidApp) -> Self {
-        Self::from_parts(|positions| positions, |_| AndroidLoop::new::<Android>(app))
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::UnsupportedOs`] on an API level below FLUI's floor,
+    /// as a second line behind `minSdk` (ADR-0244 §3).
+    pub(crate) fn try_new(app: AndroidApp) -> Result<Self, PlatformError> {
+        // Opened once and kept for the platform's life by the loop.
+        let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
+        let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
+            tracing::warn!(
+                "Android: the API level could not be read; nothing above the floor is attempted"
+            );
+            AndroidApi::UNKNOWN
+        });
+        tracing::info!(api = %api, "Android API level");
+        crate::version::gate::refuse_below_floor(api)?;
+        Ok(Self::from_parts(
+            |positions| positions,
+            |_| AndroidLoop::new::<Android>(app, library, api),
+        ))
     }
 }

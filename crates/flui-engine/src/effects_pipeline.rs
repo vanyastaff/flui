@@ -2,7 +2,7 @@
 //!
 //! This module provides:
 //! - [`GradientPipelines`], the per-blend-mode cache behind the linear, radial
-//!   and sweep gradients (plus their shared bind-group layout, stops buffer,
+//!   and sweep gradients (plus their shared bind-group layout, stops texture,
 //!   and pipeline layout)
 //! - the analytical shadow pipeline
 //!
@@ -16,17 +16,19 @@ use flui_painting::BlendMode;
 use crate::pipeline_cache::{CoverageShaderSources, select_coverage_blend};
 use crate::pipeline_set::{QuadPipelineSpec, create_unit_quad_pipeline};
 
-/// Create bind group layout for gradient stops (storage buffer)
+/// Create bind group layout for gradient stops: the `rgba32float` texture
+/// `gradients/stops.wgsl` reads with `textureLoad`, which GLES 3.0 and WebGL2
+/// offer in a fragment stage where they offer no storage buffer (ADR-0244 §1).
 pub(crate) fn create_gradient_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Gradient Stops Bind Group Layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
             },
             count: None,
         }],
@@ -230,18 +232,7 @@ impl GradientPipelines {
             self.isolation_bind_group_layout = Some(mapping);
             self.isolation_layout = Some(layout);
         }
-        let targets = [
-            Some(wgpu::ColorTargetState {
-                format: self.surface_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-            Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::R8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-        ];
+        let targets = crate::pipeline_cache::isolation_targets(self.surface_format);
         let pipeline = crate::pipeline_set::create_unit_quad_pipeline_with_targets(
             device,
             self.isolation_layout

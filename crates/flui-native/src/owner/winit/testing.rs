@@ -28,9 +28,9 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::{
-    Clipboard, DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
-    InMemoryClipboard, NullDataTransferSource, PlatformInput, SystemPreferences,
-    WindowCapabilities, WindowId, WindowOptions,
+    DataTransferOffer, DataTransferSource, DisplayId, DisplaySnapshot, DragDropEvent,
+    NullDataTransferSource, PlatformInput, SystemPreferences, WindowCapabilities, WindowId,
+    WindowOptions,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::WindowId as WinitWindowId;
@@ -292,8 +292,8 @@ impl<D: HostDisplays + Default + 'static> WinitHost for QuietHost<D> {
         Box::new(NoHostNotices)
     }
 
-    fn clipboard() -> Arc<dyn Clipboard> {
-        Arc::new(InMemoryClipboard::new())
+    fn clipboard() -> Arc<dyn crate::host::SharedClipboard> {
+        Arc::new(crate::host::MemoryClipboard::new())
     }
 
     fn drag() -> Arc<dyn FileDrops> {
@@ -320,6 +320,7 @@ impl Host for QuietTable {
     type Text = Absent<position::Text>;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = Absent<position::Clipboard>;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WinitLoop;
     type Haptics = Absent<position::Haptics>;
     type Preferences = WinitLoop;
@@ -441,7 +442,7 @@ impl LoopInput for NoInput {
     }
 
     fn key(
-        &self,
+        &mut self,
         _: winit::event::KeyEvent,
         _: winit::keyboard::ModifiersState,
     ) -> Option<PlatformInput> {

@@ -252,13 +252,12 @@ fn runtime_over(
     window: PresentationWindow,
     nonce: ProcessNonce,
 ) -> UiRuntime {
-    UiRuntime::new(
+    UiRuntime::try_new(
         window,
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )

@@ -198,7 +198,7 @@ fn refresh_indicator() {
                 vsync,
                 RefreshIndicator::new(
                     SizedBox::new(300.0, 5000.0),
-                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                    GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
                         RefreshIntent::command("Refresh"),
                         SizedBox::new(24.0, 24.0),
                     )))
