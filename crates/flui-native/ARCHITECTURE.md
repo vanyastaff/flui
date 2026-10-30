@@ -437,8 +437,8 @@ trait depends on `flui-platform` instead.
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
   iOS, accessibility on the Web and under winit off Linux,
-  haptics on winit. Android's clipboard is an in-process stand-in
-  until the system clipboard is reached through JNI.
+  haptics on winit. Android's clipboard is `ClipboardManager`, reached
+  through JNI from the owner thread.
 
   Accessibility has no Cargo feature (ADR-0151 §15, as amended).
   `accesskit_windows` and `accesskit_macos` are unconditional dependencies of

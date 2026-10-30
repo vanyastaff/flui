@@ -305,6 +305,7 @@ impl AndroidLoop {
         );
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
+        let clipboard = H::clipboard(&app);
         let activity_callbacks = H::activity(&app);
         let app_delivery = Arc::new(AppDelivery::new());
         Self {
@@ -317,7 +318,7 @@ impl AndroidLoop {
             activity_callbacks,
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
-            clipboard: H::clipboard(),
+            clipboard,
             input: H::input(),
             owner_signal,
             preferences,
