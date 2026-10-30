@@ -210,6 +210,15 @@ impl Owned {
         let text = &self.text;
         Arc::clone(self.latin1.get_or_insert_with(|| form.encode(text).into()))
     }
+
+    /// Whether `bytes` is one of the text's forms this ownership holds.
+    fn holds(&self, bytes: &Arc<[u8]>) -> bool {
+        bytes.as_ptr() == self.text.as_ptr()
+            || self
+                .latin1
+                .as_ref()
+                .is_some_and(|latin1| Arc::ptr_eq(latin1, bytes))
+    }
 }
 
 /// An `INCR` write: the requestor's property, filled a chunk at a time.
@@ -350,7 +359,7 @@ impl Selections {
                 .reply()?
                 .owner;
             if owner != self.window {
-                self.replace_owned(None)?;
+                self.owned = None;
             }
         }
         if let Some(owned) = &self.owned {
@@ -499,10 +508,10 @@ impl Selections {
             .reply()?
             .owner;
         if owner == self.window {
-            self.replace_owned(Some(Owned::new(text, time)))?;
+            self.owned = Some(Owned::new(text, time));
         } else {
             // A client took it at a later time than ours.
-            self.replace_owned(None)?;
+            self.owned = None;
             tracing::debug!("the X11 clipboard was taken before the write could own it");
         }
         // The reads that waited for the write.
@@ -525,7 +534,7 @@ impl Selections {
             .reply()?
             .owner;
         if owner != self.window {
-            self.replace_owned(None)?;
+            self.owned = None;
         }
         Ok(())
     }
@@ -722,6 +731,10 @@ impl Selections {
             tracing::debug!("an X11 clipboard transfer past {MAX_WRITERS} at once was refused");
             return Ok(false);
         }
+        if !self.within_budget(&bytes) {
+            tracing::debug!("an X11 clipboard transfer past the retained-text budget was refused");
+            return Ok(false);
+        }
         let Ok(size) = u32::try_from(bytes.len()) else {
             return Ok(false);
         };
@@ -784,19 +797,32 @@ impl Selections {
         Ok(())
     }
 
-    /// End the ownership the window had, if any, with `owned` in its place.
-    /// The transfers still writing the old text end with it, so what they
-    /// hold is freed rather than kept for every ownership a requestor holds
-    /// a transfer of.
-    fn replace_owned(&mut self, owned: Option<Owned>) -> Result<(), ReplyOrIdError> {
-        if self.owned.is_some() {
-            for transfer in std::mem::take(&mut self.transfers) {
-                tracing::debug!("an X11 clipboard transfer ended with its ownership");
-                self.forget(transfer.requestor)?;
+    /// Whether a transfer of `bytes` may start. A transfer goes on after the
+    /// ownership whose text it writes ends (ICCCM §2.2), so the text the
+    /// clipboard no longer owns but its transfers still hold is bounded:
+    /// [`MAX_TEXT`] bytes in all, each shared buffer counted once. The
+    /// current ownership's text is held anyway and never counts.
+    fn within_budget(&self, bytes: &Arc<[u8]>) -> bool {
+        let held =
+            |buffer: &Arc<[u8]>| self.owned.as_ref().is_some_and(|owned| owned.holds(buffer));
+        if held(bytes) {
+            return true;
+        }
+        let mut retained: Vec<&Arc<[u8]>> = Vec::new();
+        for transfer in &self.transfers {
+            if !held(&transfer.bytes)
+                && !retained
+                    .iter()
+                    .any(|kept| Arc::ptr_eq(kept, &transfer.bytes))
+            {
+                retained.push(&transfer.bytes);
             }
         }
-        self.owned = owned;
-        Ok(())
+        if retained.iter().any(|kept| Arc::ptr_eq(kept, bytes)) {
+            return true;
+        }
+        let total: usize = retained.iter().map(|kept| kept.len()).sum();
+        total.saturating_add(bytes.len()) <= MAX_TEXT
     }
 
     /// Stop hearing `requestor`'s properties once no transfer writes to it.
