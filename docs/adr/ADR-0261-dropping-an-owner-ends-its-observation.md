@@ -109,8 +109,10 @@ On an exceptional path the observer is not called and not dropped:
 
 Such a stream ends without `detached()`, as it does today for an observer that panicked. A path
 that holds a failure and still drops the owner would be a defect of that path, not of this rule;
-`a_close_that_holds_a_failure_never_detaches` (`flui-runtime`) closes a presentation whose
-disposal panicked and asserts that `detached()` was not called and the observer is still alive.
+`a_close_that_holds_a_failure_never_detaches` (`flui-runtime`) closes a presentation that holds a
+caught failure and asserts that `detached()` was not called and the observer is still alive. A
+`dispose` that panics is not such a close: it is contained where it runs (ADR-0040 §6), the close
+stays healthy, the owner drops, and the stream ends with `detached()`.
 
 ### §2. A teardown test proves the release with sentinels from one ledger in the testing kit
 

@@ -1631,6 +1631,7 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "a_failing_dispose_and_future_drop_do_not_abort",
         "user_drop_panic_inside_an_unwind_is_retained",
         "a_queued_command_outliving_a_teardown_failure_does_not_abort",
+        "a_close_that_holds_a_failure_never_detaches",
     ] {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
@@ -1923,6 +1924,9 @@ pub(crate) fn run_teardown_child(kind: &str) -> bool {
         "user_drop_panic_inside_an_unwind_is_retained" => {
             user_drop_panic_inside_an_unwind_is_retained
         }
+        "a_close_that_holds_a_failure_never_detaches" => {
+            a_close_that_holds_a_failure_never_detaches
+        }
         "a_queued_command_outliving_a_teardown_failure_does_not_abort" => {
             a_queued_command_outliving_a_teardown_failure_does_not_abort
         }
@@ -1930,4 +1934,62 @@ pub(crate) fn run_teardown_child(kind: &str) -> bool {
     };
     row();
     true
+}
+
+/// Counts the `detached()` calls it receives.
+#[derive(Default)]
+struct DetachCounter(AtomicUsize);
+
+impl flui_foundation::observe::TreeObserver for DetachCounter {
+    fn detached(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// R3, ADR-0261 §1: a presentation closed while it holds a caught failure
+/// (ADR-0123) is retained whole, its owner never dropped: the observer is not
+/// told `detached()` and stays alive, and the failure is the one that
+/// resumes. A `dispose` that panics is not such a close: it is contained
+/// where it runs, the close is healthy, and the stream ends with `detached()`.
+fn a_close_that_holds_a_failure_never_detaches() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    ui_runtime
+        .attach_root_widget(&SizedBox::square(10.0))
+        .expect("A mounts");
+    ui_runtime
+        .attach_root_widget_to_for_test(b, &SizedBox::square(30.0))
+        .expect("B mounts");
+    let observer = Arc::new(DetachCounter::default());
+    ui_runtime
+        .presentation_widgets_for_test(a)
+        .with_build_owner_mut(|owner| {
+            owner.set_tree_observer(
+                Arc::clone(&observer) as Arc<dyn flui_foundation::observe::TreeObserver>
+            );
+        });
+    let held: Box<dyn std::any::Any + Send> = Box::new("presentation retirement failed");
+    let closed = catch_unwind(AssertUnwindSafe(|| {
+        ui_runtime.close_presentation_after_failure(a, Some(held))
+    }));
+    let payload = closed.expect_err("the close resumes the failure it holds");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("presentation retirement failed")
+    );
+    assert_eq!(
+        observer.0.load(Ordering::SeqCst),
+        0,
+        "the retained owner never ends the stream"
+    );
+    assert!(
+        Arc::strong_count(&observer) > 1,
+        "the retained owner still holds its observer"
+    );
+    assert!(
+        ui_runtime.presentations.get(a).is_none(),
+        "A left the forest"
+    );
+    drop(ui_runtime);
 }
