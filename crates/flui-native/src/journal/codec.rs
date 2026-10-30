@@ -280,7 +280,14 @@ pub enum Row {
         redacted: bool,
     },
     /// The application read the displays (a `platform` stream).
-    Displays(DisplayRead),
+    Displays {
+        /// What the read returned.
+        read: DisplayRead,
+        /// Each display's name and persistent key were replaced before
+        /// writing (ADR-0215 §5): a key by a pseudonym numbered within the
+        /// recording, so equal keys stay equal and the row still replays.
+        redacted: bool,
+    },
     /// The application read the system preferences (a `platform` stream).
     Preferences(PreferenceRead),
 }
@@ -384,7 +391,7 @@ impl Row {
             Self::Reopen => "reopen",
             Self::Ime { .. } => "ime",
             Self::Preferences(_) => "preferences",
-            Self::Displays(_) => "displays",
+            Self::Displays { .. } => "displays",
         }
     }
 }
@@ -675,7 +682,7 @@ impl NativeRecording {
                 }
                 Row::Ime { event, .. } => target.ime(event).map_err(unsupported)?,
                 Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
-                Row::Displays(read) => target.displays(read).map_err(unsupported)?,
+                Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
@@ -712,7 +719,7 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Reopen
         | Row::Ime { .. }
         | Row::Preferences(_)
-        | Row::Displays(_) => Vec::new(),
+        | Row::Displays { .. } => Vec::new(),
     };
     readings
         .into_iter()
@@ -1410,8 +1417,9 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
         Row::Preferences(read) => wire::Row::Preferences {
             read: read_to_wire(read)?,
         },
-        Row::Displays(read) => wire::Row::Displays {
+        Row::Displays { read, redacted } => wire::Row::Displays {
             read: display_read_to_wire(read)?,
+            redacted: *redacted,
         },
     })
 }
@@ -1564,7 +1572,10 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             redacted,
         },
         wire::Row::Preferences { read } => Row::Preferences(read_from_wire(read)?),
-        wire::Row::Displays { read } => Row::Displays(display_read_from_wire(read)?),
+        wire::Row::Displays { read, redacted } => Row::Displays {
+            read: display_read_from_wire(read)?,
+            redacted,
+        },
         _ => return Err(unread("Row")),
     })
 }

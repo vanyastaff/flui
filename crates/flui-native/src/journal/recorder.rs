@@ -2,6 +2,7 @@
 //! (`native-capture`), one per registry, so a run of the backend on a device
 //! journals with the same code the in-process captures use.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_platform::ImeEvent;
@@ -17,10 +18,11 @@ use super::codec::{
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Privacy {
     /// Input method text is replaced, and each row that lost text is marked
-    /// redacted, which its replay refuses.
+    /// redacted, which its replay refuses. A display's name is replaced and
+    /// its persistent key pseudonymized, which keeps its row replayable.
     #[default]
     Redact,
-    /// Keep all text: the one explicit opt-in per recording.
+    /// Keep all text and identifiers: the one explicit opt-in per recording.
     KeepText,
 }
 
@@ -48,8 +50,16 @@ impl Recorder {
     pub fn with_privacy(backend: Backend, privacy: Privacy) -> Self {
         let journals: Arc<Mutex<Vec<NativeRecording>>> = Arc::default();
         let sink = Arc::clone(&journals);
+        let mut pseudonyms = Vec::new();
         let guard = capture(move |source, call| {
-            journal(&mut sink.lock(), backend, privacy, source, call);
+            journal(
+                &mut sink.lock(),
+                &mut pseudonyms,
+                backend,
+                privacy,
+                source,
+                call,
+            );
         });
         Self { journals, guard }
     }
@@ -80,6 +90,7 @@ impl Journals {
 /// Fold one captured call into the recording of its source.
 fn journal(
     recordings: &mut Vec<NativeRecording>,
+    pseudonyms: &mut Vec<Pseudonyms>,
     backend: Backend,
     privacy: Privacy,
     source: CaptureSource,
@@ -101,6 +112,7 @@ fn journal(
             recordings.len(),
             "BUG: a capture numbers its sources in order"
         );
+        pseudonyms.push(Pseudonyms::default());
         recordings.push(NativeRecording {
             header,
             rows: Vec::new(),
@@ -181,18 +193,39 @@ fn journal(
             Ok(values) => PreferenceRead::Observed(values.clone()),
             Err(error) => PreferenceRead::Failed(ReadFailure::of(error)),
         }),
-        Captured::Displays(read) => Row::Displays(match read {
-            Ok(snapshot) => DisplayRead::Observed {
-                revision: snapshot.revision().get(),
-                displays: snapshot
-                    .displays()
-                    .iter()
-                    .cloned()
-                    .map(RecordedDisplay::of)
-                    .collect(),
-            },
-            Err(error) => DisplayRead::Failed(ReadFailure::of(error)),
-        }),
+        Captured::Displays(read) => {
+            let read = match read {
+                Ok(snapshot) => DisplayRead::Observed {
+                    revision: snapshot.revision().get(),
+                    displays: snapshot
+                        .displays()
+                        .iter()
+                        .cloned()
+                        .map(RecordedDisplay::of)
+                        .collect(),
+                },
+                Err(error) => DisplayRead::Failed(ReadFailure::of(error)),
+            };
+            match (privacy, read) {
+                (Privacy::Redact, DisplayRead::Observed { revision, displays }) => {
+                    let pseudonyms = &mut pseudonyms[index];
+                    Row::Displays {
+                        read: DisplayRead::Observed {
+                            revision,
+                            displays: displays
+                                .into_iter()
+                                .map(|display| pseudonyms.anonymized(display))
+                                .collect(),
+                        },
+                        redacted: true,
+                    }
+                }
+                (_, read) => Row::Displays {
+                    read,
+                    redacted: false,
+                },
+            }
+        }
         Captured::Started { .. } | Captured::Opened(_) => {
             unreachable!("BUG: a source opens once, handled above")
         }
@@ -212,5 +245,26 @@ fn redacted(event: &ImeEvent) -> (ImeEvent, bool) {
         ),
         ImeEvent::Commit(_) => (ImeEvent::Commit(REDACTED.to_owned()), true),
         other => (other.clone(), false),
+    }
+}
+
+/// The pseudonyms one recording gives the displays' persistent keys: a
+/// counter in order of first sight, never derived from the key, so a redacted
+/// recording keeps which reads saw the same display without naming it.
+#[derive(Debug, Default)]
+struct Pseudonyms(HashMap<String, String>);
+
+impl Pseudonyms {
+    /// `display` with its name replaced and its persistent key pseudonymized.
+    fn anonymized(&mut self, mut display: RecordedDisplay) -> RecordedDisplay {
+        REDACTED.clone_into(&mut display.parts.name);
+        display.parts.persistent_key = display.parts.persistent_key.map(|key| {
+            let next = self.0.len() + 1;
+            self.0
+                .entry(key)
+                .or_insert_with(|| format!("display-{next}"))
+                .clone()
+        });
+        display
     }
 }

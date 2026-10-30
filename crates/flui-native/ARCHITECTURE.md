@@ -3979,10 +3979,12 @@ by its platform's registry and means nothing outside it, so a recording writes
 its number as a label and a replay issues an id of its own for each label
 (`DisplayKey::Injected`). The
 recorder redacts input method text by default (ADR-0215 §5) and marks each row
-that lost it. `NativeRecording::replay_into` replays every row, in order, into
+that lost it, and it replaces a display's name and gives its persistent key a
+pseudonym counted within the recording, a row that stays replayable.
+`NativeRecording::replay_into` replays every row, in order, into
 a `ReplayTarget`, which takes the kinds of row it reproduces: a registry's rows
 as the input the registry assembles, each other row as itself. A row the target
-refuses, or a redacted one, stops the replay with a `ReplayError` that names
+refuses, or one that lost its text, stops the replay with a `ReplayError` that names
 the row and its line, never a skipped row; `replay` is the target that takes a
 registry's input alone. The headless host is the target of the other streams
 in the tests: its host events take the `app` rows, a headless window takes

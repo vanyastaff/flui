@@ -208,15 +208,17 @@ fn recorded_reads(recording: &NativeRecording) -> Vec<Read> {
             Row::Preferences(PreferenceRead::Failed(failure)) => {
                 Some(Read::Preferences(Err(failure.clone())))
             }
-            Row::Displays(DisplayRead::Observed { displays, .. }) => {
-                Some(Read::Displays(Ok(displays
-                    .iter()
-                    .map(|display| (display.label, display.parts.clone()))
-                    .collect())))
-            }
-            Row::Displays(DisplayRead::Failed(failure)) => {
-                Some(Read::Displays(Err(failure.clone())))
-            }
+            Row::Displays {
+                read: DisplayRead::Observed { displays, .. },
+                ..
+            } => Some(Read::Displays(Ok(displays
+                .iter()
+                .map(|display| (display.label, display.parts.clone()))
+                .collect()))),
+            Row::Displays {
+                read: DisplayRead::Failed(failure),
+                ..
+            } => Some(Read::Displays(Err(failure.clone()))),
             _ => None,
         })
         .collect()
@@ -504,7 +506,13 @@ fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Capture
     use flui_native::journal::recorder::Recorder;
 
     let recorder = Recorder::with_privacy(Backend::Headless, privacy);
-    let platform = HeadlessPlatform::new();
+    // Displays the OS identifies, by keys that name the hardware.
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        flui_native::DisplaySpec::new("Built-in Retina", 1440, 900)
+            .with_persistent_key("EDID-0610-A050-SERIAL-C02XL0"),
+        flui_native::DisplaySpec::new("Studio Display", 2560, 1440)
+            .with_persistent_key("7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90"),
+    ]);
     let events = platform.host_events();
     let sources = Sources::of(&platform);
     let log = AppLog::new();
@@ -642,6 +650,65 @@ fn captured_streams_replay_to_what_the_session_delivered() {
             line: 3,
             row: "ime"
         })
+    );
+
+    // A redacting capture writes no display's name or persistent key: each
+    // key becomes a pseudonym counted within the recording, the same for the
+    // same display on every read, and the row still replays.
+    let reads = only(&redacted.recordings, Stream::Platform);
+    let mut written = Vec::new();
+    reads
+        .write(&mut written)
+        .expect("a captured recording writes");
+    let written = String::from_utf8(written).expect("JSON Lines are UTF-8");
+    for secret in [
+        "Built-in Retina",
+        "Studio Display",
+        "EDID-0610-A050-SERIAL-C02XL0",
+        "7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90",
+    ] {
+        assert!(!written.contains(secret), "{secret} reached the recording");
+    }
+    let observed: Vec<Vec<(String, Option<String>)>> = reads
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Displays {
+                read: DisplayRead::Observed { displays, .. },
+                redacted,
+            } => {
+                assert!(redacted, "a redacted read is marked");
+                Some(
+                    displays
+                        .iter()
+                        .map(|display| {
+                            (
+                                display.parts.name.clone(),
+                                display.parts.persistent_key.clone(),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+        .collect();
+    let pseudonymous = vec![
+        ("\u{fffd}".to_owned(), Some("display-1".to_owned())),
+        ("\u{fffd}".to_owned(), Some("display-2".to_owned())),
+    ];
+    assert_eq!(observed, vec![pseudonymous; 3]);
+    let platform = HeadlessPlatform::new();
+    let sources = Sources::of(&platform);
+    let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
+    let mut target = PlatformTarget::new(sources, &owner);
+    reads
+        .replay_into(&mut target)
+        .expect("a redacted display read replays");
+    assert_eq!(
+        target.reads.len(),
+        redacted.reads.len(),
+        "every read replayed"
     );
 }
 

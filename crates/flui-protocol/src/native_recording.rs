@@ -1064,6 +1064,10 @@ pub enum Row {
     Displays {
         /// What the read returned.
         read: DisplayRead,
+        /// Each display's name and persistent key were replaced before writing (ADR-0215 §5):
+        /// a key by a pseudonym numbered within the recording, so equal keys stay equal.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redacted: bool,
     },
 }
 
