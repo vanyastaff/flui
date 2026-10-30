@@ -50,16 +50,19 @@ struct Local<T> {
 
 /// The owner-local half a settle job reaches through the owner's
 /// [`PendingCompletions`].
+/// Both take `&self`: the caller holds the owning reference and keeps it
+/// rather than dropping it when the call panics, since the state may hold an
+/// answer whose destructor panics too.
 pub(super) trait Settle {
     /// The outcome arrived: run the waiting closure, or keep the outcome for
     /// `poll`. Runs at an owner turn with no borrow of the table held.
-    fn settle(self: Rc<Self>);
+    fn settle(&self);
     /// The owner retired first: drop the waiting closure unrun.
-    fn abandon_on_retire(self: Rc<Self>);
+    fn abandon_on_retire(&self);
 }
 
 impl<T: 'static> Settle for Local<T> {
-    fn settle(self: Rc<Self>) {
+    fn settle(&self) {
         let outcome = self
             .settled
             .borrow_mut()
@@ -84,7 +87,7 @@ impl<T: 'static> Settle for Local<T> {
         }
     }
 
-    fn abandon_on_retire(self: Rc<Self>) {
+    fn abandon_on_retire(&self) {
         let on_complete = self.on_complete.borrow_mut().take();
         drop(on_complete);
         let waker = self.waker.borrow_mut().take();
@@ -380,8 +383,12 @@ fn settle_job(id: SlotId) -> OwnerJob {
         let settle = scope.completions().take(id);
         // The table's borrow ended above: the waiting closure may create
         // completions of its own.
-        if let Some(settle) = settle {
-            settle.settle();
+        if let Some(settle) = settle
+            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.settle()))
+        {
+            // Kept, not destroyed during this unwind (see `Settle`).
+            std::mem::forget(settle);
+            resume_unwind(payload);
         }
     })
 }

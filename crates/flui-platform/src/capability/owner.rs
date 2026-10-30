@@ -180,11 +180,18 @@ impl PendingCompletions {
                 std::mem::forget(settle);
                 continue;
             }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.abandon_on_retire())) {
-                // A later payload is retained, not dropped: its destructor
-                // may panic too.
-                FirstPanic::fold(&mut first, Some(payload));
-            }
+            let failure = match catch_unwind(AssertUnwindSafe(|| settle.abandon_on_retire())) {
+                // The last reference may hold an answer that never drained.
+                Ok(()) => catch_unwind(AssertUnwindSafe(move || drop(settle))).err(),
+                Err(payload) => {
+                    // Kept, not destroyed: the answer it holds may panic too.
+                    std::mem::forget(settle);
+                    Some(payload)
+                }
+            };
+            // A later payload is retained, not dropped: its destructor may
+            // panic too.
+            FirstPanic::fold(&mut first, failure);
         }
         first
     }

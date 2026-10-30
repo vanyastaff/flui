@@ -394,6 +394,46 @@ fn a_second_retirement_panic_is_retained_not_dropped() {
     );
 }
 
+#[test]
+fn an_undrained_answer_is_kept_when_its_capture_panics_at_retirement() {
+    let owner = Owner::new();
+    let (completion, resolver) = owner.source.pending::<PanicOnDrop>();
+    let capture = PanicOnDrop("capture dropped at retirement");
+    completion.on_complete(move |_| {
+        let _ = &capture;
+    });
+    resolver
+        .resolve(PanicOnDrop("undrained answer dropped"))
+        .expect("the owner is live");
+
+    let payload = owner
+        .pending
+        .retire()
+        .expect("the capture's panic is handed back");
+    assert_eq!(
+        payload.downcast_ref::<String>().map(String::as_str),
+        Some("capture dropped at retirement")
+    );
+}
+
+#[test]
+fn an_undrained_answer_panicking_at_retirement_is_handed_back() {
+    let owner = Owner::new();
+    let (completion, resolver) = owner.source.pending::<PanicOnDrop>();
+    completion.on_complete(|_| {});
+    resolver
+        .resolve(PanicOnDrop("undrained answer dropped"))
+        .expect("the owner is live");
+
+    let retired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.pending.retire()))
+        .expect("the answer's panic does not escape the retirement");
+    let payload = retired.expect("the answer's panic is handed back");
+    assert_eq!(
+        payload.downcast_ref::<String>().map(String::as_str),
+        Some("undrained answer dropped")
+    );
+}
+
 thread_local! {
     /// What a [`ReenterOnDrop`] waker runs when its last clone drops.
     static ON_WAKER_DROP: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
