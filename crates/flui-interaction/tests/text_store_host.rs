@@ -8,10 +8,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputError, TextInputOwner};
 use flui_platform::text_store::{
-    CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
-    TextStoreHost, TextStoreHostError, project_ime_event,
+    CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreHost,
+    TextStoreHostError, project_ime_event,
 };
 use flui_platform::{ImeEvent, PlatformTextInput, Unsupported, UnsupportedReason};
 

@@ -4,9 +4,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use flui_interaction::testing::InMemoryTextStore;
+use flui_interaction::text_input::LockArbiter;
 use flui_platform::text_store::{
-    CommitGate, InMemoryTextStore, LockArbiter, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    TextStore, TextStoreError,
+    CommitGate, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore, TextStoreError,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;

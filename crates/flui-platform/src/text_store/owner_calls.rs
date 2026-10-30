@@ -1,7 +1,7 @@
 //! [`OwnerCalls`]: the one containment around code a text store's owner or
 //! platform supplies (ADR-0142 item 8).
 //!
-//! A store, its [`LockArbiter`](super::LockArbiter) and the presentation that
+//! A store, its `flui_interaction::text_input::LockArbiter` and the presentation that
 //! attaches it run code they do not control at these points, and every one
 //! of them goes through an [`OwnerCalls`]:
 //!

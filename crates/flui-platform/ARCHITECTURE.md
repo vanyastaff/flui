@@ -44,7 +44,7 @@ this one path (ADR-0151 §9).
   `keyboard`, the input vocabulary, whose names (`PointerEvent`, `Key`,
   `Modifiers`, …) are still taken at the root by the `ui-events` re-exports.
 - **The text store is owner-thread and UTF-16.** `TextStore` is shared as
-  `Rc<dyn TextStore>`; `LockArbiter` and `InMemoryTextStore` are not `Send`
+  `Rc<dyn TextStore>`; `CommitGate` is not `Send`
   (a `static_assertions` test pins it). Every offset on the surface is a
   `Utf16Offset`, and the conversion to a field's own representation is
   `text_store::utf16`, nowhere else.
@@ -276,47 +276,19 @@ between engine and client: the field is
 a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
 shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
 `InputConnection` also map onto. A push source (winit's `ImeEvent`) goes
-through `project_ime_event`, so a field has one editing path. `LockArbiter`
-holds the lock rules once for every implementation, including the frame
-transaction: it reads the `CommitGate` the store's owner installs through
-`TextStore::set_commit_gate`, so no store keeps a transaction flag of its own
-to forget. `flui_testing::text_store_kit` checks a store against these rules.
-The arbiter rechecks the gate before each queued grant and after draining older
-work before admitting a new request. If a grant closes the gate, later grants
-remain queued in request order; a new synchronous request is refused and an
-asynchronous request joins the queue's tail. Reopening the gate lets the next
-commit anchor resume that work.
-A grant runs only the platform's code. The store's own owner (a widget's
-`on_changed`) runs in the `settle` function the arbiter calls after each grant
-has released its lock and before the next queued one, so owner code that asks
-for a lock is granted it; a panic there is caught by the arbiter and parked in
-the `CommitGate` for the gate's owner to report, and the queue keeps running
-(ADR-0142 item 2). With no gate installed by an owner there is no one
-to report to, and the panic resumes after the lock is released. The gate a
-failure belongs to is read before the grant runs. Every call into code a store
-does not control, here and in the stores and presentations above, goes
-through `OwnerCalls` (ADR-0142 item 8; its module doc lists the points);
-`flui-widgets`' `owner_code_is_contained_at_every_point` pins each one.
-What a composition stands for in the committed text (nothing for a new
-preedit, the original words for a reconversion) is kept by each store beside
-its composing range and followed through a session by CompositionLedger,
-which applies the same composition rules the stores do, so the owner hears of
-a reconversion only when it commits.
+through `project_ime_event`, so a field has one editing path. The contract
+holds the lock's values and the `CommitGate` a store reads; the state machine
+that keeps the lock rules (`LockArbiter`), the ledger of the committed text
+(`CompositionLedger`) and the edit count (`EditGeneration`) have one consumer,
+a widget's store, and live in `flui_interaction::text_input` (ADR-0151 §6),
+as does the reference store, `flui_interaction::testing::InMemoryTextStore`
+(ADR-0264); `crates/flui-interaction/docs/ARCHITECTURE.md` describes them. Every
+call into code a store does not control goes through `OwnerCalls` (ADR-0142
+item 8; its module doc lists the points).
 
-A deletion of preedit keeps its zero-width replacement boundary even when it
-removed no committed text. A later edit crossing that boundary must join the
-deleted replacement's lineage before narrowing decides which origin remains
-(ADR-0142 item 1). `composition_ledger_named_cases` pins the committed text and
-origin after such an edit, including an empty boundary edit and reopening the
-session; `the_ledger_follows_the_reference` checks mixed edits and marks against
-an independent character-based model.
-
-**Tests:** the `text_store` module's unit tests, and `flui-testing`'s
-`in_memory_store_conforms_to_kit_v1`; the public
-`queued_text_store_grants_respect_gate_changes` family covers gate closure
-during deferred and direct grants, FIFO ordering, refusal and resumed progress,
-and `settling_runs_owner_code_outside_the_lock` the settle order and its
-failure paths.
+**Tests:** the `text_store` module's unit tests; the store tests that need a
+store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
+`ime_events_project_onto_the_store_as_the_text_input_contract_says`).
 
 ### The input vocabulary keeps what the device reported
 

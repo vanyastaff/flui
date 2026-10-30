@@ -5,8 +5,9 @@
 //! conformance kit (`flui_testing::text_store_kit`) certifies itself
 //! against, and the store a platform backend's tests drive without mounting
 //! a widget tree. It stands to [`TextStore`] as
-//! [`InMemoryClipboard`](crate::InMemoryClipboard) stands to
-//! [`Clipboard`](crate::Clipboard).
+//! `flui_platform::InMemoryClipboard` stands to
+//! `flui_platform::Clipboard`. It lives beside the lock arbiter and ledger it
+//! drives, which are this crate's (ADR-0264).
 //!
 //! Its geometry is a fixed grid: every Unicode scalar is one cell
 //! [`InMemoryTextStore::ADVANCE`] wide and [`InMemoryTextStore::LINE_HEIGHT`]
@@ -20,16 +21,13 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
-use super::composition_ledger::{CompositionLedger, committed_text};
-use super::generation::EditGeneration;
-use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
-use super::owner_calls::{OwnerCalls, RetainOnFailure};
-use super::session::{
-    Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
-    TextStoreStatus,
+use flui_platform::text_store::{
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
+    RetainOnFailure, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError,
+    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
-use super::store::{TextStore, TextStoreObserver};
-use super::utf16::{self, Utf16Offset, Utf16Range};
+
+use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
 
 /// A text store over a `String`, for tests and as the kit's reference.
 ///
