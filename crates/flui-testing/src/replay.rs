@@ -54,8 +54,8 @@ use flui_interaction::{HitTestResult, PointerEvent, PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    PointerRelease, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 use flui_platform::{EventTime, PlatformInput, WindowId};
 use flui_runtime::HostInput;
@@ -237,14 +237,15 @@ pub struct ScriptedPanZoom {
     pub phase: PinchPhase,
 }
 
-/// A trackpad smart zoom: the platform's two-finger double-tap.
+/// A discrete trackpad action where the cursor rests: a smart zoom, or
+/// fingers coming to rest.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScriptedSmartZoom {
+pub struct ScriptedTrackpadAction {
     /// Virtual time from the start of the script.
     pub at: Duration,
     /// The gesture's pointer.
     pub pointer: PointerId,
-    /// The point to zoom about.
+    /// Where the cursor rests.
     pub position: Offset<f64>,
 }
 
@@ -275,7 +276,9 @@ pub enum ScriptStep {
     /// A trackpad pinch or rotation.
     PanZoom(ScriptedPanZoom),
     /// A trackpad smart zoom (two-finger double-tap).
-    SmartZoom(ScriptedSmartZoom),
+    SmartZoom(ScriptedTrackpadAction),
+    /// Fingers come to rest on the trackpad, stopping a fling.
+    InertiaCancel(ScriptedTrackpadAction),
     /// A frame, its vsync at `at`.
     Frame {
         /// Virtual time from the start of the script.
@@ -291,7 +294,7 @@ impl ScriptStep {
             Self::Pointer(step) => step.at,
             Self::Scroll(step) => step.at,
             Self::PanZoom(step) => step.at,
-            Self::SmartZoom(step) => step.at,
+            Self::SmartZoom(step) | Self::InertiaCancel(step) => step.at,
             Self::Frame { at } => *at,
         }
     }
@@ -352,6 +355,16 @@ impl ScriptStep {
                     position(step.position),
                 )),
             )),
+            Self::InertiaCancel(step) => {
+                HostInput::Platform(PlatformInput::Pointer(PointerEvent::ScrollInertiaCancel(
+                    PointerSignal::new(
+                        PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                            .with_role(PointerRole::Primary),
+                        base + step.at,
+                    )
+                    .with_position(position(step.position)),
+                )))
+            }
             Self::Frame { at } => HostInput::Frame {
                 vsync: base + at,
                 target_present: None,
@@ -671,6 +684,11 @@ impl fmt::Display for PointerScript {
                     f,
                     "trackpad smart zoom at ({}, {})",
                     zoom.position.dx, zoom.position.dy
+                )?,
+                ScriptStep::InertiaCancel(rest) => writeln!(
+                    f,
+                    "trackpad fingers rest at ({}, {})",
+                    rest.position.dx, rest.position.dy
                 )?,
                 ScriptStep::Frame { .. } => writeln!(f, "frame")?,
             }
@@ -1229,7 +1247,25 @@ impl TrackpadScript {
         let at = self.timeline.now;
         self.timeline
             .steps
-            .push(ScriptStep::SmartZoom(ScriptedSmartZoom {
+            .push(ScriptStep::SmartZoom(ScriptedTrackpadAction {
+                at,
+                pointer: contact(CURSOR),
+                position: self.at,
+            }));
+        self
+    }
+
+    /// Fingers come to rest on the trackpad where the cursor rests: the
+    /// platform's inertia cancel, which stops a fling. It may not fall
+    /// inside a pinch.
+    pub fn rest(mut self) -> Self {
+        if self.timeline.pinching {
+            self.timeline.fail(ScriptError::UnpairedPinch);
+        }
+        let at = self.timeline.now;
+        self.timeline
+            .steps
+            .push(ScriptStep::InertiaCancel(ScriptedTrackpadAction {
                 at,
                 pointer: contact(CURSOR),
                 position: self.at,

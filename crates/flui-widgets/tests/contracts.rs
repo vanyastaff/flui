@@ -632,6 +632,7 @@ fn scroll_physics_and_activity() {
             ("scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling", crate::scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling as fn()),
             ("scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms", crate::scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms),
             ("scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it", crate::scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it),
+            ("scroll::resting_fingers_catch_a_fling_and_leave_wheel_easing", crate::scroll::resting_fingers_catch_a_fling_and_leave_wheel_easing),
             ("scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once", crate::scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once),
             ("scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion", crate::scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion),
             ("scroll::dragging_interrupts_notched_motion_and_windows_progress_independently", crate::scroll::dragging_interrupts_notched_motion_and_windows_progress_independently),

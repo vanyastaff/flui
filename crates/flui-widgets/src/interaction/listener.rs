@@ -293,7 +293,9 @@ impl Listener {
 
     /// Called when a pointer signal occurs over the listener.
     ///
-    /// FLUI currently models pointer signals as [`PointerEvent::Scroll`].
+    /// Pointer signals are [`PointerEvent::Scroll`] and
+    /// [`PointerEvent::ScrollInertiaCancel`] (fingers that came to rest on a
+    /// trackpad, stopping a fling).
     ///
     /// This channel *observes*: every listener on the hit path sees the
     /// signal (this fires for the whole path). A widget that should *act* on the tick only when it is the
@@ -454,7 +456,7 @@ impl Listener {
                     PointerEvent::Move(update) if update.buttons.is_empty() => &on_hover,
                     PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &on_move,
                     PointerEvent::Cancel(_) => &on_cancel,
-                    PointerEvent::Scroll(_) => &on_signal,
+                    PointerEvent::Scroll(_) | PointerEvent::ScrollInertiaCancel(_) => &on_signal,
                     PointerEvent::Revise(_) => &on_revise,
                     PointerEvent::PanZoom(pan_zoom) => {
                         if let Some(callback) = &on_pan_zoom_update
