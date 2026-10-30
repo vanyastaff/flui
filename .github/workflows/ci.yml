@@ -378,10 +378,12 @@ jobs:
       # from the Xvfb suite) need a compositor: a headless Weston on a socket
       # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
       # failure instead of a skip, as `FLUI_REQUIRE_GPU` does for the GPU
-      # suites. Weston loads libwayland, which the host dlopens too.
+      # suites. Weston loads libwayland, which the host dlopens too. The
+      # primary selection suite starts a sway of its own on an Xvfb: Weston
+      # has no zwp_primary_selection.
       - name: Start a headless Weston (flui-native Wayland tests)
         run: |
-          sudo apt-get install -y --no-install-recommends weston libwayland-client0
+          sudo apt-get install -y --no-install-recommends weston sway libwayland-client0
           runtime_dir="$RUNNER_TEMP/xdg-runtime"
           mkdir -p "$runtime_dir"
           chmod 700 "$runtime_dir"

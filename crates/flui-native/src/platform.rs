@@ -17,7 +17,8 @@ use flui_platform::{
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
     self, Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
-    Preferences as _, Services as _, Storage as _, Window as _, WindowPositions, WindowRefOf,
+    Preferences as _, PrimarySelection as _, Services as _, Storage as _, Window as _,
+    WindowPositions, WindowRefOf,
 };
 use crate::host_window::HostWindow;
 use crate::owner::{OpenWindowError, OwnerPlatform};
@@ -295,6 +296,13 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// The host's plain-text clipboard, owner-local: the application's
     /// clipboard provider builds its handles over it (ADR-0152).
     fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard>;
+
+    /// The host's primary selection, owner-local, where the platform has one
+    /// (X11 and Wayland); `None` elsewhere. The application's primary
+    /// selection provider builds its handles over it (ADR-0152).
+    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        None
+    }
 
     /// The data-transfer transport (ADR-0038). Contract: returns clones of
     /// ONE source instance per platform instance — the source owns
@@ -619,6 +627,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn clipboard(&self) -> std::rc::Rc<dyn crate::NativeClipboard> {
         H::Clipboard::clipboard(&self.owner)
+    }
+
+    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
+        H::PrimarySelection::primary_selection(&self.owner)
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {

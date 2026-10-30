@@ -246,7 +246,7 @@ pub use window::installation::{
 // this crate's public API (the window-open family lives with its
 // capability types in `owner`).
 pub use error::{BootstrapError, PlatformError, PlatformResult};
-pub use host::NativeClipboard;
+pub use host::{NativeClipboard, NativePrimarySelection};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;

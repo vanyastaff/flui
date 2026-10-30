@@ -36,6 +36,7 @@ impl Host for Web {
     type Text = WebTextInput;
     type Accessibility = Absent<position::Accessibility>;
     type Clipboard = WebLoop;
+    type PrimarySelection = Absent<position::PrimarySelection>;
     type Drag = WebLoop;
     type Haptics = WebHaptics;
     type Preferences = WebLoop;

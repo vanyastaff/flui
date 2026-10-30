@@ -35,7 +35,7 @@
 
 mod clipboard;
 
-pub use clipboard::{MemoryClipboard, NativeClipboard};
+pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 
 use std::marker::PhantomData;
@@ -88,6 +88,8 @@ pub trait Host: 'static {
     type Accessibility: Accessibility<WindowRefOf<Self>>;
     /// The clipboard.
     type Clipboard: Clipboard<Self::Loop>;
+    /// The primary selection, where the platform has one.
+    type PrimarySelection: PrimarySelection<Self::Loop>;
     /// The drag-and-drop transport.
     type Drag: Drag<Self::Loop>;
     /// Haptic feedback a window hands out.
@@ -356,6 +358,12 @@ pub trait Clipboard<O> {
     fn clipboard(owner: &O) -> Rc<dyn NativeClipboard>;
 }
 
+/// The primary selection position.
+pub trait PrimarySelection<O> {
+    /// [`Platform::primary_selection`].
+    fn primary_selection(owner: &O) -> Option<Rc<dyn NativePrimarySelection>>;
+}
+
 /// The drag-and-drop position.
 pub trait Drag<O> {
     /// [`Platform::data_transfer`].
@@ -409,6 +417,9 @@ pub mod position {
     /// The clipboard position.
     #[derive(Debug)]
     pub enum Clipboard {}
+    /// The primary selection position.
+    #[derive(Debug)]
+    pub enum PrimarySelection {}
     /// The drag-and-drop position.
     #[derive(Debug)]
     pub enum Drag {}
@@ -556,6 +567,13 @@ impl SyncClipboard for Absent<position::Clipboard> {
 impl<O> Clipboard<O> for Absent<position::Clipboard> {
     fn clipboard(_: &O) -> Rc<dyn NativeClipboard> {
         Rc::new(Self::NEW)
+    }
+}
+
+/// A platform without a primary selection hands out none.
+impl<O> PrimarySelection<O> for Absent<position::PrimarySelection> {
+    fn primary_selection(_: &O) -> Option<Rc<dyn NativePrimarySelection>> {
+        None
     }
 }
 

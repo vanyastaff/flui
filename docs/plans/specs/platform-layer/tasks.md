@@ -3638,6 +3638,23 @@ graph LR
   `a_selection_crosses_the_pipe_whole`, `a_transfer_ends_at_its_deadline_or_its_peer`.
   `docs/platform-parity.md` (заметка, колонка Wayland остаётся winit) и `docs/gaps.md`
   (записи 5 и 6) обновлены.
+  **Primary selection** — ветка `platform/primary-selection-wayland` поверх
+  `platform/primary-selection` (возможность `PrimarySelectionCapability` на шве, headless-кит).
+  Позиция таблицы `PrimarySelection` (`Absent` везде, кроме Wayland; X11 — в LY84),
+  `Platform::primary_selection` → `Option<Rc<dyn NativePrimarySelection>>`. Wayland:
+  `clipboard::linux::wayland::primary` на тех же хуке, `text` и `transfer`, свои устройства
+  `zwp_primary_selection_device_v1` на каждом сидении. Выделение приложения ленивое: замыкание
+  спрашивается только при чтении; `send` диспетчер записывает с дескриптором, а отвечает ход
+  цикла (`WaylandClipboard::deliver`), без замков цикла и выделения, так что замыкание может
+  войти обратно в выделение. `flui-app` на Linux регистрирует провайдер поверх
+  `NativePrimary` (общий `PrimaryClaims` всех ручек; `is_current` — реестр и `owns()` хоста).
+  **Тесты** (откат проверен: без `deliver` второй клиент читает `None`):
+  `the_primary_selection_is_asked_at_the_turn` (`tests/wayland_primary_selection.rs`, sway 1.9
+  на X11-бэкенде под Xvfb, у Weston нет primary selection; замыкание при запросе проверяет
+  `owns()`), `claims_over_one_host_selection_share_their_currency` (`flui-app`). Обвязка
+  тестов разделена: `support/x11_session.rs` (Xvfb, сессия, экран) и стартеры
+  `weston_x11.rs`, `sway_x11.rs`. Дальше: общий помощник выделения для `EditableText` и
+  `SelectionArea` и вставка средней кнопкой.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук

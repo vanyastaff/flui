@@ -31,6 +31,7 @@
 //!   selection arrives.
 
 use std::os::fd::{AsFd, OwnedFd};
+use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -46,9 +47,11 @@ use web_time::Instant;
 
 use super::owners::Owners;
 use super::text::TextForm;
-use crate::host::NativeClipboard;
+use crate::host::{NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
+
+mod primary;
 
 /// The newest `wl_data_device_manager`: version 3 adds the drag actions,
 /// version 2 lets a device be released.
@@ -73,6 +76,8 @@ struct Shared {
     state: OwnerCell<State>,
     /// The last user input, whose seat and serial a write is set under.
     last_input: LastInput,
+    /// The primary selection, beside the clipboard on devices of its own.
+    primary: OwnerCell<primary::Primary>,
     /// The `send`s being answered now.
     writers: transfer::Writers,
 }
@@ -135,6 +140,7 @@ impl SeatClipboard {
             shared: Arc::new(Shared {
                 state: OwnerCell::new(),
                 last_input,
+                primary: OwnerCell::new(),
                 writers: transfer::Writers::default(),
             }),
         }
@@ -150,6 +156,9 @@ impl WaylandClipboard for SeatClipboard {
         version: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
+        self.shared
+            .primary
+            .with(|primary| primary.global(registry, name, interface, queue));
         if interface != WlDataDeviceManager::interface().name {
             return;
         }
@@ -170,6 +179,14 @@ impl WaylandClipboard for SeatClipboard {
     }
 
     fn global_removed(&self, name: u32) {
+        let primary_gone = self
+            .shared
+            .primary
+            .with(|primary| primary.global_removed(name))
+            .unwrap_or_default();
+        primary_gone
+            .into_iter()
+            .for_each(primary::PrimaryDeviceGone::release);
         let gone = self
             .shared
             .state
@@ -190,6 +207,15 @@ impl WaylandClipboard for SeatClipboard {
     }
 
     fn seats(&self, seats: &[WlSeat]) {
+        let weak = Arc::downgrade(&self.shared);
+        let primary_gone = self
+            .shared
+            .primary
+            .with(|primary| primary.seats(seats, &weak))
+            .unwrap_or_default();
+        primary_gone
+            .into_iter()
+            .for_each(primary::PrimaryDeviceGone::release);
         let gone = self
             .shared
             .state
@@ -230,6 +256,38 @@ impl WaylandClipboard for SeatClipboard {
             devices.into_iter().for_each(SeatDevice::release);
             owned.into_items().into_iter().for_each(Owned::release);
         }
+        if let Some(primary) = self.shared.primary.with(primary::Primary::take) {
+            primary.release();
+        }
+    }
+
+    fn has_primary_selection(&self) -> bool {
+        self.shared
+            .primary
+            .with(|primary| primary.has_manager())
+            .unwrap_or(false)
+    }
+
+    fn deliver(&self) {
+        self.deliver_primary();
+    }
+}
+
+impl NativePrimarySelection for SeatClipboard {
+    fn offer(&self, text: Rc<dyn Fn() -> Option<String>>) {
+        self.offer_primary(text);
+    }
+
+    fn withdraw(&self) {
+        self.withdraw_primary();
+    }
+
+    fn owns(&self) -> bool {
+        self.owns_primary()
+    }
+
+    fn read_text(&self, answer: Resolver<Option<String>>) {
+        self.read_primary(answer);
     }
 }
 
