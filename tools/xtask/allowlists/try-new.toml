@@ -279,4 +279,3 @@ type = "SwipeActions"
 [[allow]]
 crate = "flui-widgets"
 type = "ViewportFraction"
-
