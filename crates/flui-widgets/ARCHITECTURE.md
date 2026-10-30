@@ -1080,6 +1080,31 @@ runtime parser.
 `animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
 `animated_icon::theme_and_direction_shape_the_icon` pin the three.
 
+### A carousel is a `Scrollable` over keylines, and every move goes through its position
+
+`Carousel` is a horizontal `Scrollable` whose viewport holds one `SliverCarousel`; the
+geometry both read is `CarouselGeometry` (keylines measured against the viewport, spacing and
+count), so the sliver, the snap policy and the controller agree on where every item rests by
+one computation. A `CarouselController` move and an autoplay step are programmatic scrolls of
+that position, so any user input takes over from them; `KeylineSnap` is a `SnapPolicy`, and
+`SingleAdvance` counts its one item from the item at the start of the drag
+(`SnapPolicy::target_from`, which `ScrollOwner` passes the contact's starting offset), so a
+long drag still moves one item. The active item is recomputed from the scroll listener and
+delivered after the frame, as `PageView` delivers pages (decision 37), with no borrow held, so
+`on_index_changed` may move or unmount the carousel. A wrap from the last item to the first
+scrolls back over the items between, and each is active on the way.
+
+Autoplay is a timer bound to the frame clock only while it may run (a `TickerMode` that moves,
+motion not reduced); a pause stops it without releasing it. A timer with no frame clock settles
+at once, so a step checks that the timer is still bound before it restarts it; otherwise reduced
+motion would step every frame. The pause control is drawn by the carousel, theme-free like the
+gesture menu, as the first item of its column, and pressing it, focus within the carousel, a
+press, a hover or the app leaving the front pause it until the control or
+`CarouselController::resume`. No assistive-technology focus signal exists to pause on
+(`docs/gaps.md` entry 36). `carousel::reduced_motion_stops_autoplay_and_moves_at_once`,
+`carousel::single_advance_moves_one_item_from_where_the_drag_began` and
+`carousel::index_changes_are_heard_once_each` pin the three.
+
 ### Focused document selection uses the normal action chain
 
 `DefaultFocusTraversal` binds `SelectAllTextIntent` to Cmd+A on macOS/iOS and

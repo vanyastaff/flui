@@ -4548,6 +4548,25 @@ graph LR
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
 
+- [ ] **LY97** (не закрыта: четыре PR, этот — первый; дальше предпочтения, дисплеи, состояние
+  окна, затем строка store-edit для IME без событий) — ветка `claude/project-thread-jqc75j` после
+  LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
+  часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
+  (`AppDelivery`: `notice`, `session_end`, `reopen`) и `window` (`WindowDelivery::dispatch_input`:
+  `ime`). Каждая доставка открывает свой поток при создании (`Journal::open_stream`), нумерация
+  общая с реестрами. Строка `ime` — одно семейство с тегированной `#[non_exhaustive]` нагрузкой
+  `Ime::Event(ImeEvent)`; правка хранилища (TSF, зеркала Android и web) войдёт туда же как
+  `StoreEdit` без смены версии формата. Записывающий по умолчанию редактирует текст IME
+  (`Privacy::Redact`, ADR-0215 §5) и помечает строку `redacted`. **Replay:**
+  `NativeRecording::replay_into(&mut dyn ReplayTarget)` проигрывает каждую строку по порядку; цель
+  принимает свои виды строк, остальные отказывает по умолчанию; отказ и отредактированная строка
+  останавливают replay ошибкой `ReplayError::{Unsupported, Redacted}` с именем строки и номером
+  линии, без пропуска. `replay()` возвращает `Result`. Тесты: золотые `headless_app_notices.jsonl`
+  и `headless_window_ime.jsonl`, строки `app_recordings_replay_on_the_headless_host`,
+  `window_recordings_replay_on_the_headless_host`, `a_row_the_replay_does_not_reproduce_is_a_typed_error`,
+  `a_header_out_of_its_stream_is_refused` и (с `native-capture`)
+  `captured_streams_replay_to_what_the_session_delivered` таблицы `native_recording_contracts`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

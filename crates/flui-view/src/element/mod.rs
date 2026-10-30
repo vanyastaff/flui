@@ -69,11 +69,12 @@ pub use root::{RootElement, RootElementImpl};
 // The lazy multi-box adaptor and its extension point: a render object that
 // implements `LazyMultiBoxRender` gets the element-owned child lifecycle by
 // constructing `SliverMultiBoxAdaptor::with_config` (ADR-0053). `SliverList`,
-// `SliverGrid`, and `SliverFixedExtentList` are the in-tree instantiations.
+// `SliverGrid`, `SliverFixedExtentList` and `SliverCarousel` are the in-tree
+// instantiations.
 pub use sliver_adaptor::{
-    FixedExtentConfig, ItemCount, LazyMultiBoxRender, ListConfig, SemanticSetMapping,
-    SliverFixedExtentList, SliverGrid, SliverList, SliverMultiBoxAdaptor, StaticChildren,
-    probe_item_count,
+    CarouselSliverConfig, FixedExtentConfig, ItemCount, LazyMultiBoxRender, ListConfig,
+    SemanticSetMapping, SliverCarousel, SliverFixedExtentList, SliverGrid, SliverList,
+    SliverMultiBoxAdaptor, StaticChildren, probe_item_count,
 };
 pub use sliver_persistent_header::{
     FloatingPersistentHeaderView, FloatingPinnedPersistentHeaderView, PersistentHeaderView,

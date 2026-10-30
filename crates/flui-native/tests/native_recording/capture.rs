@@ -16,17 +16,22 @@ use flui_platform::EventTime;
 use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
-use super::codec::{Backend, NativeRecording, Row};
+use super::codec::{Backend, NativeRecording, Row, Stream};
 use super::{RECORDINGS, recording};
 use flui_native::journal::recorder::Recorder;
 
 /// Run `session` with a capture installed on this thread, and return its
 /// result with the recording of every registry created during it, in
-/// creation order.
+/// creation order; the other streams the session journals are left out.
 pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<NativeRecording>) {
     let recorder = Recorder::start(backend);
     let result = session();
-    (result, recorder.finish())
+    let registries = recorder
+        .finish()
+        .into_iter()
+        .filter(|recording| recording.header.stream == Stream::Registry)
+        .collect();
+    (result, registries)
 }
 
 /// Where the checked-in recordings live.
@@ -68,10 +73,14 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
             | Row::AddDevice { .. }
             | Row::RemoveDevice { .. }
             | Row::CancelSurface { .. }
-            | Row::CancelContact { .. } => {}
+            | Row::CancelContact { .. }
+            | Row::Notice(_)
+            | Row::SessionEnd(_)
+            | Row::Reopen
+            | Row::Ime { .. } => {}
         }
     }
-    super::transcript(&device.replay())
+    super::transcript(&device.replay().expect("a registry's recording replays"))
         .iter()
         .map(|line| without_times(line))
         .collect()
@@ -102,7 +111,7 @@ fn without_times(line: &str) -> String {
 /// readings at each press, does not.
 pub fn grammar(recording: &NativeRecording) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    for input in recording.replay() {
+    for input in recording.replay().expect("a registry's recording replays") {
         let Some(event) = input.as_pointer() else {
             continue;
         };
@@ -251,6 +260,7 @@ pub fn hold_pulled_device_recordings() -> usize {
         let delivered: Vec<&str> = delivered.lines().collect();
         let replayed: Vec<String> = fresh
             .replay()
+            .expect("a registry's recording replays")
             .iter()
             .filter_map(|input| input.as_pointer().map(|event| format!("{event:?}")))
             .collect();
@@ -296,9 +306,11 @@ const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
 pub fn a_captured_registry_journals_the_recording_it_replays() {
     for (name, text) in RECORDINGS {
         let mut original = recording(text);
-        let (_, captured) = record(original.header.backend, || original.replay());
+        let (_, captured) = record(original.header.backend, || {
+            original.replay().expect("a registry's recording replays")
+        });
         let recorder = Recorder::start(original.header.backend);
-        original.replay();
+        original.replay().expect("a registry's recording replays");
         let live = recorder.journals().snapshot();
         drop(recorder.finish());
         original.header.provenance = None;

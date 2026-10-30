@@ -3960,6 +3960,27 @@ derives them again. The codec reads every number back to the bits it was
 written from (serde_json's `float_roundtrip`): a cumulative pinch scale read
 one ulp off replays a different transform than the device delivered.
 
+A recording journals one stream, which its header names: a registry's (the
+default, the only one with a clock), a loop's application delivery (`app`:
+system notices, session-end phases and reopens, reported by `AppDelivery`
+before it delivers them) or a window's delivery (`window`: the input method's
+events, reported by `WindowDelivery::dispatch_input`). Each delivery opens its
+stream when it is made, numbered with the registries in creation order. The
+recorder redacts input method text by default (ADR-0215 §5) and marks each row
+that lost it. `NativeRecording::replay_into` replays every row, in order, into
+a `ReplayTarget`, which takes the kinds of row it reproduces: a registry's rows
+as the input the registry assembles, each other row as itself. A row the target
+refuses, or a redacted one, stops the replay with a `ReplayError` that names
+the row and its line, never a skipped row; `replay` is the target that takes a
+registry's input alone. The headless host is the target of the other streams
+in the tests: its host events take the `app` rows and a headless window takes
+the `window` rows (`app_recordings_replay_on_the_headless_host`,
+`window_recordings_replay_on_the_headless_host`,
+`captured_streams_replay_to_what_the_session_delivered`). An input method that
+edits the focused text store directly (TSF, the Android and web mirrors)
+delivers no event and is not journaled yet; the `ime` row's payload is tagged
+so a store edit can join it.
+
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch
 and a pen from `InjectSyntheticPointerInput`,

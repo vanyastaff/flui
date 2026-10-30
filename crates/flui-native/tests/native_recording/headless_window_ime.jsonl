@@ -1,0 +1,5 @@
+{"flui_native_recording":1,"backend":"headless","stream":"window","provenance":"hand-written: one composition from enabled to disabled","devices":[]}
+{"row":"ime","ime":{"event":"enabled"}}
+{"row":"ime","ime":{"event":{"preedit":{"text":"に","cursor":[0,3]}}}}
+{"row":"ime","ime":{"event":{"commit":"日本"}}}
+{"row":"ime","ime":{"event":"disabled"}}
