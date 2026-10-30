@@ -489,6 +489,31 @@ impl Drop for UiRuntime {
             self.owner_frame.retire(),
             "ui_runtime owner-local frame retirement",
         );
+        // The application values the runtime's own fields still hold are
+        // destroyed here too, under the same catch, and never by the drop glue
+        // that runs after this body: once a failure resumes below, a capture
+        // that failed in that glue would be a second panic in one unwind, and
+        // abort (#1165). Queued commands carry cross-thread signal writes'
+        // closures; the frame-failure handler is the embedder's. After a
+        // failure they are retained, as every other application value here.
+        let commands: Vec<UiCommand> = self.rx.try_iter().collect();
+        let handler = self.frame_failure_handler.borrow_mut().take();
+        let preserving = first.is_some() || std::thread::panicking();
+        if preserving {
+            std::mem::forget(commands);
+            std::mem::forget(handler);
+        } else {
+            let mut retired = flui_foundation::panic::FirstPanic::new();
+            for command in commands {
+                retired.contain(|| drop(command));
+            }
+            retired.contain(|| drop(handler));
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                retired.into_payload(),
+                "ui_runtime application value retirement",
+            );
+        }
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

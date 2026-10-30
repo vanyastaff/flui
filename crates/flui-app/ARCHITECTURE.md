@@ -462,3 +462,10 @@ Discarded lifecycle panic payloads are retained (ADR-0119), as is a future
 whose poll panicked (ADR-0127); healthy completion and cancellation drop the future
 normally. A compute panic is reported as complete before its diagnostics run.
 Pinned by `service_lifecycle_matrix`.
+
+### The owner's teardown raises its failure from functions, never from `Drop`
+
+`owner_dispatch` implements no `Drop`: the exit's failure is held in the terminal slot and resumed
+by the function that ends the loop (`teardown_platform_ui_runtime`), after every step has run, so
+no field drop glue runs inside that unwind. A UI runtime the exit drops raises its own first
+failure only after destroying its application values (`flui-runtime`, #1165).
