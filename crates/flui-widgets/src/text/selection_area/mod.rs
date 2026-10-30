@@ -377,10 +377,12 @@ impl SelectionModel {
             },
             None => None,
         };
+        // The memory belongs to the latest input even when the ends stay
+        // put: Shift+End at a short line's end forgets the column.
+        self.caret.set(caret);
         if *self.selection.borrow() == selection {
             return;
         }
-        self.caret.set(caret);
         let coverage = selection
             .as_ref()
             .and_then(|selection| self.covered(selection));

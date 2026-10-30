@@ -609,7 +609,9 @@ pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
 /// downstream (the second Shift+End selects the next line); drop a line
 /// step's hit affinity (Shift+Home after landing on a wrapped line's end
 /// stays put); drop the pointer hit's affinity (Shift+Home after a drag to
-/// that line's end stays put).
+/// that line's end stays put); keep the old memory when a key leaves the
+/// ends where they were (Shift+Down after Shift+End on the short line keeps
+/// the first line's column).
 pub(crate) fn line_keys_keep_their_column_and_their_line() {
     let mut scene = Scene::over(Column::new((Text::new("abcdefghij\nx\nabcdefghij"),)).boxed());
     // Near the top left, on the first line.
@@ -628,6 +630,22 @@ pub(crate) fn line_keys_keep_their_column_and_their_line() {
         scene.selected().as_deref(),
         Some("abcdefghij\nx\nabcdefghij")
     );
+    // Shift+End on the short line keeps the ends but forgets the column.
+    let mut scene = Scene::over(Column::new((Text::new("abcdefghij\nx\nabcdefghij"),)).boxed());
+    scene.clicks(corner(&scene), 2);
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowDown),
+        Code::ArrowDown,
+        Modifiers::SHIFT
+    ));
+    assert_eq!(scene.selected().as_deref(), Some("abcdefghij\nx"));
+    assert!(scene.key(Key::Named(NamedKey::End), Code::End, Modifiers::SHIFT));
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowDown),
+        Code::ArrowDown,
+        Modifiers::SHIFT
+    ));
+    assert_eq!(scene.selected().as_deref(), Some("abcdefghij\nx\na"));
 
     let mut scene = Scene::over(
         Column::new((SizedBox::width(60.0).child(Text::new("aaaa bbbb cccc dddd")),)).boxed(),
