@@ -869,7 +869,7 @@ impl UiRuntime {
                     // streak ends here, so a later withdrawal gets the full
                     // retry budget again.
                     producer.clear_not_shown_streak();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -989,7 +989,7 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -1013,7 +1013,7 @@ impl UiRuntime {
                     // submit that retry produces must still find the epochs
                     // that arrived before this failure — see
                     // `record_submit_telemetry`'s own doc.
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -1044,7 +1044,7 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -1342,6 +1342,7 @@ impl UiRuntime {
     /// `frame_time` is the pump's frame time, recorded as the snapshot's
     /// `clock_timestamp` so a late segment start shows against it.
     pub(super) fn record_submit_telemetry(
+        &self,
         frame_time: Instant,
         presentation: &PresentationState,
         submit_at: Instant,
@@ -1356,14 +1357,18 @@ impl UiRuntime {
                 submit_at,
                 phases,
             };
+            let address = flui_foundation::PresentationAddress {
+                ui_runtime_id: self.id,
+                presentation_id: presentation.id(),
+            };
             let snapshot = match epochs {
                 EpochDisposition::Drain => {
                     presentation
                         .clock()
-                        .record_frame(presentation.id(), times, present_outcome)
+                        .record_frame(address, times, present_outcome)
                 }
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
-                    presentation.id(),
+                    address,
                     times,
                     present_outcome,
                 ),
@@ -1391,7 +1396,8 @@ impl UiRuntime {
         tracing::trace!(
             target: "flui.frame",
             event = "frame_telemetry",
-            presentation = %snapshot.presentation,
+            ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
+            presentation = %snapshot.address.presentation_id,
             frame_id = %snapshot.frame_id,
             present_outcome = outcome,
             segment_us = Self::duration_micros_saturated(snapshot.segment_span()),

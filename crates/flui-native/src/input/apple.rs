@@ -40,14 +40,13 @@ pub mod keys {
     //! two disagree the table follows Apple's header and Firefox, and the
     //! divergence is commented at the arm.
     //!
-    //! # What never reaches these tables
+    //! # Modifier keys
     //!
     //! AppKit reports modifier keys through `flagsChanged:`, not
-    //! `keyDown:`/`keyUp:` — the modifier rows below (`kVK_Shift` …
-    //! `kVK_Function`) are complete for the table's own sake, but the backend
-    //! does not receive plain key events for them, and it does not translate
-    //! `flagsChanged:` today; modifier *state* rides every event's
-    //! `modifierFlags` instead.
+    //! `keyDown:`/`keyUp:`: the event names the key that changed and the
+    //! flags after the change, never whether it went down.
+    //! [`modifier_down`] reads that from the flags, side by side where the
+    //! device-dependent bits tell the left key from the right one.
 
     #![forbid(unsafe_code)]
 
@@ -392,8 +391,8 @@ pub mod keys {
             // though its physical `code` is the registry's NumLock position.
             kvk::ANSI_KEYPAD_CLEAR => NamedKey::Clear,
 
-            // Modifiers arrive via `flagsChanged:`, not `keyDown:` — mapped for
-            // table completeness (see the module doc).
+            // Modifiers arrive via `flagsChanged:`, not `keyDown:` (see the
+            // module doc).
             kvk::SHIFT | kvk::RIGHT_SHIFT => NamedKey::Shift,
             kvk::CONTROL | kvk::RIGHT_CONTROL => NamedKey::Control,
             kvk::OPTION | kvk::RIGHT_OPTION => NamedKey::Alt,
@@ -416,6 +415,136 @@ pub mod keys {
             _ => return None,
         };
         Some(Key::Named(named))
+    }
+
+    /// `NSEventModifierFlags` bits, raw (AppKit `NSEvent.h`), and the
+    /// device-dependent bits under them that tell the left key from the right
+    /// (`NX_DEVICE*KEYMASK`, IOKit `IOLLEvent.h`).
+    mod flags {
+        pub(super) const CAPS_LOCK: usize = 1 << 16;
+        pub(super) const SHIFT: usize = 1 << 17;
+        pub(super) const CONTROL: usize = 1 << 18;
+        pub(super) const OPTION: usize = 1 << 19;
+        pub(super) const COMMAND: usize = 1 << 20;
+        pub(super) const FUNCTION: usize = 1 << 23;
+
+        pub(super) const LEFT_CONTROL: usize = 0x0001;
+        pub(super) const LEFT_SHIFT: usize = 0x0002;
+        pub(super) const RIGHT_SHIFT: usize = 0x0004;
+        pub(super) const LEFT_COMMAND: usize = 0x0008;
+        pub(super) const RIGHT_COMMAND: usize = 0x0010;
+        pub(super) const LEFT_OPTION: usize = 0x0020;
+        pub(super) const RIGHT_OPTION: usize = 0x0040;
+        pub(super) const RIGHT_CONTROL: usize = 0x2000;
+        pub(super) const DEVICE: usize = 0x207F;
+    }
+
+    /// Whether the modifier key `key_code` is down after a `flagsChanged:`
+    /// whose `modifierFlags` are `modifier_flags`; `None` for a key that is
+    /// not a modifier.
+    ///
+    /// A side's own bit decides when the event carries device-dependent bits,
+    /// so releasing the right Shift while the left one is held reads as a
+    /// release; an event that carries none falls back to the shared flag.
+    /// Caps Lock is down while its lock is on, so each toggle reads as one
+    /// press or one release.
+    pub fn modifier_down(key_code: u16, modifier_flags: usize) -> Option<bool> {
+        let (side, shared) = match key_code {
+            kvk::SHIFT => (Some(flags::LEFT_SHIFT), flags::SHIFT),
+            kvk::RIGHT_SHIFT => (Some(flags::RIGHT_SHIFT), flags::SHIFT),
+            kvk::CONTROL => (Some(flags::LEFT_CONTROL), flags::CONTROL),
+            kvk::RIGHT_CONTROL => (Some(flags::RIGHT_CONTROL), flags::CONTROL),
+            kvk::OPTION => (Some(flags::LEFT_OPTION), flags::OPTION),
+            kvk::RIGHT_OPTION => (Some(flags::RIGHT_OPTION), flags::OPTION),
+            kvk::COMMAND => (Some(flags::LEFT_COMMAND), flags::COMMAND),
+            kvk::RIGHT_COMMAND => (Some(flags::RIGHT_COMMAND), flags::COMMAND),
+            kvk::CAPS_LOCK => (None, flags::CAPS_LOCK),
+            kvk::FUNCTION => (None, flags::FUNCTION),
+            _ => return None,
+        };
+        let bit = side
+            .filter(|_| modifier_flags & flags::DEVICE != 0)
+            .unwrap_or(shared);
+        Some(modifier_flags & bit != 0)
+    }
+
+    /// The text a key press types, from its `characters` and its
+    /// `charactersIgnoringModifiers`.
+    ///
+    /// `characters` is the layout's translation with every modifier applied,
+    /// and Control applied to a letter makes it a C0 control character
+    /// (Control+A is U+0001), which is no key value a shortcut can match.
+    /// Under Control such a character gives way to the press without its
+    /// modifiers, Shift kept, the way the Android backend looks the key up
+    /// without Control.
+    pub fn typed_text<'a>(
+        characters: &'a str,
+        ignoring_modifiers: &'a str,
+        control: bool,
+    ) -> &'a str {
+        let mut chars = characters.chars();
+        let control_character = matches!(
+            (chars.next(), chars.next()),
+            (Some('\u{0}'..='\u{1f}' | '\u{7f}'), None)
+        );
+        if control && control_character && !ignoring_modifiers.is_empty() {
+            ignoring_modifiers
+        } else {
+            characters
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{flags, kvk, modifier_down, typed_text};
+
+        #[test]
+        fn a_modifier_key_reads_its_own_side() {
+            let left = flags::SHIFT | flags::LEFT_SHIFT;
+            for (name, key_code, modifier_flags, down) in [
+                ("left pressed", kvk::SHIFT, left, Some(true)),
+                (
+                    "right pressed while left held",
+                    kvk::RIGHT_SHIFT,
+                    left | flags::RIGHT_SHIFT,
+                    Some(true),
+                ),
+                (
+                    "right released, left held",
+                    kvk::RIGHT_SHIFT,
+                    left,
+                    Some(false),
+                ),
+                ("last released", kvk::SHIFT, 0, Some(false)),
+                (
+                    "no device bits: the shared flag",
+                    kvk::RIGHT_COMMAND,
+                    flags::COMMAND,
+                    Some(true),
+                ),
+                ("Caps Lock on", kvk::CAPS_LOCK, flags::CAPS_LOCK, Some(true)),
+                ("Caps Lock off", kvk::CAPS_LOCK, 0, Some(false)),
+                ("Fn", kvk::FUNCTION, flags::FUNCTION, Some(true)),
+                ("not a modifier", kvk::ANSI_A, flags::SHIFT, None),
+            ] {
+                assert_eq!(modifier_down(key_code, modifier_flags), down, "{name}");
+            }
+        }
+
+        #[test]
+        fn control_types_the_key_not_a_control_character() {
+            for (name, characters, ignoring, control, typed) in [
+                ("Control+A", "\u{1}", "a", true, "a"),
+                ("Control+Shift+A", "\u{1}", "A", true, "A"),
+                ("Control+[", "\u{1b}", "[", true, "["),
+                ("Control on a non-letter", "1", "1", true, "1"),
+                ("no Control", "\u{1b}", "[", false, "\u{1b}"),
+                ("nothing to fall back to", "\u{1}", "", true, "\u{1}"),
+                ("Option layer kept", "å", "a", false, "å"),
+            ] {
+                assert_eq!(typed_text(characters, ignoring, control), typed, "{name}");
+            }
+        }
     }
 }
 
@@ -514,8 +643,8 @@ pub(crate) mod macos {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
-            PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition, PointerRole, ScrollEvent, ScrollPhase,
+            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollPhase,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
@@ -597,6 +726,29 @@ pub(crate) mod macos {
                         ),
                     )];
                 }
+                if event_type == NSEventType::FlagsChanged {
+                    let key_code = event.keyCode();
+                    let Some(down) = crate::input::apple::keys::modifier_down(
+                        key_code,
+                        event.modifierFlags().bits(),
+                    ) else {
+                        return Vec::new();
+                    };
+                    let Some(key) = crate::input::apple::keys::keycode_to_key(key_code) else {
+                        return Vec::new();
+                    };
+                    let code = crate::input::apple::keys::keycode_to_code(key_code);
+                    return vec![PlatformInput::Keyboard(
+                        KeyEvent::new(
+                            if down { KeyState::Down } else { KeyState::Up },
+                            key,
+                            code,
+                            time,
+                        )
+                        .with_location(crate::input::keys::location_for_code(code))
+                        .with_modifiers(extract_modifiers(event)),
+                    )];
+                }
                 let modifiers = extract_modifiers(event);
                 let location = event.locationInWindow();
                 let (x, y) = (location.x, view_height - location.y);
@@ -646,10 +798,16 @@ pub(crate) mod macos {
                         return Vec::new();
                     };
                     mouse(ReadingAction::Release(button))
+                } else if event_type == NSEventType::MouseMoved {
+                    // AppKit sends a plain move only while no button is held
+                    // (a held one makes it a drag), so the move itself says
+                    // the set is empty, as of the event: a release lost while
+                    // focus was elsewhere ends the press here instead of
+                    // swallowing the next one.
+                    mouse(ReadingAction::Move).with_buttons(PointerButtons::NONE)
                 } else if matches!(
                     event_type,
-                    NSEventType::MouseMoved
-                        | NSEventType::LeftMouseDragged
+                    NSEventType::LeftMouseDragged
                         | NSEventType::RightMouseDragged
                         | NSEventType::OtherMouseDragged
                         | NSEventType::Pressure
@@ -712,13 +870,23 @@ pub(crate) mod macos {
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
                     .with_precision(precision);
-                if let Some(phase) = scroll_phase(
-                    &mut self.scrolling,
-                    event.phase(),
-                    event.momentumPhase(),
-                    precise,
-                ) {
-                    scroll = scroll.with_phase(phase);
+                let (phase, momentum) = (event.phase(), event.momentumPhase());
+                if phase == NSEventPhase::MayBegin && momentum == NSEventPhase::None {
+                    // Fingers came to rest on the trackpad: a fling in
+                    // progress stops, as the platform's own momentum would.
+                    return vec![PlatformInput::Pointer(PointerEvent::ScrollInertiaCancel(
+                        PointerSignal::new(pointer, time).with_position(position),
+                    ))];
+                }
+                match scroll_phase(&mut self.scrolling, phase, momentum, precise) {
+                    Some(phase) => scroll = scroll.with_phase(phase),
+                    // A phased event the grammar declines (a cancel of a
+                    // gesture that never began) moved nothing: it is no wheel
+                    // tick either.
+                    None if phase != NSEventPhase::None || momentum != NSEventPhase::None => {
+                        return Vec::new();
+                    }
+                    None => {}
                 }
                 vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
             }
@@ -854,11 +1022,19 @@ pub(crate) mod macos {
                 return Key::Named(NamedKey::Unidentified);
             };
 
-            let chars_str = chars.to_string();
-            if chars_str.is_empty() {
+            let chars = chars.to_string();
+            let ignoring = event
+                .charactersIgnoringModifiers()
+                .map(|ignoring| ignoring.to_string())
+                .unwrap_or_default();
+            let control = event
+                .modifierFlags()
+                .contains(NSEventModifierFlags::Control);
+            let typed = crate::input::apple::keys::typed_text(&chars, &ignoring, control);
+            if typed.is_empty() {
                 return Key::Named(NamedKey::Unidentified);
             }
-            Key::character(chars_str)
+            Key::character(typed)
         }
 
         /// Extract modifiers from NSEvent
@@ -909,11 +1085,7 @@ pub(crate) mod macos {
                         NSEventPhase::None,
                         Some(ScrollPhase::Ended),
                     ),
-                    (
-                        NSEventPhase::Cancelled,
-                        NSEventPhase::None,
-                        Some(ScrollPhase::Cancelled),
-                    ),
+                    (NSEventPhase::Cancelled, NSEventPhase::None, None),
                     (
                         NSEventPhase::None,
                         NSEventPhase::Began,

@@ -99,6 +99,52 @@ fn a_second_finger_is_additional_until_the_first_lifts() {
     assert_eq!(third.pointer.role, PointerRole::Primary);
 }
 
+/// A mouse whose release was lost while the window lost focus: the next move
+/// that reports no button held takes the press back, and the next press of
+/// that button is a down again instead of a repeat of a held one. A touch
+/// sequence is its contact and ignores the reported set.
+fn a_lost_release_is_taken_back_by_the_next_reported_set() {
+    use flui_platform::pointer::PointerButtons;
+    let mut contacts = registry();
+    decode(&mut contacts, &mouse(ReadingAction::Move, 1)).expect("valid");
+    decode(&mut contacts, &mouse(PRESS, 2)).expect("valid");
+    let held =
+        mouse(ReadingAction::Move, 3).with_buttons(PointerButtons::only(PointerButton::PRIMARY));
+    assert!(
+        matches!(
+            single(&decode(&mut contacts, &held).expect("valid")),
+            PointerEvent::Move(_)
+        ),
+        "a set that still holds the button changes nothing"
+    );
+    let resynced = decode(
+        &mut contacts,
+        &mouse(ReadingAction::Move, 4).with_buttons(PointerButtons::NONE),
+    )
+    .expect("valid");
+    let events = pointer_events(&resynced);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [PointerEvent::Cancel(cancel), PointerEvent::Move(movement)]
+                if cancel.reason == CancelReason::Platform && movement.buttons.is_empty()
+        ),
+        "the press is taken back, then the move: {events:?}"
+    );
+    assert!(matches!(
+        single(&decode(&mut contacts, &mouse(PRESS, 5)).expect("valid")),
+        PointerEvent::Down(_)
+    ));
+
+    decode(&mut contacts, &touch(1, PRESS, 6)).expect("valid");
+    let pressed = decode(
+        &mut contacts,
+        &touch(1, ReadingAction::Move, 7).with_buttons(PointerButtons::NONE),
+    )
+    .expect("valid");
+    assert!(matches!(single(&pressed), PointerEvent::Move(_)));
+}
+
 fn a_mouse_keeps_its_identity_across_presses() {
     let mut contacts = registry();
     decode(&mut contacts, &mouse(ReadingAction::Move, 1)).expect("valid");
@@ -812,11 +858,11 @@ fn pan_zoom_carries_only_scale_and_rotation() {
 /// `PanGesture`/pixel `MouseWheel` touch phases, AppKit's `phase` and
 /// `momentumPhase`.
 fn two_finger_pan_is_phased_scroll_on_every_backend() {
-    use GesturePhase::{Began, Changed, Ended};
+    use GesturePhase::{Began, Cancelled, Changed, Ended};
     use flui_platform::pointer::ScrollPhase;
     let fingers = |phase| ScrollReading::fingers(phase, true);
     type Row = (&'static str, Vec<ScrollReading>, Vec<Option<ScrollPhase>>);
-    let rows: [Row; 3] = [
+    let rows: [Row; 4] = [
         (
             "winit",
             vec![fingers(Began), fingers(Changed), fingers(Ended)],
@@ -856,6 +902,11 @@ fn two_finger_pan_is_phased_scroll_on_every_backend() {
                 ScrollReading::default(),
             ],
             vec![None, None],
+        ),
+        (
+            "appkit resting finger",
+            vec![fingers(Cancelled), fingers(Began), fingers(Cancelled)],
+            vec![None, Some(ScrollPhase::Began), Some(ScrollPhase::Cancelled)],
         ),
     ];
     for (backend, readings, expected) in rows {
@@ -1191,6 +1242,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_mouse_keeps_its_identity_across_presses",
                 a_mouse_keeps_its_identity_across_presses,
+            ),
+            (
+                "a_lost_release_is_taken_back_by_the_next_reported_set",
+                a_lost_release_is_taken_back_by_the_next_reported_set,
             ),
             (
                 "the_reserved_contact_is_one_cursor_across_devices",
