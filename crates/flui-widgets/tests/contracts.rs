@@ -564,7 +564,7 @@ fn selection_area_text_runs() {
             ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
             ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
             ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
-            ("selection_area::the_reported_text_follows_the_published_document_order", crate::selection_area::the_reported_text_follows_the_published_document_order),
+            ("selection_area::a_document_reads_its_texts_where_they_are_laid_out", crate::selection_area::a_document_reads_its_texts_where_they_are_laid_out),
             ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
             ("selection_area::a_silenced_text_is_left_out_of_the_selection", crate::selection_area::a_silenced_text_is_left_out_of_the_selection),
             ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
@@ -1206,6 +1206,7 @@ fn layout_and_render_object_wiring() {
         &[
             ("stack_positioned::positioned_places_child_at_explicit_edges", crate::stack_positioned::positioned_places_child_at_explicit_edges as fn()),
             ("wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow", crate::wrap::wrap_three_boxes_form_two_runs_when_width_is_narrow),
+            ("wrap::wrap_starts_its_runs_at_the_reading_edge", crate::wrap::wrap_starts_its_runs_at_the_reading_edge),
             ("table::table_mounts_render_table_and_lays_out_a_grid_row_major", crate::table::table_mounts_render_table_and_lays_out_a_grid_row_major),
             ("flex_parent_data::two_expandeds_split_main_axis_by_flex_factor", crate::flex_parent_data::two_expandeds_split_main_axis_by_flex_factor),
             ("flex_parent_data::vertical_direction_updates_mounted_flex_children", crate::flex_parent_data::vertical_direction_updates_mounted_flex_children),

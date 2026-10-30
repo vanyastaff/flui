@@ -52,7 +52,7 @@ use crate::{
 /// A region whose commands are reached through a context menu.
 ///
 /// ```rust,ignore
-/// ContextMenuArea::new(
+/// ContextMenuArea::try_new(
 ///     GestureCommand::new("Delete Alice", Delete("Alice")),
 ///     [GestureCommand::new("Archive Alice", Archive("Alice"))],
 /// )?
@@ -92,7 +92,7 @@ impl ContextMenuArea {
     /// [`GestureAlternativesError::EmptyLabel`] for a command without a
     /// label, [`GestureAlternativesError::DuplicateLabel`] for two commands
     /// with one.
-    pub fn new(
+    pub fn try_new(
         first: GestureCommand,
         more: impl IntoIterator<Item = GestureCommand>,
     ) -> Result<Self, GestureAlternativesError> {

@@ -297,6 +297,19 @@ impl RenderWrap {
         self
     }
 
+    /// Sets the reading direction that flips the horizontal axis; a change
+    /// lays the wrap out again.
+    pub fn set_text_direction(
+        &mut self,
+        text_direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.text_direction.replace(text_direction) == Some(text_direction) {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        }
+    }
+
     /// Builder: sets the vertical direction that flips the vertical axis.
     #[must_use]
     pub fn with_vertical_direction(mut self, vertical_direction: VerticalDirection) -> Self {

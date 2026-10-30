@@ -22,7 +22,7 @@ impl FrameSink for Sink {
 }
 
 fn runtime(clock: &ManualClock, fonts: &flui_painting::FontCollection) -> UiRuntime {
-    let runtime = UiRuntime::new(
+    let runtime = UiRuntime::try_new(
         crate::owner_publication::window(),
         1.0,
         RuntimeHostServices::new(

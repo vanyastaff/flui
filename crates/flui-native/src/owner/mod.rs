@@ -67,6 +67,8 @@
 pub(crate) mod accessibility_slot;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod animation_frame;
 pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;

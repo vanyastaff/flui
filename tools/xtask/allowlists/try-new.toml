@@ -3,11 +3,3 @@
 # list only shrinks: the scan fails on a fallible `new` it does not name and on an
 # entry whose `new` no longer fails.
 reason = "written before the rule had a gate; each entry is renamed to `try_new`"
-
-[[allow]]
-crate = "flui-runtime"
-type = "UiRuntime"
-
-[[allow]]
-crate = "flui-widgets"
-type = "ContextMenuArea"

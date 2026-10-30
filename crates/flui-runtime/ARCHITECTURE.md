@@ -335,7 +335,7 @@ host.
   widget harness runs every frame through it. It neither constructs
   `OwnerHost` nor reproduces native event-loop routing; owner-turn behavior
   is tested in this crate's own host tests.
-- **A UI runtime reads time from one `ClockSource`.** `UiRuntime::new` takes the
+- **A UI runtime reads time from one `ClockSource`.** `UiRuntime::try_new` takes the
   source: the UI runtime's frame-time origin, every presentation's gesture arena
   (its deadlines) and `FrameClock` (its produce gate) read it, so a
   `ClockSource::Manual` UI runtime keeps them on the timeline its driver
@@ -369,7 +369,7 @@ host.
   mapping, and a wildcard arm would swallow it (pinned by the enum's
   doctest, which matches every variant from outside the crate).
 - **A UI runtime owns one text context over the app's font collection.**
-  `UiRuntime::new` takes the app's `FontCollection` (the host's shared engine
+  `UiRuntime::try_new` takes the app's `FontCollection` (the host's shared engine
   services hold it), and `RuntimeServices::construct` builds the UI runtime's one
   `TextContext` over it (ADR-0092 §3), behind a `TextContextHandle`. A
   presentation builds none: `PresentationState::new`, the one place a
@@ -886,12 +886,30 @@ made in the frame of the call before it with work pending, answer unstable. Pinn
 **Act and read.** `act_and_read` (`UiCommand::SemanticsAgentActionRead`) takes the committed tree
 as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as `act` does, parks
 the reply on the presentation (`agent_reads`, at most 256) and requests a redraw. The reply
-completes in `drive_frame`'s commit-anchor loop, after the frame the effect landed in, by diffing
+completes in `drive_frame`, right after the frame the effect landed in (before the commit anchor), by diffing
 the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
 (name, value, description, state, actions; bounds only when asked), a role change counting as
 appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
 owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
 `src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+
+**Waits.** `wait` (`UiCommand::SemanticsAgentWait`) parks a condition on the presentation
+(`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
+already answers at the drain; after each frame `drive_frame` ran, which also counts that frame
+for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`), so a deadline or a
+timer that ran out is seen. The tree part of a condition is a pure function of the committed tree
+(`SemanticsOwner::evaluate_wait`); `Settled` and the unsettled causes come from the runtime's own
+predicates (`needs_redraw`, a scheduled frame, pending work, transient callbacks, the next timer),
+which `UiRuntime::unsettled_causes` reads without the agent's own waits, so a parked wait is never
+why the window is busy. A condition that counts frames asks for a redraw while it is parked,
+because an idle window presents none. The deadline is on the presentation's clock (a manual clock
+expires it deterministically) and joins `next_wake`, so a window that draws nothing still times
+out; a timeout is an answer, `satisfied: false` with the last observation and the causes, and the
+window closing answers `gone`. A presentation holds 256 waits: the next is refused with
+`TooManyWaits` (`busy`, retry `soon`), never dropped and never in place of an older one. A
+condition on events is refused until the event stream exists. Image loads are not among the
+causes: the runtime sits below the layer that loads images. Pinned by
+`src/ui_runtime/tests/agent_wait.rs` and `crates/flui-semantics/tests/wait.rs`.
 
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is

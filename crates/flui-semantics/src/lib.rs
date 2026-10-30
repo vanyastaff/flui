@@ -54,6 +54,7 @@ pub mod node;
 mod numeric_range;
 pub mod owner;
 pub mod platform;
+mod reading_order;
 pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
 pub use platform::AssistiveFocusSupport;
 pub mod properties;
@@ -79,10 +80,14 @@ pub use accesskit_translation::{
     semantics_action_for, semantics_action_request_for, tree_to_update,
 };
 pub use numeric_range::{NumericRange, NumericRangeError};
+pub use reading_order::reading_order;
 // ============================================================================
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
-pub use agent::{Placement, TreeSnapshot, WireActionError, WireLocateError, WireReadError};
+pub use agent::{
+    Evaluation, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
+    WireReadError, counts_frames, waits_on_events,
+};
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because

@@ -608,8 +608,23 @@ impl UiRuntime {
     /// the loop to wake and re-drive a pump so `tick_deadlines` can resolve
     /// it, even though that pump will render nothing for the gated
     /// presentation itself.
+    ///
+    /// A wait an agent parked (`SemanticsAgent::wait`) counts through its deadline, so a window
+    /// that draws nothing still times it out.
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {
+        [
+            self.next_wake_excluding_agent_waits(),
+            self.next_agent_wait_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// [`Self::next_wake`] without the deadlines of waits an agent parked: what keeps a window
+    /// from being settled.
+    pub(crate) fn next_wake_excluding_agent_waits(&self) -> Option<web_time::Instant> {
         self.presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())

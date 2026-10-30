@@ -513,32 +513,37 @@ impl WebLoop {
                 return;
             }
 
-            // The callback's timestamp is the display's cadence: the refresh
-            // estimate follows it. A new published period wakes the owner,
-            // whose next turn reads the changed snapshot.
-            if let Some(displays) = displays.upgrade()
-                && displays.frame(timestamp)
-                && let Some(signal) = signal.upgrade()
-            {
-                // A failed wake leaves the signal's retry debt.
-                let _ = signal.wake();
-            }
+            crate::owner::animation_frame::turn(
+                || {
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.request_animation_frame(
+                            f.borrow()
+                                .as_ref()
+                                .expect("BUG: the RAF closure slot is filled before any frame runs")
+                                .as_ref()
+                                .unchecked_ref(),
+                        );
+                    }
+                },
+                || {
+                    // The callback's timestamp is the display's cadence: the
+                    // refresh estimate follows it. A new published period
+                    // wakes the owner, whose next turn reads the changed
+                    // snapshot.
+                    if let Some(displays) = displays.upgrade()
+                        && displays.frame(timestamp)
+                        && let Some(signal) = signal.upgrade()
+                    {
+                        // A failed wake leaves the signal's retry debt.
+                        let _ = signal.wake();
+                    }
 
-            // Dispatch frame request to window callbacks
-            if let Some(ref cbs) = delivery {
-                cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
-            }
-
-            // Request next frame after work (ensures smooth loop)
-            if let Some(w) = web_sys::window() {
-                let _ = w.request_animation_frame(
-                    f.borrow()
-                        .as_ref()
-                        .expect("BUG: the RAF closure slot is filled before any frame runs")
-                        .as_ref()
-                        .unchecked_ref(),
-                );
-            }
+                    // Dispatch frame request to window callbacks
+                    if let Some(ref cbs) = delivery {
+                        cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
+                    }
+                },
+            );
         }));
 
         // Kick off the first frame
