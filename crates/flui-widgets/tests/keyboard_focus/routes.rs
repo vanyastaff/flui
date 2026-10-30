@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
+use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, Modifiers, NamedKey};
@@ -21,7 +22,7 @@ use flui_widgets::navigator::{
     Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, PageRoute, PopupRoute, Route,
     RouteAnimation, RouteContentBuilder, RouteId, RouteSettings,
 };
-use flui_widgets::{Align, AnimatedBuilder, Column, SizedBox};
+use flui_widgets::{Align, AnimatedBuilder, Column, RawTextField, SizedBox, TextEditingController};
 
 use super::{chord, down, press, tab, up};
 use crate::common::harness::{Harness, mount};
@@ -65,6 +66,28 @@ fn dialog(label: &'static str, activations: &Rc<Cell<u32>>) -> PopupRoute<i32> {
         },
     )
     .barrier_dismissible(true)
+}
+
+/// A route content builder whose page is a "first" control and an
+/// `autofocus` text field whose focus node is labelled `field`, holding
+/// `text`.
+fn field_page(
+    text: &str,
+) -> impl Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static {
+    let node = FocusNode::with_debug_label("field");
+    let controller = TextEditingController::with_text(text);
+    move |_, _, _| {
+        Column::new((
+            Focus::new(SizedBox::new(40.0, 40.0)).debug_label("first"),
+            SizedBox::new(200.0, 40.0).child(
+                RawTextField::new(controller.clone())
+                    .focus_node(Rc::clone(&node))
+                    .autofocus(true),
+            ),
+        ))
+        .into_view()
+        .boxed()
+    }
 }
 
 /// A navigator whose home page is one control at the top left.
@@ -198,6 +221,14 @@ pub(crate) fn push_moves_focus_into_the_new_route() {
         "the autofocus control replaces the route's provisional first focus"
     );
 
+    drop(navigator.push(PopupRoute::<i32>::new(field_page(""))));
+    settle(&mut harness);
+    assert_eq!(
+        focused(&harness).as_deref(),
+        Some("field"),
+        "a text field's autofocus replaces it too"
+    );
+
     let late = LateAutofocus::new();
     drop(navigator.push(late.route()));
     settle(&mut harness);
@@ -317,7 +348,52 @@ pub(crate) fn pop_restores_the_opening_element() {
         Some("second"),
         "the focus returns to the element that opened the route"
     );
+
+    // A row of a focusable list, moved to by the arrow keys, is the opening
+    // element as any other control is.
+    let navigator = NavigatorHandle::new();
+    let shared = Rc::clone(&counts);
+    navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
+        let shared = Rc::clone(&shared);
+        SizedBox::new(300.0, 200.0)
+            .child(
+                flui_widgets::ListView::builder(ROWS.len(), 40.0, move |index| {
+                    ROWS.get(index).map(|label| control(label, &shared))
+                })
+                .focusable(true),
+            )
+            .into_view()
+            .boxed()
+    }));
+    let mut harness = mount(Navigator::new(navigator.clone()));
+    harness.tick();
+    let manager = harness.focus_manager();
+    assert!(tab(&manager));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("row0"));
+    for _ in 0..3 {
+        assert!(press(&manager, &Key::Named(NamedKey::ArrowDown)));
+        settle(&mut harness);
+    }
+    assert_eq!(focused(&harness).as_deref(), Some("row3"));
+
+    drop(navigator.push(dialog("dialog", &counts)));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("dialog"));
+    assert!(navigator.pop());
+    settle(&mut harness);
+    assert_eq!(
+        focused(&harness).as_deref(),
+        Some("row3"),
+        "the focus returns to the list row that opened the route"
+    );
 }
+
+/// The labels of the list rows in `pop_restores_the_opening_element`.
+const ROWS: [&str; 12] = [
+    "row0", "row1", "row2", "row3", "row4", "row5", "row6", "row7", "row8", "row9", "row10",
+    "row11",
+];
 
 /// Records the routes a navigator reports removed.
 #[derive(Default)]
@@ -595,6 +671,18 @@ pub(crate) fn back_keys_pop_only_the_current_page() {
     assert!(chord(&manager, &back, modifiers));
     settle(&mut harness);
     assert_eq!(navigator.route_ids().len(), 1, "Back popped the page");
+    assert_eq!(focused(&harness).as_deref(), Some("home"));
+
+    drop(navigator.push(PageRoute::<i32>::new(field_page("draft"))));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("field"));
+    assert!(chord(&manager, &back, modifiers));
+    settle(&mut harness);
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "Back from inside a text field pops the page; the field does not take it"
+    );
     assert_eq!(focused(&harness).as_deref(), Some("home"));
 
     drop(navigator.push(dialog("dialog", &counts)));

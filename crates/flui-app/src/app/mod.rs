@@ -45,7 +45,7 @@ pub use config::{AppConfig, DiagnosticsProfile, MotionOverride, PointerResamplin
 pub use dev_agent::DevAgent;
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
-    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
     SegmentPhase,
 };
@@ -63,6 +63,7 @@ pub use lifecycle::{
     TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
     service_events,
 };
+pub use runner::EXIT_CODE_HUNG;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

@@ -110,6 +110,16 @@ pub trait AgentPort: Send + Sync {
         &self,
         request: flui_protocol::MotionRequest,
     ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault>;
+
+    /// Enqueue a read of the announcements the window delivered to assistive
+    /// technology.
+    ///
+    /// # Errors
+    /// Returns the same admission faults as [`Self::read`].
+    fn announcements(
+        &self,
+        params: flui_protocol::AnnouncementsParams,
+    ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault>;
 }
 
 /// The pending half of an [`AgentAnswer`].

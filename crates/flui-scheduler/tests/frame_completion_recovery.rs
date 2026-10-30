@@ -47,7 +47,7 @@ fn assert_failure(result: Result<(), Box<dyn std::any::Any + Send>>, expected: &
 }
 fn assert_next_frame(scheduler: &UpdateScheduler) {
     let mut next = scheduler.end_of_frame();
-    flui_scheduler::OwnerFrame::new(scheduler)
+    flui_scheduler::OwnerFrame::try_new(scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             flui_scheduler::Instant::now(),
@@ -158,7 +158,7 @@ fn delivery(case: &str) {
             }
             drop(owned);
         } else if pipeline {
-            flui_scheduler::OwnerFrame::new(scheduler)
+            flui_scheduler::OwnerFrame::try_new(scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     Instant::now(),
@@ -168,7 +168,7 @@ fn delivery(case: &str) {
                 )
                 .expect("live owner frame");
         } else {
-            flui_scheduler::OwnerFrame::new(scheduler)
+            flui_scheduler::OwnerFrame::try_new(scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     flui_scheduler::Instant::now(),

@@ -26,7 +26,7 @@ use flui_platform::pointer::{
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRevision,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
@@ -244,7 +244,7 @@ fn preferences(values: SystemPreferences) -> InputRecord {
 
 /// Preferences with every field observed.
 fn full_preferences() -> SystemPreferences {
-    let ratio = DevicePixelRatio::new(1.5).expect("positive");
+    let ratio = DevicePixelRatio::try_new(1.5).expect("positive");
     SystemPreferences::default()
         .with_text_scale(1.25)
         .expect("in range")
@@ -262,11 +262,11 @@ fn full_preferences() -> SystemPreferences {
                 .with_double_tap_interval(Duration::from_millis(300))
                 .with_long_press_timeout(Duration::from_millis(450))
                 .with_native_mouse_geometry(
-                    NativeMouseGeometry::new(Size::new(4, 4), Size::new(2, 3), ratio)
+                    NativeMouseGeometry::try_new(Size::new(4, 4), Size::new(2, 3), ratio)
                         .expect("valid"),
                 )
                 .with_native_touch_geometry(
-                    NativeTouchGeometry::new(8, 100, 50, 8000, ratio).expect("valid"),
+                    NativeTouchGeometry::try_new(8, 100, 50, 8000, ratio).expect("valid"),
                 ),
         )
         .with_wheel(
@@ -349,6 +349,10 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             ),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
+        ("HostInput", "AssistiveFocus") => Some(vec![
+            host(HostInput::AssistiveFocus(Some(accesskit::NodeId(42)))),
+            host(HostInput::AssistiveFocus(None)),
+        ]),
         ("RecordedSurface", "Window") => one(row(
             HostInput::Platform(PlatformInput::Pointer(PointerEvent::Down(press(touch())))),
             InputOutcome::Handled,
@@ -387,7 +391,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             InputOutcome::Queued,
         )),
         ("WindowObservation", "Metrics") => one(window(WindowObservation::Metrics(
-            WindowMetrics::new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
+            WindowMetrics::try_new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
         ))),
         ("WindowObservation", "Focus") => one(window(WindowObservation::Focus(false))),
         ("WindowObservation", "Visibility") => one(window(WindowObservation::Visibility(true))),
@@ -404,7 +408,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }
         ("PlatformInput", "PointerFrame") => one(platform(PlatformInput::PointerFrame(
-            PointerFrame::new(vec![
+            PointerFrame::try_new(vec![
                 PointerEvent::Down(press(touch())),
                 PointerEvent::Down(press(info(PointerKind::Touch, PointerRole::Additional))),
             ])
@@ -466,6 +470,9 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             PointerEvent::ScrollInertiaCancel(signal(touch())),
         )),
         ("PointerEvent", "PanZoom") => one(pan_zoom(PanZoomPhase::Start)),
+        ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
+            SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
+        ))),
         ("PointerEvent", "Revise") => one(pointer_event(PointerEvent::Revise(
             PointerRevision::new(touch(), rich_sample(40)),
         ))),
@@ -728,12 +735,12 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
 fn round_trip(records: &[InputRecord]) -> Vec<InputRecord> {
     let mut header = RecordingHeader::new(RecordingClock::Monotonic);
     header.privacy = Privacy::KeepText;
-    let mut writer = RecordingWriter::new(Vec::new(), &header).expect("header");
+    let mut writer = RecordingWriter::try_new(Vec::new(), &header).expect("header");
     for record in records {
         writer.write(record).expect("row");
     }
     let bytes = writer.finish().expect("flush");
-    RecordingReader::new(&bytes[..])
+    RecordingReader::try_new(&bytes[..])
         .expect("header")
         .map(|row| row.expect("every row reads back").record)
         .collect()
@@ -785,9 +792,11 @@ fn every_vocabulary_variant_round_trips_through_the_recording_dto() {
         {
             let record = unrecorded_sample(enumeration, variant)
                 .unwrap_or_else(|| panic!("{enumeration}::{variant} has no sample"));
-            let mut writer =
-                RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
-                    .expect("header");
+            let mut writer = RecordingWriter::try_new(
+                Vec::new(),
+                &RecordingHeader::new(RecordingClock::Monotonic),
+            )
+            .expect("header");
             assert!(
                 writer.write(&record).is_err(),
                 "{enumeration}::{variant} is not recorded ({why}), so the writer refuses it"
@@ -837,7 +846,7 @@ fn preference_rows_keep_their_json_spelling() {
         preferences(SystemPreferences::default()),
     ];
     let mut writer =
-        RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
+        RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
             .expect("header");
     for row in &rows {
         writer.write(row).expect("row");

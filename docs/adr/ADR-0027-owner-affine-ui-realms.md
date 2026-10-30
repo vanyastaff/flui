@@ -3,7 +3,12 @@
 - **Status:** Accepted
 - **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
   decisions below remain in force.
+- **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for the verdict's
+  sentence "Multiple UI runtimes may execute concurrently" and §1's sentence on runtime count per
+  owner thread: every UI runtime runs on one owner thread.
 - **Date:** 2026-07-11
+- **Amended:** 2026-10-30 — §9 matches the code after the `!Send` flip: the view, render and
+  callback surfaces carry no `Send` bound, and the cross-thread handles are the ones listed there.
 - **Amended:** 2026-10-11 — factual runtime location and attachment capability names follow ADR-0083/0190; the former self-absorption label is removed.
 - **Absorbs:** [retired ADR-0002](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0002-engine-wide-threading-architecture.md), the original engine-wide threading constraints.
 - **Refined by:** ADR-0037 (presentation ownership domains), ADR-0043 (per-presentation trees,
@@ -245,10 +250,14 @@ These are deliberate divergences from Flutter's process-global shape.
 - `View`, `BuildContext`, `ViewState`, `ElementBase`, the view-family traits, notifications and
   the `flui-foundation` callback aliases are not `Send + Sync`; widget authors use `Rc`,
   `Cell` and `RefCell` freely. `RenderObject`, `RenderSliver` and `ParentData` are not
-  `Send + Sync` either: a `PipelineOwner` belongs to one presentation on one thread.
+  `Send + Sync` either: a `PipelineOwner` belongs to one presentation on one thread. Listener,
+  animation-status, post-frame and event callbacks are `'static` without `Send`, and
+  controllers are `Rc<RefCell<_>>` handles. `cargo xtask send-positions` holds every `Send`
+  position left in the public API to a list that only shrinks.
 - **Closed command vocabulary**: the cross-thread surface is domain-specific — coalesced redraw
-  requests, owner-queued hot reload, stamped worker results, navigation commands, and the raster
-  handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
+  requests (`RebuildHandle`, `FrameWaker`), signal writes (`SignalSender`), owner-queued hot
+  reload, stamped worker results (`IoFuture`, `ComputeJob`), navigation commands, application
+  commands (`AppHandle`), and the raster handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
   executor is rejected as a standing constraint. Raw channels never appear in public
   signatures.
 - `UiRuntime` now lives in the internal `flui-runtime` crate (ADR-0083); `flui-app` owns its

@@ -2,8 +2,10 @@
 
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::delegates::{
     SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
     SliverGridDelegateWithMaxCrossAxisExtent,
@@ -15,6 +17,7 @@ use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::scroll::list_focus::{FocusableList, ListFocusConfig, ListItemFocus};
 use crate::scroll::{ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, Viewport};
 
 /// Where the composed [`Viewport`] gets its scroll offset from — mirrors
@@ -77,6 +80,12 @@ pub struct GridView {
     builder_source: Option<SliverChildBuilderDelegate>,
     /// Wrap each tile in a `RepaintBoundary` (default `true`).
     add_repaint_boundaries: bool,
+    /// The grid's accessible name.
+    semantics_label: Option<Arc<str>>,
+    /// One Tab stop with arrow-key focus over the tiles (`GridView::focusable`).
+    focusable: bool,
+    /// The accessible name of a focusable grid while it has no tiles.
+    empty_label: Option<Arc<str>>,
 }
 
 impl GridView {
@@ -98,6 +107,9 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
+            semantics_label: None,
+            focusable: false,
+            empty_label: None,
         }
     }
 
@@ -120,6 +132,9 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: None,
             add_repaint_boundaries: true,
+            semantics_label: None,
+            focusable: false,
+            empty_label: None,
         }
     }
 
@@ -147,6 +162,9 @@ impl GridView {
             children_in_boundaries: std::cell::OnceCell::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
             add_repaint_boundaries: true,
+            semantics_label: None,
+            focusable: false,
+            empty_label: None,
         }
     }
 
@@ -216,6 +234,48 @@ impl GridView {
         self.shrink_wrap = shrink_wrap;
         self
     }
+
+    /// Name the grid for assistive technology: the label of its grid node.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
+        self
+    }
+
+    /// Make the grid one Tab stop with keyboard focus over its tiles (default
+    /// `false`).
+    ///
+    /// Tab enters the grid on the tile it last focused, or on the first
+    /// visible tile, and leaves it for the next control. Along the scroll
+    /// axis the arrows move by a row of tiles, and a column past the end of a
+    /// short last row lands on its last tile; the cross-axis arrows move
+    /// along the row, the way they point under right-to-left text. Page
+    /// Up/Down move a page of rows in the same column, Home/End go to the
+    /// first and last tile. At the edge an arrow stays in the grid; a grid
+    /// inside another focusable list hands it to that list. A tile's focus
+    /// goes to its first focusable descendant, and a tile not built yet is
+    /// scrolled to and focused when it mounts; the focused tile stays built
+    /// while the pointer scrolls it away.
+    #[must_use]
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// The accessible name of a focusable grid while it has no tiles: the
+    /// grid keeps focus on itself and announces this name.
+    #[must_use]
+    pub fn empty_label(mut self, label: impl Into<Arc<str>>) -> Self {
+        self.empty_label = Some(label.into());
+        self
+    }
+
+    /// The number of tiles the grid has.
+    fn item_count(&self) -> usize {
+        self.builder_source
+            .as_ref()
+            .map_or(self.children.len(), |delegate| delegate.item_count)
+    }
 }
 
 impl fmt::Debug for GridView {
@@ -223,7 +283,10 @@ impl fmt::Debug for GridView {
         let mut s = f.debug_struct("GridView");
         s.field("scroll_direction", &self.scroll_direction)
             .field("offset_source", &self.offset_source)
-            .field("shrink_wrap", &self.shrink_wrap);
+            .field("shrink_wrap", &self.shrink_wrap)
+            .field("focusable", &self.focusable)
+            .field("semantics_label", &self.semantics_label)
+            .field("empty_label", &self.empty_label);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
         } else {
@@ -247,14 +310,27 @@ impl StatelessView for GridView {
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
 
+        let named = |sliver: SliverGrid| match &self.semantics_label {
+            Some(label) => sliver.semantics_label(Arc::clone(label)),
+            None => sliver,
+        };
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
             // Lazy variant: wire SliverGrid (element-owned request strategy).
-            let builder = if self.add_repaint_boundaries {
-                super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
-            } else {
-                Rc::clone(&delegate.builder)
+            let builder = match (self.focusable, self.add_repaint_boundaries) {
+                (false, false) => Rc::clone(&delegate.builder),
+                (false, true) => {
+                    super::sliver_list::wrap_builder_in_repaint_boundaries(&delegate.builder)
+                }
+                (true, boundary) => {
+                    let inner = Rc::clone(&delegate.builder);
+                    let wrapped: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |index| {
+                        inner(index)
+                            .map(|tile| BoxedView::new(ListItemFocus::new(index, tile, boundary)))
+                    });
+                    wrapped
+                }
             };
-            {
+            named({
                 let sliver = SliverGrid::with_config(
                     Rc::clone(&self.grid_delegate),
                     delegate.item_count,
@@ -267,13 +343,32 @@ impl StatelessView for GridView {
                     }
                     None => sliver,
                 }
-            }
+            })
             .boxed()
         } else {
             // Static children go through the same lazy path as a builder:
             // only the window is built, keyed children are found by the
             // delegate's key map, everything outside the window is evicted.
-            let children = if self.add_repaint_boundaries {
+            let children = if self.focusable {
+                // The marker needs the tile's index, which a mapping does not
+                // see, so the tiles are wrapped once per grid value.
+                Rc::clone(self.children_in_boundaries.get_or_init(|| {
+                    StaticChildren::new(
+                        self.children
+                            .children()
+                            .iter()
+                            .enumerate()
+                            .map(|(index, tile)| {
+                                BoxedView::new(ListItemFocus::new(
+                                    index,
+                                    tile.clone(),
+                                    self.add_repaint_boundaries,
+                                ))
+                            })
+                            .collect(),
+                    )
+                }))
+            } else if self.add_repaint_boundaries {
                 Rc::clone(self.children_in_boundaries.get_or_init(|| {
                     StaticChildren::mapped(
                         self.children.children().to_vec(),
@@ -283,10 +378,10 @@ impl StatelessView for GridView {
             } else {
                 Rc::clone(&self.children)
             };
-            SliverGrid::over(Rc::clone(&self.grid_delegate), &children).boxed()
+            named(SliverGrid::over(Rc::clone(&self.grid_delegate), &children)).boxed()
         };
 
-        if self.shrink_wrap {
+        let viewport = if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
                 OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
@@ -300,6 +395,23 @@ impl StatelessView for GridView {
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
+        };
+        if !self.focusable {
+            return viewport;
         }
+        let config = ListFocusConfig {
+            item_count: self.item_count(),
+            axis: self.scroll_direction,
+            reversed: axis_direction == AxisDirection::RightToLeft,
+            position: match &self.offset_source {
+                OffsetSource::Fixed(_) => None,
+                OffsetSource::Position(position) => Some(position.clone()),
+            },
+            extent_estimate: 0.0,
+            empty_list_label: self.empty_label.clone(),
+            sliver: false,
+            grid: true,
+        };
+        FocusableList::new(config, viewport).boxed()
     }
 }

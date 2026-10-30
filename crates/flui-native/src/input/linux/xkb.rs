@@ -664,7 +664,7 @@ mod keyboard {
 
     impl<T> Held<T> {
         /// `pointer` as a constructor returned it; `None` for a null one.
-        fn new(pointer: *mut T, release: unsafe extern "C" fn(*mut T)) -> Option<Self> {
+        fn try_new(pointer: *mut T, release: unsafe extern "C" fn(*mut T)) -> Option<Self> {
             NonNull::new(pointer).map(|pointer| Self { pointer, release })
         }
 
@@ -737,10 +737,10 @@ mod keyboard {
     impl Keyboard {
         /// The keyboard `source` describes; `None` when libxkbcommon cannot
         /// be loaded or the keymap cannot be read.
-        pub(crate) fn new(source: &KeymapSource) -> Option<Self> {
+        pub(crate) fn try_new(source: &KeymapSource) -> Option<Self> {
             let api = xkbcommon_dl::xkbcommon_option()?;
             // SAFETY: a constructor that takes flags only.
-            let context = Held::new(
+            let context = Held::try_new(
                 unsafe {
                     (api.xkb_context_new)(xkbcommon_dl::xkb_context_flags::XKB_CONTEXT_NO_FLAGS)
                 },
@@ -782,7 +782,7 @@ mod keyboard {
                     let source = CString::new(text.as_str()).ok()?;
                     // SAFETY: the live context and a NUL-terminated string that
                     // outlives the call; the keymap copies what it reads.
-                    let keymap = Held::new(
+                    let keymap = Held::try_new(
                         unsafe {
                             (api.xkb_keymap_new_from_string)(
                                 context.as_ptr(),
@@ -794,7 +794,7 @@ mod keyboard {
                         *api.xkb_keymap_unref,
                     )?;
                     // SAFETY: the keymap just made.
-                    let state = Held::new(
+                    let state = Held::try_new(
                         unsafe { (api.xkb_state_new)(keymap.as_ptr()) },
                         *api.xkb_state_unref,
                     )?;
@@ -806,7 +806,7 @@ mod keyboard {
                     let raw = connection.xcb().get_raw_xcb_connection();
                     // SAFETY: the libxcb connection the source holds open, and
                     // the live context.
-                    let keymap = Held::new(
+                    let keymap = Held::try_new(
                         unsafe {
                             (x11.xkb_x11_keymap_new_from_device)(
                                 context.as_ptr(),
@@ -818,7 +818,7 @@ mod keyboard {
                         *api.xkb_keymap_unref,
                     )?;
                     // SAFETY: as above, with the keymap just made.
-                    let state = Held::new(
+                    let state = Held::try_new(
                         unsafe {
                             (x11.xkb_x11_state_new_from_device)(keymap.as_ptr(), raw, *device)
                         },
@@ -836,7 +836,7 @@ mod keyboard {
             let locale = compose_locale();
             // SAFETY: a live context and a NUL-terminated locale that
             // outlives the call.
-            let table = Held::new(
+            let table = Held::try_new(
                 unsafe {
                     (api.xkb_compose_table_new_from_locale)(
                         context.as_ptr(),
@@ -847,7 +847,7 @@ mod keyboard {
                 *api.xkb_compose_table_unref,
             )?;
             // SAFETY: the live table just made.
-            let state = Held::new(
+            let state = Held::try_new(
                 unsafe {
                     (api.xkb_compose_state_new)(
                         table.as_ptr(),
@@ -1125,7 +1125,7 @@ xkb_symbols \"flui\" {
             }
             let source =
                 KeymapSource::compositor(COMPOSITOR_KEYMAP.to_vec()).expect("the keymap is text");
-            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            let mut keyboard = Keyboard::try_new(&source).expect("the keymap compiles");
             assert_eq!(
                 source.layout_name(keyboard.layout()),
                 Some("FLUI (dead keys)")
@@ -1169,7 +1169,7 @@ xkb_symbols \"flui\" { };
             }
             let source =
                 KeymapSource::compositor(WIDE_KEYMAP.to_vec()).expect("the keymap is text");
-            let mut keyboard = Keyboard::new(&source).expect("the keymap compiles");
+            let mut keyboard = Keyboard::try_new(&source).expect("the keymap compiles");
             let time = EventTime::from_nanos(1);
             for outside in [0, 30_000] {
                 assert!(

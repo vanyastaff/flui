@@ -739,7 +739,7 @@ mod material_tests {
     /// window manager holds for the window once the command applied; a
     /// command admitted before the window closed answers `Closed`.
     fn from_the_gate_on_each_material_reaches_the_desktop_window_manager() {
-        let platform = crate::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::try_new().expect("platform");
         if super::super::material::gate(WindowsBuild::read()).is_err() {
             eprintln!("skipped: this machine's build is below the system backdrop's");
             return;

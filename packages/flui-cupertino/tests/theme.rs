@@ -78,10 +78,10 @@ pub fn mounted_text_roles_paint_distinct_numeric_sizing_answers() {
         .map(|(authored, profile, answer)| {
             (
                 TextSizeRequest {
-                    size: TextSize::new(authored).expect("authored size"),
+                    size: TextSize::try_new(authored).expect("authored size"),
                     profile,
                 },
-                TextSize::new(answer).expect("answer size"),
+                TextSize::try_new(answer).expect("answer size"),
             )
         }),
     )

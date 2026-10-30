@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -758,11 +758,11 @@ before `HeadlessHost::replay` applies any of it, and the replay returns the
 decisions to compare with the recorded ones:
 
 ```rust,ignore
-let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))?;
+let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))?;
 let recording = record(host.input_taps(), writer)?;
 // ...drive the host...
 let bytes = recording.finish()?;
-let replayable = ReplayableRecording::read(RecordingReader::new(&bytes[..])?)?;
+let replayable = ReplayableRecording::read(RecordingReader::try_new(&bytes[..])?)?;
 assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
 ```
 
@@ -951,7 +951,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, changelog fragments, ...; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, send-impls, try-new, changelog fragments, ...; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit

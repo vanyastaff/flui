@@ -4548,8 +4548,9 @@ graph LR
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
 
-- [ ] **LY97** (не закрыта: четыре PR, первые два — потоки и предпочтения; дальше дисплеи и состояние
-  окна, затем строка store-edit для IME без событий) — ветка `claude/project-thread-jqc75j` после
+- [ ] **LY97** (не закрыта: четыре PR — потоки, предпочтения, дисплеи и состояние окна; дальше строки
+  `close_request`/`closed` после T8 и строка store-edit для IME без событий) — ветка
+  `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
   (`AppDelivery`: `notice`, `session_end`, `reopen`) и `window` (`WindowDelivery::dispatch_input`:
@@ -4576,10 +4577,64 @@ graph LR
   `try_into_preferences` с типизированной `InvalidPreference`), не `non_exhaustive`, так что новое
   поле не компилируется ни в одном зеркале, пока его не отразят. Headless воспроизводит
   наблюдение и сбой вида `preferences` через `HeadlessPreferences`; другие виды сбоя он не воспроизводит и отказывает
-  типизированной ошибкой. Тесты: золотой `headless_platform_preferences.jsonl`, строки
+  типизированной ошибкой. Тесты: золотой `headless_platform_preferences.jsonl` (теперь `headless_platform_reads.jsonl`), строки
   `platform_recordings_replay_on_the_headless_host` и платформенная часть
   `captured_streams_replay_to_what_the_session_delivered` и
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
+  **Третья часть — дисплеи.** Тот же поток `platform`: `HostPlatform::display_snapshot` пишет
+  каждое чтение (`Captured::Displays`), строка `displays` несёт
+  `DisplayRead::{Observed { revision, displays }, Failed(ReadFailure)}`. Дисплей в схеме — метка
+  (`DisplayId::get` платформы, смысл только внутри записи) и поля через публичные
+  `flui_platform::{DisplayParts, ColorParts}` (`DisplayInfo::into_parts`, `DisplayParts::into_info`),
+  не `non_exhaustive`. Replay выпускает свой id на каждую метку (`DisplayKey::Injected`), один на
+  весь replay; ревизия снимка пишется как сведение и не воспроизводится. Headless получает
+  `HeadlessDisplayControls::{replace, fail_next_read}`. Тесты: золотой
+  `headless_platform_preferences.jsonl` переименован в `headless_platform_reads.jsonl` и несёт три
+  чтения дисплеев; `platform_recordings_replay_on_the_headless_host` и платформенная часть
+  `captured_streams_replay_to_what_the_session_delivered` сверяют чтения дисплеев по меткам.
+  **Четвёртая часть — состояние окна.** Поток `window_state` (без часов): `WindowStateCell::new`
+  открывает журнал и пишет первый снимок, `publish` пишет каждый изменившийся снимок целиком
+  (`Captured::WindowState`) после снятия замка слота; через ячейку публикуют все хосты, поэтому
+  своих точек записи у них нет. Строка `state { state, redacted }`: ревизия как сведение, дисплей
+  меткой (та же, что в потоке `platform`), остальные поля через публичные
+  `flui_platform::{WindowStateParts, CapabilityParts}` (`WindowState::into_parts`,
+  `WindowStateParts::into_state`, `WindowCapabilities::into_parts`,
+  `CapabilityParts::into_capabilities`); возможность команды пишется как `native`/`emulated` или
+  `unavailable` с причиной. `Privacy::Redact` заменяет заголовок и помечает строку, replay её
+  отвергает. Headless воспроизводит снимок через `MockWindow::simulate_state`: снимок публикуется
+  через `WindowState::successor`, ревизии свои, до следующего изменения модели. Тесты: золотой
+  `headless_window_state.jsonl` и строка `window_state_recordings_replay_on_the_headless_host`;
+  в `captured_streams_replay_to_what_the_session_delivered` replay снимков с общим реестром меток
+  даёт те же факты и ревизии, что живая публикация, включая свёрнутое окно, которое не бывает
+  occluded и сохраняет метрики; отказ на снимке с вычеркнутым заголовком в
+  `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Строки `close_request`/`closed` с
+  причиной и решением охранника (veto или доставка) — отдельный PR после T8.
+
+- [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
+  `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей
+  `testing`; headless-приёмник `HeadlessHaptics` в `flui-native` (не реэкспортируется, ничего не
+  записывает); `TestHost::haptic_actuator` отдаёт двойник комплекта; потребители включают
+  `flui-platform/testing` в dev-зависимостях. ADR-0264 заменяет ADR-0151 §7 (где живут двойники)
+  и последнюю фразу §6; D9, LY48 и LY50 переписаны. Проверки на Linux: clippy `--all-targets -D
+  warnings` и тесты `-p flui-platform -p flui-native -p flui-testing -p flui-runtime
+  -p flui-interaction` (`FLUI_HEADLESS=1`; `x11_window` требует openbox, в облачном контейнере
+  его нет), `xtask testing`, `xtask checks`.
+- [x] **LY47** и остаток **LY48** (`InMemoryTextStore`) — ветка `claude/project-thread-00ptwi` после #1983.
+  `LockArbiter` (из `lock.rs`, который теперь держит значения lock и `CommitGate`),
+  `CompositionLedger`, `committed_text`, `EditGeneration` → `flui_interaction::text_input`,
+  реэкспорт `flui_sdk::interaction::text_input` (строка в `tests/surface.rs`);
+  `InMemoryTextStore` → `flui_interaction::testing` (ADR-0264), реэкспорт
+  `flui_testing::text_store_kit::InMemoryTextStore`. `DEFERRED_LOCK_CAPACITY` остаётся в контракте:
+  его называет `TextStoreError::DeferredQueueFull`. Проверка границы `rg`: вне `flui-platform`
+  перенесённые типы зовут только `flui-widgets`, `flui-testing` и тесты; `flui-native` берёт
+  только `utf16::byte_range`, он остаётся в контракте. Тесты `lock_gate`, `composition_ledger` и
+  проекции IME (бывшие unit-тесты `projection.rs`) — модули `flui-interaction/tests/main.rs`;
+  у `flui-platform` больше нет dev-зависимости `proptest`. Проверки на Linux: clippy `--all-targets
+  -D warnings` по `flui-platform`, `flui-interaction`, `flui-testing`, `flui-runtime`,
+  `flui-app`, `flui-native`, `flui-widgets`, `flui-sdk`; тесты тех же crate'ов зелёные, кроме
+  строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
+  `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
+  --all-targets`; `xtask checks`.
 
 ## Отступление от порядка, решённое владельцем
 

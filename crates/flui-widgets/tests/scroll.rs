@@ -104,7 +104,8 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
     let content = |weight, limit| {
         Viewport::new((SliverCrossAxisGroup::new((
             SliverCrossAxisItem::content(
-                SliverConstrainedCrossAxis::new(limit, child("fixed", 30.0)).expect("valid limit"),
+                SliverConstrainedCrossAxis::try_new(limit, child("fixed", 30.0))
+                    .expect("valid limit"),
             ),
             child("one share", 60.0),
             SliverCrossAxisItem::flex(
@@ -156,7 +157,7 @@ pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_seman
 pub(crate) fn constrained_sliver_updates_layout_without_replacing_the_child() {
     use flui_widgets::{SliverConstrainedCrossAxis, SliverToBoxAdapter, Viewport};
     let content = |extent| {
-        Viewport::new((SliverConstrainedCrossAxis::new(
+        Viewport::new((SliverConstrainedCrossAxis::try_new(
             extent,
             SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
         )
@@ -2301,6 +2302,58 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
     assert_eq!(scroll.pixels(), caught, "the press stops the fling");
 }
 
+/// Fingers that come to rest on a trackpad catch a released fling as a
+/// press does, and leave a notched wheel's easing to reach its destination.
+pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
+    use flui_foundation::geometry::Offset;
+    use flui_platform::pointer::ScrollPrecision::Notched;
+    use flui_testing::TrackpadScript;
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &vsync),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let rest = TrackpadScript::new("fingers rest", Offset::new(150.0, 150.0))
+        .rest()
+        .build()
+        .expect("one discrete event");
+
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(50));
+    let easing = scroll.pixels();
+    assert!(easing > 0.0 && easing < 100.0, "the easing runs: {easing}");
+    laid.replay(&rest);
+    laid.pump_for(Duration::from_millis(250));
+    assert_eq!(
+        scroll.pixels(),
+        100.0,
+        "the easing goes on to its destination"
+    );
+
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    let coasting = scroll.pixels();
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > coasting, "the fling coasts");
+    laid.replay(&rest);
+    let caught = scroll.pixels();
+    for _ in 0..10 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(scroll.pixels(), caught, "resting fingers stop the fling");
+    assert!(
+        !scroll.position().is_scrolling(),
+        "the caught fling's activity ends"
+    );
+}
+
 pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
     use flui_platform::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
@@ -3227,7 +3280,7 @@ pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
 
 /// Anchors at 0, 500 and 1000 px.
 fn three_anchors() -> flui_widgets::SharedSnapPolicy {
-    Arc::new(flui_widgets::AnchorSnap::new([0.0, 500.0, 1000.0]).expect("three anchors"))
+    Arc::new(flui_widgets::AnchorSnap::try_new([0.0, 500.0, 1000.0]).expect("three anchors"))
 }
 
 /// A drag from 800 that comes to rest at 740 and lifts: the snap settles

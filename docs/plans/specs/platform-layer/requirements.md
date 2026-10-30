@@ -16,7 +16,7 @@
   [ADR-0255](../../../adr/ADR-0255-mobile-and-web-hosts.md)
 - **Уровень 0:** [../release/requirements.md](../release/requirements.md) (R2: публикуются все
   крейты, нужные `flui`, поэтому имена и состав крейтов этой спеки — публикуемые)
-- **Смежные спеки:** [send-flip](../send-flip/), [text-ime](../text-ime/),
+- **Смежные спеки:** [send-flip](https://github.com/vanyastaff/flui/blob/642ac6e75484985d042e4c522f561f60e0575ff6/docs/plans/specs/send-flip/), [text-ime](../text-ime/),
   [persistence](../persistence/), [teardown](../teardown/), [focus-keyboard](../focus-keyboard/),
   [naming](../naming/), [window-lifecycle](https://github.com/vanyastaff/flui/blob/01531550886e0ad4eefd4ee98fb9db4ab24e34c5/docs/plans/specs/window-lifecycle/) (сделана, удалена),
   [web-canvas-input-ownership](../web-canvas-input-ownership/),

@@ -66,7 +66,6 @@ graph LR
   T17 & FD11["flui-driver FD11"] --> T19["T19 нативный прогон"]
   T4 --> P6["persistence P6"]
   T2 & T4 & T8 --> P5["persistence P5"]
-  T13 --> LY47["platform-layer LY47, LY48"]
 ```
 
 ## Сделано
@@ -171,12 +170,101 @@ graph LR
   (heli r8140, 70 с).
 - [x] T4 — `flui-view`: guard, реестр, `detached()` — #1953; 12 контрактных тестов — строки `close_guard_matrix`, `flush_registry_matrix`, `lifecycle_subscription_matrix`; R3, persistence R20, R28
 - [x] T7 — строки навигации: три строки R17 в таблице `navigation_teardown` (`crates/flui-widgets/tests/contracts.rs`); характеризация, на текущем коде проходят. Зубы проверены: без `finish_all` в `HeroController::did_detach` падают строки навигатора и hero. `cargo test -p flui-widgets --test widgets_it` 2026-10-29 — 70 из 70, clippy `-p flui-widgets --all-targets -D warnings` чистый
-- [ ] T8 — остаток: откат и проводка (мера R10 — ADR-0258 §6)
-- [ ] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7)
-- [ ] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
-- [ ] T11 — вето с причиной
-- [ ] T12 — обход #1165
-- [ ] T13 — IME-шаг закрытия
+- [ ] T8 — остаток: откат и проводка (мера R10 — ADR-0258 §6). Откат повтора — #1975 (строки R10 в `flui-testing`; свап корня в виджетном харнессе ждёт дедлайн повтора). Проводка — следующий PR: у каждой презентации свой `CloseGuardSource`, guard лежит в возможностях её собственного `BuildOwner` (у каждой презентации свой `WidgetsBinding`), поэтому ключ — `PresentationId`, и ремаунт корня guard не теряет; `RuntimeHostServices::with_flush_registry`/`with_close_vetoes`; `UiRuntime::{close_refused, withdraw_close, settle_close_guards}`; headless `request_close`/`end_session` (`SESSION_END_BUDGET` 3 с); в `flui-app` удержанный guard оставляет закрытие до вопроса обработчику, отпущенное закрытие ставится в очередь окна, занятый хост оставляет settle на следующий ход; реестр сброса хоста пишет через I/O-пул. Тесты: таблица `close_guard_hosting` (4 строки, в т.ч. `each_window_of_one_runtime_holds_its_own_close`, `a_guard_survives_a_root_remount`), строка `a_held_guard_keeps_the_close_before_the_handler_is_asked` в `close_request_matrix`; зубы проверены (с `close_refused` = false строки падают). Временное: строки набора раннера `flui_app::testing` открывают вторичное окно `Isolated`, а не главное — headless не открывает главное окно без поверхности; offscreen-поверхность главного окна — дизайн к T10
+- [ ] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7). Сделано
+  (один PR после T8): набор раннера `flui_app::testing` (`HeadlessRun`, `ExitReport`,
+  `TeardownStep`); `ExitDeadline` (6 с; реестр сброса пишется до сервисов, шаг
+  `TeardownStep::Flush`; пулы на одном сроке, `ExecutionServices::shutdown(Instant)`); сторож выхода
+  (15 с, `EXIT_CODE_HUNG` 124, `flui_native::end_process`); терминальный слот хоста (паника на
+  выходе и из `Platform::run` ждёт сброса и возобновляется, 101); per-operation containment в
+  `flui-runtime` (сбой операции владельца отчитан один раз, хвост FIFO исполняется; терминальны
+  только закрытие последней презентации последнего runtime и сбой после закрытия владельца);
+  тотальный catch методов `RunnerHandler` и `WindowRoutes` (паника держится в слоте, цикл
+  выходит); кадр — исключение: сбой отвечается `FrameOutcome::Failed` (`#[non_exhaustive]`),
+  платформа считает его прошедшим кадром и не разматывает стек, сбой не терминален; контракт
+  долга применения дисплея — в `flui-runtime` (`a_failed_wake_keeps_the_display_owed`). Строки:
+  R4 `a_hung_service_and_compute_job_end_within_the_exit_budget`,
+  `a_blocking_destructor_ends_the_process_with_the_hung_code` (ребёнок `runner_exit_codes`); R7
+  `teardown_panic_flushes_the_registry_before_resuming`; R11
+  `an_application_panic_never_leaves_a_handler` (11 строк: `AppHandler` ready, quit_requested,
+  reopen, exit_policy, wake_deadline и все шесть методов `WindowHandler`; 10 падают, когда catch
+  возобновляет панику); `a_failed_frame_is_contained_and_the_fifo_tail_runs`;
+  `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
+  открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
+  маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
+  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, R12, R13, строки с паникой в
+  маршрутизации `flui-app`.
+  - [ ] Строки `AppHandler::session_end` и `AppHandler::host_notice` в
+    `an_application_panic_never_leaves_a_handler`: headless не даёт внедрить панику приложения в
+    `answer_session_end` и в подписчика системного уведомления; нужен шов (ответ сеанса через
+    маршрут, как `route_quit`, и подписчик уведомлений в наборе раннера).
+- [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
+  `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
+  задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
+  изменения поведения, набор раннера — `StandInRenderer` (`flui_app::testing`: кадры,
+  `lose_device`, `fail_recoveries`, `is_released`). `HeadlessRunHandle::renderer`,
+  `HeadlessRunHandle::wake_deadline`; `run_owner_turn` задаёт вопрос выхода, который ход
+  попросил задать снова, как цикл рабочего стола. `flui_testing::DropLedger`/`DropSentinel`
+  (ADR-0261 §2). Таблица `runner_close` (`crates/flui-app/tests/runner_close.rs`, восемь
+  строк): R1 `last_window_close_releases_the_runtime_through_the_runner`; R2
+  `closing_with_a_pending_load_retires_the_future_once`; R4
+  `last_window_close_returns_ok_on_both_routes`; R10
+  `the_runner_sleeps_until_the_failure_retry_deadline`; R15
+  `close_requested_inside_a_frame_runs_once_on_the_next_turn`; R16
+  `a_late_completion_after_close_requests_no_frame`; R18
+  `a_second_close_request_tears_down_once`; R20
+  `device_loss_on_the_closing_frame_still_exits_ok`. Зубы: без `failure_retry_at` в
+  `UiRuntime::next_wake` падает R10; без вопроса выхода в `run_owner_turn` падает R15 (закрытие
+  из кадра закрывает окно, но цикл не выходит). Правки `frame_pacing.rs` не понадобилось.
+  - [x] Находка: на headless потерянное устройство, чьё восстановление не удаётся, крутит
+    кадры синхронно без конца: `SubmitVerdict::DeviceLost` ставит повтор кадра сразу, а
+    headless доставляет запрос кадра в том же drain. На рабочем столе это кадр на каждый vsync
+    до восстановления. R20 закрывает окно в том же кадре и не зависит от этого; решение —
+    отдельно. Решено ADR-0267: кадр на потерянном устройстве ждёт backoff сброшенного кадра,
+    пересборка, падающая на потолке, после десяти попыток бросается до
+    `AppHandle::retry_render_device`; строки `runner_close`
+    `a_lost_device_waits_out_its_rebuild_backoff` и
+    `a_given_up_device_renders_again_when_the_application_asks`.
+- [x] T10 — характеризация раннера (учёт `Drop` — ADR-0261 §2; R4 — `EXIT_BUDGET`)
+- [x] T11 — вето с причиной. `CloseRequest::reason` несёт причину; `KeepOpen` обработчика
+  записывает `PendingClose` (`CloseGuardSource::record`), паника обработчика не записывает
+  ничего. `AppHandle::request_quit` спрашивает каждую presentation с `Program` на ходу владельца
+  (`drive_program_quit`); при вето quit ждёт презентации с записью: выполнение записи или уход
+  окна — согласие, `stay_open` (`SettledClose::declined`) или отказ без записи — отмена. Закрытие
+  окна старше записи quit (`make_due`). Фатальные выходы — `Ingress::quit_now` без вопроса.
+  ADR-0259 §4 уточнён. Доказательство: `close_request_matrix`
+  (`a_close_request_carries_its_reason`, `a_kept_open_close_is_recorded_for_its_reason`),
+  `lifecycle_tests::a_window_close_outranks_a_recorded_quit`, `runner_close` (R23
+  `a_vetoed_close_disposes_nothing`, `a_refused_quit_waits_for_the_record_then_exits`,
+  `a_quit_the_window_stays_open_for_is_cancelled`). Зубы: без записи в ожидание quit падают
+  строки quit, без `record` в `consult` — R23 и строки quit.
+- [x] T12 — обход #1165
+  - [x] Часть 1. Эксперимент риска 1: паника `dispose` вместе с паникующим `Drop` future — abort
+    нет, обе локализуются на месте (`a_failing_dispose_and_future_drop_do_not_abort`); то же
+    внутри внешнего unwind удерживается без вызова кода (R14
+    `user_drop_panic_inside_an_unwind_is_retained`). Найден abort: `UiRuntime::drop` возобновлял
+    первую панику, пока `rx` держал замыкание `SignalWrite`, чей захват паникует в drop glue
+    (статус 134 до правки). Теперь очередь команд и обработчик сбоев кадра уничтожаются в теле
+    `drop` под catch или удерживаются после сбоя
+    (`a_queued_command_outliving_a_teardown_failure_does_not_abort`). Обход: из `Drop` в
+    `owner_dispatch`, `element_tree`, `build_owner` возобновления нет; в `flui-scheduler` —
+    `OwnerFrame` и `PresentationFrameScope`, обе отставляют очереди до возобновления. Итоги — в
+    четырёх `ARCHITECTURE.md`.
+  - [x] Часть 2: R19 `stale_handles_refuse_after_the_runtime_drops` — строки `rebuild_handle`,
+    `command_sender`, `signal_write`, `writer_source`, `post_frame_handle` в
+    `ui_runtime_and_presentation_isolation_matrix` (`flui-runtime`) и `worker_handle`,
+    `service_publisher` в `service_lifecycle_matrix` (`flui-app`): после drop каждый handle
+    отказывает типизированно (`OwnerGone`, `OwnerClosed`, `Closed`, `ShuttingDown`; `RebuildHandle`
+    неактивен) и не держит дерево. R3 `a_close_that_holds_a_failure_never_detaches`: закрытие с
+    удержанным сбоем не роняет владельца, `detached()` не вызван, наблюдатель жив; паника `dispose`
+    сдерживается на месте и такого закрытия не даёт.
+- [x] T13 — IME-шаг закрытия. Подтверждение стоит в общем пути к Detached
+  (`reconcile_lifecycle_after_failure` в `flui-runtime`): перед наблюдателями Detached
+  сфокусированное поле подтверждает композицию, текст остаётся. Так покрыт любой путь —
+  принятое закрытие, окно, уничтоженное платформой (на headless-runner Detached приходит из
+  наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
+  `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
+  `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
 - [ ] T17 — README, Win32-строка R5, закрытие

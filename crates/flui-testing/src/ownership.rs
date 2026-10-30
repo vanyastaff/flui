@@ -631,7 +631,7 @@ fn swipe_row() -> BoxedView {
     let action = |label: &'static str| {
         SwipeAction::new(GestureCommand::new(label, Act), SizedBox::new(10.0, 10.0))
     };
-    let row = SwipeActions::new(
+    let row = SwipeActions::try_new(
         ColoredBox::new(ROW).child(SizedBox::new(300.0, 60.0)),
         [action("Pin")],
         [action("Delete")],
@@ -943,7 +943,7 @@ fn interactive_viewer_in_pager_widget(device: PointerKind) {
 /// A viewer's zoom commands in a context menu nobody opens, so the viewer
 /// keeps the whole page.
 fn viewer_alternatives() -> GestureAlternatives {
-    GestureAlternatives::new(Alternative::ContextMenu(
+    GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Zoom in", ZoomIntent::In),
             |_cx, _request| {},
@@ -956,7 +956,7 @@ fn viewer_alternatives() -> GestureAlternatives {
 /// A pager's page commands in a context menu nobody opens, so the pager
 /// keeps the whole row.
 fn pager_alternatives() -> GestureAlternatives {
-    GestureAlternatives::new(Alternative::ContextMenu(
+    GestureAlternatives::try_new(Alternative::ContextMenu(
         MenuSpec::new(
             GestureCommand::new("Previous page", PageIntent::Previous),
             |_cx, _request| {},

@@ -59,6 +59,9 @@ members = [
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
+# A vendored crate is built by the members that depend on it, under its own
+# lints, not as a member of FLUI's (third_party/README.md).
+exclude = ["third_party"]
 
 # No `default-members`: a bare `cargo build` at the root builds the `flui`
 # facade alone; `--workspace` builds everything. cargo-hack drives each package
@@ -729,6 +732,8 @@ edge-exceptions = [
 [package.metadata.cargo-shear]
 ignored-paths = [
     "tests/ui/thread_boundary/*.rs",
+    "tests/ui/thread_boundary/material/*.rs",
+    "tests/ui/thread_boundary/cupertino/*.rs",
     "tests/ui/unstable_input/*.rs",
     "tests/ui/native/*.rs",
 ]
@@ -932,6 +937,12 @@ required-features = ["native"]
 [[test]]
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
+
+# An application on wasm32 capturing `Rc` in owner-local callbacks; `cargo xtask wasm-check`
+# compiles it for wasm32.
+[[test]]
+name = "wasm_consumer"
+path = "tests/wasm_consumer.rs"
 
 # The acceptance application in a window, for native runs through flui-driver.
 # Its tree is `tests/fixtures/acceptance_app/app.rs`, which uses the Material

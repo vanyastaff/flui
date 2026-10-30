@@ -18,16 +18,17 @@ use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::NamedKey;
 use flui_platform::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
-    TextStoreStatus, Utf16Offset, Utf16Range,
+    CommitGate, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore, TextStoreStatus,
+    Utf16Offset, Utf16Range,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 
 fn offset(units: usize) -> Utf16Offset {
     Utf16Offset::new(units)
 }
 
 fn range(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(offset(start), offset(end)).expect("ordered")
+    Utf16Range::try_new(offset(start), offset(end)).expect("ordered")
 }
 
 /// What the view reports: its text, a caret or selection, and a composing

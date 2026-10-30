@@ -474,7 +474,7 @@ mod tests {
             let scheduler = UpdateScheduler::new();
             let mut owner = BuildOwner::new();
             let owner_frame =
-                OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+                OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
             owner.set_async_driver(owner_frame.async_driver());
             let mut tree = ElementTree::new();
 

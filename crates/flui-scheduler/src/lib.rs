@@ -76,7 +76,7 @@
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
 //! // async tasks and complete execution. A UI runtime owns one.
-//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+//! let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -157,12 +157,12 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use config::TimingsCallback;
-/// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
-/// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
-/// can name it without an extra, redundant direct dependency on
-/// `flui-foundation` just to construct/match one of this crate's own public
-/// field types.
-pub use flui_foundation::PresentationId;
+/// [`FrameSnapshot::address`]'s type and the two ids it pairs — re-exported
+/// so a consumer of this crate's frame telemetry (e.g. `flui-devtools`'
+/// `timeline` feature) can name them without an extra, redundant direct
+/// dependency on `flui-foundation` just to construct/match one of this
+/// crate's own public field types.
+pub use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 pub use frame_clock::{
     ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PollDecision, SkipReason,
 };

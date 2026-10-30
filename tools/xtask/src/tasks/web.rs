@@ -64,6 +64,18 @@ fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
         ]))
         .into(),
         wasm_facade_check().into(),
+        // an application capturing `Rc` in owner-local callbacks (ADR-0086)
+        deny_warnings(Cmd::cargo([
+            "clippy",
+            "-p",
+            "flui",
+            "--test",
+            "wasm_consumer",
+            "--locked",
+            "--target",
+            WASM_TARGET,
+        ]))
+        .into(),
     ]
 }
 

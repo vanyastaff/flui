@@ -228,4 +228,15 @@ impl PlatformAccessibility for MacosAccessibility {
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         self.shared.set_action_listener(listener);
     }
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        Self::ASSISTIVE_FOCUS
+    }
+}
+
+impl MacosAccessibility {
+    /// NSAccessibility tells an application nothing of VoiceOver's cursor
+    /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
+    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
+        flui_semantics::AssistiveFocusSupport::Unreported;
 }

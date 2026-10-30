@@ -7,10 +7,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
+use flui_interaction::testing::InMemoryTextStore;
 use flui_platform::text_store::{
-    CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
-    RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
@@ -159,7 +160,7 @@ impl TextStore for Faulty {
 }
 
 fn whole_text(session: &dyn TextStoreRead) -> String {
-    let whole = Utf16Range::new(Utf16Offset::ZERO, session.document_len())
+    let whole = Utf16Range::try_new(Utf16Offset::ZERO, session.document_len())
         .expect("zero precedes every length");
     session.text(whole).unwrap_or_default()
 }
@@ -189,7 +190,7 @@ fn faulty_index(
     if fault != Fault::SplitsSurrogatesOnHitTest {
         return Ok(found);
     }
-    let pair = Utf16Range::new(found, Utf16Offset::new(found.get() + 2)).expect("ascending");
+    let pair = Utf16Range::try_new(found, Utf16Offset::new(found.get() + 2)).expect("ascending");
     let Ok(text) = session.text(pair) else {
         return Ok(found);
     };
@@ -353,7 +354,7 @@ impl TextStoreFixture for FaultyFixture {
 
     fn app_replace_all(&mut self, text: &str) {
         let inner = &self.store.inner;
-        let whole = Utf16Range::new(Utf16Offset::ZERO, utf16::utf16_len(&inner.text()))
+        let whole = Utf16Range::try_new(Utf16Offset::ZERO, utf16::utf16_len(&inner.text()))
             .expect("zero precedes every length");
         if self.store.fault != Fault::NotifiesInsideTransaction {
             inner.app_replace(whole, text);

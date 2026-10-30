@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange,
-    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreStatus, project_ime_event,
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore,
+    TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    project_ime_event,
 };
 use flui_platform::{ImeEvent, PlatformTextInput};
 use flui_widgets::{EditableText, TextEditingController};
@@ -1925,7 +1926,7 @@ fn store_refusing_a_grant_when_its_flush_fails() {
     store.set_observer(Some(Rc::new(FailsOnText)));
     gate.set_open(false);
     store.app_replace(
-        flui_platform::text_store::Utf16Range::new(
+        flui_platform::text_store::Utf16Range::try_new(
             flui_platform::text_store::Utf16Offset::new(0),
             flui_platform::text_store::Utf16Offset::new(1),
         )
@@ -3316,7 +3317,7 @@ fn in_memory_grant_reading_and_editing_its_store() {
                 if let Some(store) = reentered.upgrade() {
                     *sink.borrow_mut() = store.text();
                     store.app_replace(
-                        flui_platform::text_store::Utf16Range::new(
+                        flui_platform::text_store::Utf16Range::try_new(
                             flui_platform::text_store::Utf16Offset::new(0),
                             flui_platform::text_store::Utf16Offset::new(0),
                         )
@@ -3408,7 +3409,7 @@ fn app_edit_held_back(store: &Weak<InMemoryTextStore>, gate: &CommitGate) {
     if let Some(store) = store.upgrade() {
         gate.set_open(false);
         store.app_replace(
-            flui_platform::text_store::Utf16Range::new(
+            flui_platform::text_store::Utf16Range::try_new(
                 flui_platform::text_store::Utf16Offset::new(0),
                 flui_platform::text_store::Utf16Offset::new(0),
             )

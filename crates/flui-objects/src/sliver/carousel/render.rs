@@ -20,6 +20,7 @@ use flui_rendering::{
 
 use super::geometry::{CarouselGeometry, mask_rect};
 use super::layout::CarouselLayout;
+use crate::sliver::pinned::{PinnedChildren, PinnedPlace};
 
 /// Where each laid-out item of a carousel was last masked, for the item's own content to
 /// read: a parallax image shifts by the item's [`progress`](Self::progress), a caption fades
@@ -154,6 +155,10 @@ pub struct RenderSliverCarousel {
     warned_unbounded: bool,
     /// The accessible set the items announce, when it differs from the item count.
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name (`set_collection_label`).
+    collection_label: Option<std::sync::Arc<str>>,
+    /// The pinned residents outside the window (`set_pinned_indices`).
+    pinned: PinnedChildren,
 }
 
 impl RenderSliverCarousel {
@@ -171,6 +176,8 @@ impl RenderSliverCarousel {
             axis: Axis::Horizontal,
             warned_unbounded: false,
             collection: None,
+            collection_label: None,
+            pinned: PinnedChildren::default(),
         }
     }
 
@@ -220,6 +227,29 @@ impl RenderSliverCarousel {
         flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
+    /// Names the collection for assistive technology: the label of the list
+    /// node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    /// The logical indices of pinned residents outside the window. Each is
+    /// laid out where the keylines place it and announced, but neither painted
+    /// nor hit-tested (ADR-0265).
+    pub fn set_pinned_indices(
+        &mut self,
+        pinned: &std::collections::BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.pinned.set(pinned)
+    }
+
     /// The number of items.
     #[must_use]
     pub fn item_count(&self) -> usize {
@@ -244,7 +274,7 @@ impl RenderSliverCarousel {
         {
             return Some(geometry.clone());
         }
-        let geometry = CarouselGeometry::new(
+        let geometry = CarouselGeometry::try_new(
             &self.config.layout,
             viewport,
             self.config.spacing,
@@ -259,6 +289,7 @@ impl RenderSliverCarousel {
         ctx: &mut SliverLayoutContext<'_, Variable, SliverMultiBoxAdaptorParentData>,
     ) -> SliverGeometry {
         self.shown.clear();
+        self.pinned.clear_slots();
         self.frames.replace(std::iter::empty());
         ctx.emit_retain_band(0, 0);
         SliverGeometry::new(0.0, 0.0, 0.0)
@@ -296,6 +327,9 @@ impl RenderSliver for RenderSliverCarousel {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(
@@ -401,6 +435,23 @@ impl RenderSliver for RenderSliverCarousel {
         shown.sort_by(|a, b| a.mask_extent.total_cmp(&b.mask_extent));
         self.shown = shown;
         self.frames.replace(frames.into_iter());
+
+        // A pinned item is placed where it rests on the large keyline: the
+        // keylines at the current offset park every item outside them at an
+        // edge, which is no place to reveal it from.
+        let item_count = self.item_count;
+        self.pinned.lay_out(first..last + 1, ctx, |index| {
+            (index < item_count).then(|| {
+                let rest = geometry.rest_offset(index);
+                let placement = geometry.place(index, rest);
+                let layout_offset = rest + placement.center - extent / 2.0;
+                PinnedPlace {
+                    constraints: child_constraints,
+                    layout_offset,
+                    paint_offset: child_paint_offset(&constraints, &sliver, layout_offset, extent),
+                }
+            })
+        })?;
         Ok(sliver)
     }
 
@@ -434,10 +485,15 @@ impl RenderSliver for RenderSliverCarousel {
         false
     }
 
+    /// A shown item with a visible mask, or a pinned child: paint and hit
+    /// testing go through the shown items alone, so a pinned child is
+    /// announced without being drawn or reached.
     fn visits_child_for_semantics(&self, child_slot: usize, _size: Size) -> bool {
-        self.shown
-            .iter()
-            .any(|item| item.slot == child_slot && item.mask_extent > 0.0)
+        self.pinned.is_pinned_slot(child_slot)
+            || self
+                .shown
+                .iter()
+                .any(|item| item.slot == child_slot && item.mask_extent > 0.0)
     }
 
     fn describe_approximate_paint_clip(&self, child_slot: usize, _size: Size) -> Option<Rect> {

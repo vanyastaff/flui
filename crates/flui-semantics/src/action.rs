@@ -95,6 +95,9 @@ pub enum ActionCall {
     SetScrollOffset(Offset<f64>),
     /// Select this range of the node's text.
     SetTextSelection(TextSelection),
+    /// Select this range of the document's texts: a `SetTextSelection`
+    /// sent to a document node or to a text beneath it (ADR-0214 §4).
+    SetDocumentSelection(crate::DocumentSelection),
     /// Replace the selected text with this text.
     ReplaceSelectedText(String),
     /// Set the node's value to this text.
@@ -153,7 +156,9 @@ impl ActionCall {
             Self::ScrollRight(_) => SemanticsAction::ScrollRight,
             Self::ScrollIntoView(_) => SemanticsAction::ScrollIntoView,
             Self::SetScrollOffset(_) => SemanticsAction::SetScrollOffset,
-            Self::SetTextSelection(_) => SemanticsAction::SetTextSelection,
+            Self::SetTextSelection(_) | Self::SetDocumentSelection(_) => {
+                SemanticsAction::SetTextSelection
+            }
             Self::ReplaceSelectedText(_) => SemanticsAction::ReplaceSelectedText,
             Self::SetValue(_) => SemanticsAction::SetValue,
             Self::SetNumericValue(_) => SemanticsAction::SetNumericValue,
@@ -190,7 +195,10 @@ pub struct Reveal {
     pub scroll_position: Option<f64>,
 }
 
-/// A text selection within one node, in characters of its value.
+/// A text selection in a field's value, in UTF-8 bytes on `char` boundaries:
+/// what an editor works in. A platform request names positions in the
+/// field's text runs instead; the owner reads them through the field's
+/// [`TextContent`](crate::TextContent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextSelection {
     /// Where the selection starts; stays put as the selection grows.
@@ -208,6 +216,12 @@ pub struct TextSelection {
 /// Invoked on the UI owner by the semantics-action drain; an accessibility
 /// adapter sends a [`SemanticsActionRequest`], never the handler.
 pub type SemanticsActionHandler = Rc<dyn Fn(ActionCall)>;
+
+/// Told `true` when the assistive technology's cursor (VoiceOver, TalkBack)
+/// enters the subtree of the node holding it and `false` when it leaves, by
+/// the UI runtime as the platform reports the cursor (`HostInput::AssistiveFocus`).
+/// Distinct from input focus, which the application moves.
+pub type AssistiveFocusHandler = Rc<dyn Fn(bool)>;
 
 // ============================================================================
 // SemanticsActionRequest
@@ -320,11 +334,18 @@ pub enum ActionDecodeError {
         /// The action requested.
         action: SemanticsAction,
     },
-    /// The request carried a payload the action cannot take, or a text
-    /// selection whose ends lie on another node.
+    /// The request carried a payload the action cannot take.
     #[error("{action} cannot take the payload the request carried")]
     MismatchedPayload {
         /// The action requested.
         action: SemanticsAction,
+    },
+    /// A text selection whose ends are not positions in the target field's
+    /// current text runs: a run of another field, a run the field no longer
+    /// publishes, or a character past a run's end.
+    #[error("the text selection does not lie in the current text of {node_id}")]
+    InvalidTextPosition {
+        /// The field the request targets.
+        node_id: AccessibilityNodeId,
     },
 }

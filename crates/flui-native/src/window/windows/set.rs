@@ -224,7 +224,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             })?;
         tracing::info!("Opening window: {:?}", options.title);
 
-        let window = WindowsWindow::new(
+        let window = WindowsWindow::try_new(
             options,
             handler,
             Arc::clone(windows),
@@ -591,7 +591,7 @@ mod open_tests {
     /// A real window opened with a content size reports that content size:
     /// the frame is added to the outer window, not taken out of the content.
     fn a_real_window_opens_with_the_content_size_it_asked_for() {
-        let platform = crate::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -616,7 +616,7 @@ mod open_tests {
     /// A size set on a maximized window is the size it returns to: the window
     /// stays maximized and restores to the content size asked for.
     fn a_size_set_while_maximized_is_the_size_restored_to() {
-        let platform = crate::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default().with_visible(false),
@@ -647,7 +647,7 @@ mod open_tests {
 
     /// A window that opens maximized returns to the rectangle it was given.
     fn a_window_opened_maximized_returns_to_its_normal_rectangle() {
-        let platform = crate::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -677,7 +677,7 @@ mod open_tests {
     /// a maximized window does not make the maximized rectangle the one to
     /// return to.
     fn maximized_and_fullscreen_windows_report_their_normal_rectangle() {
-        let platform = crate::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::try_new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()

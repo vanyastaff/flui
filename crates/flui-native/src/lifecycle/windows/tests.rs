@@ -19,7 +19,7 @@ fn hosted_receiver() -> (Receiver, Rc<HostEvents>, Rc<AppLog>, Bound) {
     let run = bound(app.clone());
     let notices = Arc::new(SystemNotices::new(Arc::clone(&run.delivery)));
     let host = Rc::new(HostEvents::new(Arc::clone(&run.delivery), notices));
-    let receiver = Receiver::new([Rc::clone(&host) as Rc<dyn Subscriber>]).expect("receiver");
+    let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>]).expect("receiver");
     (receiver, host, app, run)
 }
 

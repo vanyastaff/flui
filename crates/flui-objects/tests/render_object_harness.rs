@@ -11,7 +11,7 @@
 //! | `RenderErrorBox` | `harness_render_error_box_*` | yes | — | — | yes | — |
 //! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order, paint size, poison |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
-//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
+//! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | semantics runs |
 //! | `RenderIcon` | `harness_icon_*` | yes | — | yes | yes | — |
 //! | `RenderEditable` | `harness_editable_*` | yes | yes | yes | yes | — |
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
@@ -87,6 +87,7 @@
 //! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverSubtreeAnchor` | `harness_sliver_subtree_anchor_*` | yes | yes | — | — | attach identity |
 //! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverMainAxisGroup` | `harness_sliver_main_axis_group_*` | yes | — | — | yes | — |
 //! | `RenderSliverCrossAxisGroup` | `harness_sliver_cross_axis_group_*` | yes | yes | yes | — | axes, tracks |
@@ -253,6 +254,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverFillRemainingAndOverscroll",
     "RenderSliverFillRemainingWithScrollable",
     "RenderSliverIgnorePointer",
+    "RenderSliverSubtreeAnchor",
     "RenderSliverList",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
@@ -1698,25 +1700,61 @@ fn harness_paragraph_paints_text_frame() {
     assert!(run.painted());
 }
 
+/// A selectable paragraph merges its descendants, declares its anchor and
+/// publishes its laid-out text as runs; the same paragraph not selectable
+/// publishes none (ADR-0214).
+fn harness_paragraph_publishes_runs_only_while_selectable() {
+    use flui_rendering::semantics::SemanticsAnchor;
+
+    let anchor = SemanticsAnchor::new();
+    for (selectable, expected_runs) in [(Some(anchor.clone()), 2_usize), (None, 0)] {
+        let mut paragraph = RenderParagraph::new(TextSpan::new("one\ntwo"), TextDirection::Ltr);
+        let _ = paragraph.set_selectable(selectable.clone());
+        let run = RenderTester::mount(box_node(paragraph))
+            .with_constraints(loose(200.0))
+            .with_semantics_enabled()
+            .run_to_semantics();
+        let owner = run.semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("one\ntwo"))
+            .expect("the paragraph is published");
+        let config = node.config();
+        assert_eq!(
+            config
+                .text_content()
+                .map_or(0, |content| content.runs().len()),
+            expected_runs,
+            "one run per line while selectable, none otherwise"
+        );
+        assert_eq!(
+            config.is_merging_semantics_of_descendants(),
+            selectable.is_some()
+        );
+        assert_eq!(config.anchors().contains(&anchor), selectable.is_some());
+    }
+}
+
 fn harness_icon_resolves_square_and_optional_glyph_together() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
     use flui_painting::TextSizing;
 
-    let authored = TextSize::new(20.0).expect("valid side");
+    let authored = TextSize::try_new(20.0).expect("valid side");
     let exact = TextSizing::exact([
         (
             TextSizeRequest {
                 size: authored,
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(32.0).expect("valid body size"),
+            TextSize::try_new(32.0).expect("valid body size"),
         ),
         (
             TextSizeRequest {
                 size: authored,
                 profile: TextScaleProfile::Headline,
             },
-            TextSize::new(45.0).expect("valid headline size"),
+            TextSize::try_new(45.0).expect("valid headline size"),
         ),
     ])
     .expect("consistent answers");
@@ -1770,14 +1808,17 @@ fn harness_icon_without_a_glyph_retains_its_committed_size_answer() {
     use flui_painting::{TextSizing, TextSizingAdmissionError};
 
     let request = TextSizeRequest {
-        size: TextSize::new(20.0).expect("valid authored icon side"),
+        size: TextSize::try_new(20.0).expect("valid authored icon side"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
     admission.set_warm_capacity(1);
     let cohort = sizing.begin_cohort();
     admission
-        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .admit([(
+            request,
+            TextSize::try_new(30.5).expect("valid resolved side"),
+        )])
         .expect("initial captured answer");
     let run = RenderTester::mount(box_node(
         RenderIcon::new(20.0, None, flui_painting::typography::TextStyle::default())
@@ -1798,16 +1839,16 @@ fn harness_icon_without_a_glyph_retains_its_committed_size_answer() {
     admission
         .admit([(
             TextSizeRequest {
-                size: TextSize::new(40.0).expect("valid unrelated request"),
+                size: TextSize::try_new(40.0).expect("valid unrelated request"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(50.0).expect("valid unrelated answer"),
+            TextSize::try_new(50.0).expect("valid unrelated answer"),
         )])
         .expect("a newer answer replaces the one-entry warm history");
     let error = admission
         .admit([(
             request,
-            TextSize::new(20.0).expect("valid conflicting size"),
+            TextSize::try_new(20.0).expect("valid conflicting size"),
         )])
         .expect_err("live icon geometry must retain the original captured answer");
     assert!(matches!(
@@ -1822,13 +1863,16 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     use flui_painting::{TextSizing, TextSizingAdmissionError};
 
     let request = TextSizeRequest {
-        size: TextSize::new(20.0).expect("valid authored icon side"),
+        size: TextSize::try_new(20.0).expect("valid authored icon side"),
         profile: TextScaleProfile::Body,
     };
     let (sizing, mut admission) = TextSizing::captured();
     admission.set_warm_capacity(1);
     admission
-        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .admit([(
+            request,
+            TextSize::try_new(30.5).expect("valid resolved side"),
+        )])
         .expect("initial captured answer");
     let first_attempt = sizing.begin_cohort();
     let mut run = RenderTester::mount(box_node(
@@ -1867,16 +1911,16 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     admission
         .admit([(
             TextSizeRequest {
-                size: TextSize::new(40.0).expect("valid unrelated request"),
+                size: TextSize::try_new(40.0).expect("valid unrelated request"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(50.0).expect("valid unrelated answer"),
+            TextSize::try_new(50.0).expect("valid unrelated answer"),
         )])
         .expect("evict the original answer from warm history");
     let error = admission
         .admit([(
             request,
-            TextSize::new(20.0).expect("valid conflicting size"),
+            TextSize::try_new(20.0).expect("valid conflicting size"),
         )])
         .expect_err("the new attempt must retain the answer observed by its intrinsic query");
     assert!(matches!(
@@ -2613,7 +2657,7 @@ fn harness_aspect_ratio_unbounded_minima_remain_finite() {
         assert_eq!(run.dry_layout(run.root(), constraints), expected);
     }
     fn ratio(value: f64) -> AspectRatioFactor {
-        AspectRatioFactor::new(value).expect("valid ratio")
+        AspectRatioFactor::try_new(value).expect("valid ratio")
     }
     fn height_minimum() {
         check(
@@ -5497,7 +5541,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
         };
         let mut run = RenderTester::mount(
             box_node(RenderViewport::new(axis)).child(
-                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                sliver_node(RenderSliverConstrainedCrossAxis::try_new(40.0).unwrap())
                     .label("limit")
                     .child(
                         sliver_node(RenderSliverToBoxAdapter::new())
@@ -5528,7 +5572,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
             );
         }
         for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(RenderSliverConstrainedCrossAxis::new(invalid).is_err());
+            assert!(RenderSliverConstrainedCrossAxis::try_new(invalid).is_err());
             run.update::<RenderSliverConstrainedCrossAxis>(id, |object| {
                 assert!(object.set_max_extent(invalid).is_err());
             });
@@ -8290,6 +8334,32 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     );
 }
 
+/// The sliver anchor publishes its own id while mounted and is transparent:
+/// it commits its child's geometry whole and passes hits through to it.
+fn harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry() {
+    let anchor = SubtreeAnchor::new();
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverSubtreeAnchor::new(anchor.clone()))
+            .label("anchor")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("adapter")
+                    .child(box_node(RenderColoredBox::red(300.0, 60.0)).label("item")),
+            ),
+    ))
+    .with_size(Size::new(300.0, 100.0))
+    .run_frame();
+
+    assert_eq!(anchor.get(), Some(run.id("anchor")));
+    assert_eq!(
+        run.sliver_geometry(run.id("anchor")),
+        run.sliver_geometry(run.id("adapter"))
+    );
+    assert_eq!(run.sliver_geometry(run.id("anchor")).paint_extent, 60.0);
+    assert!(run.hit(20.0, 20.0).contains(&run.id("item")));
+    assert!(!run.hit(20.0, 80.0).contains(&run.id("item")));
+}
+
 // ─── RenderSliverList (request seam — INERT without a child manager) ─────────
 
 fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
@@ -8347,6 +8417,193 @@ fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
         &[2],
         "only logical index 2 should be requested; got {indices:?}"
     );
+}
+
+/// The lazy multi-box slivers, which share the pinned-child contract.
+#[derive(Clone, Copy, Debug)]
+enum LazySliver {
+    List,
+    FixedExtentList,
+    Grid,
+    Carousel,
+}
+
+impl LazySliver {
+    /// A sliver over `count` resident 50 px children seeded with their
+    /// logical indices, each announced as `row{index}`; row 0 paints blue and
+    /// every other row red.
+    fn mount(self, count: usize, pinned: &std::collections::BTreeSet<usize>) -> TreeNode {
+        let mut node = match self {
+            Self::List => {
+                let mut list = RenderSliverList::new(count, 50.0);
+                let _ = list.set_pinned_indices(pinned);
+                sliver_node(list)
+            }
+            Self::FixedExtentList => {
+                let mut list = RenderSliverFixedExtentList::new(50.0, count);
+                let _ = list.set_pinned_indices(pinned);
+                sliver_node(list)
+            }
+            Self::Grid => {
+                // Six 50 px columns across the 300 px viewport.
+                let mut grid =
+                    RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(6), count);
+                let _ = grid.set_pinned_indices(pinned);
+                sliver_node(grid)
+            }
+            Self::Carousel => {
+                // Uncontained 50 px items, one after another like a list.
+                let layout = CarouselLayout::uncontained(50.0).expect("a positive extent");
+                let mut carousel = RenderSliverCarousel::new(
+                    CarouselConfig::new(layout, 0.0),
+                    count,
+                    CarouselItemFrames::new(),
+                );
+                let _ = carousel.set_pinned_indices(pinned);
+                sliver_node(carousel)
+            }
+        }
+        .label("sliver");
+        for index in 0..count {
+            let paint = if index == 0 {
+                RenderColoredBox::blue(300.0, 50.0)
+            } else {
+                RenderColoredBox::red(300.0, 50.0)
+            };
+            let mut row = box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled(&format!("row{index}")))
+                    .with_container(true),
+            )
+            .child(box_node(paint))
+            .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+                SliverMultiBoxAdaptorParentData::new(index),
+            ));
+            if index == 0 {
+                row = row.label("item0");
+            }
+            node = node.child(row);
+        }
+        node
+    }
+
+    fn set_pinned(self, run: &mut FrameRun, pinned: &std::collections::BTreeSet<usize>) {
+        let sliver = run.id("sliver");
+        match self {
+            Self::List => run.update::<RenderSliverList>(sliver, |list| {
+                let _ = list.set_pinned_indices(pinned);
+            }),
+            Self::FixedExtentList => run.update::<RenderSliverFixedExtentList>(sliver, |list| {
+                let _ = list.set_pinned_indices(pinned);
+            }),
+            Self::Grid => run.update::<RenderSliverGrid>(sliver, |grid| {
+                let _ = grid.set_pinned_indices(pinned);
+            }),
+            Self::Carousel => run.update::<RenderSliverCarousel>(sliver, |carousel| {
+                let _ = carousel.set_pinned_indices(pinned);
+            }),
+        }
+    }
+}
+
+/// The labels a frame announces.
+fn announced_labels(run: &FrameRun) -> Vec<String> {
+    run.pipeline()
+        .semantics_owner()
+        .expect("semantics enabled")
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect()
+}
+
+/// A pinned child the band has left is laid out where it belongs and kept in
+/// the semantics tree, never painted, and adds nothing to the sliver's
+/// geometry; unpinned, it drops out of the tree without a scroll. The same
+/// on every lazy multi-box sliver and under either viewport clip, since a
+/// clip is no reason a child is not painted.
+fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
+    use std::collections::BTreeSet;
+
+    // Rows of 50 px; the band at a 1000 px scroll offset starts well past
+    // row 0 (the cache extent reaches back 250 px).
+    const SCROLLED: f64 = 1000.0;
+    let pinned = BTreeSet::from([0]);
+    for sliver in [
+        LazySliver::List,
+        LazySliver::FixedExtentList,
+        LazySliver::Grid,
+        LazySliver::Carousel,
+    ] {
+        // The grid fits six tiles a row; give it as many rows as a list.
+        let count = match sliver {
+            LazySliver::Grid => 240,
+            _ => 40,
+        };
+        for clip in [Clip::HardEdge, Clip::None] {
+            let frame = |pins: &BTreeSet<usize>| {
+                // A scrollable answers `ScrollIntoView` above its viewport,
+                // which keeps a laid-out row past the cache addressable.
+                let mut revealing = SemanticsConfiguration::new();
+                revealing.add_action(
+                    flui_rendering::semantics::SemanticsAction::ScrollIntoView,
+                    Rc::new(|_| {}),
+                );
+                let scrollable =
+                    box_node(RenderSemanticsAnnotations::from_configuration(revealing))
+                        .child(viewport_with_scroll(0.0, sliver.mount(count, pins)));
+                let mut run = RenderTester::mount(scrollable)
+                    .with_size(Size::new(300.0, 100.0))
+                    .with_semantics_enabled()
+                    .run_frame();
+                let viewport = run.id("viewport");
+                run.update::<RenderViewport<ScrollableViewportOffset>>(viewport, |viewport| {
+                    let _ = viewport.set_clip_behavior(clip);
+                    viewport.offset_mut().set_pixels(SCROLLED);
+                });
+                run.pump();
+                run
+            };
+            let case = format!("{sliver:?} under {clip:?}");
+            let unpinned = frame(&BTreeSet::new());
+            let mut run = frame(&pinned);
+            let row = run.id("item0");
+
+            assert!(
+                announced_labels(&unpinned)
+                    .iter()
+                    .all(|label| label != "row0"),
+                "{case}: precondition: an unpinned row the band left is not announced"
+            );
+            assert_eq!(
+                run.offset(row).dy,
+                -SCROLLED,
+                "{case}: the pinned row is laid out at its own place, scrolled away"
+            );
+            assert!(
+                announced_labels(&run).iter().any(|label| label == "row0"),
+                "{case}: the pinned row stays in the semantics tree; got {:?}",
+                announced_labels(&run)
+            );
+            assert!(
+                !run.display_commands()
+                    .iter()
+                    .any(|command| command.line.contains("#0000FFFF")),
+                "{case}: the pinned row is not painted"
+            );
+            assert_eq!(
+                run.sliver_geometry(run.id("sliver")),
+                unpinned.sliver_geometry(unpinned.id("sliver")),
+                "{case}: a pinned row adds nothing to the geometry"
+            );
+
+            sliver.set_pinned(&mut run, &BTreeSet::new());
+            run.pump();
+            assert!(
+                announced_labels(&run).iter().all(|label| label != "row0"),
+                "{case}: an unpinned row drops out of the tree without a scroll"
+            );
+        }
+    }
 }
 
 fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
@@ -11684,7 +11941,7 @@ fn harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes() {
         let group = sliver_node(RenderSliverCrossAxisGroup::new())
             .label("group")
             .child(
-                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                sliver_node(RenderSliverConstrainedCrossAxis::try_new(40.0).unwrap())
                     .label("content_track")
                     .with_parent_data_seed(track(SliverCrossAxisAllocation::Content))
                     .child(adapter(30.0, "a")),
@@ -12681,6 +12938,10 @@ fn family_text_and_image() {
                 harness_paragraph_paints_text_frame,
             ),
             (
+                "paragraph_publishes_runs_only_while_selectable",
+                harness_paragraph_publishes_runs_only_while_selectable,
+            ),
+            (
                 "icon_resolves_square_and_optional_glyph_together",
                 harness_icon_resolves_square_and_optional_glyph_together,
             ),
@@ -13295,6 +13556,7 @@ fn family_sliver_lists() {
         ("sliver_carousel_geometry_and_frames", harness_sliver_carousel_geometry_and_frames),
         ("sliver_fixed_extent_list_geometry", harness_sliver_fixed_extent_list_geometry),
         ("sliver_list_seeded_residents_laid_out_at_expected_offsets", harness_sliver_list_seeded_residents_laid_out_at_expected_offsets),
+        ("lazy_slivers_keep_a_pinned_child_out_of_band", harness_lazy_slivers_keep_a_pinned_child_out_of_band),
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
         ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
         ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),
@@ -13318,6 +13580,7 @@ fn family_sliver_wrappers() {
         ("sliver_fill_remaining_and_overscroll_fills_viewport", harness_sliver_fill_remaining_and_overscroll_fills_viewport),
         ("sliver_fill_remaining_with_scrollable_reports_full_scroll_extent", harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent),
         ("sliver_ignore_pointer_blocks_hits_when_active", harness_sliver_ignore_pointer_blocks_hits_when_active),
+        ("sliver_subtree_anchor_publishes_its_id_and_the_child_geometry", harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry),
         ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
         ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
         ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),

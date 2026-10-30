@@ -587,7 +587,8 @@ fn reported_facts(
     capabilities: WindowCapabilities,
 ) -> ReportedFacts {
     ReportedFacts {
-        metrics: WindowMetrics::new(device_size(window.inner_size()), window.scale_factor()).ok(),
+        metrics: WindowMetrics::try_new(device_size(window.inner_size()), window.scale_factor())
+            .ok(),
         appearance,
         safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,

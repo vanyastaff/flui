@@ -149,9 +149,9 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, DynamicRange,
-    FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
+    ColorGamut, ColorParts, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
+    DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
 };
 pub use event_time::EventTime;
@@ -175,7 +175,7 @@ pub use pointer::{
     PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
@@ -200,8 +200,8 @@ pub use window::{
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_state::{
-    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CommandRefusal,
-    PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities, WindowCommand,
-    WindowControl, WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted,
-    WindowState,
+    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
+    CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,
+    WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
+    WindowRevisionExhausted, WindowState, WindowStateParts,
 };

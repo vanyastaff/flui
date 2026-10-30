@@ -13,7 +13,7 @@ pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
 use flui_platform::pointer::{
     ButtonChange, PanZoomEvent, PointerMove, PointerPosition, PointerSample, ScrollDelta,
-    ScrollEvent, ScrollUnit,
+    ScrollEvent, ScrollUnit, SmartZoomEvent,
 };
 
 use crate::{
@@ -21,7 +21,8 @@ use crate::{
     events::{CursorIcon, PointerEvent},
     pointer::MouseTrackerAnnotation,
     pointer::interaction_lane::{
-        PanZoomDispatch, PanZoomTarget, PointerTarget, ScrollTarget, active_dispatch_handle,
+        PanZoomDispatch, PanZoomTarget, PointerTarget, ScrollTarget, SmartZoomDispatch,
+        SmartZoomTarget, active_dispatch_handle,
     },
 };
 
@@ -311,6 +312,9 @@ pub struct HitTestEntry {
     /// Data-plane identity of this target's owner-local pan-zoom handler.
     pub pan_zoom_target: Option<PanZoomTarget>,
 
+    /// Data-plane identity of this target's owner-local smart zoom handler.
+    pub smart_zoom_target: Option<SmartZoomTarget>,
+
     /// Mouse cursor for this target.
     pub cursor: CursorRequest,
 
@@ -339,6 +343,7 @@ impl std::fmt::Debug for HitTestEntry {
             .field("cursor", &self.cursor)
             .field("has_scroll_target", &self.scroll_target.is_some())
             .field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
+            .field("has_smart_zoom_target", &self.smart_zoom_target.is_some())
             .field("has_mouse_annotation", &self.mouse_annotation.is_some())
             // Presence, not contents: the payload is `dyn Any` and has no
             // useful `Debug`. It is the flag that separates "no tag here" from
@@ -358,6 +363,7 @@ impl HitTestEntry {
             pointer_target: None,
             scroll_target: None,
             pan_zoom_target: None,
+            smart_zoom_target: None,
             cursor: CursorRequest::Defer,
             mouse_annotation: None,
             metadata: None,
@@ -416,6 +422,13 @@ impl HitTestEntry {
     #[must_use]
     pub fn pan_zoom_target(mut self, target: PanZoomTarget) -> Self {
         self.pan_zoom_target = Some(target);
+        self
+    }
+
+    /// Builder: set the owner-local smart zoom target identity.
+    #[must_use]
+    pub fn smart_zoom_target(mut self, target: SmartZoomTarget) -> Self {
+        self.smart_zoom_target = Some(target);
         self
     }
 
@@ -872,6 +885,52 @@ impl HitTestResult {
         false
     }
 
+    /// Offers a smart zoom to the path's smart zoom targets, leaf-first,
+    /// each in its own space, stopping at the first one that claims it: an
+    /// image inside a zoomable page answers before the page.
+    ///
+    /// Returns `true` when a target claimed the event.
+    pub fn dispatch_smart_zoom(&self, event: &SmartZoomEvent) -> bool {
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "smart zoom dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        for entry in &self.path {
+            let Some(target) = entry.smart_zoom_target else {
+                continue;
+            };
+            let local = match entry.transform {
+                Some(transform) => {
+                    if !transform.is_invertible() {
+                        continue;
+                    }
+                    let Some(local) = transform_smart_zoom_event(event, &transform) else {
+                        continue;
+                    };
+                    local
+                }
+                None => *event,
+            };
+            match handle.invoke_smart_zoom_target(target, SmartZoomDispatch::new(local, *event)) {
+                Ok(propagation) if propagation.should_stop() => return true,
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::debug!(
+                        ?error,
+                        "smart zoom target unavailable during owner-lane dispatch"
+                    );
+                }
+            }
+        }
+        false
+    }
+
     /// Dispatches a trackpad pan-zoom event to the path's pan-zoom targets,
     /// leaf-first, stopping at the first one that claims it.
     ///
@@ -1017,6 +1076,7 @@ pub(crate) fn transform_pointer_event(
         }
         PointerEvent::Scroll(event) => *event = transform_scroll_event(event, transform)?,
         PointerEvent::PanZoom(event) => *event = transform_pan_zoom_event(event, transform)?,
+        PointerEvent::SmartZoom(event) => *event = transform_smart_zoom_event(event, transform)?,
         PointerEvent::Enter(event)
         | PointerEvent::Leave(event)
         | PointerEvent::ScrollInertiaCancel(event) => {
@@ -1070,6 +1130,16 @@ fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<Po
 /// Localize the focal point; scale and rotation are dimensionless and stay
 /// as the source reported them.
 fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option<PanZoomEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    Some(local)
+}
+
+/// Localize the point to zoom about.
+fn transform_smart_zoom_event(
+    event: &SmartZoomEvent,
+    transform: &Matrix4,
+) -> Option<SmartZoomEvent> {
     let mut local = *event;
     local.position = transform_position(event.position, transform)?;
     Some(local)

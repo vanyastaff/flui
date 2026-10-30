@@ -872,7 +872,7 @@ impl UiRuntime {
                     // streak ends here, so a later withdrawal gets the full
                     // retry budget again.
                     producer.clear_not_shown_streak();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -992,7 +992,7 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -1011,43 +1011,38 @@ impl UiRuntime {
                 }
                 SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
-                    // `Retain`, not `Drain`: this arm now arms a retry
-                    // (`retry_needed = true` below), and the eventual real
-                    // submit that retry produces must still find the epochs
-                    // that arrived before this failure — see
+                    // `Retain`, not `Drain`: the frame is tried again, and the
+                    // eventual real submit must still find the epochs that
+                    // arrived before this failure — see
                     // `record_submit_telemetry`'s own doc.
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
                         EpochDisposition::Retain,
                     );
-                    // Division of labor with the platform runner's own
-                    // recovery wake (`render_frame_with_device_recovery` in
-                    // `runner.rs`): this arm only ever runs once
-                    // `render_scene` was actually called, i.e. there was
-                    // dirty content to submit — it owns the retry for a
-                    // loss OBSERVED MID-FRAME, for every `RasterBackend`
-                    // consumer (headless included), not just the desktop/
-                    // Android runners. A loss discovered on a quiescent
-                    // loop, before anything is dirty enough to reach
-                    // `render_scene` at all, never reaches this arm
-                    // (`draw_frame_entered` produces `Idle`, nothing to
-                    // submit) — that gap is what the runner's own wake on a
-                    // FAILED pre-frame recovery attempt covers instead. The
-                    // two are non-overlapping, not redundant.
-                    retry_needed = true;
-                    // See `retry_needs_repaint`'s own binding above.
-                    retry_needs_repaint = true;
-                    tracing::warn!(
-                        "GPU device lost; frame dropped — retry armed, recovery is \
-                         attempted by the renderer owner"
-                    );
+                    // The submit consumed the paint demand, so the frame the
+                    // rebuilt device shows needs a full repaint whenever it
+                    // comes.
+                    self.mark_needs_full_repaint_for(producer);
+                    // Paced like any dropped frame (ADR-0267): a frame asked
+                    // for at once would run again before the renderer's owner
+                    // next rebuilds the device, and fail the same way. A
+                    // given-up rebuild was reported when it was given up and
+                    // holds the frames until a rebuild is asked for again.
+                    if !producer.device_abandoned() {
+                        let recovery = producer.device_recovery().unwrap_or_default();
+                        self.report_frame_failure(
+                            producer,
+                            FrameFailureKind::DeviceLost { recovery },
+                        );
+                        Self::arm_failure_retry(producer);
+                    }
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
-                    Self::record_submit_telemetry(
+                    self.record_submit_telemetry(
                         frame_time,
                         producer,
                         submit_at,
@@ -1278,6 +1273,7 @@ impl UiRuntime {
         }
         let late = self.presentations.iter().any(|presentation| {
             presentation.failure_retry_at().is_none()
+                && !presentation.device_abandoned()
                 && (presentation.redraw_requested_since_watch()
                     || (late_visual_update && presentation.has_pending_work_snapshot()))
         });
@@ -1345,6 +1341,7 @@ impl UiRuntime {
     /// `frame_time` is the pump's frame time, recorded as the snapshot's
     /// `clock_timestamp` so a late segment start shows against it.
     pub(super) fn record_submit_telemetry(
+        &self,
         frame_time: Instant,
         presentation: &PresentationState,
         submit_at: Instant,
@@ -1359,14 +1356,18 @@ impl UiRuntime {
                 submit_at,
                 phases,
             };
+            let address = flui_foundation::PresentationAddress {
+                ui_runtime_id: self.id,
+                presentation_id: presentation.id(),
+            };
             let snapshot = match epochs {
                 EpochDisposition::Drain => {
                     presentation
                         .clock()
-                        .record_frame(presentation.id(), times, present_outcome)
+                        .record_frame(address, times, present_outcome)
                 }
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
-                    presentation.id(),
+                    address,
                     times,
                     present_outcome,
                 ),
@@ -1394,7 +1395,8 @@ impl UiRuntime {
         tracing::trace!(
             target: "flui.frame",
             event = "frame_telemetry",
-            presentation = %snapshot.presentation,
+            ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
+            presentation = %snapshot.address.presentation_id,
             frame_id = %snapshot.frame_id,
             present_outcome = outcome,
             segment_us = Self::duration_micros_saturated(snapshot.segment_span()),

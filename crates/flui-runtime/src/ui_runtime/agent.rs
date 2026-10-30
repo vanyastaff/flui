@@ -26,9 +26,10 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySen
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
-    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
-    ElementId, ElementRef, ErrorCode, InputPath, LocateParams, Matches, ReadQuery, Retry, Snapshot,
-    SnapshotReading, Tree, WaitOutcome, WaitParams, WindowId,
+    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
+    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, InputPath,
+    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
+    WaitParams, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
@@ -693,6 +694,38 @@ impl SemanticsAgent {
         )
     }
 
+    /// The announcements the presentation delivered to assistive technology
+    /// after `params.since`, oldest first: a read leaves out the announcer
+    /// nodes that carry them, so this is where an agent hears them.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
+    /// request cannot be enqueued; the reply carries the rest.
+    pub fn announcements(
+        &self,
+        params: AnnouncementsParams,
+    ) -> Result<AgentReply<AnnouncementJournal>, AgentError> {
+        let (command, answer) = self.announcements_command(params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn announcements_command(
+        &self,
+        params: AnnouncementsParams,
+    ) -> (UiCommand, AgentReply<AnnouncementJournal>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::SemanticsAnnouncements {
+                presentation_id: self.sender.presentation_id,
+                params,
+                reply,
+            },
+            answer,
+        )
+    }
+
     fn motion_command(
         &self,
         request: flui_protocol::MotionRequest,
@@ -802,6 +835,13 @@ impl AgentPort for DevAgentPort {
         request: flui_protocol::MotionRequest,
     ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
         self.admit(|agent| agent.motion_command(request))
+    }
+
+    fn announcements(
+        &self,
+        params: AnnouncementsParams,
+    ) -> Result<AgentAnswer<AnnouncementJournal>, AgentFault> {
+        self.admit(|agent| agent.announcements_command(params))
     }
 }
 
@@ -969,7 +1009,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             pipeline
                 .semantics_owner()
@@ -992,7 +1032,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             pipeline
                 .semantics_owner()
@@ -1023,7 +1063,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         let (placement, point) = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             let placement = Placement::new(ratio, window);
             let point = pipeline
@@ -1101,7 +1141,7 @@ impl UiRuntime {
             .expect("BUG: a presentation id packs a non-zero generation");
         let before = if snapshot == Snapshot::Delta {
             Some(state.pipeline().with(|pipeline| {
-                let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                     .unwrap_or(DevicePixelRatio::ONE);
                 pipeline
                     .semantics_owner()
@@ -1160,7 +1200,7 @@ impl UiRuntime {
         let window = WindowId::from_u64(state.id().as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
         let placement = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
                 .unwrap_or(DevicePixelRatio::ONE);
             Placement::new(ratio, window)
         });
@@ -1199,6 +1239,25 @@ impl UiRuntime {
             let element = outcome.element.map(|element| element.element);
             send_reply(&reply, element, Ok(outcome));
         }
+    }
+
+    /// The owner half of [`SemanticsAgent::announcements`]. With
+    /// accessibility off there is no owner and nothing was delivered.
+    pub(super) fn serve_semantics_announcements(
+        &self,
+        presentation: PresentationId,
+        params: &AnnouncementsParams,
+    ) -> Result<AnnouncementJournal, AgentError> {
+        let state = self
+            .presentations
+            .get(presentation)
+            .ok_or(AgentError::PresentationGone)?;
+        Ok(state.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(|owner| owner.announcement_journal(params))
+                .unwrap_or_default()
+        }))
     }
 
     /// The owner half of [`SemanticsAgent::act`]: resolves the wire action

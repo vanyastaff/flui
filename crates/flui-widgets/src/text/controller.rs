@@ -4,16 +4,19 @@
 //! [`TextEditingController::caret_byte_offset`] reports the extent and
 //! [`TextEditingController::selection`] the span.
 
+use std::cell::RefCell;
 use std::ops::Range;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::rc::Rc;
 
 use flui_painting::text_boundaries::{
-    is_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary, word_segments_from,
+    is_grapheme_boundary, next_grapheme_boundary, next_word_start, previous_grapheme_boundary,
+    previous_word_start,
 };
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
-use flui_platform::text_store::{EditGeneration, RetainOnFailure, committed_text};
+use flui_interaction::text_input::{EditGeneration, committed_text};
+use flui_platform::text_store::RetainOnFailure;
 
 // ============================================================================
 // ControllerInner
@@ -95,12 +98,12 @@ impl Selection {
 
 /// Mutable interior of a [`TextEditingController`].
 ///
-/// Guarded by a `Mutex` inside `Arc` so any clone of the controller refers to
+/// Held in an `Rc<RefCell>` so any clone of the controller refers to
 /// the same live text and caret state.
 ///
 /// The field's text store (`super::text_store`) reads and writes these fields
 /// directly through [`TextEditingController::with_inner`] and
-/// [`TextEditingController::with_inner_silent`]: a platform session applies
+/// [`TextEditingController::write_session`]: a platform session applies
 /// its edits in one write and notifies once.
 pub(super) struct ControllerInner {
     pub(super) text: String,
@@ -121,6 +124,14 @@ pub(super) struct ControllerInner {
     /// application edit or silently by a session or a key handler: a reader
     /// that saw this value and sees it again has nothing to diff.
     pub(super) revision: u64,
+}
+
+/// A platform session's result, which
+/// [`TextEditingController::write_session`] stores in one write.
+pub(super) struct SessionWrite {
+    pub(super) text: String,
+    pub(super) selection: Selection,
+    pub(super) composing: Option<ComposingState>,
 }
 
 /// The in-progress IME composition: its byte range into
@@ -173,7 +184,7 @@ pub(super) struct ComposingState {
 /// # Sharing
 ///
 /// `TextEditingController` is `Clone`: every clone shares the same underlying
-/// buffer and listener list (both are `Arc`-backed internally).  The owning
+/// buffer and listener list (both are `Rc`-backed internally).  The owning
 /// widget state typically holds one clone; the key-event handler closure
 /// captures a second.  `notify_listeners` propagates through every clone so
 /// a listener added to any one clone fires regardless of which clone mutates
@@ -237,9 +248,9 @@ pub(super) struct ComposingState {
 /// [`Self::move_caret_word_right`], [`Self::extend_selection_word_left`]/
 /// [`Self::extend_selection_word_right`]) and word deletion
 /// ([`Self::delete_word_backward`]/[`Self::delete_word_forward`]) step by
-/// UAX #29 **word** segments (ICU4X's, through
-/// [`flui_painting::text_boundaries::word_segments_from`]), not ASCII
-/// whitespace runs: a
+/// UAX #29 **word** segments, stopping at
+/// [`flui_painting::text_boundaries::word_starts`], the starts a field
+/// publishes to assistive technology, not ASCII whitespace runs: a
 /// straight/curly apostrophe inside a word (`"don't"`) and a letter-digit
 /// run (`"foo123"`) each stay one segment per the standard's own rules,
 /// and a run of plain whitespace is skipped as a whole rather than
@@ -269,8 +280,8 @@ pub(super) struct ComposingState {
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
-    inner: Arc<Mutex<ControllerInner>>,
-    /// Listener list — `ChangeNotifier` is itself `Arc`-backed so clones share
+    inner: Rc<RefCell<ControllerInner>>,
+    /// Listener list — `ChangeNotifier` is itself `Rc`-backed so clones share
     /// the same list.
     notifier: ChangeNotifier,
 }
@@ -290,7 +301,7 @@ impl TextEditingController {
     /// with identical text under that spelling would be a trap.
     #[must_use]
     pub fn is_same_controller(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// How many change listeners are registered.
@@ -312,12 +323,12 @@ impl TextEditingController {
 
 impl std::fmt::Debug for TextEditingController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let guard = self.inner.borrow();
         f.debug_struct("TextEditingController")
             .field("text", &guard.text)
             .field("selection", &guard.selection)
             .field("composing", &guard.composing)
-            // `notifier` is intentionally omitted: its Arc-backed listener list
+            // `notifier` is intentionally omitted: its Rc-backed listener list
             // is noise in debug output and has no stable representation.
             .finish_non_exhaustive()
     }
@@ -330,8 +341,9 @@ impl Default for TextEditingController {
 }
 
 impl RetainOnFailure for TextEditingController {
-    /// Forgotten whole: its listener list is a thread-shared `Arc`, which
-    /// another thread may make this clone the last owner of (ADR-0127).
+    /// Forgotten whole: its listener list holds owner closures, and other
+    /// handles to it (`listenable`) hide whether this clone is their last
+    /// owner (ADR-0127).
     fn retain(self) {
         std::mem::forget(self);
     }
@@ -342,7 +354,7 @@ impl TextEditingController {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ControllerInner {
+            inner: Rc::new(RefCell::new(ControllerInner {
                 text: String::new(),
                 selection: Selection::collapsed(0),
                 composing: None,
@@ -359,7 +371,7 @@ impl TextEditingController {
         let text = initial_text.into();
         let selection = Selection::collapsed(text.len());
         Self {
-            inner: Arc::new(Mutex::new(ControllerInner {
+            inner: Rc::new(RefCell::new(ControllerInner {
                 text,
                 selection,
                 composing: None,
@@ -376,11 +388,7 @@ impl TextEditingController {
 
     /// A snapshot of the current text buffer.
     pub fn text(&self) -> String {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .text
-            .clone()
+        self.inner.borrow().text.clone()
     }
 
     /// The committed text: [`Self::text`] with the IME composition's range
@@ -395,7 +403,7 @@ impl TextEditingController {
     /// [`Self::is_composing`] is `false`.
     #[must_use]
     pub fn committed_text(&self) -> String {
-        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let guard = self.inner.borrow();
         committed_text(
             &guard.text,
             guard
@@ -410,11 +418,7 @@ impl TextEditingController {
     /// Always points to a valid UTF-8 char boundary (including one past the
     /// last byte when the caret is at the end).
     pub fn caret_byte_offset(&self) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .selection
-            .caret
+        self.inner.borrow().selection.caret
     }
 
     /// The selected span as a byte range into [`Self::text`], in ascending
@@ -430,29 +434,20 @@ impl TextEditingController {
     /// direction. [`Self::caret_byte_offset`] is where the direction lives.
     #[must_use]
     pub fn selection(&self) -> Range<usize> {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .selection
-            .range()
+        self.inner.borrow().selection.range()
     }
 
     /// Whether anything is selected, i.e. the selection is not collapsed.
     #[must_use]
     pub fn has_selection(&self) -> bool {
-        !self
-            .inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .selection
-            .is_collapsed()
+        !self.inner.borrow().selection.is_collapsed()
     }
 
     /// The selected text, empty when the selection is collapsed — what a copy
     /// writes to the clipboard.
     #[must_use]
     pub fn selected_text(&self) -> String {
-        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let guard = self.inner.borrow();
         let range = guard.selection.range();
         guard.text[range].to_owned()
     }
@@ -812,7 +807,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev = prev_word_boundary(&guard.text, caret);
+                    let prev = previous_word_start(&guard.text, caret);
                     guard.selection = Selection::collapsed(prev);
                     true
                 }
@@ -834,7 +829,7 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    let next = next_word_boundary(&guard.text, caret);
+                    let next = next_word_start(&guard.text, caret);
                     guard.selection = Selection::collapsed(next);
                     true
                 }
@@ -852,7 +847,7 @@ impl TextEditingController {
     pub fn extend_selection_word_left(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != 0).then(|| prev_word_boundary(&guard.text, caret))
+            (caret != 0).then(|| previous_word_start(&guard.text, caret))
         });
     }
 
@@ -861,7 +856,7 @@ impl TextEditingController {
     pub fn extend_selection_word_right(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != guard.text.len()).then(|| next_word_boundary(&guard.text, caret))
+            (caret != guard.text.len()).then(|| next_word_start(&guard.text, caret))
         });
     }
 
@@ -883,7 +878,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev = prev_word_boundary(&guard.text, caret);
+                    let prev = previous_word_start(&guard.text, caret);
                     guard.text.drain(prev..caret);
                     guard.selection = Selection::collapsed(prev);
                     guard.composing = None;
@@ -908,7 +903,7 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    let next = next_word_boundary(&guard.text, caret);
+                    let next = next_word_start(&guard.text, caret);
                     guard.text.drain(caret..next);
                     guard.composing = None;
                     true
@@ -927,8 +922,7 @@ impl TextEditingController {
     #[must_use]
     pub fn composing_range(&self) -> Option<Range<usize>> {
         self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .borrow()
             .composing
             .as_ref()
             .map(|state| state.range.clone())
@@ -944,11 +938,7 @@ impl TextEditingController {
     /// happened once.
     #[must_use]
     pub fn is_composing(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .composing
-            .is_some()
+        self.inner.borrow().composing.is_some()
     }
 
     /// Whether the caret should currently be hidden because the IME owns its
@@ -970,8 +960,7 @@ impl TextEditingController {
     #[must_use]
     pub fn caret_hidden_by_ime(&self) -> bool {
         self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .borrow()
             .composing
             .as_ref()
             .is_some_and(|state| state.caret_hidden)
@@ -981,41 +970,56 @@ impl TextEditingController {
     // Text-store access
     // =========================================================================
 
-    /// Read the controller's state under its lock.
+    /// Read the controller's state.
     ///
     /// For the field's text store (`super::text_store`), which answers a
-    /// platform's reads from these fields directly.
+    /// platform's reads from these fields directly. `f` runs under the
+    /// borrow, so it is crate code that calls nothing back.
     pub(super) fn with_inner<R>(&self, f: impl FnOnce(&ControllerInner) -> R) -> R {
-        f(&self.inner.lock().unwrap_or_else(PoisonError::into_inner))
+        f(&self.inner.borrow())
     }
 
-    /// Change the controller's state under its lock WITHOUT notifying
-    /// listeners — the caller notifies once through [`Self::notify_changed`]
-    /// when it is done. A platform session writes all of its edits back this
-    /// way, so the session is one change to the field, not one per edit.
-    pub(super) fn with_inner_silent<R>(&self, f: impl FnOnce(&mut ControllerInner) -> R) -> R {
-        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.revision = guard.revision.wrapping_add(1);
-        f(&mut guard)
+    /// Store a platform session's result WITHOUT notifying listeners, unless
+    /// the application edited the controller since the session opened at
+    /// `generation`. The caller notifies once through
+    /// [`Self::notify_changed`] when it is done, so the session is one change
+    /// to the field, not one per edit.
+    ///
+    /// The result is built before the borrow: under it only fields are
+    /// assigned, so no code runs while the controller is borrowed.
+    pub(super) fn write_session(&self, generation: EditGeneration, write: SessionWrite) -> bool {
+        let SessionWrite {
+            text,
+            selection,
+            composing,
+        } = write;
+        let mut inner = self.inner.borrow_mut();
+        inner.revision = inner.revision.wrapping_add(1);
+        if !inner.generation.admits(generation) {
+            return false;
+        }
+        inner.text = text;
+        inner.selection = selection;
+        inner.composing = composing;
+        true
     }
 
-    /// [`ControllerInner::revision`], read under the lock.
+    /// [`ControllerInner::revision`].
     pub(super) fn revision(&self) -> u64 {
         self.with_inner(|inner| inner.revision)
     }
 
-    /// Notify listeners of a change made through [`Self::with_inner_silent`].
+    /// Notify listeners of a change stored through [`Self::write_session`].
     pub(super) fn notify_changed(&self) {
         self.notifier.notify_listeners();
     }
 
-    /// Apply an application edit under the lock. `edit` says whether it
-    /// changed anything; a change advances [`ControllerInner::generation`]
-    /// in the same critical section, and the listeners hear of it once the
-    /// lock is released.
+    /// Apply an application edit. `edit` says whether it changed anything;
+    /// a change advances [`ControllerInner::generation`] under the same
+    /// borrow, and the listeners hear of it once the borrow is released.
     fn app_edit(&self, edit: impl FnOnce(&mut ControllerInner) -> bool) {
         let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = self.inner.borrow_mut();
             let changed = edit(&mut guard);
             if changed {
                 guard.generation.advance();
@@ -1036,11 +1040,11 @@ impl TextEditingController {
     /// changes.  Pass it to [`AnimatedBuilder`](crate::AnimatedBuilder) to
     /// rebuild a widget subtree on every edit.
     ///
-    /// The returned `Arc` wraps a clone of the internal `ChangeNotifier`, which
-    /// is itself `Arc`-backed — both the widget build and the key handler share
+    /// The returned `Rc` wraps a clone of the internal `ChangeNotifier`, which
+    /// is itself `Rc`-backed — both the widget build and the key handler share
     /// the same live listener list through their respective clones.
-    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        std::rc::Rc::new(self.notifier.clone())
+    pub fn listenable(&self) -> Rc<dyn Listenable> {
+        Rc::new(self.notifier.clone())
     }
 }
 
@@ -1077,84 +1081,6 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
         }
         _ => false,
     }
-}
-
-/// The byte offset of the next word-jump stop forward from `offset` — see
-/// [`TextEditingController`]'s `# Word unit` doc section for the full
-/// forward/backward contract this implements.
-///
-/// Finds the segment `offset` currently touches (the first one whose end
-/// is past `offset`) and returns the start of the first non-whitespace
-/// segment strictly after it, or `text.len()` if none remains. Streamed,
-/// not collected, and started at the line that holds `offset`: this runs
-/// on every Ctrl/Alt+Right and must not segment, or allocate a segment
-/// list for, the whole buffer on every keystroke.
-fn next_word_boundary(text: &str, offset: usize) -> usize {
-    let total = text.len();
-    if text.is_empty() || offset >= total {
-        return total;
-    }
-    let offset = clamp_to_char_boundary(text, offset);
-    let mut segments = word_segments_from(text, offset).skip_while(|segment| segment.end <= offset);
-    // Consume the segment `offset` touches (already skipped-to by the
-    // `skip_while` above) without inspecting it — a word-jump always
-    // clears whatever segment it started in/on.
-    segments.next();
-    segments
-        .find(|segment| !segment.whitespace)
-        .map_or(total, |segment| segment.start)
-}
-
-/// The byte offset of the previous word-jump stop backward from `offset`
-/// — see [`TextEditingController`]'s `# Word unit` doc section for the
-/// full forward/backward contract this implements.
-///
-/// Finds the segment `offset` currently touches (the last one whose start
-/// is before `offset`). If that segment is a word, returns ITS OWN start
-/// without skipping it; if it is whitespace (or `offset` already sits at
-/// a word's start), continues back to the start of the previous
-/// non-whitespace segment, or `0` if none remains.
-///
-/// The segmenter walks forward only, so each pass scans one line forward,
-/// from its start up to the bound, and a pass that finds no word moves to
-/// the line before: the cost is the lines walked back over, not the
-/// buffer, and nothing is collected.
-fn prev_word_boundary(text: &str, offset: usize) -> usize {
-    if text.is_empty() || offset == 0 {
-        return 0;
-    }
-    let offset = clamp_to_char_boundary(text, offset);
-    if offset == 0 {
-        return 0;
-    }
-    let Some(touching) = word_segments_from(text, offset - 1)
-        .take_while(|segment| segment.start < offset)
-        .last()
-    else {
-        return 0;
-    };
-    if !touching.whitespace {
-        return touching.start;
-    }
-    // The last word before `bound`, one line at a time.
-    let mut bound = touching.start;
-    while bound > 0 {
-        let mut line_start = bound;
-        let mut word = None;
-        for segment in
-            word_segments_from(text, bound - 1).take_while(|segment| segment.start < bound)
-        {
-            line_start = line_start.min(segment.start);
-            if !segment.whitespace {
-                word = Some(segment.start);
-            }
-        }
-        if let Some(start) = word {
-            return start;
-        }
-        bound = line_start;
-    }
-    0
 }
 
 /// Clamp `offset` to the nearest extended-grapheme-cluster boundary of `s`,
@@ -1253,7 +1179,7 @@ mod tests {
     //
     // See `TextEditingController`'s `# Word unit` doc section for the
     // forward/backward tie-break.
-    // Red-check: swap `next_word_boundary`/`prev_word_boundary` back to an
+    // Red-check: swap `next_word_start`/`previous_word_start` back to an
     // ASCII-whitespace scan and the CJK/Arabic/emoji cases below jump by
     // scalar or byte instead of by word.
     // ------------------------------------------------------------------
@@ -1273,13 +1199,18 @@ mod tests {
     /// Mark `range` as composed, silently, as a platform session's
     /// write-back does.
     fn compose(controller: &TextEditingController, range: Range<usize>, caret_hidden: bool) {
-        controller.with_inner_silent(|inner| {
-            inner.composing = Some(ComposingState {
+        let (text, selection, generation) =
+            controller.with_inner(|inner| (inner.text.clone(), inner.selection, inner.generation));
+        let write = SessionWrite {
+            text,
+            selection,
+            composing: Some(ComposingState {
                 range,
                 caret_hidden,
                 origin: String::new(),
-            });
-        });
+            }),
+        };
+        assert!(controller.write_session(generation, write));
     }
 
     /// A non-IME edit while composing ends the composition rather than

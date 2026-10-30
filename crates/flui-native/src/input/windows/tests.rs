@@ -54,7 +54,7 @@ fn move_mouse(hwnd: HWND) {
 /// other's hover as it was, and leaving the first changes only the first's.
 #[test]
 fn two_windows_keep_their_own_input() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let (first, second) = (
         open(&platform, "flui input a"),
         open(&platform, "flui input b"),
@@ -78,7 +78,7 @@ fn two_windows_keep_their_own_input() {
 /// `InputWindows::forget`.
 #[test]
 fn a_windows_input_is_gone_once_it_is_destroyed() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let window = open(&platform, "flui input gone");
     let this = window_ref(&window);
     let inputs = window_inputs().expect("the class's input on this thread");
@@ -97,7 +97,7 @@ fn a_windows_input_is_gone_once_it_is_destroyed() {
 /// window's reads nothing either.
 #[test]
 fn a_window_the_input_never_saw_has_no_input() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let window = open(&platform, "flui input stranger");
     let this = window_ref(&window);
     let stranger = InputWindows::new();

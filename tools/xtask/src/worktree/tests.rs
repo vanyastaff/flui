@@ -33,7 +33,7 @@ fn rejects_every_other_shape() {
 }
 
 fn the_main_checkout_is_its_own_top_level_or_a_first_record_holding_git() {
-    let scratch = ScratchDir::new("worktree-main").expect("scratch dir");
+    let scratch = ScratchDir::try_new("worktree-main").expect("scratch dir");
     let checkout = scratch.path().join("checkout");
     std::fs::create_dir_all(checkout.join(".git")).expect("mkdir");
     let git_dir = scratch.path().join("separate-git-dir");
@@ -372,7 +372,7 @@ impl Fixture {
 
     /// `init_args` go to the main checkout's `git init`, run in the scratch dir.
     fn init(init_args: &[&str]) -> Self {
-        let scratch = ScratchDir::new("worktree").expect("scratch dir");
+        let scratch = ScratchDir::try_new("worktree").expect("scratch dir");
         let origin = scratch.path().join("origin.git");
         let main = scratch.path().join("main");
         let top = Git::new(scratch.path().to_path_buf());

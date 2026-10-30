@@ -352,9 +352,9 @@ pub(crate) struct OwnerControl {
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see
-    /// `WindowsLoop::new`), with the broadcast subscribers and window
+    /// `WindowsLoop::try_new`), with the broadcast subscribers and window
     /// hooks `H` names and the owner window's `owner_hooks`.
-    pub(crate) fn new<H: super::WindowsHost>(
+    pub(crate) fn try_new<H: super::WindowsHost>(
         identity: WindowIdentity,
         windows: Weak<dyn ClassWindows>,
         owner_hooks: Vec<Arc<dyn OwnerMessages>>,
@@ -386,9 +386,11 @@ impl OwnerControl {
             })?;
         let address = Arc::new(Mutex::new(None::<isize>));
         let target = Arc::clone(&address);
-        let wake = Arc::new(wake::OwnerWake::new().map_err(|error| PlatformError::Init {
-            message: error.to_string(),
-        })?);
+        let wake = Arc::new(
+            wake::OwnerWake::try_new().map_err(|error| PlatformError::Init {
+                message: error.to_string(),
+            })?,
+        );
         let transport = Arc::clone(&wake);
         let signal = OwnerSignal::new(Arc::new(move || {
             let address = target.lock();
@@ -415,15 +417,16 @@ impl OwnerControl {
             .hooks;
         let lifecycle = H::lifecycle(&seeds);
         let preferences = H::preferences(&seeds)?;
-        let broadcasts = super::broadcast::Receiver::new(H::broadcast_subscribers(&OwnerObjects {
-            preferences: &preferences,
-            lifecycle: &lifecycle,
-            displays: &displays,
-            signal: &signal,
-        }))
-        .map_err(|error| PlatformError::Init {
-            message: format!("the broadcast receiver: {error}"),
-        })?;
+        let broadcasts =
+            super::broadcast::Receiver::try_new(H::broadcast_subscribers(&OwnerObjects {
+                preferences: &preferences,
+                lifecycle: &lifecycle,
+                displays: &displays,
+                signal: &signal,
+            }))
+            .map_err(|error| PlatformError::Init {
+                message: format!("the broadcast receiver: {error}"),
+            })?;
         let owner_hooks: Rc<[Arc<dyn OwnerMessages>]> = owner_hooks.into();
         let frames = Rc::new(FrameCount::default());
         let context = Box::new(OwnerControlContext {

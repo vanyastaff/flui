@@ -37,6 +37,14 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod headless;
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_arch = "wasm32",
+    windows,
+    test
+))]
+pub(crate) mod host_queue;
 #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
 pub(crate) mod ime;
 pub(crate) mod sizing;

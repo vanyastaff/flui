@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "close_guard.rs"]
+mod close_guard;
 #[path = "controller_restart.rs"]
 mod controller_restart;
 #[path = "first_frame_deferral.rs"]
@@ -131,6 +133,18 @@ fn owner_local_write_paths() {
             (
                 "owner_local_write_paths::nested_write_panics_inside_an_event_cx",
                 owner_local_write_paths::nested_write_panics_inside_an_event_cx,
+            ),
+            (
+                "owner_local_write_paths::listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::status_listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::status_listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source",
+                owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source,
             ),
         ],
     );

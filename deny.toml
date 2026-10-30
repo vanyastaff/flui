@@ -114,6 +114,9 @@ exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
 # warning per duplicate buried the run's result under thousands of lines of
 # inclusion graphs. The weekly nightly-canary job prints
 # `cargo tree --duplicates` as a metric instead.
+# Known duplicates kept on purpose name their way out here: jni 0.21 beside
+# 0.22 is `accesskit_android`'s (TalkBack in flui-native), until
+# accesskit_android moves to jni 0.22.
 multiple-versions = "allow"
 # Allow wildcard dependencies (common in workspace)
 wildcards = "allow"
@@ -136,6 +139,15 @@ deny = [
         "winit",
         "convert_case",
     ], reason = "FLUI segments text through ICU4X (ADR-0092 §6)" },
+
+    # UI state is owner-local (ADR-0136): a value crosses a thread because the
+    # compiler proves it may, never through a wrapper that asserts it or checks
+    # it at run time. `cargo xtask send-impls` lists the hand-written impls.
+    { crate = "send_wrapper", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "fragile", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "send-cell", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "unsend", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+    { crate = "force-send-sync", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
 ]
 
 # Crates whose job std or core now does (once_cell → OnceLock/LazyLock,

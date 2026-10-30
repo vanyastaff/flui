@@ -269,6 +269,73 @@ impl UiRuntime {
         self.mark_needs_full_repaint_for(self.presentations.primary());
     }
 
+    /// Where the rebuild of the primary presentation's lost GPU device
+    /// stands; `None` while its device is healthy. The renderer's owner reads
+    /// this to learn that the application asked for a new rebuild after one
+    /// was given up ([`Self::retry_render_device`]).
+    // Primary-addressed for the same reason as
+    // `mark_primary_needs_full_repaint` (#559).
+    #[must_use]
+    pub fn primary_device_recovery(&self) -> Option<crate::frame_failure::DeviceRecovery> {
+        self.presentations.primary().device_recovery()
+    }
+
+    /// Record where the rebuild of the primary presentation's lost GPU device
+    /// stands, as its renderer's owner learns it (ADR-0267): `None` once the
+    /// device is healthy again.
+    ///
+    /// Giving the rebuild up reports one
+    /// [`FrameFailureKind::DeviceLost`](crate::frame_failure::FrameFailureKind::DeviceLost)
+    /// with [`DeviceRecovery::Abandoned`](crate::frame_failure::DeviceRecovery::Abandoned)
+    /// and holds the presentation's frames: it asks for none and waits out no
+    /// retry. Leaving a given-up state marks the whole tree for repaint and
+    /// asks for a frame, since nothing was shown meanwhile; a rebuild that
+    /// succeeds is repainted by the renderer's owner, which knows whether the
+    /// frame it runs next still needs one.
+    pub fn note_primary_device_recovery(
+        &self,
+        recovery: Option<crate::frame_failure::DeviceRecovery>,
+    ) {
+        let presentation = self.presentations.primary();
+        let was_abandoned = presentation.device_abandoned();
+        presentation.replace_device_recovery(recovery);
+        let abandons = recovery.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
+        if abandons && !was_abandoned {
+            presentation.disarm_failure_retry();
+            self.report_frame_failure(
+                presentation,
+                crate::frame_failure::FrameFailureKind::DeviceLost {
+                    recovery: recovery.unwrap_or_default(),
+                },
+            );
+        } else if was_abandoned && !abandons {
+            self.mark_needs_full_repaint_for(presentation);
+            self.wake_frame();
+        }
+    }
+
+    /// Ask again for the rebuild of every lost GPU device whose rebuild was
+    /// given up (ADR-0267): each such presentation returns to
+    /// [`DeviceRecovery::Pending`](crate::frame_failure::DeviceRecovery::Pending)
+    /// and asks for a frame, before which its renderer's owner rebuilds the
+    /// device again with a fresh backoff. Returns whether any rebuild was
+    /// asked for; a healthy device or one still being rebuilt is left as it is.
+    pub fn retry_render_device(&self) -> bool {
+        let mut asked = false;
+        for presentation in self.presentations.iter() {
+            if presentation.device_abandoned() {
+                presentation
+                    .replace_device_recovery(Some(crate::frame_failure::DeviceRecovery::Pending));
+                self.mark_needs_full_repaint_for(presentation);
+                asked = true;
+            }
+        }
+        if asked {
+            self.wake_frame();
+        }
+        asked
+    }
+
     pub(crate) fn surface_restored(&self, id: flui_foundation::PresentationId) {
         if let Some(presentation) = self.presentations.get(id) {
             self.mark_needs_full_repaint_for(presentation);
@@ -482,8 +549,11 @@ impl UiRuntime {
     pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
             // A presentation waiting out a dropped frame's backoff has its
-            // frame work counted once the wait is over, not before.
+            // frame work counted once the wait is over, not before; one whose
+            // device rebuild was given up has none until a rebuild is asked
+            // for again.
             let frame_work = match presentation.failure_retry_at() {
+                _ if presentation.device_abandoned() => false,
                 Some(at) => presentation.clock().now() >= at,
                 None => {
                     presentation.has_pending_work_snapshot()

@@ -181,7 +181,7 @@ fn the_wake_deadline_is_asked_and_kept() {
             let _ = owner.proxy().request_quit();
         }
     });
-    Box::new(flui_native::WindowsPlatform::new().expect("native Windows platform"))
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native Windows platform"))
         .run(Rc::clone(&log) as Rc<dyn AppHandler>)
         .expect("the loop ends on the quit asked once the deadline came");
     assert!(

@@ -35,6 +35,7 @@ use std::rc::Rc;
 use common::{lay_out, tight};
 use flui_material::{InputDecoration, TextField, Theme, ThemeData};
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::view::ViewExt;
 use flui_sdk::widgets::{SizedBox, TextEditingController};
 
 // ============================================================================
@@ -460,4 +461,40 @@ pub fn the_input_purpose_reaches_the_text_store() {
     form.tick();
     let store = form.active_text_store().expect("focused form store");
     assert_eq!(store.status().purpose, TextInputPurpose::Phone);
+}
+
+/// `autofocus(true)` on a `TextField` and on a `TextFormField` reaches the
+/// field's own node: the field holds the focus once mounted, and without it
+/// nothing is focused.
+pub fn an_autofocus_field_takes_the_focus_on_mount() {
+    type Field = fn(Rc<FocusNode>, bool) -> flui_sdk::view::BoxedView;
+    let cases: [(&str, Field); 2] = [
+        ("TextField", |node, autofocus| {
+            TextField::new(TextEditingController::new())
+                .focus_node(node)
+                .autofocus(autofocus)
+                .boxed()
+        }),
+        ("TextFormField", |node, autofocus| {
+            flui_material::TextFormField::new(TextEditingController::new())
+                .focus_node(node)
+                .autofocus(autofocus)
+                .boxed()
+        }),
+    ];
+    for (name, field) in cases {
+        for autofocus in [true, false] {
+            let node = FocusNode::with_debug_label(name);
+            let mut laid = lay_out(
+                Theme::new(ThemeData::light(), field(Rc::clone(&node), autofocus)),
+                tight(300.0, 100.0),
+            );
+            laid.tick();
+            assert_eq!(
+                node.has_primary_focus(),
+                autofocus,
+                "{name} with autofocus({autofocus})"
+            );
+        }
+    }
 }

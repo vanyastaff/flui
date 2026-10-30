@@ -1,6 +1,5 @@
-use flui_platform::text_store::{
-    InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-};
+use flui_interaction::testing::InMemoryTextStore;
+use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError};
 
 use super::*;
 
@@ -359,7 +358,7 @@ pub(crate) fn a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn()
     assert_eq!(
         store.request_lock(
             LockGrant::read_write(move |session| {
-                let at = flui_platform::text_store::Utf16Range::new(end, end)
+                let at = flui_platform::text_store::Utf16Range::try_new(end, end)
                     .expect("a caret is a range");
                 session.replace(at, "d").expect("the end is a position");
             }),

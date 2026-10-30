@@ -184,7 +184,7 @@ impl DocumentState {
         // pointer it is given.
         let _ = unsafe { ClientToScreen(self.window.hwnd(), &raw mut origin) };
         (
-            DevicePixelRatio::new(services.scale()).unwrap_or_default(),
+            DevicePixelRatio::try_new(services.scale()).unwrap_or_default(),
             DevicePoint::new(origin.x, origin.y),
         )
     }

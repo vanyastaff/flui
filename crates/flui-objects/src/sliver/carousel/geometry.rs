@@ -37,9 +37,14 @@ impl CarouselGeometry {
     /// `None` when the viewport is not finite or not greater than zero, the spacing is not
     /// finite or negative, or the layout has nothing to show in that viewport.
     #[must_use]
-    pub fn new(layout: &CarouselLayout, viewport: f64, spacing: f64, count: usize) -> Option<Self> {
+    pub fn try_new(
+        layout: &CarouselLayout,
+        viewport: f64,
+        spacing: f64,
+        count: usize,
+    ) -> Option<Self> {
         Some(Self {
-            strategy: Strategy::new(layout, viewport, spacing, count)?,
+            strategy: Strategy::try_new(layout, viewport, spacing, count)?,
             count,
         })
     }

@@ -117,7 +117,7 @@ fn collect_baseline(
     for target in &runnable {
         let (package, bench, _) = target;
         println!("== {package} / {bench}");
-        let home = util::ScratchDir::new("criterion")?;
+        let home = util::ScratchDir::try_new("criterion")?;
         if !run(target, home.path())? {
             eprintln!("failed: {package} / {bench}");
             return Ok(ExitCode::FAILURE);
@@ -344,7 +344,7 @@ mod tests {
     const VALID_SAMPLES: &str = r#"{"iters":[1.0,2.0],"times":[12.0,24.0]}"#;
 
     fn fresh_measurement_is_published() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("custom-target/criterion");
         let status = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
             assert!(!home.join("scene/fixture/sample.json").exists());
@@ -361,7 +361,7 @@ mod tests {
     }
 
     fn success_without_samples_is_unavailable() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let status = collect_baseline(&args(false), &[target("gpu")], &output, |_, _| Ok(true))
             .expect("unavailable target");
@@ -374,7 +374,7 @@ mod tests {
     }
 
     fn stale_baseline_cannot_stand_in_for_a_run() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         artifacts(&output, "scene", VALID_SAMPLES);
         let mut called = false;
@@ -395,7 +395,7 @@ mod tests {
     }
 
     fn empty_destination_left_by_a_failed_run_is_reused() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         std::fs::create_dir_all(output.join("scene/fixture")).expect("empty destination");
         let status = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
@@ -412,7 +412,7 @@ mod tests {
     }
 
     fn criterion_reserved_names_are_refused() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         for reserved in ["new", "change"] {
             let collect = BenchCollectArgs {
@@ -427,7 +427,7 @@ mod tests {
     }
 
     fn optional_unavailable_target_does_not_erase_measured_work() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let status = collect_baseline(
             &args(false),
@@ -446,7 +446,7 @@ mod tests {
     }
 
     fn explicit_complete_run_rejects_an_unavailable_target() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let status = collect_baseline(
             &args(true),
@@ -468,7 +468,7 @@ mod tests {
     }
 
     fn invalid_samples_do_not_publish(invalid: &str) {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let result = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
             artifacts(home, "valid", VALID_SAMPLES);
@@ -503,7 +503,7 @@ mod tests {
     }
 
     fn incomplete_artifacts_are_rejected() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let result = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
             artifacts(home, "scene", VALID_SAMPLES);
@@ -516,7 +516,7 @@ mod tests {
     }
 
     fn failed_process_cannot_publish_samples() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         let status = collect_baseline(&args(false), &[target("cpu")], &output, |_, home| {
             artifacts(home, "scene", VALID_SAMPLES);
@@ -528,7 +528,7 @@ mod tests {
     }
 
     fn publication_failure_is_not_reported_as_saved() {
-        let scratch = ScratchDir::new("bench-fixture").expect("fixture");
+        let scratch = ScratchDir::try_new("bench-fixture").expect("fixture");
         let output = scratch.path().join("criterion");
         std::fs::create_dir_all(&output).expect("output directory");
         std::fs::write(output.join("scene"), "blocks destination directory")

@@ -462,7 +462,7 @@ impl Drop for ContextGuard {
             // SAFETY: this was the outermost borrow of a retired context:
             // the slot was cleared before retirement (no new borrow can be
             // minted), no other guard exists, and the pointer is the
-            // `Box::into_raw` allocation `WindowsWindow::new` installed —
+            // `Box::into_raw` allocation `WindowsWindow::try_new` installed —
             // reclaiming it here is the unique free.
             drop(unsafe { Box::from_raw(self.context) });
         }
@@ -534,7 +534,7 @@ pub(crate) fn with_window_context_checked<R>(
             // SAFETY: the verdict established that this thread owns the
             // window (owner == current, both live), the window is of our
             // class (so the non-null slot value is the `Box::into_raw`
-            // pointer `WindowsWindow::new` installed, not a foreign
+            // pointer `WindowsWindow::try_new` installed, not a foreign
             // protocol's), and the slot is non-null (so `WM_DESTROY` has
             // not retired it). Between the slot read above and this
             // acquisition no message dispatch happens on this thread, so
@@ -1513,7 +1513,7 @@ pub(crate) fn sample_state(
         // window's empty client area is not drawable and keeps the last.
         metrics: have_client
             .then(|| {
-                flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::WindowMetrics::try_new(
                     Size::new(client.right - client.left, client.bottom - client.top),
                     scale,
                 )

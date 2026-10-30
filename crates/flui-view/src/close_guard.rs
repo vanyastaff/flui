@@ -95,6 +95,9 @@ struct GuardState {
     next_epoch: u64,
     /// The close due to be carried out, until the owner settles it.
     due: Option<CloseReason>,
+    /// The reasons whose recorded close was resolved with
+    /// [`PendingClose::stay_open`] since the owner last settled.
+    declined: Vec<CloseReason>,
     /// How many changes to the recorded closes were committed.
     changes: u64,
     /// How many of them the owner has settled: waiters taken before this
@@ -122,6 +125,20 @@ impl GuardState {
             .position(|record| record.reason == reason && record.epoch == epoch)
     }
 
+    /// Record a close for `reason`, unless one is recorded already.
+    fn record(&mut self, reason: CloseReason) -> Option<LifecycleEvent> {
+        if self.records.iter().any(|record| record.reason == reason) {
+            return None;
+        }
+        let epoch = self.next_epoch;
+        self.next_epoch = epoch
+            .checked_add(1)
+            .expect("BUG: a close guard recorded 2^64 closes");
+        self.records.push(Record { reason, epoch });
+        self.changed();
+        Some(LifecycleEvent::CloseChanged)
+    }
+
     fn changed(&mut self) {
         self.changes = self
             .changes
@@ -132,7 +149,21 @@ impl GuardState {
     /// Make the presentation's close due as `reason`: every record is
     /// consumed, since one close carries them all out. A close already due
     /// and not yet settled stays the one carried out.
+    ///
+    /// A recorded close of the window itself outranks a quit
+    /// ([`CloseReason::Program`]): the owner closes the window for it, which
+    /// is also the presentation's consent to the quit, while a due quit
+    /// alone leaves the window to the quit.
     fn make_due(&mut self, reason: CloseReason) {
+        let reason = if reason == CloseReason::Program {
+            self.records
+                .iter()
+                .map(|record| record.reason)
+                .find(|recorded| *recorded != CloseReason::Program)
+                .unwrap_or(reason)
+        } else {
+            reason
+        };
         self.records.clear();
         self.due.get_or_insert(reason);
         self.changed();
@@ -353,6 +384,9 @@ impl PendingClose {
     pub fn stay_open(self) -> Result<(), StaleClose> {
         self.resolve(|state, index| {
             state.records.remove(index);
+            if !state.declined.contains(&self.reason) {
+                state.declined.push(self.reason);
+            }
             state.changed();
             LifecycleEvent::CloseChanged
         })
@@ -417,6 +451,16 @@ pub struct CloseGuardSource {
     state: Rc<RefCell<GuardState>>,
 }
 
+/// A clone is the same guard: what the host answers the platform with where
+/// a close arrives, beside the one its presentation settles.
+impl Clone for CloseGuardSource {
+    fn clone(&self) -> Self {
+        Self {
+            state: Rc::clone(&self.state),
+        }
+    }
+}
+
 impl fmt::Debug for CloseGuardSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CloseGuardSource")
@@ -441,6 +485,7 @@ impl CloseGuardSource {
                 records: Vec::new(),
                 next_epoch: 0,
                 due: None,
+                declined: Vec::new(),
                 changes: 0,
                 settled: 0,
                 waiters: Vec::new(),
@@ -469,18 +514,28 @@ impl CloseGuardSource {
                 return None;
             }
             refused = true;
-            if state.records.iter().any(|record| record.reason == reason) {
-                return None;
-            }
-            let epoch = state.next_epoch;
-            state.next_epoch = epoch
-                .checked_add(1)
-                .expect("BUG: a close guard recorded 2^64 closes");
-            state.records.push(Record { reason, epoch });
-            state.changed();
-            Some(LifecycleEvent::CloseChanged)
+            state.record(reason)
         });
         refused
+    }
+
+    /// Record a close for `reason` that the application refused by its own
+    /// answer, not by a hold: its close-request handler kept the
+    /// presentation open. The presentation's widgets then find it as a
+    /// [`PendingClose`] and resolve it; releasing a hold carries it out as it
+    /// does a close a hold refused. A repeated request records nothing more.
+    pub fn record(&self, reason: CloseReason) {
+        transition(&self.state, |state| state.record(reason));
+    }
+
+    /// Whether a close for `reason` is recorded and waiting.
+    #[must_use]
+    pub fn is_recorded(&self, reason: CloseReason) -> bool {
+        self.state
+            .borrow()
+            .records
+            .iter()
+            .any(|record| record.reason == reason)
     }
 
     /// Withdraw the close recorded for `reason`, if one is: the platform
@@ -511,6 +566,7 @@ impl CloseGuardSource {
     pub fn settle(&self) -> SettledClose {
         let mut state = self.state.borrow_mut();
         let close = state.due.take();
+        let declined = std::mem::take(&mut state.declined);
         state.settled = state.changes;
         let settled = state.settled;
         let (wake, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut state.waiters)
@@ -519,6 +575,7 @@ impl CloseGuardSource {
         state.waiters = waiting;
         SettledClose {
             close,
+            declined,
             wake: wake.into_iter().map(|(_, waker)| waker).collect(),
         }
     }
@@ -531,6 +588,11 @@ impl CloseGuardSource {
 pub struct SettledClose {
     /// The recorded close due to be carried out now, if one is.
     pub close: Option<CloseReason>,
+    /// The reasons whose recorded close was resolved with
+    /// [`PendingClose::stay_open`] since the last settle: an owner waiting on
+    /// that close, as a deferred quit waits on [`CloseReason::Program`],
+    /// gives it up.
+    pub declined: Vec<CloseReason>,
     /// The wakers of the [`CloseChanged`] futures a change resolved, for the
     /// owner to wake inside its containment boundary.
     pub wake: Vec<Waker>,

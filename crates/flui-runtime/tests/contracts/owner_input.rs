@@ -612,6 +612,10 @@ impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
     ) {
     }
     fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 /// `HostInput::Accessibility` takes the accessibility bridge's path: it waits
@@ -757,8 +761,8 @@ fn accessibility_input_reaches_the_semantics_owner() {
     assert_eq!(dispatch(boom), Ok(InputOutcome::Queued));
     assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
     let woken = wakes.load(Ordering::Relaxed);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(owner_turn));
-    assert!(failed.is_err(), "the handler's panic resumes");
+    // The handler's panic is contained by the owner (ADR-0258 §1).
+    owner_turn();
     assert_eq!(clicks.get(), 0, "the request behind it waits");
     assert!(
         wakes.load(Ordering::Relaxed) > woken,
@@ -920,9 +924,9 @@ type NestedLocks = Rc<RefCell<Vec<String>>>;
 /// drop `finish_checkout` from `return_to_owner` — the queued grant has not
 /// run when the dispatch returns.
 fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
+    use flui_interaction::testing::InMemoryTextStore;
     use flui_platform::text_store::{
-        Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset,
-        Utf16Range,
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
     };
 
     let owner = OwnerHost::new();
@@ -936,7 +940,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
         .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
         .expect("the headless window takes text input");
     let composing = Composition {
-        range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
         hides_caret: false,
     };
     assert_eq!(

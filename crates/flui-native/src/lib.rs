@@ -219,6 +219,8 @@ pub mod os;
 mod owner;
 mod platform;
 mod preferences;
+#[cfg(any(windows, unix))]
+mod process;
 pub mod storage;
 #[cfg(test)]
 mod table_test;
@@ -286,7 +288,7 @@ pub use owner::headless::{
 pub use preferences::headless::HeadlessPreferences;
 pub use text::headless::FakeTextInput;
 pub use window::headless::{
-    HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
+    HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
@@ -302,6 +304,8 @@ pub use task::{Task, TaskLabel};
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
 pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+#[cfg(any(windows, unix))]
+pub use process::end_process;
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use owner::{
@@ -427,12 +431,12 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
 
     #[cfg(windows)]
     {
-        Ok(Box::new(WindowsPlatform::new()?))
+        Ok(Box::new(WindowsPlatform::try_new()?))
     }
 
     #[cfg(all(target_os = "macos", not(windows)))]
     {
-        Ok(Box::new(MacOSPlatform::new()?))
+        Ok(Box::new(MacOSPlatform::try_new()?))
     }
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
@@ -474,7 +478,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(IOSPlatform::new()?))
+        Ok(Box::new(IOSPlatform::try_new()?))
     }
 
     #[cfg(all(
@@ -488,7 +492,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(WebPlatform::new()?))
+        Ok(Box::new(WebPlatform::try_new()?))
     }
 
     #[cfg(not(any(
@@ -528,7 +532,7 @@ fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
 /// The native Wayland host, as [`current_platform`] starts it.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(WaylandPlatform::new()?))
+    Ok(Box::new(WaylandPlatform::try_new()?))
 }
 
 /// A build without the Wayland host never chooses it.
@@ -542,7 +546,7 @@ fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
 /// The native X11 host, as [`current_platform`] starts it.
 #[cfg(x11_host)]
 fn start_x11() -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(X11Platform::new()?))
+    Ok(Box::new(X11Platform::try_new()?))
 }
 
 /// A build without the X11 host never chooses it.

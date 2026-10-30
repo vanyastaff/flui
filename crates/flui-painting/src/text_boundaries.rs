@@ -146,6 +146,61 @@ fn word_segments_at(text: &str, from: usize) -> impl Iterator<Item = WordSegment
     })
 }
 
+/// The start of each word segment of `text` that is not whitespace, in
+/// order: the stops a caret moving word by word lands on, and the word starts
+/// a text field publishes to assistive technology. Punctuation is a segment
+/// of its own, so it is a stop too.
+pub fn word_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
+    word_segments(text)
+        .filter(|segment| !segment.whitespace)
+        .map(|segment| segment.start)
+}
+
+/// The first of [`word_starts`] after `offset`, or the text's length when
+/// none remains. `offset` is clamped to the text and rounded forward to a
+/// `char` boundary.
+///
+/// Streamed from the line that holds `offset`: a word-wise caret step costs
+/// the length of that line, not of the text.
+#[must_use]
+pub fn next_word_start(text: &str, offset: usize) -> usize {
+    let total = text.len();
+    if offset >= total {
+        return total;
+    }
+    let offset = text.ceil_char_boundary(offset);
+    word_segments_from(text, offset)
+        .find(|segment| !segment.whitespace && segment.start > offset)
+        .map_or(total, |segment| segment.start)
+}
+
+/// The last of [`word_starts`] before `offset`, or `0` when there is none.
+/// `offset` is clamped to the text and rounded forward to a `char` boundary.
+///
+/// The segmenter walks forward only, so each pass scans one line forward, up
+/// to the bound, and a pass that finds no word moves to the line before: the
+/// cost is the lines walked back over, and nothing is collected.
+#[must_use]
+pub fn previous_word_start(text: &str, offset: usize) -> usize {
+    let mut bound = text.ceil_char_boundary(offset.min(text.len()));
+    while bound > 0 {
+        let mut line_start = bound;
+        let mut word = None;
+        for segment in
+            word_segments_from(text, bound - 1).take_while(|segment| segment.start < bound)
+        {
+            line_start = line_start.min(segment.start);
+            if !segment.whitespace {
+                word = Some(segment.start);
+            }
+        }
+        if let Some(start) = word {
+            return start;
+        }
+        bound = line_start;
+    }
+    0
+}
 /// Consecutive boundaries as ranges: `[0, 3, 5]` gives `0..3` and `3..5`.
 fn pairs(mut boundaries: impl Iterator<Item = usize>) -> impl Iterator<Item = Range<usize>> {
     let mut start = boundaries.next();

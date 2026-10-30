@@ -32,6 +32,7 @@ use flui_scheduler::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
+use flui_view::__runtime::CloseGuardSource;
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
     BuildInProgress, GlobalKeyScope, WidgetsBinding,
@@ -92,6 +93,9 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's byte storage, if it has one, handed to widgets through
     /// `LifecycleContext::storage`.
     pub(crate) storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// What the presentation closes and persists through: its close guard's
+    /// vetoes and signal, and the host's flush registry.
+    pub(crate) close: crate::runtime_services::CloseServices,
     /// Where the UI runtime reads time: this presentation's gesture arena and
     /// [`FrameClock`] read the same source as the UI runtime's frame clock.
     pub(crate) clock: &'a ClockSource,
@@ -461,6 +465,11 @@ pub struct PresentationState {
     /// registry (composed into the UI runtime's whole-frame composite by
     /// `UiRuntime::enter`, never activated standalone in production).
     widgets: WidgetsBinding,
+    /// The presentation's close guard: its widgets hold the close through
+    /// [`CloseGuard`](flui_view::CloseGuard), the host asks it whether a close
+    /// may proceed, and the owner settles it on its turn. One per
+    /// presentation, so it outlives every remount of the root.
+    close_guard: CloseGuardSource,
     /// Render tree, layout/paint pipeline coordination, and this
     /// presentation's own semantics-enablement fan-out. Moved from the
     /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
@@ -573,6 +582,11 @@ pub struct PresentationState {
     /// key or button press already tried early in this interval. See
     /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP).
     failure_retry: Cell<FailureRetry>,
+    /// Where the rebuild of this presentation's lost GPU device stands, as its
+    /// renderer's owner last said; `None` while the device is healthy. A given-up
+    /// rebuild holds this presentation's frames until a new rebuild is asked
+    /// for (ADR-0267).
+    device_recovery: Cell<Option<crate::frame_failure::DeviceRecovery>>,
     /// Last frame segment entered for this presentation. Written before the
     /// segment's probe and work so the value remains unwind-correct.
     segment_phase: FramePhaseMarker<SegmentPhase>,
@@ -648,6 +662,7 @@ impl PresentationState {
         let republish_flag = semantics.full_republish_handle();
         let wake = Arc::clone(wake);
         let awaken_window = window.redraw_requester();
+        let detached = command_sender.clone();
         bridge.set_activation_listener(Arc::new(move |active| {
             enabled_flag.store(active, Ordering::Relaxed);
             if active {
@@ -656,6 +671,12 @@ impl PresentationState {
                 // incrementally, so it must be answered with a
                 // self-contained full tree, not the next diff.
                 republish_flag.store(true, Ordering::Relaxed);
+            } else if let Err(error) = detached.send_assistive_focus(None) {
+                // Its cursor left with it, whether or not the adapter said so.
+                tracing::warn!(
+                    ?error,
+                    "dropping the end of the assistive cursor: the ui_runtime inbox is full or gone"
+                );
             }
             // The flag alone changes nothing until a frame runs: wake the
             // loop and poke this window so the reconcile actually happens.
@@ -670,6 +691,17 @@ impl PresentationState {
             semantics.set_platform_semantics_enabled(true);
         }
 
+        let cursor = command_sender.clone();
+        bridge.set_assistive_focus_listener(Arc::new(move |node| {
+            // Transported like an action, so the two apply in the order the
+            // platform reported them.
+            if let Err(error) = cursor.send_assistive_focus(node) {
+                tracing::warn!(
+                    ?error,
+                    "dropping an assistive cursor move: the ui_runtime inbox is full or gone"
+                );
+            }
+        }));
         bridge.set_action_listener(Arc::new(move |request| {
             // The adapter's thread only transports the request: it reaches
             // the owner as `HostInput::Accessibility` and is decoded there
@@ -813,6 +845,10 @@ impl PresentationState {
 
         // Frames and retirements wake the runtime so the raster lane applies them.
         let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
+        let close_guard = CloseGuardSource::new(
+            &capabilities.close.vetoes,
+            capabilities.close.notify.clone(),
+        );
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
@@ -821,6 +857,9 @@ impl PresentationState {
             owner.set_async_driver(capabilities.async_driver);
             owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
+            if let Some(registry) = capabilities.close.flush_registry.clone() {
+                owner.set_flush_registry(registry);
+            }
             let presentation = owner.capabilities_mut();
             presentation.text_input = Some(text_input.handle());
             presentation.clipboard = Some(flui_interaction::ClipboardHandle::new(
@@ -828,6 +867,7 @@ impl PresentationState {
             ));
             presentation.textures = Some(textures.clone());
             presentation.storage = capabilities.storage;
+            presentation.close_guard = Some(close_guard.guard());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -917,6 +957,18 @@ impl PresentationState {
         widgets.with_build_owner_mut(|owner| {
             owner.capabilities_mut().haptics = Some(haptics.handle());
         });
+        // Announcements queue on the pipeline, which keeps them across
+        // accessibility being switched off and on, and request this
+        // presentation's frame so an idle window still speaks.
+        let announcer = pipeline
+            .with_mut(flui_rendering::pipeline::PipelineOwner::announcements)
+            .map(|announcements| {
+                let request_frame = Arc::clone(&request_frame);
+                announcements.announcer(Arc::new(move || request_frame()))
+            });
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().announcer = announcer;
+        });
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
             id,
@@ -937,6 +989,15 @@ impl PresentationState {
             semantics_flag.store(enabled, Ordering::Relaxed);
         }));
 
+        // Whether this window's adapter says where the assistive technology's
+        // cursor is: a widget that acts on it asks before relying on it.
+        let assistive_focus = accessibility.as_ref().map_or(
+            flui_semantics::AssistiveFocusSupport::Unreported,
+            |bridge| bridge.assistive_focus_support(),
+        );
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().assistive_focus = assistive_focus;
+        });
         Self::wire_platform_accessibility(
             &window,
             accessibility.as_ref(),
@@ -998,6 +1059,7 @@ impl PresentationState {
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
+            close_guard,
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
@@ -1017,6 +1079,7 @@ impl PresentationState {
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
+            device_recovery: Cell::new(None),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1124,6 +1187,10 @@ impl PresentationState {
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
+            close_guard: CloseGuardSource::new(
+                &[],
+                flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
+            ),
             renderer,
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
@@ -1143,6 +1210,7 @@ impl PresentationState {
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
+            device_recovery: Cell::new(None),
             segment_phase: FramePhaseMarker::new(SegmentPhase::Build),
             #[cfg(test)]
             segment_probe: RefCell::new(None),
@@ -1166,6 +1234,11 @@ impl PresentationState {
 
     /// This presentation's own widget framework state.
     #[must_use]
+    /// The presentation's close guard.
+    pub(crate) fn close_guard(&self) -> &CloseGuardSource {
+        &self.close_guard
+    }
+
     pub(crate) fn widgets(&self) -> &WidgetsBinding {
         &self.widgets
     }
@@ -1345,7 +1418,7 @@ impl PresentationState {
     ) -> Result<(flui_protocol::MotionState, bool), flui_animation::InvalidPlaybackRate> {
         let rate = request
             .rate
-            .map(flui_animation::PlaybackRate::new)
+            .map(flui_animation::PlaybackRate::try_new)
             .transpose()?;
         let mut clock = self.motion_clock.borrow_mut();
         let old_rate = clock.rate();
@@ -1665,6 +1738,7 @@ impl PresentationState {
                 .try_with(|owner| {
                     owner.has_pending_invalidations()
                         || owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                        || owner.has_pending_announcements()
                 })
                 .unwrap_or(true)
     }
@@ -1693,6 +1767,7 @@ impl PresentationState {
                 // scope; `run_frame` drains again before its first phase.
                 owner.drain_pending_dirty_with_recovery(recovery);
                 owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                    || owner.has_pending_announcements()
             })
     }
 
@@ -1757,6 +1832,35 @@ impl PresentationState {
             at: Some(at),
             ..retry
         });
+    }
+
+    /// Stop waiting out a dropped frame's retry, keeping the streak: the
+    /// presentation's frames are held by something else now.
+    pub(crate) fn disarm_failure_retry(&self) {
+        self.failure_retry.set(FailureRetry::default());
+    }
+
+    /// Where the rebuild of this presentation's lost device stands; `None`
+    /// while the device is healthy.
+    pub(crate) fn device_recovery(&self) -> Option<crate::frame_failure::DeviceRecovery> {
+        self.device_recovery.get()
+    }
+
+    /// Record where the rebuild of this presentation's lost device stands
+    /// (`None`: healthy again) and return what it was.
+    pub(crate) fn replace_device_recovery(
+        &self,
+        recovery: Option<crate::frame_failure::DeviceRecovery>,
+    ) -> Option<crate::frame_failure::DeviceRecovery> {
+        self.device_recovery.replace(recovery)
+    }
+
+    /// Whether this presentation's device rebuild was given up, which holds
+    /// its frames until a new rebuild is asked for.
+    pub(crate) fn device_abandoned(&self) -> bool {
+        self.device_recovery
+            .get()
+            .is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned)
     }
 
     /// The instant a dropped frame's wait ends, if one waits.
@@ -2210,7 +2314,6 @@ impl PresentationState {
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
         }
-        let (announce, event) = self.semantics.take_close_callbacks();
 
         let source = self.widgets.lifecycle_source();
         source.begin_close();
@@ -2220,8 +2323,6 @@ impl PresentationState {
         failure.invoke(|| source.finish_close_with_mode(mode));
         let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
-        failure.retire(announce);
-        failure.retire(event);
         failure.retire(agent);
         failure.release(window_control);
         let mode = failure.mode();

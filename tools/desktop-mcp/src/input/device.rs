@@ -45,7 +45,7 @@ fn failed(what: &'static str) -> impl FnOnce(enigo::InputError) -> ToolError {
 
 impl Input {
     /// Opens the OS input connection.
-    pub fn new() -> Result<Self, String> {
+    pub fn try_new() -> Result<Self, String> {
         let settings = Settings {
             release_keys_when_dropped: true,
             ..Settings::default()
@@ -1150,7 +1150,7 @@ mod live_state_tests {
     #[test]
     #[ignore = "temporarily presses Ctrl; requires an idle interactive Windows desktop"]
     fn physical_state_change_inside_guard_blocks_event() {
-        let mut input = Input::new().expect("BUG: native input device opens");
+        let mut input = Input::try_new().expect("BUG: native input device opens");
         nothing_held().expect("BUG: the live test needs an idle keyboard and mouse");
         let event_sent = Cell::new(false);
         let result = super::super::guarded_input_event(

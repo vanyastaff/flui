@@ -804,7 +804,7 @@ impl TabController {
     /// a mounted view and bar.
     #[must_use]
     pub fn step_alternatives(&self) -> GestureAlternatives {
-        GestureAlternatives::new(Alternative::Companion(
+        GestureAlternatives::try_new(Alternative::Companion(
             CompanionSpec::new(
                 GestureCommand::new("Previous tab", TabStep::Previous)
                     .key(SingleActivator::character("[").control()),

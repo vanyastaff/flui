@@ -43,9 +43,12 @@ use parking_lot::Mutex;
 
 use flui_foundation::RenderId;
 use flui_rendering::{
-    context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
-    parent_data::BoxParentData,
-    traits::RenderBox,
+    constraints::SliverGeometry,
+    context::{
+        BoxHitTestContext, BoxLayoutContext, PaintCx, SliverHitTestContext, SliverLayoutContext,
+    },
+    parent_data::{BoxParentData, SliverPhysicalParentData},
+    traits::{RenderBox, RenderSliver},
 };
 
 /// The cell a [`RenderSubtreeAnchor`] publishes its `RenderId` into.
@@ -223,5 +226,105 @@ impl RenderBox for RenderSubtreeAnchor {
 
     fn debug_name(&self) -> &'static str {
         "RenderSubtreeAnchor"
+    }
+}
+
+/// [`RenderSubtreeAnchor`] for a sliver subtree: a layout/paint/hit-test
+/// transparent sliver proxy that publishes its own `RenderId` into a
+/// [`SubtreeAnchor`] while mounted, so a focus node around a sliver can read
+/// the sliver's committed constraints and geometry
+/// (`PipelineOwner::sliver_layout`) and its place on screen.
+#[derive(Debug, Default)]
+pub struct RenderSliverSubtreeAnchor {
+    anchor: SubtreeAnchor,
+    mounted_id: Option<RenderId>,
+}
+
+impl Clone for RenderSliverSubtreeAnchor {
+    fn clone(&self) -> Self {
+        // Mount identity belongs to the inserted object, not its copies.
+        Self::new(self.anchor.clone())
+    }
+}
+
+impl RenderSliverSubtreeAnchor {
+    /// A sliver proxy that publishes into `anchor` while mounted.
+    #[must_use]
+    pub fn new(anchor: SubtreeAnchor) -> Self {
+        Self {
+            anchor,
+            mounted_id: None,
+        }
+    }
+
+    /// Changes the publication slot without replacing the mounted render node.
+    pub fn set_anchor(&mut self, anchor: SubtreeAnchor) {
+        if Arc::ptr_eq(&self.anchor.published, &anchor.published) {
+            return;
+        }
+        if let Some(id) = self.mounted_id {
+            self.anchor.clear(id);
+            anchor.publish(id);
+        }
+        self.anchor = anchor;
+    }
+
+    /// The anchor this object publishes into.
+    #[must_use]
+    pub fn anchor(&self) -> &SubtreeAnchor {
+        &self.anchor
+    }
+}
+
+impl flui_foundation::Diagnosticable for RenderSliverSubtreeAnchor {
+    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+        builder.add(
+            "render_id",
+            match self.anchor.get() {
+                Some(id) => format!("{id:?}"),
+                None => "<unmounted>".to_owned(),
+            },
+        );
+    }
+}
+
+impl RenderSliver for RenderSliverSubtreeAnchor {
+    type Arity = Single;
+    type ParentData = SliverPhysicalParentData;
+
+    /// Pass-through: the child is laid out under this object's constraints
+    /// and its geometry adopted whole.
+    fn perform_layout(
+        &mut self,
+        ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
+        let constraints = *ctx.constraints();
+        if ctx.child_count() > 0 {
+            ctx.layout_child(0, constraints)
+        } else {
+            Ok(SliverGeometry::ZERO)
+        }
+    }
+
+    fn hit_test(
+        &self,
+        ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
+    ) -> bool {
+        ctx.child_count() > 0 && ctx.hit_test_child_at_layout_offset(0)
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.mounted_id = Some(handle.id());
+        self.anchor.publish(handle.id());
+    }
+
+    fn detach(&mut self) {
+        if let Some(id) = self.mounted_id.take() {
+            self.anchor.clear(id);
+        }
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "RenderSliverSubtreeAnchor"
     }
 }

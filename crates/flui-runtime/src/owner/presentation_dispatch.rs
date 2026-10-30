@@ -506,7 +506,10 @@ impl PresentationDispatcher {
                 core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }
             HostInput::Accessibility(request) => {
-                return self.queue_accessibility(&core, request);
+                return self.queue_command(&core, |sender| sender.send_accessibility(request));
+            }
+            HostInput::AssistiveFocus(node) => {
+                return self.queue_command(&core, |sender| sender.send_assistive_focus(node));
             }
         };
         Ok(match delivered {
@@ -532,12 +535,14 @@ impl PresentationDispatcher {
         self.platform_input(&core, surface, input, effects)
     }
 
-    /// Queue an AT request in the addressed runtime's command inbox, stamped
-    /// for this presentation, as its accessibility bridge does.
-    fn queue_accessibility(
+    /// Queue an AT request or cursor move in the addressed runtime's command
+    /// inbox, stamped for this presentation, as its accessibility bridge does.
+    fn queue_command(
         &self,
         core: &OwnerCore,
-        request: accesskit::ActionRequest,
+        send: impl FnOnce(
+            &crate::ui_runtime::UiCommandSender,
+        ) -> Result<(), crate::ui_runtime::CommandSendError>,
     ) -> Result<InputOutcome, DispatchError> {
         let sender = {
             let state = core.state.try_borrow().map_err(|_| DispatchError::Busy)?;
@@ -547,7 +552,7 @@ impl PresentationDispatcher {
                 .command_sender_for(self.address.presentation_id)
         };
         // No owner borrow is held: the send wakes the host.
-        match sender.send_accessibility(request) {
+        match send(&sender) {
             Ok(()) => Ok(InputOutcome::Queued),
             Err(crate::ui_runtime::CommandSendError::ChannelFull { .. }) => {
                 Err(DispatchError::InboxFull)

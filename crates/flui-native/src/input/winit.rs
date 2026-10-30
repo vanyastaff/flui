@@ -347,7 +347,7 @@ impl WinitInput {
         let input = if events.len() == 1 {
             PlatformInput::Pointer(events.remove(0))
         } else {
-            match flui_platform::PointerFrame::new(events) {
+            match flui_platform::PointerFrame::try_new(events) {
                 Ok(frame) => PlatformInput::PointerFrame(frame),
                 Err(empty) => unreachable!("BUG: a taken touch frame is not empty: {empty}"),
             }
@@ -651,6 +651,11 @@ impl WinitInput {
                 delta.unit() == owned::ScrollUnit::Pixels,
             ),
         );
+        // A cancel of a gesture that never began moved nothing: it is no
+        // wheel tick either.
+        if native_phase.is_none() && phase == winit::event::TouchPhase::Cancelled {
+            return Vec::new();
+        }
         let mut scroll = owned::ScrollEvent::new(
             pointer,
             EventTime::from_nanos(event_timestamp_ns()),
@@ -1461,6 +1466,8 @@ mod pointer_translation_tests {
                 TouchPhase::Moved,
                 TouchPhase::Ended,
                 TouchPhase::Cancelled,
+                TouchPhase::Started,
+                TouchPhase::Cancelled,
             ];
             for (index, phase) in phases.into_iter().enumerate() {
                 let invalid_end = phase == TouchPhase::Ended;
@@ -1476,7 +1483,7 @@ mod pointer_translation_tests {
                 } else {
                     delta
                 };
-                let input = state
+                let mut inputs = state
                     .window_input(
                         window,
                         &WindowEvent::MouseWheel {
@@ -1487,8 +1494,13 @@ mod pointer_translation_tests {
                         2.0,
                         KeyboardModifiers::SHIFT,
                     )
-                    .expect("wheel handled")
-                    .remove(0);
+                    .expect("wheel handled");
+                // A cancel after the gesture ended takes nothing back.
+                if index == 4 {
+                    assert!(inputs.is_empty(), "an orphan cancel scrolls: {inputs:?}");
+                    continue;
+                }
+                let input = inputs.remove(0);
                 let PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input else {
                     panic!("owned Scroll")
                 };

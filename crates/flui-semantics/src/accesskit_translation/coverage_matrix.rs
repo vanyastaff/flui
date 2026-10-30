@@ -15,7 +15,7 @@ use super::{PublishView, to_node};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
-use crate::role::{Assertiveness, SemanticsRole};
+use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
 use flui_foundation::geometry::Axis;
@@ -46,6 +46,7 @@ fn read_tree<R>(
             actions,
             rect,
             children: child_ids.clone(),
+            text_selection: None,
         }),
     )];
     for (&child, child_id) in children.iter().zip(&child_ids) {
@@ -57,6 +58,7 @@ fn read_tree<R>(
                 actions: 0,
                 rect,
                 children: SmallVec::new(),
+                text_selection: None,
             }),
         ));
     }
@@ -158,6 +160,7 @@ fn every_published_attribute_reads_through_the_consumer() {
     let SemanticsAttributes {
         states: _,
         live: _,
+        live_atomic: _,
         label: _,
         value: _,
         numeric_range: _,
@@ -190,13 +193,20 @@ fn every_published_attribute_reads_through_the_consumer() {
         sort_key: _,
         hint_overrides: _,
         scroll_index: _,
-        // Unpublished: AccessKit has no adjacent-value or platform-view
-        // property, and FLUI publishes no text runs that text lengths describe.
+        // Unpublished: AccessKit has no adjacent-value, platform-view or
+        // text-length property.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
+        // Published as `TextRun` children, read through the consumer by
+        // `tests/text_runs.rs`.
+        text: _,
+        // Published as the text selection of a document, in the runs of the
+        // texts beneath it; read through the consumer by the widget rows of
+        // ADR-0214.
+        document_selection: _,
     } = SemanticsAttributes::default();
     let States {
         toggled: _,
@@ -207,6 +217,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         hidden: _,
         modal: _,
         required: _,
+        busy: _,
         invalid: _,
         current: _,
         has_popup: _,
@@ -475,7 +486,7 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::None,
             |a| {
                 a.label = Some("Saved".into());
-                a.live = Some(Assertiveness::Assertive);
+                a.live = Some(LiveSetting::Assertive);
             },
             |n| n.live() == accesskit::Live::Assertive,
         ),
@@ -522,6 +533,22 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::Button,
             |a| a.states.hidden = Some(true),
             |n| n.is_hidden() && common_filter(n) == FilterResult::ExcludeSubtree,
+        ),
+        Row::new(
+            "busy",
+            R::Log,
+            |a| a.states.busy = Some(true),
+            |n| n.data().is_busy(),
+        ),
+        Row::new(
+            "live atomic",
+            R::None,
+            |a| {
+                a.label = Some("3 results".into());
+                a.live = Some(LiveSetting::Polite);
+                a.live_atomic = Some(true);
+            },
+            |n| n.live() == accesskit::Live::Polite && n.is_live_atomic(),
         ),
         Row::new(
             "modal",

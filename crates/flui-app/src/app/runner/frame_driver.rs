@@ -154,8 +154,68 @@ impl FrameDriver {
     }
 
     fn wake(&mut self, runtime: &mut UiRuntime, record: &Rc<FrameRecord>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = record;
+        // The turn's settle comes before its frame: a close the guard has
+        // now let through is queued for the window, which closes after the
+        // frame, outside this runtime's lease. A host busy elsewhere leaves
+        // the settle owed for the next turn, so no released close is lost.
+        //
+        // A due quit (`CloseReason::Program`) closes no window: it is this
+        // presentation's consent to the quit the application deferred, and a
+        // declined one cancels that quit. A window close carried out consents
+        // too, since the window is gone either way.
+        let ui_runtime_id = runtime.id();
+        let address = |presentation_id| PresentationAddress {
+            ui_runtime_id,
+            presentation_id,
+        };
+        if let Some(queues) = window_commands() {
+            let settled = runtime.settle_close_guards();
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            let ingress = super::host::APP_RUNTIME.with(|slot| {
+                slot.try_borrow()
+                    .ok()
+                    .and_then(|state| state.main_ingress.clone())
+            });
+            for (presentation_id, reason) in settled.due {
+                if reason != flui_view::CloseReason::Program {
+                    queues.close_due(address(presentation_id));
+                }
+                #[cfg(all(
+                    not(target_os = "android"),
+                    not(target_os = "ios"),
+                    not(target_arch = "wasm32")
+                ))]
+                if let Some(ingress) = &ingress {
+                    ingress.quit_consented(address(presentation_id));
+                }
+            }
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            if let Some(ingress) = &ingress {
+                for (presentation_id, reason) in settled.declined {
+                    if reason == flui_view::CloseReason::Program {
+                        ingress.quit_declined(address(presentation_id));
+                    }
+                }
+            }
+        }
+        // What the registry's finished writes resolved wakes here too, each
+        // waker contained and reported against this frame's presentation.
+        for waker in settle_flush_registry() {
+            if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
+            {
+                runtime.report_contained_panic(record.binding.0, payload.as_ref());
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
+        }
         match self {
             #[cfg(all(
                 test,
@@ -461,6 +521,29 @@ impl Drop for FrameDriverLease {
             self.retirement.frame(driver);
         }
     }
+}
+
+/// Settle the host's flush registry: the wakers its finished writes resolved.
+fn settle_flush_registry() -> Vec<std::task::Waker> {
+    super::host::APP_RUNTIME
+        .with(|slot| {
+            slot.try_borrow().ok().and_then(|state| {
+                state
+                    .flush_host
+                    .as_ref()
+                    .map(flui_view::__runtime::FlushHost::settle)
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// The host's window queues, unless the host is borrowed elsewhere.
+fn window_commands() -> Option<Rc<crate::app::window_control::WindowCommandQueues>> {
+    super::host::APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|state| Rc::clone(&state.window_commands))
+    })
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]

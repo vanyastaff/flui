@@ -462,6 +462,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.render_tree.get(id)?.as_box()?.state().geometry()
     }
 
+    /// The constraints a **sliver** node was last laid out under and the
+    /// geometry it committed, or `None` if `id` is missing, is a box, or has
+    /// not been laid out yet. The sliver twin of [`Self::box_size`]: its
+    /// painted region is `paint_extent` along `constraints.axis()` by
+    /// `cross_axis_extent`, at its own origin.
+    #[must_use]
+    pub fn sliver_layout(
+        &self,
+        id: RenderId,
+    ) -> Option<(
+        crate::constraints::SliverConstraints,
+        crate::constraints::SliverGeometry,
+    )> {
+        let state = self.render_tree.get(id)?.as_sliver()?.state();
+        Some((*state.constraints()?, state.geometry()?))
+    }
+
     /// The matrix mapping points in `descendant`'s local coordinate space into
     /// `ancestor`'s.
     ///
@@ -1034,6 +1051,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 };
                 let entry = match render_object.pan_zoom_target() {
                     Some(target) => entry.pan_zoom_target(target),
+                    None => entry,
+                };
+                let entry = match render_object.smart_zoom_target() {
+                    Some(target) => entry.smart_zoom_target(target),
                     None => entry,
                 };
                 let entry = entry
@@ -1929,6 +1950,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     .unwrap_or_else(no_op_semantics_update_callback);
                 let mut owner = flui_semantics::SemanticsOwner::new(callback);
                 owner.set_device_pixel_ratio(self.device_pixel_ratio);
+                if let Some(announcements) = self.semantics_regions.existing_announcements() {
+                    owner.set_announcements(announcements.clone());
+                }
                 self.semantics_owner = Some(owner);
             }
             self.notifier.read().fire_semantics_owner_created();
@@ -1986,6 +2010,29 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    /// The presentation's announcement queue (ADR-0204 §4), created on first
+    /// request and installed in every semantics owner this pipeline creates,
+    /// so messages and announcer identities survive accessibility being
+    /// turned off and on. `None` once the synthetic identity space is
+    /// exhausted.
+    pub fn announcements(&mut self) -> Option<flui_semantics::Announcements> {
+        let created = self.semantics_regions.existing_announcements().is_none();
+        let announcements = self.semantics_regions.announcements()?;
+        if created && let Some(owner) = self.semantics_owner.as_mut() {
+            owner.set_announcements(announcements.clone());
+        }
+        Some(announcements)
+    }
+
+    /// Whether the semantics owner holds an announcement that the next
+    /// frame's semantics phase publishes, though no node is dirty.
+    #[must_use]
+    pub fn has_pending_announcements(&self) -> bool {
+        self.semantics_owner
+            .as_ref()
+            .is_some_and(flui_semantics::SemanticsOwner::has_undelivered_announcements)
+    }
+
     /// Returns the semantics owner, if semantics is currently enabled.
     ///
     /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
@@ -2024,6 +2071,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &mut self,
     ) -> Vec<flui_semantics::SemanticsDiagnostic> {
         std::mem::take(&mut self.unchecked_semantics_diagnostics)
+    }
+
+    /// Spends the presentation's synthetic identity space, so a test sees
+    /// what exhaustion publishes.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn exhaust_semantics_identities(&mut self) {
+        self.semantics_regions.exhaust();
     }
 
     /// Installs (or removes) the semantics owner directly, bypassing the

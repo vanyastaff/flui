@@ -32,7 +32,7 @@ use flui_platform::pointer::{
     PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRevision,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, TangentialPressure, Twist,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, Locale,
@@ -302,6 +302,9 @@ enum HostInputDto {
     },
     #[serde(rename = "accessibility")]
     Accessibility(ActionRequestDto),
+    /// The screen reader's cursor: the node id it moved to, or none off the tree.
+    #[serde(rename = "assistive_focus")]
+    AssistiveFocus(Option<u64>),
 }
 
 impl HostInputDto {
@@ -309,7 +312,7 @@ impl HostInputDto {
         match self {
             Self::Platform(input) => input.redact(),
             Self::Accessibility(request) => request.redact(),
-            Self::Window(_) | Self::Frame { .. } => false,
+            Self::Window(_) | Self::Frame { .. } | Self::AssistiveFocus(_) => false,
         }
     }
 }
@@ -334,6 +337,7 @@ impl TryFrom<&HostInput> for HostInputDto {
                 }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
+            HostInput::AssistiveFocus(node) => Self::AssistiveFocus(node.map(|node| node.0)),
             _ => return Err(unmirrored("HostInput")),
         })
     }
@@ -364,6 +368,7 @@ impl TryFrom<HostInputDto> for HostInput {
                 }),
             },
             HostInputDto::Accessibility(request) => Self::Accessibility(request.try_into()?),
+            HostInputDto::AssistiveFocus(node) => Self::AssistiveFocus(node.map(accesskit::NodeId)),
         })
     }
 }
@@ -433,7 +438,7 @@ impl TryFrom<PlatformInputDto> for PlatformInput {
         Ok(match input {
             PlatformInputDto::Pointer(event) => Self::Pointer(event.try_into()?),
             PlatformInputDto::PointerFrame(events) => Self::PointerFrame(
-                flui_platform::PointerFrame::new(
+                flui_platform::PointerFrame::try_new(
                     events
                         .into_iter()
                         .map(PointerEvent::try_from)
@@ -877,6 +882,16 @@ enum PanZoomPhaseDto {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct SmartZoomDto {
+    pointer: PointerInfoDto,
+    t: u64,
+    x: f64,
+    y: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modifiers: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct PanZoomDto {
     pointer: PointerInfoDto,
     t: u64,
@@ -944,6 +959,8 @@ enum PointerEventDto {
     ScrollInertiaCancel(SignalDto),
     #[serde(rename = "pan_zoom")]
     PanZoom(PanZoomDto),
+    #[serde(rename = "smart_zoom")]
+    SmartZoom(SmartZoomDto),
     #[serde(rename = "revise")]
     Revise {
         pointer: PointerInfoDto,
@@ -1079,6 +1096,16 @@ impl TryFrom<&PointerEvent> for PointerEventDto {
                     modifiers: modifiers_dto(gesture.modifiers),
                 })
             }
+            PointerEvent::SmartZoom(zoom) => {
+                let point = zoom.position.get();
+                Self::SmartZoom(SmartZoomDto {
+                    pointer: zoom.pointer().try_into()?,
+                    t: zoom.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    modifiers: modifiers_dto(zoom.modifiers),
+                })
+            }
             PointerEvent::Revise(revision) => Self::Revise {
                 pointer: (&revision.pointer).try_into()?,
                 sample: (&revision.sample).into(),
@@ -1193,6 +1220,14 @@ impl TryFrom<PointerEventDto> for PointerEvent {
                     },
                 )
                 .with_modifiers(modifiers(&gesture.modifiers)?),
+            ),
+            PointerEventDto::SmartZoom(zoom) => Self::SmartZoom(
+                SmartZoomEvent::new(
+                    zoom.pointer.try_into()?,
+                    EventTime::from_nanos(zoom.t),
+                    position(zoom.x, zoom.y)?,
+                )
+                .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
             PointerEventDto::Revise { pointer, sample } => Self::Revise(PointerRevision::new(
                 pointer.try_into()?,
@@ -1834,7 +1869,7 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
                 height,
                 scale_factor,
             } => Self::Metrics(
-                WindowMetrics::new(
+                WindowMetrics::try_new(
                     flui_foundation::geometry::DeviceSize::new(width, height),
                     scale_factor,
                 )
@@ -2198,7 +2233,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
 }
 
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
-    DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods
@@ -2263,7 +2298,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
                 .map(|geometry| {
                     let [area_w, area_h] = geometry.double_click_area;
                     let [drag_w, drag_h] = geometry.drag_tolerance;
-                    NativeMouseGeometry::new(
+                    NativeMouseGeometry::try_new(
                         Size::new(area_w, area_h),
                         Size::new(drag_w, drag_h),
                         pixel_ratio(geometry.pixel_ratio)?,
@@ -2274,7 +2309,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
             native_touch_geometry: gestures
                 .native_touch_geometry
                 .map(|geometry| {
-                    NativeTouchGeometry::new(
+                    NativeTouchGeometry::try_new(
                         geometry.touch_slop,
                         geometry.double_tap_slop,
                         geometry.min_fling,
@@ -2479,7 +2514,7 @@ pub(crate) fn profiles(stored: Vec<ProfileDto>) -> Result<GestureProfiles> {
                 position_smoothing: values
                     .position_smoothing
                     .map(|tuning| {
-                        OneEuroTuning::new(tuning.min_cutoff, tuning.beta, tuning.d_cutoff)
+                        OneEuroTuning::try_new(tuning.min_cutoff, tuning.beta, tuning.d_cutoff)
                             .map_err(invalid)
                     })
                     .transpose()?,
@@ -2519,7 +2554,7 @@ mod tests {
             "{refused:?}"
         );
         let mut writer =
-            RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
+            RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
                 .expect("header");
         let error = writer
             .write_row(Err(refused.expect_err("refused")))

@@ -17,6 +17,10 @@ extend-exclude = [
     # descriptions (upstream prose, `Rrecorder` included): fixed upstream, not here.
     "crates/flui-platform/src/keyboard/named_key.rs",
     "crates/flui-platform/src/keyboard/code.rs",
+    # Vendored upstream sources, kept as published apart from their patch
+    # (third_party/README.md).
+    "third_party/accesskit_android/**",
+    "third_party/accesskit_ios/**",
 ]
 
 [default]

@@ -49,6 +49,13 @@
 pub mod app;
 pub mod bindings;
 pub mod embedder;
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub mod testing;
 
 /// What one operating system's windows offer beyond the window contract: the
 /// core host's per-system extensions of [`HostWindow`](native::HostWindow),
@@ -99,6 +106,7 @@ pub use app::{
     PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
 };
 // The app's font registration door (ADR-0092 §2).
+pub use app::EXIT_CODE_HUNG;
 pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
 #[cfg(not(target_os = "ios"))]
@@ -128,7 +136,7 @@ pub use app::{
 // only their presentation's frame; narrower lifecycle failures can be
 // contained while the frame continues. These types report both outcomes.
 pub use app::{
-    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SamplingFailure,
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };

@@ -364,6 +364,11 @@ mod async_completion_isolation;
 // ========================================================================
 mod closing_one_presentation_is_invisible_to_siblings;
 
+// ========================================================================
+// A handle outliving its UI runtime refuses, typed, and holds nothing of it.
+// ========================================================================
+mod stale_handles;
+
 /// This module's own red-exploits: the segment gate's poll-decision
 /// equivalence table, the close-mid-animation probe, and the
 /// zero-produce (demand-driven idle) invariant. Distinct from
@@ -460,6 +465,11 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("presentation_forest_isolation::sibling_presentations_flush_independently", presentation_forest_isolation::sibling_presentations_flush_independently as fn()),
             ("two_ui_runtimes_two_threads_no_shared_state", two_ui_runtimes_two_threads_no_shared_state as fn()),
             ("dropping_ui_runtime_a_cannot_wake_ui_runtime_b", dropping_ui_runtime_a_cannot_wake_ui_runtime_b as fn()),
+            ("stale_handles_refuse_after_the_runtime_drops::rebuild_handle", stale_handles::rebuild_handle as fn()),
+            ("stale_handles_refuse_after_the_runtime_drops::command_sender", stale_handles::command_sender as fn()),
+            ("stale_handles_refuse_after_the_runtime_drops::signal_write", stale_handles::signal_write as fn()),
+            ("stale_handles_refuse_after_the_runtime_drops::writer_source", stale_handles::writer_source as fn()),
+            ("stale_handles_refuse_after_the_runtime_drops::post_frame_handle", stale_handles::post_frame_handle as fn()),
         ],
     );
 }

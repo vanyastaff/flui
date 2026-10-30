@@ -767,7 +767,7 @@ Pinned by `a_vertical_drag_slot_claims_only_vertical_motion`,
 A behavioural widget's constructor takes a `GestureAlternatives` (ADR-0216).
 Its commands live inside the `Alternative` — a `ControlSpec`'s controls or a
 `MenuSpec`'s items — so no command can exist without its single-pointer path,
-and `GestureAlternatives::new` refuses an empty or repeated label, which
+and `GestureAlternatives::try_new` refuses an empty or repeated label, which
 assistive technology could not tell apart. Each command is an `Intent`
 resolved through the `Actions` chain where the alternatives are mounted: the
 gesture through `CommandHandle::perform` (from `handle(ctx)` in the widget's
@@ -832,7 +832,7 @@ behavioural widget in the same frame, which is why the question waits for the
 frame to end; `unfulfilled_companion_alternatives_are_reported`), and
 `assert_gesture_alternatives` resolves the anchor in the published tree and
 activates that node. The type erasure sits in `CompanionSpec` so that
-`Alternative` stays one non-generic enum; `GestureAlternatives::new` refuses a
+`Alternative` stays one non-generic enum; `GestureAlternatives::try_new` refuses a
 command whose intent is not the link's (`ForeignIntent`). Rows:
 `page_view_with_buttons_beside_it`, and flui-material's `TabBar` beside a
 `TabBarView`.
@@ -2459,8 +2459,8 @@ enclosing word, via
 [`TextPainter::get_word_boundary`](#19-word-and-grapheme-movement-use-icu4x-uax-29-not-dictionary-segmentation)
 — ICU4X word segmentation, over the same segments Ctrl/Alt+Arrow word-jump
 walks, and NOT the same function: the keyboard
-path's `next_word_boundary`/`prev_word_boundary`
-(`crates/flui-widgets/src/text/controller.rs`) answer a directional
+path's `next_word_start`/`previous_word_start`
+(`flui_painting::text_boundaries`, the stops a field also publishes) answer a directional
 "next/previous stop" query with their own asymmetric tie-break, while
 `get_word_boundary` answers "which segment is under this exact
 position" with a different one — see decision #19's own tie-break note.
@@ -3564,7 +3564,7 @@ For assistive technology the header is a labelled `Banner` landmark. ARIA admits
 expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
 where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
 part expands it; content it clips entirely is not published. Equal extents give a header that
-takes nothing and offers no scroll action; `HeaderExtents::new` refuses extents that are not
+takes nothing and offers no scroll action; `HeaderExtents::try_new` refuses extents that are not
 finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
 (and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
 what scrolling the body does, never an operation, and what it clips stays reachable by the

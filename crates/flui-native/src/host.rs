@@ -519,6 +519,11 @@ impl PlatformAccessibility for Absent<position::Accessibility> {
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         drop(listener);
     }
+
+    /// No adapter, no cursor to report.
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 /// A bridge that put nothing on its window has nothing to let go of.

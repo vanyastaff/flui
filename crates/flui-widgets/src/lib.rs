@@ -278,26 +278,26 @@ pub use scroll::{
     AnchorSnap, AnchorSnapError, AnchoredDrag, AnchoredDragController, AnchoredDragState,
     AnchorsError, AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics,
     CollapsingHeader, CollapsingHeaderState, CustomScrollView, DraggableAnchors,
-    DraggableAnchorsBuilder, FlingHandoff, FlingStep, GridView, HeaderExtents, HeaderExtentsError,
-    HeaderOrder, InvalidExtents, InvalidSliverCrossAxisExtent, InvalidViewportFraction,
-    InvalidWheelScrollDistance, ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
-    OverScrollHeaderStretchConfiguration, OverscrollBehavior, PageController, PageSnap, PageView,
-    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorPhase,
-    RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent, ScrollCause, ScrollController,
-    ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollPhysics, ScrollStep, Scrollable, Scrollbar,
-    SharedScrollPhysics, SharedSnapPolicy, ShrinkWrappingViewport, SingleChildScrollView,
-    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate,
-    SliverConstrainedCrossAxis, SliverCrossAxisGroup, SliverCrossAxisItem, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTriggerSignal, Viewport,
-    ViewportFraction, WheelScrollDistances,
+    DraggableAnchorsBuilder, FlingHandoff, FlingStep, FocusableSliver, GridView, HeaderExtents,
+    HeaderExtentsError, HeaderOrder, InvalidExtents, InvalidSliverCrossAxisExtent,
+    InvalidViewportFraction, InvalidWheelScrollDistance, ListView, NestedScroll,
+    NestedScrollConnection, NestedScrollState, OverScrollHeaderStretchConfiguration,
+    OverscrollBehavior, PageController, PageSnap, PageView, PageViewState, RefreshController,
+    RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle,
+    RefreshIntent, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics,
+    ScrollPhysics, ScrollStep, Scrollable, Scrollbar, SharedScrollPhysics, SharedSnapPolicy,
+    ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
+    SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
+    SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
+    SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter,
+    SnapPolicy, StretchTriggerSignal, Viewport, ViewportFraction, WheelScrollDistances,
 };
 pub use scroll::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselState, KeylineSnap, MAX_ITEM_EXTENT,
-    MIN_AUTOPLAY_PERIOD,
+    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
+    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use scroll::{
@@ -315,7 +315,8 @@ pub use swipe::{
 };
 pub use text::{
     AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
-    RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
+    RawTextFieldState, RichText, SelectedText, SelectionArea, SelectionContainer, SubmitCallback,
+    Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
@@ -378,10 +379,11 @@ pub use flui_interaction::{
     PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
-    ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
-    Invalid, NumericRange, NumericRangeError, Reveal, ScrollUnit as SemanticsScrollUnit,
-    SemanticsAnchor, SemanticsConfiguration, SemanticsRole, SetSize, SortDirection, TableShape,
-    TextDirection as SemanticsTextDirection, Toggled,
+    ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
+    HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
+    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
+    SetSize, SortDirection, TableShape, TextDirection as SemanticsTextDirection, TextSelection,
+    Toggled, Urgency,
 };
 
 // ============================================================================
@@ -449,13 +451,14 @@ pub mod prelude {
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;
     pub use crate::{
-        AspectRatioDelegate, Assertiveness, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
+        AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
-        FlowPaintingContext, HeadingLevel, MultiChildLayoutContext, MultiChildLayoutDelegate,
-        NumericRange, NumericRangeError, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-        SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth, Toggled,
+        FlowPaintingContext, HeadingLevel, LiveSetting, MultiChildLayoutContext,
+        MultiChildLayoutDelegate, NumericRange, NumericRangeError, SemanticsAnchor,
+        SemanticsConfiguration, SemanticsRole, SemanticsTextDirection, SingleChildLayoutDelegate,
+        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
+        TableCellVerticalAlignment, TableColumnWidth, Toggled, Urgency,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};

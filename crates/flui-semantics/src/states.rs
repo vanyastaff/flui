@@ -170,6 +170,8 @@ pub struct States {
     pub(crate) hidden: Option<bool>,
     pub(crate) modal: Option<bool>,
     pub(crate) required: Option<bool>,
+    /// The node is being updated (`aria-busy`): its live changes wait.
+    pub(crate) busy: Option<bool>,
     pub(crate) invalid: Option<Invalid>,
     pub(crate) current: Option<Current>,
     pub(crate) has_popup: Option<HasPopup>,
@@ -249,6 +251,12 @@ impl States {
         self.invalid
     }
 
+    /// Whether the node is being updated, `None` when not declared.
+    #[must_use]
+    pub const fn busy(&self) -> Option<bool> {
+        self.busy
+    }
+
     /// Which kind of current item the node is, `None` when it is not one.
     #[must_use]
     pub const fn current(&self) -> Option<Current> {
@@ -306,6 +314,7 @@ impl States {
             hidden,
             modal,
             required,
+            busy,
             invalid,
             current,
             has_popup,
@@ -324,6 +333,7 @@ impl States {
             || bool::conflicts(hidden, other.hidden)
             || bool::conflicts(modal, other.modal)
             || bool::conflicts(required, other.required)
+            || bool::conflicts(busy, other.busy)
             || Invalid::conflicts(invalid, other.invalid)
             || Current::conflicts(current, other.current)
             || HasPopup::conflicts(has_popup, other.has_popup)
@@ -346,6 +356,7 @@ impl States {
             hidden,
             modal,
             required,
+            busy,
             invalid,
             current,
             has_popup,
@@ -364,6 +375,7 @@ impl States {
         *hidden = bool::merge(*hidden, other.hidden);
         *modal = bool::merge(*modal, other.modal);
         *required = bool::merge(*required, other.required);
+        *busy = bool::merge(*busy, other.busy);
         *invalid = Invalid::merge(*invalid, other.invalid);
         *current = Current::merge(*current, other.current);
         *has_popup = HasPopup::merge(*has_popup, other.has_popup);

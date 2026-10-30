@@ -43,20 +43,25 @@ mod applicability;
 // contract, and a translation detail is not something a consumer should pin.
 mod accesskit_translation;
 pub mod action;
+mod announce;
+mod assistive_focus;
 mod attributes;
 mod collection;
 pub mod configuration;
-pub mod event;
+mod document_selection;
 pub mod identity;
 pub mod node;
 mod numeric_range;
 pub mod owner;
 pub mod platform;
+pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
+pub use platform::AssistiveFocusSupport;
 pub mod properties;
 pub mod regions;
 pub mod relation;
 pub mod role;
 pub mod states;
+mod text_content;
 pub mod tree;
 
 // ============================================================================
@@ -64,8 +69,8 @@ pub mod tree;
 // ============================================================================
 
 pub use action::{
-    ActionCall, ActionDecodeError, CustomActionId, Reveal, ScrollUnit, SemanticsAction,
-    SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
+    ActionCall, ActionDecodeError, AssistiveFocusHandler, CustomActionId, Reveal, ScrollUnit,
+    SemanticsAction, SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
@@ -98,9 +103,13 @@ pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
 pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
 // ============================================================================
-// RE-EXPORTS - Event Types
+// RE-EXPORTS - Announcements
 // ============================================================================
-pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
+pub use announce::{AnnounceError, Announcements, Announcer};
+pub use text_content::{
+    MAX_RUN_CHARACTERS, TextContent, TextRun, TextRunError, TextRunParts, TextRunPosition,
+    TextRunSelection,
+};
 // ============================================================================
 // RE-EXPORTS - State Types
 // ============================================================================
@@ -128,7 +137,8 @@ pub use node::SemanticsNode;
 // RE-EXPORTS - Owner Types
 // ============================================================================
 pub use owner::{
-    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, report_diagnostic,
+    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, TextRunsWithheld,
+    report_diagnostic,
 };
 pub use owner::{
     SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
@@ -143,9 +153,10 @@ pub use properties::{
 // ============================================================================
 // RE-EXPORTS - Role Types
 // ============================================================================
+pub use document_selection::{DocumentPosition, DocumentSelection};
 pub use relation::{SemanticsAnchor, SemanticsRelation};
 pub use role::{
-    AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
+    AccessibilityFocusBlockType, DebugSemanticsDumpOrder, LiveSetting, SemanticsRole, Urgency,
 };
 // ============================================================================
 // RE-EXPORTS - Attributes and Tree Types
@@ -168,12 +179,12 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Assertiveness,
-        AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
+        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Announcer, AttributedString,
+        DebugSemanticsDumpOrder, HeadingLevel, LiveSetting, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsEvent,
-        SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner, SemanticsRelation,
-        SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection, Toggled,
+        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsId,
+        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
+        SemanticsTree, States, TextDirection, Toggled, Urgency,
     };
 }
 

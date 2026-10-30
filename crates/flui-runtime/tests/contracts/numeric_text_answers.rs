@@ -83,8 +83,8 @@ fn abandoned_numeric_answers_are_released(reject_sampling: bool) {
         .requests()
         .first()
         .expect("a real authored size request");
-    let accepted = TextSize::new(request.size.value() * 1.5).expect("finite first answer");
-    let replacement = TextSize::new(accepted.value() + 1.0).expect("distinct finite answer");
+    let accepted = TextSize::try_new(request.size.value() * 1.5).expect("finite first answer");
+    let replacement = TextSize::try_new(accepted.value() + 1.0).expect("distinct finite answer");
     admission
         .admit([(request, accepted)])
         .expect("admit first actual answer");

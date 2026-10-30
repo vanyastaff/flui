@@ -143,7 +143,7 @@ mod winit {
             &self,
             signal: &Arc<OwnerSignal>,
         ) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-            Ok(Rc::new(PreferenceSource::new(signal)?))
+            Ok(Rc::new(PreferenceSource::try_new(signal)?))
         }
     }
 }
@@ -227,7 +227,7 @@ pub(crate) fn kept(source: Rc<dyn OwnerPreferences>) -> Rc<PreferenceSource> {
 impl PreferenceSource {
     /// A source that wakes the owner behind `signal` when a preference
     /// changes.
-    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+    pub(crate) fn try_new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
         // Direct activation avoids the generated process-wide factory cache,
@@ -486,10 +486,11 @@ fn drag_extent(metric: i32) -> Result<i32, PreferenceQueryError> {
 
 /// Query mouse metrics at the consuming coordinate context, without subscribing.
 fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
-    let ratio =
-        DevicePixelRatio::new(f64::from(dpi) / 96.0).ok_or(PreferenceQueryError::Unsupported(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::Unavailable),
-        ))?;
+    let ratio = DevicePixelRatio::try_new(f64::from(dpi) / 96.0).ok_or(
+        PreferenceQueryError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable,
+        )),
+    )?;
     let metric = |index: SYSTEM_METRICS_INDEX| -> Result<i32, PreferenceQueryError> {
         // SAFETY: these scalar getters take no pointers. Clear the thread's error
         // slot so a legitimate zero metric cannot inherit an older API failure.
@@ -510,7 +511,7 @@ fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError>
         drag_extent(metric(SM_CXDRAG)?)?,
         drag_extent(metric(SM_CYDRAG)?)?,
     );
-    Ok(NativeMouseGeometry::new(double_click, drag, ratio)?)
+    Ok(NativeMouseGeometry::try_new(double_click, drag, ratio)?)
 }
 
 fn sample(

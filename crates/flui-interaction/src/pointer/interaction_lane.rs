@@ -22,7 +22,9 @@ use flui_painting::paint::{Path, Shader};
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
 use crate::containment::RoutePanic;
-use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
+use crate::events::{
+    PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent, SmartZoomEvent,
+};
 use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -153,6 +155,24 @@ pub struct PanZoomTarget {
 impl fmt::Debug for PanZoomTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PanZoomTarget").finish_non_exhaustive()
+    }
+}
+
+/// Opaque data-plane identity for an owner-local smart zoom target.
+///
+/// The counterpart of [`ScrollTarget`] for the platform's smart zoom
+/// ([`SmartZoomEvent`]): hit-test entries carry this identity, the claiming
+/// handler stays in the active owner lane, and the first target on the path,
+/// leaf first, that answers [`EventPropagation::Stop`] takes the event.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SmartZoomTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for SmartZoomTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SmartZoomTarget").finish_non_exhaustive()
     }
 }
 
@@ -398,7 +418,25 @@ impl<'a> PointerDispatch<'a> {
 }
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
-type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
+
+/// A smart zoom in the receiving target's space and the root's space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct SmartZoomDispatch {
+    /// The zoom localized to the receiving target.
+    pub local: SmartZoomEvent,
+    /// The zoom as the presentation delivered it.
+    pub global: SmartZoomEvent,
+}
+
+impl SmartZoomDispatch {
+    /// The zoom as `local` in the target's space and `global` in the root's.
+    #[must_use]
+    pub const fn new(local: SmartZoomEvent, global: SmartZoomEvent) -> Self {
+        Self { local, global }
+    }
+}
+
 /// A native gesture in the receiving target's space and the root's space.
 #[derive(Clone, Copy)]
 pub struct PanZoomDispatch<'a> {
@@ -498,7 +536,6 @@ impl<'a> PanZoomDispatch<'a> {
     }
 }
 
-type PanZoomHandler = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
@@ -613,45 +650,31 @@ impl MouseRegionCell {
     }
 }
 
-struct ScrollCell {
-    current: RefCell<ScrollHandler>,
+/// The current handler of a claiming target (scroll, pan-zoom, smart zoom),
+/// replaceable without changing the target's identity.
+struct ClaimCell<H: ?Sized> {
+    current: RefCell<Rc<H>>,
 }
 
-impl ScrollCell {
-    fn new(handler: ScrollHandler) -> Self {
+impl<H: ?Sized> ClaimCell<H> {
+    fn new(handler: Rc<H>) -> Self {
         Self {
             current: RefCell::new(handler),
         }
     }
 
-    fn snapshot(&self) -> ScrollHandler {
+    fn snapshot(&self) -> Rc<H> {
         Rc::clone(&self.current.borrow())
     }
 
-    fn replace(&self, handler: ScrollHandler) -> ScrollHandler {
+    fn replace(&self, handler: Rc<H>) -> Rc<H> {
         std::mem::replace(&mut *self.current.borrow_mut(), handler)
     }
 }
 
-struct PanZoomCell {
-    current: RefCell<PanZoomHandler>,
-}
-
-impl PanZoomCell {
-    fn new(handler: PanZoomHandler) -> Self {
-        Self {
-            current: RefCell::new(handler),
-        }
-    }
-
-    fn snapshot(&self) -> PanZoomHandler {
-        Rc::clone(&self.current.borrow())
-    }
-
-    fn replace(&self, handler: PanZoomHandler) -> PanZoomHandler {
-        std::mem::replace(&mut *self.current.borrow_mut(), handler)
-    }
-}
+type ScrollCell = ClaimCell<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
+type PanZoomCell = ClaimCell<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static>;
+type SmartZoomCell = ClaimCell<dyn Fn(SmartZoomDispatch) -> EventPropagation + 'static>;
 
 struct PathClipCell {
     current: RefCell<PathClipper>,
@@ -950,6 +973,7 @@ struct LocalLaneInner {
     mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
     scroll_targets: RefCell<HashMap<TargetId, Rc<ScrollCell>>>,
     pan_zoom_targets: RefCell<HashMap<TargetId, Rc<PanZoomCell>>>,
+    smart_zoom_targets: RefCell<HashMap<TargetId, Rc<SmartZoomCell>>>,
     path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
     shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
     payload_targets: RefCell<HashMap<TargetId, Rc<dyn Any>>>,
@@ -1016,6 +1040,7 @@ impl InteractionLane {
             mouse_targets: RefCell::new(HashMap::new()),
             scroll_targets: RefCell::new(HashMap::new()),
             pan_zoom_targets: RefCell::new(HashMap::new()),
+            smart_zoom_targets: RefCell::new(HashMap::new()),
             path_clip_targets: RefCell::new(HashMap::new()),
             shader_mask_targets: RefCell::new(HashMap::new()),
             payload_targets: RefCell::new(HashMap::new()),
@@ -1146,6 +1171,7 @@ impl Drop for InteractionLane {
         let mouse_targets = self.inner.mouse_targets.take();
         let scroll_targets = self.inner.scroll_targets.take();
         let pan_zoom_targets = self.inner.pan_zoom_targets.take();
+        let smart_zoom_targets = self.inner.smart_zoom_targets.take();
         let path_clip_targets = self.inner.path_clip_targets.take();
         let shader_mask_targets = self.inner.shader_mask_targets.take();
         let payload_targets = self.inner.payload_targets.take();
@@ -1177,6 +1203,9 @@ impl Drop for InteractionLane {
             failure.retire(target);
         }
         for target in ordered_lane_values(pan_zoom_targets) {
+            failure.retire(target);
+        }
+        for target in ordered_lane_values(smart_zoom_targets) {
             failure.retire(target);
         }
         for target in ordered_lane_values(path_clip_targets) {
@@ -1345,6 +1374,7 @@ pub struct DispatchCustody {
     mice: Vec<Rc<MouseRegionCell>>,
     scrolls: Vec<Rc<ScrollCell>>,
     pans: Vec<Rc<PanZoomCell>>,
+    smart_zooms: Vec<Rc<SmartZoomCell>>,
     clips: Vec<Rc<PathClipCell>>,
     masks: Vec<Rc<ShaderMaskCell>>,
     payloads: Vec<Rc<dyn Any>>,
@@ -1381,6 +1411,9 @@ impl DispatchCustody {
             failure.retire(cell);
         }
         for cell in std::mem::take(&mut self.pans) {
+            failure.retire(cell);
+        }
+        for cell in std::mem::take(&mut self.smart_zooms) {
             failure.retire(cell);
         }
         for cell in std::mem::take(&mut self.clips) {
@@ -1526,6 +1559,7 @@ impl InteractionDispatchHandle {
             mice: Vec::new(),
             scrolls: Vec::new(),
             pans: Vec::new(),
+            smart_zooms: Vec::new(),
             clips: Vec::new(),
             masks: Vec::new(),
             payloads: Vec::new(),
@@ -1552,6 +1586,7 @@ impl InteractionDispatchHandle {
         custody.mice = take_targets(&lane.mouse_targets, &ids);
         custody.scrolls = take_targets(&lane.scroll_targets, &ids);
         custody.pans = take_targets(&lane.pan_zoom_targets, &ids);
+        custody.smart_zooms = take_targets(&lane.smart_zoom_targets, &ids);
         custody.clips = take_targets(&lane.path_clip_targets, &ids);
         custody.masks = take_targets(&lane.shader_mask_targets, &ids);
         custody.payloads = take_targets(&lane.payload_targets, &ids);
@@ -2108,6 +2143,104 @@ impl InteractionDispatchHandle {
             }
             propagation
         }))
+    }
+
+    /// Register a smart zoom claim handler in the active owner lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active on this
+    /// thread, or when the lane's private identity source is exhausted.
+    pub fn register_smart_zoom(
+        &self,
+        handler: impl Fn(SmartZoomDispatch) -> EventPropagation + 'static,
+    ) -> Result<SmartZoomTarget, InteractionDispatchError> {
+        let handler = self.admit(handler)?;
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        self.stamp(&lane, target_id);
+        lane.smart_zoom_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(SmartZoomCell::new(Rc::new(handler))));
+        Ok(SmartZoomTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a smart zoom target's current handler without changing
+    /// identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn replace_smart_zoom(
+        &self,
+        target: SmartZoomTarget,
+        handler: impl Fn(SmartZoomDispatch) -> EventPropagation + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let handler = self.admit(handler)?;
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        let cell = lane
+            .smart_zoom_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_handler = cell.replace(Rc::new(handler));
+        drop(old_handler);
+        Ok(())
+    }
+
+    /// Remove a smart zoom target from future dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn unregister_smart_zoom(
+        &self,
+        target: SmartZoomTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_target(&lane, target.lane_id, target.target_id)?;
+        let removed = lane
+            .smart_zoom_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        lane.target_owners.borrow_mut().remove(&target.target_id);
+        drop(removed);
+        Ok(())
+    }
+
+    /// Invoke one registered smart zoom target synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn invoke_smart_zoom_target(
+        &self,
+        target: SmartZoomTarget,
+        event: SmartZoomDispatch,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .smart_zoom_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let latch = lane.owner_latch(target.target_id);
+        if latch.is_closed() {
+            return Err(InteractionDispatchError::TargetGone);
+        }
+        let handler = cell.snapshot();
+        Ok(latch.invoke(cell, handler, |handler| handler(event)))
     }
 
     /// Register a path clipper in the active owner lane.

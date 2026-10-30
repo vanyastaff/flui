@@ -84,7 +84,12 @@ pub(crate) mod native_actions {
 
     impl Fixture {
         fn new() -> Self {
-            let controller = Rc::new(RefCell::new(TextEditingController::with_text("abc")));
+            Self::with_field("abc", false)
+        }
+
+        /// A field showing `text`, hiding it behind the mask when `obscure`.
+        fn with_field(text: &str, obscure: bool) -> Self {
+            let controller = Rc::new(RefCell::new(TextEditingController::with_text(text)));
             let node = Rc::new(RefCell::new(FocusNode::with_debug_label("native field")));
             let enabled = Rc::new(Cell::new(true));
             let shown = Rc::new(Cell::new(true));
@@ -106,6 +111,7 @@ pub(crate) mod native_actions {
                     let changes = Rc::clone(&changes);
                     EditableText::new(document.borrow().clone(), Rc::clone(&focus.borrow()))
                         .enabled(active.get())
+                        .obscure_text(obscure)
                         .on_changed(move |cx, text| {
                             changes.borrow_mut().push(text.to_owned());
                             signals.count.update(cx, |n| *n += 1)
@@ -163,7 +169,11 @@ pub(crate) mod native_actions {
         }
 
         fn id(&self) -> NodeId {
-            self.tree().find(Role::TextInput).expect("sole field").id()
+            let tree = self.tree();
+            tree.find(Role::TextInput)
+                .or_else(|_| tree.find(Role::PasswordInput))
+                .expect("sole field")
+                .id()
         }
 
         fn request(&self, action: Action, id: NodeId, data: Option<ActionData>) {
@@ -670,6 +680,155 @@ pub(crate) mod native_actions {
             "new field never edits the old document"
         );
     }
+
+    impl Fixture {
+        /// The published tree as a screen reader's adapter reads it.
+        fn reader(&self) -> accesskit_consumer::Tree {
+            accesskit_consumer::Tree::new(self.tree().raw().clone(), true)
+        }
+
+        fn select(&mut self, selection: accesskit::TextSelection) {
+            self.request(
+                Action::SetTextSelection,
+                self.id(),
+                Some(ActionData::SetTextSelection(selection)),
+            );
+            self.pump();
+        }
+    }
+
+    /// The byte offset of the scalar at `usv` in `text`.
+    fn byte_at(text: &str, usv: usize) -> usize {
+        text.char_indices()
+            .nth(usv)
+            .map_or(text.len(), |(byte, _)| byte)
+    }
+
+    /// A screen reader moving by word stops where Ctrl+→ does: the field
+    /// publishes the word starts its controller steps between.
+    pub(crate) fn a_screen_reader_moves_by_word_where_the_caret_steps() {
+        let text = "don't stop, café 42";
+        let fixture = Fixture::with_field(text, false);
+        let reader = fixture.reader();
+        let field = reader
+            .state()
+            .node_by_tree_local_id(fixture.id(), TreeId::ROOT)
+            .expect("the field is published");
+        assert_eq!(field.document_range().text(), text);
+        let mut read = Vec::new();
+        let mut at = field.document_start();
+        while !at.is_document_end() {
+            at = at.forward_to_word_start();
+            read.push(byte_at(text, at.to_global_usv_index()));
+        }
+        let controller = fixture.controller.borrow().clone();
+        controller.set_caret_byte_offset(0);
+        let mut stepped = Vec::new();
+        while controller.caret_byte_offset() < text.len() {
+            controller.move_caret_word_right();
+            stepped.push(controller.caret_byte_offset());
+        }
+        assert_eq!(read, stepped);
+    }
+
+    /// An empty field still publishes a caret, and text a screen reader puts
+    /// in place of the selection lands at it through the keyboard's edit
+    /// path, `on_changed` included; a selection it sets is the controller's.
+    pub(crate) fn a_screen_reader_types_into_an_empty_field_and_selects_in_it() {
+        let mut fixture = Fixture::with_field("", false);
+        {
+            let reader = fixture.reader();
+            let field = reader
+                .state()
+                .node_by_tree_local_id(fixture.id(), TreeId::ROOT)
+                .expect("the field is published");
+            assert!(field.supports_text_ranges(), "an empty field has a run");
+            let caret = field
+                .text_selection_focus()
+                .expect("an empty field has a caret");
+            assert_eq!(caret.to_global_usv_index(), 0);
+        }
+        fixture.request(
+            Action::ReplaceSelectedText,
+            fixture.id(),
+            Some(ActionData::Value("héllo".into())),
+        );
+        fixture.pump();
+        assert_eq!(fixture.controller.borrow().text(), "héllo");
+        assert_eq!(*fixture.changed.borrow(), ["héllo"]);
+        let selection = {
+            let reader = fixture.reader();
+            let field = reader
+                .state()
+                .node_by_tree_local_id(fixture.id(), TreeId::ROOT)
+                .expect("the field is published");
+            assert_eq!(
+                field
+                    .text_selection_focus()
+                    .expect("a caret")
+                    .to_global_usv_index(),
+                5,
+                "the caret follows the inserted text"
+            );
+            let mut range = field.document_range();
+            let start = field.document_start();
+            range.set_start(start.forward_to_character_end());
+            range.set_end(start.forward_to_character_end().forward_to_character_end());
+            range.to_text_selection()
+        };
+        fixture.select(selection);
+        assert_eq!(
+            fixture.controller.borrow().selection(),
+            1..3,
+            "the é, in bytes"
+        );
+        assert_eq!(fixture.changed.borrow().len(), 1, "a selection is no edit");
+    }
+
+    /// A cluster longer than a run's character may hold and a line longer
+    /// than a run may hold are cut, and the field still reads whole.
+    pub(crate) fn a_long_cluster_and_a_long_line_read_whole() {
+        let text = format!("e{}{}", "\u{301}".repeat(150), "a".repeat(300));
+        let fixture = Fixture::with_field(&text, false);
+        let reader = fixture.reader();
+        let field = reader
+            .state()
+            .node_by_tree_local_id(fixture.id(), TreeId::ROOT)
+            .expect("the field is published");
+        assert_eq!(field.document_range().text(), text);
+        let runs = fixture.tree().find_all(Role::TextRun).len();
+        assert!(runs >= 2, "302 characters take two runs, found {runs}");
+    }
+    /// A field that hides its input publishes the mask alone, and a selection
+    /// made on the mask selects the characters behind it.
+    pub(crate) fn a_password_field_publishes_only_its_mask() {
+        let mut fixture = Fixture::with_field("ñx", true);
+        let selection = {
+            let reader = fixture.reader();
+            let field = reader
+                .state()
+                .node_by_tree_local_id(fixture.id(), TreeId::ROOT)
+                .expect("the field is published");
+            assert_eq!(field.document_range().text(), "\u{2022}\u{2022}");
+            let mut range = field.document_range();
+            range.set_start(field.document_start().forward_to_character_end());
+            range.to_text_selection()
+        };
+        assert!(
+            fixture
+                .tree()
+                .nodes()
+                .filter_map(|node| node.value())
+                .all(|value| !value.contains('ñ') && !value.contains('x')),
+            "no node carries the source"
+        );
+        fixture.select(selection);
+        assert_eq!(
+            fixture.controller.borrow().selection(),
+            2..3,
+            "the x, in source bytes"
+        );
+    }
 }
 
 // ------------------------------------------------------------------
@@ -867,10 +1026,10 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     let exact = |answer| {
         TextSizing::exact([(
             TextSizeRequest {
-                size: TextSize::new(16.0).expect("authored size"),
+                size: TextSize::try_new(16.0).expect("authored size"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(answer).expect("resolved size"),
+            TextSize::try_new(answer).expect("resolved size"),
         )])
         .expect("one exact answer")
     };
@@ -1721,7 +1880,7 @@ pub(crate) mod text_store {
         harness.tick();
         let field = store(&harness);
         *slot.borrow_mut() = Some(Rc::clone(&field));
-        let composing = Utf16Range::new(at(2), at(6)).expect("ordered");
+        let composing = Utf16Range::try_new(at(2), at(6)).expect("ordered");
         edit(&field, move |session| {
             session.insert_at_selection("東京").expect("in range");
             session.insert_at_selection("おおさか").expect("in range");
@@ -1743,6 +1902,56 @@ pub(crate) mod text_store {
             "one owner notification with the committed text, its lock granted after the session"
         );
         assert_eq!(controller.text(), "東京おおさか");
+    }
+
+    /// The owner reads the controller from `on_changed` and from a listener,
+    /// after a key edit and after a platform session: neither runs while
+    /// the controller is borrowed.
+    ///
+    /// Red-check: notify the listeners, or call `on_changed`, while the
+    /// controller's state is still borrowed — the owner's read panics with
+    /// `BorrowError`.
+    pub(crate) fn the_owner_reads_the_controller_from_its_callbacks() {
+        use flui_foundation::Listenable as _;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("reading field");
+        let changed = Rc::new(RefCell::new(Vec::new()));
+        let (reader, sink) = (controller.clone(), Rc::clone(&changed));
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
+                move |_cx, text| {
+                    sink.borrow_mut()
+                        .push((text.to_owned(), reader.text(), reader.selection()));
+                },
+            ),
+        );
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let (listened, log) = (controller.clone(), Rc::clone(&heard));
+        let _listener = controller.add_listener(Rc::new(move || {
+            log.borrow_mut().push(listened.text());
+        }));
+        let _ = focus_node.request_focus();
+        harness.tick();
+
+        let handled = harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('a'))
+            .is_handled();
+        assert!(handled);
+        edit(&store(&harness), |session| {
+            session.insert_at_selection("b").expect("in range");
+        });
+
+        assert_eq!(
+            *changed.borrow(),
+            vec![
+                ("a".to_owned(), "a".to_owned(), 1..1),
+                ("ab".to_owned(), "ab".to_owned(), 2..2),
+            ],
+            "on_changed read the controller after each edit"
+        );
+        assert_eq!(*heard.borrow(), ["a", "ab"], "the listener read it too");
     }
 
     /// A field that gains focus is the store the window's input-method host
@@ -2074,7 +2283,7 @@ pub(crate) mod text_store {
         controller.set_text("ba");
         controller.set_selection(0, 0);
         let refused = read(&field, |session| {
-            session.rect_for_range(Utf16Range::new(at(0), at(1)).expect("ordered"))
+            session.rect_for_range(Utf16Range::try_new(at(0), at(1)).expect("ordered"))
         });
         assert_eq!(
             refused.err(),
@@ -2486,7 +2695,7 @@ pub(crate) mod text_store {
         let units = flui_platform::text_store::utf16::utf16_len(text);
         let full = read(&field, move |session| {
             session
-                .rect_for_range(Utf16Range::new(at(0), units).expect("ordered document range"))
+                .rect_for_range(Utf16Range::try_new(at(0), units).expect("ordered document range"))
                 .expect("laid-out document")
         });
         assert!(full.clipped, "long document exceeds the visible field");

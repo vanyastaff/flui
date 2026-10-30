@@ -1,0 +1,99 @@
+error[E0277]: `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `CupertinoTabController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<usize>>`
+note: required because it appears within the type `CupertinoTabController`
+ --> packages/flui-cupertino/src/tab_scaffold.rs
+  |
+  | pub struct CupertinoTabController {
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<RefCell<Option<BuildPhase>>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<Option<BuildPhase>>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `CupertinoTabController`, the trait `Send` is not implemented for `Rc<RefCell<Option<BuildPhase>>>`
+note: required because it appears within the type `CupertinoTabController`
+ --> packages/flui-cupertino/src/tab_scaffold.rs
+  |
+  | pub struct CupertinoTabController {
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `CupertinoTabController`, the trait `Send` is not implemented for `Rc<notifier_generic::ListenerStorage<()>>`
+note: required because it appears within the type `Notifier<()>`
+ --> crates/flui-foundation/src/notifier_generic.rs
+  |
+  | pub struct Notifier<Arg> {
+  |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+ --> crates/flui-foundation/src/notifier.rs
+  |
+  | pub struct ChangeNotifier {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `CupertinoTabController`
+ --> packages/flui-cupertino/src/tab_scaffold.rs
+  |
+  | pub struct CupertinoTabController {
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `CupertinoTabController`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
+note: required because it appears within the type `Notifier<()>`
+ --> crates/flui-foundation/src/notifier_generic.rs
+  |
+  | pub struct Notifier<Arg> {
+  |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+ --> crates/flui-foundation/src/notifier.rs
+  |
+  | pub struct ChangeNotifier {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `CupertinoTabController`
+ --> packages/flui-cupertino/src/tab_scaffold.rs
+  |
+  | pub struct CupertinoTabController {
+  |            ^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/cupertino/cupertino_tab_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`

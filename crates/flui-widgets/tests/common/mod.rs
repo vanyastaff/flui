@@ -20,7 +20,7 @@ pub mod child_process;
 pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
     struct Dismiss;
     impl flui_widgets::Intent for Dismiss {}
-    flui_widgets::GestureAlternatives::new(flui_widgets::Alternative::ContextMenu(
+    flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Dismiss", Dismiss),
             |_cx, _request| {},
@@ -34,7 +34,7 @@ pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
 /// opens, so the viewer keeps its whole row.
 #[allow(dead_code)]
 pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
-    flui_widgets::GestureAlternatives::new(flui_widgets::Alternative::ContextMenu(
+    flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Zoom in", flui_widgets::ZoomIntent::In),
             |_cx, _request| {},
@@ -52,7 +52,7 @@ pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
 /// pager keeps its whole row.
 #[allow(dead_code)]
 pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
-    flui_widgets::GestureAlternatives::new(flui_widgets::Alternative::ContextMenu(
+    flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
             flui_widgets::GestureCommand::new("Previous page", flui_widgets::PageIntent::Previous),
             |_cx, _request| {},

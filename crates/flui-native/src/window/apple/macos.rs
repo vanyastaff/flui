@@ -161,7 +161,7 @@ pub struct MacOSWindow {
 
     /// What the table's positions made for this window once its content view
     /// was installed: the accessibility bridge, subclassed onto that view;
-    /// the IME capability, the `NSTextInputClient` conformance the view
+    /// the text position, the `NSTextInputClient` conformance the view
     /// carries; the actuator; and the system chrome.
     facets: WindowFacets,
 
@@ -291,7 +291,7 @@ impl MacOSWindow {
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
@@ -1067,8 +1067,8 @@ impl crate::host_window::HostWindow for MacOSWindow {
         self.facets.text.capture_sizing()
     }
 
-    /// None: AppKit's input method is pushed to through the content view
-    /// (`text_input`), and reads no field's store.
+    /// The content view's client: AppKit's input method reads and edits the
+    /// focused field's store through it (ADR-0090).
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
@@ -1136,7 +1136,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        let window = MacOSWindow::new(
+        let window = MacOSWindow::try_new(
             options,
             handler,
             Arc::clone(&owner.windows),
@@ -1173,7 +1173,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
 
     fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
-        // (`MacOSWindow::new`).
+        // (`MacOSWindow::try_new`).
         appkit_window_capabilities(true)
     }
 
@@ -1285,9 +1285,8 @@ impl PlatformWindow for MacOSWindow {
         None
     }
 
-    /// The window's IME capability — the `NSTextInputClient` conformance the
-    /// content view carries (see `text::apple::macos`). It shares the
-    /// window's `closed` flag, so it observes the window's own close.
+    /// None: the window's text position is a store host (`text_store_host`),
+    /// which AppKit's input method pulls from; no capability is pushed to.
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         self.facets
             .text

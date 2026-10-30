@@ -1470,7 +1470,7 @@ pub(crate) fn pointer_frame_settles_a_pinch_once_for_both_contacts() {
                     realm.handle_input_addressed(
                         primary,
                         PlatformInput::PointerFrame(
-                            PointerFrame::new(events.to_vec()).expect("two events"),
+                            PointerFrame::try_new(events.to_vec()).expect("two events"),
                         ),
                     );
                 });

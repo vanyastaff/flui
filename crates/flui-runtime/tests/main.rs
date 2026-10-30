@@ -87,12 +87,19 @@ fn scoped_diagnostics_observes_a_callsite_first_used_without_a_subscriber() {
     );
 }
 
+#[path = "contracts/frame_telemetry.rs"]
+mod frame_telemetry;
+
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 
 #[path = "contracts/error_view.rs"]
 mod error_view;
 
+#[path = "contracts/announce.rs"]
+mod announce;
+#[path = "contracts/device_loss.rs"]
+mod device_loss;
 #[path = "contracts/display_timing.rs"]
 mod display_timing;
 #[path = "contracts/frame_rate_demand.rs"]

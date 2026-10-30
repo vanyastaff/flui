@@ -48,7 +48,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     }));
 
     let log_pipe = log.clone();
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             Instant::now(),
@@ -75,7 +75,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// this a `Drop` guard running during unwind — double-panic into `abort`.
 fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("one frame owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("one frame owner");
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
@@ -118,7 +118,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 /// illegal `PersistentCallbacks -> TransientCallbacks` transition.
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("one frame owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("one frame owner");
     let _ = catch_unwind(AssertUnwindSafe(|| {
         owner
             .drive_frame(Instant::now(), far_deadline(), || {}, || panic!("boom"))
@@ -158,7 +158,7 @@ fn persistent_callbacks_run_before_the_pipeline() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         log_post.push("post_frame");
     }));
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             Instant::now(),
@@ -180,7 +180,8 @@ fn persistent_callbacks_run_before_the_pipeline() {
 fn retiring_owner_cancels_the_active_local_tail() {
     for fail_after_retire in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
+        let owner =
+            std::rc::Rc::new(flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner"));
         let lane = owner.post_frame_handle();
         let head = owner.clone();
         lane.schedule(move |_| {
@@ -235,7 +236,8 @@ fn retirement_orders_healthy_captures_and_retains_tail_after_failure() {
 
     for failures in [[false, false], [true, false], [false, true], [true, true]] {
         let scheduler = UpdateScheduler::new();
-        let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
+        let owner =
+            std::rc::Rc::new(flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner"));
         let lane = owner.post_frame_handle();
         let log = Log::default();
         let head = owner.clone();
@@ -303,7 +305,7 @@ fn retirement_orders_healthy_captures_and_retains_tail_after_failure() {
 
 fn incomplete_presentations_do_not_block_eligible_siblings() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
     let a = owner.presentation_scope();
     let b = owner.presentation_scope();
     let a_handle = a.post_frame_handle();
@@ -388,7 +390,7 @@ fn incomplete_presentations_do_not_block_eligible_siblings() {
 
 fn cancelled_geometry_transfers_completion_debt_to_replacement() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
     let presentation = owner.presentation_scope();
     let log = Log::default();
     presentation.enter_segment().expect("start");
@@ -420,7 +422,7 @@ fn cancelled_geometry_transfers_completion_debt_to_replacement() {
 
 fn eligible_panic_preserves_exact_epochs_and_healthy_recovery() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
     let a = owner.presentation_scope();
     let b = owner.presentation_scope();
     let log = Log::default();
@@ -475,7 +477,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     use flui_scheduler::{DemandKind, FrameClock, PollDecision, SkipReason};
 
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
     let presentation = owner
         .presentation_scope_factory()
         .create()
@@ -535,7 +537,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
 fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
     for failing_wake in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+        let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
         let factory = owner.presentation_scope_factory();
         let presentation = factory.create().expect("live assembly authority");
         let log = Log::default();
@@ -626,7 +628,7 @@ fn successor_completion_demand_survives_wake_failure_and_host_clearing() {
 
 fn reentrant_partial_geometry_blocks_an_already_selected_tail() {
     let scheduler = UpdateScheduler::new();
-    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
     let a = std::rc::Rc::new(owner.presentation_scope());
     let b = owner.presentation_scope();
     let c = owner.presentation_scope();
@@ -713,7 +715,7 @@ fn preserving_scope_close_retains_captures_and_keeps_siblings_deliverable() {
     }
     for capture_failure in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+        let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
         let a = owner.presentation_scope();
         let b = owner.presentation_scope();
         let log = Log::default();
@@ -773,7 +775,7 @@ fn withdrawal_defers_capture_retirement_until_other_authority_is_closed() {
     }
     for failures in [[false, false], [true, false], [false, true], [true, true]] {
         let scheduler = UpdateScheduler::new();
-        let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+        let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
         let a = owner.presentation_scope();
         let b = owner.presentation_scope();
         let log = Log::default();
@@ -864,7 +866,7 @@ fn closing_a_scope_retires_its_active_tail_without_losing_siblings() {
     }
     for failures in [[false, false], [true, false], [false, true], [true, true]] {
         let scheduler = UpdateScheduler::new();
-        let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("owner");
+        let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
         let a = std::rc::Rc::new(owner.presentation_scope());
         let b = owner.presentation_scope();
         let log = Log::default();
@@ -987,7 +989,7 @@ fn scope_retirement_inherits_live_owner_failure_custody() {
     }
     for mode in 0..4 {
         let scheduler = UpdateScheduler::new();
-        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("owner"));
+        let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("owner"));
         let a = owner.presentation_scope();
         let b = owner.presentation_scope();
         let drops = Rc::new(Cell::new(0));

@@ -1,14 +1,18 @@
-//! The Apple hosts' text: AppKit's text input (`macos`), the
-//! `NSTextInputClient` half of the IME contract the window's view implements,
-//! UIKit's keyboard responder and Dynamic Type sizing (`ios`), and the
-//! document that responder edits (`composition`).
+//! The Apple hosts' text: AppKit's text input (`macos`), the window's view
+//! serving the focused field's store to the input method through the
+//! `NSTextInputClient` verbs (`client`), UIKit's keyboard responder and
+//! Dynamic Type sizing (`ios`), and the document that responder edits
+//! (`composition`).
 //!
-//! Both input methods speak UTF-16, as `NSString` counts, and
-//! `flui_platform::ImeEvent` speaks UTF-8 bytes; [`ime_cursor`] is the one
-//! conversion between them.
+//! Both input methods speak UTF-16, as `NSString` counts. UIKit's responder
+//! announces `flui_platform::ImeEvent`s, which speak UTF-8 bytes;
+//! [`ime_cursor`] is the one conversion between them.
 
+#[cfg(any(target_os = "ios", test))]
 use flui_platform::text_store::utf16::{self, Utf16Offset, Utf16Range};
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod client;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod composition;
 #[cfg(target_os = "ios")]
@@ -23,8 +27,9 @@ pub(crate) mod macos;
 /// falls inside a surrogate pair: a range no byte offset can express, and
 /// one the caller must not round to a nearby boundary (a guessed caret is
 /// worse than none: the client hides it).
+#[cfg(any(target_os = "ios", test))]
 pub(crate) fn ime_cursor(text: &str, from: Utf16Offset, to: Utf16Offset) -> Option<(usize, usize)> {
-    let range = Utf16Range::new(from, to)?;
+    let range = Utf16Range::try_new(from, to)?;
     let bytes = utf16::byte_range(text, range).ok()?;
     Some((bytes.start, bytes.end))
 }

@@ -579,6 +579,10 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
     fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
         self.delegate.set_action_listener(listener);
     }
+
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Unreported
+    }
 }
 
 fn run_platform_ownership_child(kind: &str) {
@@ -955,6 +959,9 @@ fn run_scoped_routes_child(fail_cursor: bool) {
 }
 
 pub(crate) fn run_presentation_close_child(kind: &str) {
+    if run_teardown_child(kind) {
+        return;
+    }
     if kind == "ui_runtime-sibling" {
         run_ui_runtime_sibling_child();
         return;
@@ -1038,7 +1045,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     assert!(focused.has_primary_focus());
 
     let input = ui_runtime.text_input_handle();
-    let store: Rc<dyn TextStore> = flui_platform::text_store::InMemoryTextStore::new("editing");
+    let store: Rc<dyn TextStore> = flui_interaction::testing::InMemoryTextStore::new("editing");
     let opaque_drops = Arc::new(AtomicUsize::new(0));
     let bundle = DropCompetition {
         first: CursorCapture {
@@ -1202,7 +1209,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                     },
                 };
                 let store: Rc<dyn TextStore> =
-                    flui_platform::text_store::InMemoryTextStore::new("rejected");
+                    flui_interaction::testing::InMemoryTextStore::new("rejected");
                 let client =
                     flui_interaction::TextInputClient::new(store).on_session_start(move || {
                         let _ = (&bundle.first, &bundle.second);
@@ -1621,6 +1628,11 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "competing-keys",
         "lifecycle-between-rounds",
         "outer-close",
+        "a_failing_dispose_and_future_drop_do_not_abort",
+        "user_drop_panic_inside_an_unwind_is_retained",
+        "a_queued_command_outliving_a_teardown_failure_does_not_abort",
+        "a_close_that_holds_a_failure_never_detaches",
+        "a_handler_capture_sending_on_drop_is_refused",
     ] {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
@@ -1754,4 +1766,286 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
 /// same content differ only in it.
 fn layer_content(scene: &flui_layer::Scene) -> String {
     format!("{:?}", scene.tree().iter().collect::<Vec<_>>())
+}
+
+/// How many [`PanicsOnDropFuture`]s were dropped in this process.
+static FUTURES_DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A load that never completes, whose future panics when dropped, as an
+/// application future whose destructor fails.
+struct PanicsOnDropFuture;
+
+impl std::future::Future for PanicsOnDropFuture {
+    type Output = Result<(), ()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::task::Poll::Pending
+    }
+}
+
+impl Drop for PanicsOnDropFuture {
+    fn drop(&mut self) {
+        FUTURES_DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        panic!("a pending future's destructor failed");
+    }
+}
+
+/// Panics when dropped, as an application capture whose destructor fails.
+struct PanicsOnDrop(&'static str);
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("{}", self.0);
+    }
+}
+
+/// A root whose state panics in `dispose`, over a [`PanicsOnDropFuture`].
+#[derive(Clone, StatefulView)]
+struct FailingTeardownRoot;
+
+struct FailingTeardownState;
+
+impl StatefulView for FailingTeardownRoot {
+    type State = FailingTeardownState;
+
+    fn create_state(&self) -> Self::State {
+        FailingTeardownState
+    }
+}
+
+impl ViewState<FailingTeardownRoot> for FailingTeardownState {
+    fn build(&self, _view: &FailingTeardownRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_view::element::FutureBuilder::keyed(
+            Some(0_u32),
+            Rc::new(|| {
+                Box::pin(PanicsOnDropFuture) as flui_view::element::BoxedResultFuture<(), ()>
+            }),
+            Rc::new(|_, _| flui_widgets::SizedBox::new(10.0, 10.0).boxed()),
+        )
+    }
+
+    fn dispose(&mut self) {
+        panic!("dispose failed");
+    }
+}
+
+/// A runtime whose root is [`FailingTeardownRoot`], its load started.
+fn failing_teardown_runtime() -> UiRuntime {
+    let mut ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&FailingTeardownRoot)
+        .expect("the root mounts");
+    let mut clock = flui_foundation::ManualClock::new();
+    let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
+    let _ = ui_runtime.pump(&mut clock, &mut sink);
+    ui_runtime
+}
+
+/// A `dispose` that panics and a pending future whose `Drop` panics, in one
+/// runtime's drop: each is contained where it runs, the future is dropped
+/// once, and the process does not abort.
+fn a_failing_dispose_and_future_drop_do_not_abort() {
+    let ui_runtime = failing_teardown_runtime();
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime)));
+    assert!(dropped.is_ok(), "each failure was contained where it ran");
+    assert_eq!(
+        FUTURES_DROPPED.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the pending future was dropped once"
+    );
+}
+
+/// R14: the same runtime dropped while an outer panic unwinds retains what
+/// its application values hold, running none of their code: the outer
+/// failure is the one that unwinds, and the process does not abort.
+fn user_drop_panic_inside_an_unwind_is_retained() {
+    let ui_runtime = failing_teardown_runtime();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _held = ui_runtime;
+        panic!("outer failure");
+    }));
+    let payload = unwound.expect_err("the outer failure unwound");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("outer failure")
+    );
+    assert_eq!(
+        FUTURES_DROPPED.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the pending future was retained, not dropped, inside the unwind"
+    );
+}
+
+/// A runtime whose drop raises a failure, a post-frame capture's, while a
+/// queued cross-thread signal write still holds a capture that fails too:
+/// the write's capture is retained by the drop itself, never left to the
+/// drop glue that runs inside the raised failure's unwind, so the process
+/// does not abort and the first failure is the one raised (#1165).
+fn a_queued_command_outliving_a_teardown_failure_does_not_abort() {
+    let ui_runtime = UiRuntime::for_test();
+    let id = ui_runtime.presentation_id();
+    let graph = ui_runtime
+        .presentation_widgets_for_test(id)
+        .with_build_owner(|owner| owner.signal_graph().clone());
+    let signal = graph.signal(0_u32);
+    let held = PanicsOnDrop("queued write capture failed");
+    ui_runtime
+        .command_sender()
+        .send_signal_write(signal.detach(), move |_, _| {
+            let _ = &held;
+        })
+        .expect("the write is queued");
+    let capture = PanicsOnDrop("post-frame capture failed");
+    ui_runtime
+        .owner_frame
+        .post_frame_handle()
+        .schedule(move |_| {
+            let _ = &capture;
+        })
+        .expect("the callback is queued");
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime)));
+    let payload = dropped.expect_err("the runtime's drop raised its first failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("post-frame capture failed")
+    );
+    std::mem::forget(payload);
+}
+
+/// The teardown rows that would abort a process when broken, each run in a
+/// child of its own.
+pub(crate) fn run_teardown_child(kind: &str) -> bool {
+    let row: fn() = match kind {
+        "a_failing_dispose_and_future_drop_do_not_abort" => {
+            a_failing_dispose_and_future_drop_do_not_abort
+        }
+        "user_drop_panic_inside_an_unwind_is_retained" => {
+            user_drop_panic_inside_an_unwind_is_retained
+        }
+        "a_handler_capture_sending_on_drop_is_refused" => {
+            a_handler_capture_sending_on_drop_is_refused
+        }
+        "a_close_that_holds_a_failure_never_detaches" => {
+            a_close_that_holds_a_failure_never_detaches
+        }
+        "a_queued_command_outliving_a_teardown_failure_does_not_abort" => {
+            a_queued_command_outliving_a_teardown_failure_does_not_abort
+        }
+        _ => return false,
+    };
+    row();
+    true
+}
+
+/// Counts the `detached()` calls it receives.
+#[derive(Default)]
+struct DetachCounter(AtomicUsize);
+
+impl flui_foundation::observe::TreeObserver for DetachCounter {
+    fn detached(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// R3, ADR-0261 §1: a presentation closed while it holds a caught failure
+/// (ADR-0123) is retained whole, its owner never dropped: the observer is not
+/// told `detached()` and stays alive, and the failure is the one that
+/// resumes. A `dispose` that panics is not such a close: it is contained
+/// where it runs, the close is healthy, and the stream ends with `detached()`.
+fn a_close_that_holds_a_failure_never_detaches() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let a = ui_runtime.presentation_id();
+    let b = ui_runtime.install_second_presentation_for_test();
+    ui_runtime
+        .attach_root_widget(&SizedBox::square(10.0))
+        .expect("A mounts");
+    ui_runtime
+        .attach_root_widget_to_for_test(b, &SizedBox::square(30.0))
+        .expect("B mounts");
+    let observer = Arc::new(DetachCounter::default());
+    ui_runtime
+        .presentation_widgets_for_test(a)
+        .with_build_owner_mut(|owner| {
+            owner.set_tree_observer(
+                Arc::clone(&observer) as Arc<dyn flui_foundation::observe::TreeObserver>
+            );
+        });
+    let held: Box<dyn std::any::Any + Send> = Box::new("presentation retirement failed");
+    let closed = catch_unwind(AssertUnwindSafe(|| {
+        ui_runtime.close_presentation_after_failure(a, Some(held))
+    }));
+    let payload = closed.expect_err("the close resumes the failure it holds");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("presentation retirement failed")
+    );
+    assert_eq!(
+        observer.0.load(Ordering::SeqCst),
+        0,
+        "the retained owner never ends the stream"
+    );
+    assert!(
+        Arc::strong_count(&observer) > 1,
+        "the retained owner still holds its observer"
+    );
+    assert!(
+        ui_runtime.presentations.get(a).is_none(),
+        "A left the forest"
+    );
+    drop(ui_runtime);
+}
+
+/// Whether [`SendsOnDrop`]'s write was refused.
+static WRITE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A frame-failure handler's capture whose destructor sends a signal write
+/// through a sender it kept, then fails.
+struct SendsOnDrop {
+    sender: UiCommandSender,
+    target: Option<flui_view::SignalSender<u32>>,
+}
+
+impl Drop for SendsOnDrop {
+    fn drop(&mut self) {
+        let target = self.target.take().expect("BUG: one drop");
+        let held = PanicsOnDrop("queued write capture failed");
+        if let Err(refused) = self.sender.send_signal_write(target, move |_, _| {
+            let _ = &held;
+        }) {
+            WRITE_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::mem::forget(refused);
+        }
+        panic!("handler capture failed");
+    }
+}
+
+/// The frame-failure handler's capture sends a write while the runtime
+/// drops and then fails: the inbox is already closed, so the write is
+/// refused rather than left for the drop glue to destroy inside the
+/// handler failure's unwind, and the process does not abort.
+fn a_handler_capture_sending_on_drop_is_refused() {
+    let ui_runtime = UiRuntime::for_test();
+    let id = ui_runtime.presentation_id();
+    let graph = ui_runtime
+        .presentation_widgets_for_test(id)
+        .with_build_owner(|owner| owner.signal_graph().clone());
+    let capture = SendsOnDrop {
+        sender: ui_runtime.command_sender(),
+        target: Some(graph.signal(0_u32).detach()),
+    };
+    ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+        move |_| {
+            let _ = &capture;
+        },
+    )));
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime)));
+    let payload = dropped.expect_err("the runtime's drop raised the capture's failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("handler capture failed")
+    );
+    assert!(WRITE_REFUSED.load(std::sync::atomic::Ordering::SeqCst));
 }

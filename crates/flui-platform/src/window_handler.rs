@@ -25,10 +25,7 @@ pub enum CloseDecision {
 
 /// What a [`WindowHandler`] did with a frame request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
-    clippy::exhaustive_enums,
-    reason = "a frame ran or it did not; a platform counts only the first"
-)]
+#[non_exhaustive]
 pub enum FrameOutcome {
     /// A frame ran: whatever was due when it was asked for had its chance.
     Produced,
@@ -36,6 +33,12 @@ pub enum FrameOutcome {
     /// nothing, and work due at the same instant is not asked for again
     /// because of it.
     Declined,
+    /// The frame ran and failed, and the handler contained the failure
+    /// instead of unwinding into the platform (ADR-0258 §4). The platform
+    /// counts it as a frame that ran: it had its chance at what was due, and
+    /// when the next one comes is the handler's to ask, with the backoff a
+    /// frame that keeps failing gets.
+    Failed,
 }
 
 /// Which way the surface behind a window changes, as

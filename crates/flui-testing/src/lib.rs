@@ -116,6 +116,7 @@
 pub mod a11y;
 pub mod backend_conformance;
 pub mod bootstrap;
+pub mod drop_ledger;
 pub mod gesture_alternatives;
 pub mod host;
 pub mod log_capture;
@@ -136,13 +137,14 @@ pub use a11y::{
 };
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{
     AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
 };
 pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
-    HeadlessWindowId, NotSettled, StartedOsDrag,
+    HeadlessWindowId, NotSettled, SESSION_END_BUDGET, StartedOsDrag,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
@@ -353,7 +355,7 @@ impl HeadlessBinding {
         let (vsync_driver_alive, request_frame) = Self::registry_driver(&scheduler);
         vsync.set_frame_requester(Some(request_frame));
         let owner_frame =
-            OwnerFrame::new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
+            OwnerFrame::try_new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             lifecycle: flui_view::__runtime::LifecycleSource::new(),
@@ -1601,8 +1603,12 @@ impl Default for HeadlessBinding {
 /// owner or disables semantics hides nothing from it.
 pub(crate) fn assert_semantics_clean(pipeline: &flui_rendering::pipeline::PipelineCell) {
     use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::semantics::SemanticsDiagnostic;
 
-    let findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
+    let mut findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
+    // Withheld text runs report an exhausted identity space, not an author
+    // error; a test that exhausts it reads the report queue.
+    findings.retain(|finding| !matches!(finding, SemanticsDiagnostic::TextRunsWithheld(_)));
     assert!(
         findings.is_empty(),
         "the frame's semantics publication found author errors: {findings:?}"

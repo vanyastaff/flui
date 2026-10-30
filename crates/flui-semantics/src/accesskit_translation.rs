@@ -23,8 +23,7 @@
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
 use crate::action::{
-    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
-    UnroutedAction,
+    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, UnroutedAction,
 };
 use crate::applicability::prohibits_name;
 use crate::attributes::SemanticsAttributes;
@@ -33,7 +32,7 @@ use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::properties::AttributedString;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
-use crate::role::{Assertiveness, SemanticsRole};
+use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use flui_foundation::geometry::Axis;
 use rustc_hash::FxHashMap;
@@ -50,6 +49,10 @@ pub(crate) struct PublishView<'a> {
     pub(crate) actions: u64,
     pub(crate) rect: flui_foundation::geometry::Rect<f64>,
     pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
+    /// The node's document selection resolved to runs published beneath it
+    /// (ADR-0214 §3), or `None` when it declares none or an end names no
+    /// current text there.
+    pub(crate) text_selection: Option<accesskit::TextSelection>,
 }
 
 /// Whether `bits` carries `action`.
@@ -197,22 +200,30 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
     })
 }
 
-/// How a node's changes are announced: its declared politeness, else what its
+/// How a node's changes are announced: its declared setting, else what its
 /// role implies (ARIA 1.2: `assertive` for an alert, `polite` for a status or
 /// a log, `off` for a timer or marquee), else not at all.
-fn live_politeness(live: Option<Assertiveness>, role: SemanticsRole) -> Option<accesskit::Live> {
+fn live_politeness(live: Option<LiveSetting>, role: SemanticsRole) -> Option<accesskit::Live> {
     match (live, role) {
-        (Some(Assertiveness::Assertive), _) | (None, SemanticsRole::Alert) => {
+        (Some(LiveSetting::Assertive), _) | (None, SemanticsRole::Alert) => {
             Some(accesskit::Live::Assertive)
         }
-        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
+        (Some(LiveSetting::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
             Some(accesskit::Live::Polite)
         }
-        // ARIA's implicit `off`, published: an absent setting would inherit an
-        // enclosing region's and announce every tick.
-        (None, SemanticsRole::Timer | SemanticsRole::Marquee) => Some(accesskit::Live::Off),
+        // `off`, published: an absent setting would inherit an enclosing
+        // region's and announce every tick.
+        (Some(LiveSetting::Off), _) | (None, SemanticsRole::Timer | SemanticsRole::Marquee) => {
+            Some(accesskit::Live::Off)
+        }
         (None, _) => None,
     }
+}
+
+/// Whether a change announces the whole region: as declared, else as the
+/// role implies (ARIA 1.2: `alert` and `status` are atomic).
+fn live_atomic(atomic: Option<bool>, role: SemanticsRole) -> bool {
+    atomic.unwrap_or(matches!(role, SemanticsRole::Alert | SemanticsRole::Status))
 }
 
 /// Translate one node's states onto the AccessKit node.
@@ -230,6 +241,7 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
         hidden,
         modal,
         required,
+        busy,
         invalid,
         current,
         has_popup,
@@ -267,6 +279,13 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
     }
     if let Some(live) = live_politeness(attrs.live, attrs.role) {
         node.set_live(live);
+        // Atomicity matters only to a region that announces.
+        if live != accesskit::Live::Off && live_atomic(attrs.live_atomic, attrs.role) {
+            node.set_live_atomic();
+        }
+    }
+    if busy == Some(true) {
+        node.set_busy();
     }
     if modal == Some(true) {
         node.set_modal();
@@ -496,19 +515,35 @@ fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
 ///
 /// The payload must fit the action: a text for `SetValue` and
 /// `ReplaceSelectedText`, a number for a numeric `SetValue`, a point for
-/// `SetScrollOffset`, a selection within the target node for
-/// `SetTextSelection` (FLUI publishes no text runs yet, so a selection whose
-/// ends lie on another node has no meaning here), an id for `CustomAction`.
-/// A directional scroll carries its `ScrollUnit` (`Page` when the request has none);
-/// a reveal's `ScrollHint` is a preference and is not passed on. Any other payload on an action
-/// that takes none is refused. Validity against the current node (a number
-/// inside the range) is the owner's check at dispatch.
+/// `SetScrollOffset`, an id for `CustomAction`. A directional scroll carries
+/// its `ScrollUnit` (`Page` when the request has none); a reveal's
+/// `ScrollHint` is a preference and is not passed on. Any other payload on an
+/// action that takes none is refused. Validity against the current node (a
+/// number inside the range) is the owner's check at dispatch.
+///
+/// A `SetTextSelection` names positions in the field's text runs, which only
+/// the owner that published them can read: decode it with
+/// [`SemanticsOwner::semantics_action_request_for`](crate::SemanticsOwner::semantics_action_request_for).
+/// Here it is refused with [`ActionDecodeError::InvalidTextPosition`].
 ///
 /// # Errors
 ///
 /// [`ActionDecodeError`] names the target, tree, action or payload that did not fit.
 pub fn semantics_action_request_for(
     request: &accesskit::ActionRequest,
+) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
+    decode_request(request, |_, _| None)
+}
+
+/// [`semantics_action_request_for`], with `text_selection` reading a
+/// selection's run positions into the call its target receives: bytes of
+/// a field's value, or a document's selection across its texts.
+pub(crate) fn decode_request(
+    request: &accesskit::ActionRequest,
+    text_selection: impl FnOnce(
+        crate::AccessibilityNodeId,
+        &accesskit::TextSelection,
+    ) -> Option<ActionCall>,
 ) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
     use accesskit::ActionData;
 
@@ -537,15 +572,8 @@ pub fn semantics_action_request_for(
             ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
         }
         (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
-            if selection.anchor.node != request.target_node
-                || selection.focus.node != request.target_node
-            {
-                return Err(mismatched);
-            }
-            ActionCall::SetTextSelection(TextSelection {
-                anchor: selection.anchor.character_index,
-                focus: selection.focus.character_index,
-            })
+            text_selection(node_id, selection)
+                .ok_or(ActionDecodeError::InvalidTextPosition { node_id })?
         }
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
             ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
@@ -600,6 +628,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             actions: data.actions,
             rect: data.rect,
             children: data.children.clone(),
+            text_selection: data.text_selection,
         };
         &filtered
     } else {
@@ -613,6 +642,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         role: _,
         states: _,
         live: _,
+        live_atomic: _,
         label: _,
         value: _,
         numeric_range: _,
@@ -643,13 +673,17 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         scroll_index: _,
         // Published with the `CustomAction` bit below.
         custom_actions,
-        // Unpublished: AccessKit has no adjacent-value or platform-view
-        // property, and FLUI publishes no text runs that text lengths describe.
+        // Unpublished: AccessKit has no adjacent-value, platform-view or
+        // text-length property.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
         max_value_length: _,
         current_value_length: _,
+        // Published as the `TextRun` children `text_run_nodes` builds.
+        text: _,
+        // Resolved against the runs beneath the node by `publish_view`.
+        document_selection: _,
     } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
@@ -814,9 +848,107 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             .collect::<Vec<_>>(),
     );
 
+    if let Some((content, identities)) = published_text(data.attrs) {
+        let mut children = node.children().to_vec();
+        children.extend(identities.iter().map(|id| NodeId(id.as_u64())));
+        node.set_children(children);
+        if let Some(selection) = content.selection() {
+            let position = |at: crate::TextRunPosition| accesskit::TextPosition {
+                node: NodeId(identities[at.run].as_u64()),
+                character_index: at.character,
+            };
+            node.set_text_selection(accesskit::TextSelection {
+                anchor: position(selection.anchor),
+                focus: position(selection.focus),
+            });
+        }
+    }
+    // A document's selection lies in the runs of the texts beneath it; its
+    // own runs, if it had any, would already have set one.
+    if node.text_selection().is_none()
+        && let Some(selection) = data.text_selection
+    {
+        node.set_text_selection(selection);
+    }
+
     node
 }
 
+/// The text runs a node publishes, with their identities: a text field's,
+/// and a selectable text's (ADR-0214), each only on a node whose role
+/// `accesskit_consumer` resolves text ranges on, and only once the pipeline
+/// has given the runs identities.
+pub(crate) fn published_text(
+    attrs: &SemanticsAttributes,
+) -> Option<(&crate::TextContent, &[AccessibilityNodeId])> {
+    let content = attrs.text.as_deref()?;
+    if !supports_text_ranges(attrs) {
+        return None;
+    }
+    Some((content, content.run_identities()?))
+}
+
+/// Whether the node publishes as a role `accesskit_consumer` reads text
+/// ranges on (`Node::supports_text_ranges`): a text input, a document, or
+/// static text, which a node with no role and a label publishes as
+/// ([`resolve_role`]).
+fn supports_text_ranges(attrs: &SemanticsAttributes) -> bool {
+    let role = attrs.effective_role();
+    role.is_text_input()
+        || role == SemanticsRole::Document
+        || (role == SemanticsRole::None && attrs.label.as_ref().is_some_and(|l| !l.is_empty()))
+}
+
+/// Whether a text declares runs it cannot publish for want of
+/// identities: the runs and the selection are withheld together.
+pub(crate) fn withholds_text(attrs: &SemanticsAttributes) -> bool {
+    attrs
+        .text
+        .as_deref()
+        .is_some_and(|content| content.run_identities().is_none())
+        && supports_text_ranges(attrs)
+}
+
+/// The `TextRun` nodes of a field, in order. Runs of one visual line link to
+/// each other, so a line boundary is read only where the line ends.
+pub(crate) fn text_run_nodes(attrs: &SemanticsAttributes) -> Vec<(NodeId, Node)> {
+    let Some((content, identities)) = published_text(attrs) else {
+        return Vec::new();
+    };
+    let runs = content.runs();
+    runs.iter()
+        .enumerate()
+        .map(|(index, run)| {
+            let mut node = Node::new(Role::TextRun);
+            node.set_value(run.text());
+            node.set_character_lengths(run.character_lengths());
+            node.set_character_positions(run.character_positions());
+            node.set_character_widths(run.character_widths());
+            node.set_word_starts(run.word_starts());
+            node.set_text_direction(match run.direction() {
+                crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
+                crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+            });
+            let rect = run.rect();
+            node.set_bounds(Rect {
+                x0: rect.left(),
+                y0: rect.top(),
+                x1: rect.right(),
+                y1: rect.bottom(),
+            });
+            if index > 0 && runs[index - 1].line() == run.line() {
+                node.set_previous_on_line(NodeId(identities[index - 1].as_u64()));
+            }
+            if runs
+                .get(index + 1)
+                .is_some_and(|next| next.line() == run.line())
+            {
+                node.set_next_on_line(NodeId(identities[index + 1].as_u64()));
+            }
+            (NodeId(identities[index].as_u64()), node)
+        })
+        .collect()
+}
 /// A node as the adapter is handed it: [`to_node`], except that the root of a
 /// window's tree is a [`Role::Window`] when nothing gave it a role — no
 /// explicit role, and no flag or label that resolves one.
@@ -1212,11 +1344,11 @@ pub(crate) fn tree_to_scaled_update(
             // hand — no second arena lookup per node on the publish path.
             let data = tree.publish_view(node)?;
             let node_id = NodeId(data.id.as_u64());
-            Some((
-                node_id,
-                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),
-            ))
+            let published =
+                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors);
+            Some(std::iter::once((node_id, published)).chain(text_run_nodes(data.attrs)))
         })
+        .flatten()
         .collect();
 
     let focus = focus
@@ -1240,6 +1372,7 @@ pub(crate) mod coverage_matrix;
 mod tests {
 
     use super::*;
+    use crate::action::TextSelection;
     use crate::identity::AccessibilityNodeId;
     use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
@@ -1258,6 +1391,7 @@ mod tests {
             actions,
             rect: flui_foundation::geometry::Rect::ZERO,
             children: SmallVec::new(),
+            text_selection: None,
         })
     }
 
@@ -1328,7 +1462,15 @@ mod tests {
                 data,
             };
             assert_eq!(
-                semantics_action_request_for(&request).map(|request| request.action()),
+                // A selection's run positions are read by the owner; any reading
+                // routes the action.
+                decode_request(&request, |_, _| {
+                    Some(ActionCall::SetTextSelection(TextSelection {
+                        anchor: 0,
+                        focus: 0,
+                    }))
+                })
+                .map(|request| request.action()),
                 Ok(action),
                 "{action} publishes {published:?}, which does not route back to it"
             );
@@ -1452,12 +1594,12 @@ mod tests {
                 Ak::SetTextSelection,
                 Some(Data::SetTextSelection(accesskit::TextSelection {
                     anchor: position(here, 2),
-                    focus: position(here, 5),
+                    focus: position(elsewhere, 5),
                 })),
-                Ok(ActionCall::SetTextSelection(crate::TextSelection {
-                    anchor: 2,
-                    focus: 5,
-                })),
+                // Run positions need the owner that published the runs.
+                Err(ActionDecodeError::InvalidTextPosition {
+                    node_id: AccessibilityNodeId::from(render_id(1)),
+                }),
             ),
             (
                 Ak::CustomAction,
@@ -1490,16 +1632,6 @@ mod tests {
                 Some(Data::Value("x".into())),
                 Err(ActionDecodeError::MismatchedPayload {
                     action: SemanticsAction::Click,
-                }),
-            ),
-            (
-                Ak::SetTextSelection,
-                Some(Data::SetTextSelection(accesskit::TextSelection {
-                    anchor: position(here, 0),
-                    focus: position(elsewhere, 1),
-                })),
-                Err(ActionDecodeError::MismatchedPayload {
-                    action: SemanticsAction::SetTextSelection,
                 }),
             ),
             (
@@ -1684,29 +1816,90 @@ mod tests {
     }
 
     /// A live region announces at the politeness it was given; without one,
-    /// an alert is assertive and a status polite, as their ARIA roles imply.
+    /// an alert is assertive and a status polite, as their ARIA roles imply,
+    /// and both are atomic; an `Off` region announces nothing, so it is not.
     #[test]
     fn live_regions_announce_at_their_politeness() {
-        use Assertiveness::{Assertive, Polite};
+        use LiveSetting::{Assertive, Off, Polite};
         use accesskit::Live;
-        let table: &[(Option<Assertiveness>, SemanticsRole, Option<Live>)] = &[
-            (None, SemanticsRole::None, None),
-            (Some(Polite), SemanticsRole::None, Some(Live::Polite)),
-            (Some(Assertive), SemanticsRole::None, Some(Live::Assertive)),
-            (None, SemanticsRole::Alert, Some(Live::Assertive)),
-            (None, SemanticsRole::Status, Some(Live::Polite)),
-            (Some(Polite), SemanticsRole::Alert, Some(Live::Polite)),
-            (None, SemanticsRole::Log, Some(Live::Polite)),
-            (None, SemanticsRole::Timer, Some(Live::Off)),
-            (None, SemanticsRole::Marquee, Some(Live::Off)),
+        // (setting, atomic, role) → (published live, published atomic)
+        type Row = (
+            Option<LiveSetting>,
+            Option<bool>,
+            SemanticsRole,
+            Option<Live>,
+            bool,
+        );
+        let table: &[Row] = &[
+            (None, None, SemanticsRole::None, None, false),
+            (
+                Some(Polite),
+                None,
+                SemanticsRole::None,
+                Some(Live::Polite),
+                false,
+            ),
+            (
+                Some(Assertive),
+                None,
+                SemanticsRole::None,
+                Some(Live::Assertive),
+                false,
+            ),
+            (Some(Off), None, SemanticsRole::None, Some(Live::Off), false),
+            (
+                None,
+                None,
+                SemanticsRole::Alert,
+                Some(Live::Assertive),
+                true,
+            ),
+            (None, None, SemanticsRole::Status, Some(Live::Polite), true),
+            (
+                Some(Polite),
+                None,
+                SemanticsRole::Alert,
+                Some(Live::Polite),
+                true,
+            ),
+            (
+                Some(Off),
+                None,
+                SemanticsRole::Status,
+                Some(Live::Off),
+                false,
+            ),
+            (
+                None,
+                Some(false),
+                SemanticsRole::Alert,
+                Some(Live::Assertive),
+                false,
+            ),
+            (
+                Some(Polite),
+                Some(true),
+                SemanticsRole::None,
+                Some(Live::Polite),
+                true,
+            ),
+            (None, None, SemanticsRole::Log, Some(Live::Polite), false),
+            (None, None, SemanticsRole::Timer, Some(Live::Off), false),
+            (None, None, SemanticsRole::Marquee, Some(Live::Off), false),
         ];
-        for &(live, role, expected) in table {
+        for &(live, live_atomic, role, expected, atomic) in table {
             let node = translate(&SemanticsAttributes {
                 live,
+                live_atomic,
                 role,
                 ..Default::default()
             });
-            assert_eq!(node.live(), expected, "{live:?} {role}");
+            assert_eq!(node.live(), expected, "{live:?} {live_atomic:?} {role}");
+            assert_eq!(
+                node.is_live_atomic(),
+                atomic,
+                "{live:?} {live_atomic:?} {role}"
+            );
         }
     }
 

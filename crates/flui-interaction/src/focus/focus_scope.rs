@@ -1253,11 +1253,9 @@ impl FocusNode {
     /// `entry` says ([`EntryTarget`]). A lazy list is the unit; its built
     /// rows are its descendants.
     ///
-    /// No widget registers an entry yet: its planned caller is a focusable
-    /// `ListView` (one Tab stop, roving focus over its rows), specified in
-    /// `docs/plans/specs/focus-keyboard/design.md` and not built. Until then
-    /// a list's rows are ordinary Tab candidates, and an application that
-    /// wants one stop registers the entry on its own node.
+    /// `ListView::focusable` registers one on its list node (`flui-widgets`,
+    /// `scroll/list_focus.rs`); an application that wants one stop for a
+    /// container of its own registers the entry on its own node.
     ///
     /// Dropping the returned registration removes `entry` unless a later
     /// registration replaced it.

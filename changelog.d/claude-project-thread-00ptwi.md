@@ -11,6 +11,14 @@
   ([ADR-0264](/docs/adr/ADR-0264-platform-test-doubles-live-with-their-contract.md)): enable
   `flui-platform/testing` in the dev-dependencies of a test that records haptics. A headless
   window's actuator is no longer a `FakeHaptics`: it plays every request and keeps nothing.
+- **`flui-platform`**, **`flui-interaction`**: `LockArbiter`, `CompositionLedger`,
+  `EditGeneration` and `committed_text` moved from `flui_platform::text_store` to
+  `flui_interaction::text_input`, re-exported for text-widget authors as
+  `flui_sdk::interaction::text_input`; the reference store `InMemoryTextStore` moved to
+  `flui_interaction::testing` (feature `testing`) and is re-exported by
+  `flui_testing::text_store_kit` (ADR-0151 §6,
+  [ADR-0264](/docs/adr/ADR-0264-platform-test-doubles-live-with-their-contract.md)). The lock's
+  values, `CommitGate`, `OwnerCalls` and `project_ime_event` stay in the contract.
 
 ### Fixed
 
@@ -29,3 +37,10 @@
   owner turn ([ADR-0142](/docs/adr/ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
   item 6). `CommitGate::set_checked_out`, `CommitGate::owner_entry`, `CommitGate::is_shut` and
   `TextInputOwner::set_checked_out` carry it.
+- **`flui-native`** (macOS): the input method reads and edits the focused field's text store
+  through `NSTextInputClient`, as on Windows and the web
+  ([ADR-0090](/docs/adr/ADR-0090-ime-pull-text-store-contract.md)). The field ending a
+  composition (focus moving, an application edit over it) now makes AppKit drop its marked text
+  instead of committing it a second time; a press-and-hold accent replaces the letter it was
+  held on; reconversion, the candidate window and click-to-index read the field; and a key typed
+  during a frame waits for it instead of being dropped.

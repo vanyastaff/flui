@@ -210,7 +210,7 @@ pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
     let store = harness
         .active_text_store()
         .expect("the focused field is the active IME client");
-    let composing = Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
+    let composing = Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
     let outcome = store.request_lock(
         LockGrant::read_write(move |session| {
             session.insert_at_selection("東京").expect("in range");
@@ -285,7 +285,7 @@ pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value
     let store = harness
         .active_text_store()
         .expect("the focused field is the active IME client");
-    let composing = Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
+    let composing = Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(6)).expect("ordered");
     let outcome = store.request_lock(
         LockGrant::read_write(move |session| {
             session
@@ -349,7 +349,7 @@ pub(crate) fn setting_the_shown_text_as_the_value_ends_a_reconversion() {
     let store = harness
         .active_text_store()
         .expect("the focused field is the active IME client");
-    let whole = Utf16Range::new(Utf16Offset::new(0), Utf16Offset::new(3)).expect("ordered");
+    let whole = Utf16Range::try_new(Utf16Offset::new(0), Utf16Offset::new(3)).expect("ordered");
     let composing = Some(Composition {
         range: whole,
         hides_caret: false,
@@ -403,7 +403,7 @@ pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
             session.insert_at_selection("X").expect("in range");
             session
                 .set_composition(Some(Composition {
-                    range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(3))
+                    range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(3))
                         .expect("ordered"),
                     hides_caret: false,
                 }))
@@ -464,7 +464,7 @@ pub(crate) fn a_reset_mid_composition_removes_the_preedit() {
             session.insert_at_selection("X").expect("in range");
             session
                 .set_composition(Some(Composition {
-                    range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(3))
+                    range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(3))
                         .expect("ordered"),
                     hides_caret: false,
                 }))

@@ -29,6 +29,8 @@ pub struct SliverFixedExtentList {
     /// `None` leaves the adaptor's default — every child a member, at its own
     /// logical index.
     semantics: Option<SemanticSetMapping>,
+    /// The list's accessible name.
+    semantics_label: Option<std::sync::Arc<str>>,
 }
 
 /// Where the children come from.
@@ -59,6 +61,7 @@ impl SliverFixedExtentList {
             item_extent,
             source: Source::Static(StaticChildren::new(children.into_boxed_vec())),
             semantics: None,
+            semantics_label: None,
         }
     }
 
@@ -79,6 +82,7 @@ impl SliverFixedExtentList {
             item_extent,
             source: Source::Static(children),
             semantics: None,
+            semantics_label: None,
         }
     }
 
@@ -104,6 +108,7 @@ impl SliverFixedExtentList {
                 builder: Rc::new(builder),
             },
             semantics: None,
+            semantics_label: None,
         }
     }
 
@@ -126,6 +131,13 @@ impl SliverFixedExtentList {
         self
     }
 
+    /// Name the list for assistive technology: the label of its list node.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
+        self
+    }
+
     /// The per-child main-axis extent.
     #[must_use]
     pub const fn item_extent(&self) -> f64 {
@@ -142,12 +154,14 @@ impl fmt::Debug for SliverFixedExtentList {
             Source::Builder { item_count, .. } => s.field("item_count", item_count),
         };
         s.field("semantics", &self.semantics);
+        s.field("semantics_label", &self.semantics_label);
         s.finish()
     }
 }
 
-impl StatelessView for SliverFixedExtentList {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+impl SliverFixedExtentList {
+    /// The lazy adaptor this list mounts.
+    pub(crate) fn adaptor(&self) -> flui_view::element::SliverFixedExtentList {
         let adaptor = match &self.source {
             Source::Static(children) => {
                 flui_view::element::SliverFixedExtentList::over(self.item_extent, children)
@@ -164,9 +178,19 @@ impl StatelessView for SliverFixedExtentList {
         // Applied after the match so both delegate kinds carry it: a builder
         // delegate numbers its children exactly as a static one does, and the
         // reference's `semanticIndexCallback` is not a property of either.
-        match &self.semantics {
+        let adaptor = match &self.semantics {
             Some(mapping) => adaptor.semantics(mapping.clone()),
             None => adaptor,
+        };
+        match &self.semantics_label {
+            Some(label) => adaptor.semantics_label(std::sync::Arc::clone(label)),
+            None => adaptor,
         }
+    }
+}
+
+impl StatelessView for SliverFixedExtentList {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.adaptor()
     }
 }

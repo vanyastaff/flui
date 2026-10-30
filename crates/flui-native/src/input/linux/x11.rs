@@ -1537,7 +1537,7 @@ mod live {
                 tracing::warn!("libxkbcommon-x11 or XKB is missing: X11 windows get no keys");
                 return None;
             };
-            let keyboard = Keyboard::new(&source)?;
+            let keyboard = Keyboard::try_new(&source)?;
             let device = u16::try_from(source.x11_device()?).ok()?;
             let events = xkb::EventType::NEW_KEYBOARD_NOTIFY
                 | xkb::EventType::MAP_NOTIFY

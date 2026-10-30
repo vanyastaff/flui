@@ -900,6 +900,13 @@ while the required terminal commits still happen. The value or closure a closed
 graph rejects is dropped normally unless the thread is already panicking
 ([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
 
+### Dropping a build owner raises nothing
+
+`BuildOwner::drop` reclaims its global keys and tells the tree observer `detached()`, contained,
+and never resumes a failure; the element tree drops a `ReconcileGuard` that only resets a cell.
+A `dispose` that panics while a presentation tears down is contained and recorded per element, so
+the tree's teardown is no source of the raised failure that #1165 is about.
+
 ### Independent child and contained payload retirement
 
 **Rule:** `StaticChildren` withdraws its independently owned views and its

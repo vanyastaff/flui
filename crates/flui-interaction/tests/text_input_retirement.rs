@@ -7,13 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Bounds;
+use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::{
     ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-    TextStoreObserver, TextStoreStatus,
+    CommitGate, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError, TextStoreObserver,
+    TextStoreStatus,
 };
 
 #[derive(Default)]
@@ -833,7 +834,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
                 LockGrant::read(move |session| {
                     *read.borrow_mut() = session
                         .text(
-                            flui_platform::text_store::Utf16Range::new(
+                            flui_platform::text_store::Utf16Range::try_new(
                                 flui_platform::text_store::Utf16Offset::ZERO,
                                 session.document_len(),
                             )
@@ -884,7 +885,7 @@ fn commit_reentry_preserves_the_newer_attachment() {
             LockGrant::read(move |session| {
                 *read.borrow_mut() = session
                     .text(
-                        flui_platform::text_store::Utf16Range::new(
+                        flui_platform::text_store::Utf16Range::try_new(
                             flui_platform::text_store::Utf16Offset::ZERO,
                             session.document_len(),
                         )

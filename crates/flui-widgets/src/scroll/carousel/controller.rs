@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{SharedCurve, curves};
+use flui_foundation::MutatedDuringBuild;
 use flui_objects::{CarouselGeometry, CarouselItemFrames, CarouselLayout};
 use flui_view::{EventCx, EventOutcome};
 
@@ -68,7 +69,7 @@ impl Attachment {
         if !position.has_applied_viewport_dimension() {
             return None;
         }
-        CarouselGeometry::new(
+        CarouselGeometry::try_new(
             &self.layout,
             position.viewport_dimension(),
             self.spacing,
@@ -111,28 +112,37 @@ impl CarouselController {
     /// the carousel's scroll position as a programmatic scroll: any user input takes over.
     /// Under reduced motion the move is immediate. Before the carousel is laid out it opens
     /// on that item instead, the last such call winning; with no items it does nothing.
-    pub fn animate_to_item(&self, index: usize) {
-        self.move_to(index, true);
+    ///
+    /// # Errors
+    ///
+    /// [`MutatedDuringBuild`] when called from a `build` while the carousel is laid out: the
+    /// position does not move (ADR-0086 §7).
+    pub fn animate_to_item(&self, index: usize) -> Result<(), MutatedDuringBuild> {
+        self.move_to(index, true)
     }
 
     /// [`animate_to_item`](Self::animate_to_item) without the animation.
-    pub fn jump_to_item(&self, index: usize) {
-        self.move_to(index, false);
+    ///
+    /// # Errors
+    ///
+    /// As [`animate_to_item`](Self::animate_to_item).
+    pub fn jump_to_item(&self, index: usize) -> Result<(), MutatedDuringBuild> {
+        self.move_to(index, false)
     }
 
-    fn move_to(&self, index: usize, animate: bool) {
+    fn move_to(&self, index: usize, animate: bool) -> Result<(), MutatedDuringBuild> {
         let attachment = self.inner.attachment.borrow().clone();
         let Some(attachment) = attachment else {
             self.inner.pending.set(Some(index));
-            return;
+            return Ok(());
         };
         if attachment.count == 0 {
-            return;
+            return Ok(());
         }
         let index = index.min(attachment.count - 1);
         let Some(geometry) = attachment.geometry() else {
             attachment.frames.open_at(index);
-            return;
+            return Ok(());
         };
         let target = geometry.rest_offset(index);
         if animate && !attachment.reduced_motion {
@@ -140,9 +150,9 @@ impl CarouselController {
                 target,
                 MOVE_DURATION,
                 SharedCurve::new(curves::EASE_IN_OUT),
-            );
+            )
         } else {
-            attachment.scroll.jump_to(target);
+            attachment.scroll.jump_to(target)
         }
     }
 

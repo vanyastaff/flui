@@ -41,8 +41,8 @@ use flui_objects::{
 use flui_rendering::{
     protocol::{BoxProtocol, SliverProtocol},
     semantics::{
-        ActionCall, Assertiveness, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel,
-        Invalid, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
+        ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid,
+        LiveSetting, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
         SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
         TableShape, TextDirection, Toggled,
     },
@@ -52,7 +52,7 @@ use flui_view::{
     RenderView, WriterSource, impl_render_view,
 };
 
-use crate::support::{event_callback, ref_callback, value_callback};
+use crate::support::{ValueCallback, event_callback, ref_callback, value_callback};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -92,6 +92,9 @@ type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 struct EventActions {
     handlers: Vec<(SemanticsAction, EventActionHandler)>,
     custom: Vec<CustomEntry>,
+    /// Told when the assistive technology's cursor enters (`true`) or leaves
+    /// the node's subtree.
+    assistive_focus: Option<ValueCallback<bool>>,
 }
 
 /// One labelled custom action, offered while its gate (if any) holds.
@@ -124,7 +127,7 @@ impl EventActions {
     }
 
     fn is_empty(&self) -> bool {
-        self.handlers.is_empty() && self.custom.is_empty()
+        self.handlers.is_empty() && self.custom.is_empty() && self.assistive_focus.is_none()
     }
 
     fn actions(&self) -> impl Iterator<Item = SemanticsAction> + '_ {
@@ -136,6 +139,7 @@ impl std::fmt::Debug for EventActions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EventActions")
             .field("handlers", &self.actions().collect::<Vec<_>>())
+            .field("assistive_focus", &self.assistive_focus.is_some())
             .field(
                 "custom",
                 &self
@@ -165,6 +169,27 @@ struct SemanticsActionCell {
 /// which the semantics owner invokes on the owner thread while the UI runtime is
 /// entered. Every failure is a dropped action, never a panic: the platform
 /// asked for something the tree can no longer do.
+/// Tell the node whose table `target` names that the assistive technology's
+/// cursor entered (`true`) or left its subtree. A table gone, or one that no
+/// longer asks, drops the news: the node is no longer there to hear it.
+fn deliver_assistive_focus(target: LocalPayloadTarget, within: bool) {
+    let Ok(payload) = resolve_local_payload(target) else {
+        tracing::debug!(
+            within,
+            "an assistive cursor move reached a node that is gone"
+        );
+        return;
+    };
+    let Ok(cell) = payload.downcast::<SemanticsActionCell>() else {
+        tracing::error!("BUG: a semantics action ticket resolved to a payload of another type");
+        return;
+    };
+    let Some(handler) = cell.actions.assistive_focus.clone() else {
+        return;
+    };
+    cell.writer.write(|cx| handler(cx, within));
+}
+
 fn deliver(target: LocalPayloadTarget, call: ActionCall) {
     let action = call.action();
     let payload = match resolve_local_payload(target) {
@@ -692,9 +717,26 @@ impl Semantics {
 
     /// Make this node a live region: assistive technology announces its
     /// changes without the user moving to it, politely or interrupting.
+    /// [`LiveSetting::Off`] keeps it silent inside an enclosing region.
     #[must_use]
-    pub fn live_region(mut self, politeness: Assertiveness) -> Self {
-        self.configuration.set_live_region(Some(politeness));
+    pub fn live_region(mut self, setting: LiveSetting) -> Self {
+        self.configuration.set_live_region(setting);
+        self
+    }
+
+    /// Set whether a change announces the whole region rather than only what
+    /// changed. Undeclared, an alert or a status is atomic.
+    #[must_use]
+    pub fn live_atomic(mut self, atomic: bool) -> Self {
+        self.configuration.set_live_atomic(atomic);
+        self
+    }
+
+    /// Set whether this node is being updated: a screen reader holds back
+    /// the announcements of its subtree until it is not.
+    #[must_use]
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.configuration.set_busy(busy);
         self
     }
 
@@ -971,6 +1013,110 @@ impl Semantics {
         self
     }
 
+    /// Invoke `handler` with the selection a platform asked this field to
+    /// take, in bytes of its value: the owner has read it from the field's
+    /// published text runs, and refused one whose
+    /// ends lie outside them before it reaches here.
+    #[must_use]
+    pub fn on_set_text_selection<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetTextSelection,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetTextSelection(selection) = call {
+                    handler(cx, selection);
+                }
+            }),
+        );
+        self
+    }
+
+    /// Make this node a merge boundary (ADR-0214 §3): it keeps a node of its
+    /// own inside a merging ancestor, and merges none of its descendants into
+    /// it, so the controls and texts beneath it stay addressable.
+    #[must_use]
+    pub fn merge_boundary(mut self, merge_boundary: bool) -> Self {
+        self.configuration.set_merge_boundary(merge_boundary);
+        self
+    }
+
+    /// Publish `selection` as this document's selection across the texts
+    /// beneath it, in their runs (ADR-0214 §3). A selection whose end names
+    /// no text beneath the node that publishes runs is not published.
+    #[must_use]
+    pub fn document_selection(
+        mut self,
+        selection: Option<flui_rendering::semantics::DocumentSelection>,
+    ) -> Self {
+        self.configuration.set_document_selection(selection);
+        self
+    }
+
+    /// Invoke `handler` with the selection a platform asked this document to
+    /// take: a `SetTextSelection` sent to the node, or to a text beneath it,
+    /// with each end as the text's anchor and a byte of it (ADR-0214 §4).
+    /// The owner refused one whose ends are not current runs of texts beneath
+    /// this node before it reaches here. Replaces
+    /// [`on_set_text_selection`](Self::on_set_text_selection): a node takes
+    /// selections as a field or as a document, not both.
+    #[must_use]
+    pub fn on_set_document_selection<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, flui_rendering::semantics::DocumentSelection) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::SetTextSelection,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetDocumentSelection(selection) = call {
+                    handler(cx, selection);
+                }
+            }),
+        );
+        self
+    }
+
+    /// Invoke `handler` with `true` when the assistive technology's cursor
+    /// (VoiceOver, TalkBack) enters this node's subtree and `false` when it
+    /// leaves: a carousel stops moving while a screen reader reads it. This is
+    /// not input focus, which the application moves. Only a platform whose
+    /// adapter reports the cursor calls it; ask
+    /// `LifecycleContext::assistive_focus_support` before relying on it.
+    #[must_use]
+    pub fn on_assistive_focus_within<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.event_actions.assistive_focus = Some(value_callback(handler));
+        self
+    }
+
+    /// Invoke `handler` with the text a platform asked this field to put in
+    /// place of its selection.
+    #[must_use]
+    pub fn on_replace_selected_text<F, R>(mut self, handler: F) -> Self
+    where
+        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = ref_callback::<str, _, _>(handler);
+        self.event_actions.insert(
+            SemanticsAction::ReplaceSelectedText,
+            Rc::new(move |cx, call| {
+                if let ActionCall::ReplaceSelectedText(text) = call {
+                    handler(cx, &text);
+                }
+            }),
+        );
+        self
+    }
+
     /// Invoke `handler` with the offset, in this node's coordinates, a
     /// platform asked this node to scroll its content to.
     #[must_use]
@@ -1116,6 +1262,11 @@ impl Semantics {
             for action in self.event_actions.actions() {
                 configuration.add_action(action, Rc::clone(route.handler()));
             }
+            if self.event_actions.assistive_focus.is_some()
+                && let Some(handler) = route.assistive_focus_handler()
+            {
+                configuration.add_assistive_focus_handler(Rc::clone(handler));
+            }
         }
         configuration
     }
@@ -1166,7 +1317,12 @@ impl Semantics {
         match ctx.register_local_payload(cell) {
             Ok(target) => {
                 let handler: SemanticsActionHandler = Rc::new(move |call| deliver(target, call));
-                Some(SemanticsActionRoute::new(target, handler))
+                let assistive_focus: flui_rendering::semantics::AssistiveFocusHandler =
+                    Rc::new(move |within| deliver_assistive_focus(target, within));
+                Some(
+                    SemanticsActionRoute::new(target, handler)
+                        .with_assistive_focus(assistive_focus),
+                )
             }
             Err(error) => {
                 tracing::debug!(

@@ -777,7 +777,7 @@ impl Delivering {
                         }
                         read
                     }
-                    None => match Keyboard::new(&source) {
+                    None => match Keyboard::try_new(&source) {
                         Some(keyboard) => {
                             self.keymaps.push((seat, SeatKeymap { source, keyboard }));
                             true
@@ -2606,36 +2606,40 @@ mod tests {
     use super::{Delivering, NativeClock, SeatKey, Wire, arrival, queue, read_keymap};
     use crate::input::linux::xkb::GROUP_NAME_READS;
 
-    /// The descriptors the process holds open.
-    fn open_descriptors() -> usize {
-        std::fs::read_dir("/proc/self/fd")
-            .expect("procfs lists the descriptors")
-            .count()
-    }
-
     /// A compositor that sends keymap after keymap before the loop delivers
     /// leaves one queued per seat, the newest: the older files are closed
-    /// unread, and the one delivery reads reads.
+    /// unread, and the one delivery reads.
+    ///
+    /// Each older keymap is a pipe whose closing the test sees through its
+    /// write end, so a descriptor another test opens at the same time can't
+    /// move the count.
     #[test]
     fn a_seat_queues_one_keymap() {
-        let text = b"xkb_keymap { };\0";
-        let path = std::env::temp_dir().join(format!("flui-keymap-{}", std::process::id()));
-        std::fs::write(&path, text).expect("the keymap is written");
-        let size = u32::try_from(text.len()).expect("a short keymap");
-        let before = open_descriptors();
         let mut wires = Vec::new();
-        for _ in 0..1_000 {
-            let fd = OwnedFd::from(std::fs::File::open(&path).expect("the keymap opens"));
+        let mut older: Option<std::io::PipeWriter> = None;
+        let keymap = |wires: &mut Vec<Wire>, fd: OwnedFd, size: u32| {
             queue(
-                &mut wires,
+                wires,
                 Wire::Keymap {
                     seat: SeatKey(1),
                     fd,
                     size,
                 },
             );
+        };
+        for _ in 0..1_000 {
+            let (reader, writer) = std::io::pipe().expect("a pipe opens");
+            keymap(&mut wires, OwnedFd::from(reader), 16);
+            assert_replaced(older.replace(writer));
         }
-        let held = open_descriptors() - before;
+        let text = b"xkb_keymap { };\0";
+        let path = std::env::temp_dir().join(format!("flui-keymap-{}", std::process::id()));
+        std::fs::write(&path, text).expect("the keymap is written");
+        let file = std::fs::File::open(&path).expect("the keymap opens");
+        std::fs::remove_file(&path).expect("the keymap is removed");
+        let size = u32::try_from(text.len()).expect("a short keymap");
+        keymap(&mut wires, OwnedFd::from(file), size);
+        assert_replaced(older.take());
         queue(
             &mut wires,
             Wire::RepeatInfo {
@@ -2644,14 +2648,24 @@ mod tests {
                 delay: 600,
             },
         );
-        std::fs::remove_file(&path).expect("the keymap is removed");
-        assert_eq!(held, 1, "keymap files held open");
         assert_eq!(wires.len(), 2, "wires queued");
         let Some(Wire::Keymap { fd, size, .. }) = wires.into_iter().next() else {
             panic!("the keymap stays first");
         };
         let source = read_keymap(fd, size).expect("the queued keymap reads");
         assert!(format!("{source:?}").contains("xkb_keymap"), "{source:?}");
+    }
+
+    /// A replaced keymap's descriptor is closed: its pipe has no reader left.
+    fn assert_replaced(writer: Option<std::io::PipeWriter>) {
+        use std::io::Write as _;
+        let Some(mut writer) = writer else {
+            return;
+        };
+        let error = writer
+            .write_all(b"x")
+            .expect_err("a replaced keymap's pipe has no reader");
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
     }
 
     /// A keymap of two named layouts, padded with a comment to nearly the

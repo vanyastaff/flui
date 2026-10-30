@@ -50,7 +50,13 @@
 //! in `SparseChildren::by_logical_index`; they are managed solely by
 //! `service_child_requests`.
 
-use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fmt,
+    marker::PhantomData,
+    rc::Rc,
+    sync::Arc,
+};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{
@@ -136,6 +142,24 @@ pub trait LazyMultiBoxRender:
     fn set_semantic_set_size(&mut self, count: Option<usize>)
     -> flui_rendering::RenderUpdateImpact;
 
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node the render object publishes. `None` publishes no name.
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact;
+
+    /// Installs the logical indices of the attached children that are pinned
+    /// ([`KeepAliveHandle::pin`](crate::owner::KeepAliveHandle::pin)) and lie
+    /// outside the retained band. The render object lays each of them out at
+    /// its estimated offset after the band, keeps it out of its geometry,
+    /// anchor and measured extents, and skips it in paint and hit testing.
+    /// An index with no attached child is ignored.
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact;
+
     /// Animate children into new positions when the owner's roster changes
     /// (see [`Placement`]); `None` places them at once. A render object that
     /// cannot animate placement ignores it, which is the default.
@@ -171,6 +195,9 @@ fn delegate_changed<R: LazyMultiBoxRender>(
 // STATIC CHILDREN — the delegate behind every `list` constructor
 // ============================================================================
 
+/// A per-item wrapper applied as a child is built, given its logical index.
+type ChildMap = Rc<dyn Fn(usize, BoxedView) -> BoxedView>;
+
 /// A fixed `Vec<BoxedView>` served by index, with the key → index map that
 /// lets a keyed child whose data moved be found without a callback.
 ///
@@ -185,7 +212,7 @@ pub struct StaticChildren {
     /// Applied to each child as it is built (a per-item repaint boundary,
     /// say). The key map reads the raw children, so a wrapper that salts
     /// the key stays matchable through the unsalted callback key.
-    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    map: Option<ChildMap>,
     /// The builder and key callback handed to adaptors, created once: two
     /// adaptors built over one delegate carry the same `Rc`s, which is what
     /// the adaptor's update compares to decide whether the residents need
@@ -196,7 +223,7 @@ pub struct StaticChildren {
 /// Outgoing independent envelopes stay owned until their own retirement starts.
 struct RetiringStaticChildren {
     children: Vec<BoxedView>,
-    map: Option<Rc<dyn Fn(BoxedView) -> BoxedView>>,
+    map: Option<ChildMap>,
     delegate_pair: Option<(ItemBuilder, FindIndexByKey)>,
 }
 
@@ -254,7 +281,7 @@ impl StaticChildren {
         Rc::new(Self {
             children,
             key_to_index: std::cell::OnceCell::new(),
-            map: Some(Rc::new(map)),
+            map: Some(Rc::new(move |_index, child| map(child))),
             delegate_pair: std::cell::OnceCell::new(),
         })
     }
@@ -283,7 +310,7 @@ impl StaticChildren {
     pub fn build(&self, index: usize) -> Option<BoxedView> {
         let child = self.children.get(index).cloned()?;
         Some(match &self.map {
-            Some(map) => map(child),
+            Some(map) => map(index, child),
             None => child,
         })
     }
@@ -407,6 +434,8 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// `SliverList::separated` sets it explicitly, since its `2n - 1`
     /// children are `n` members.
     pub(crate) semantics: Option<SemanticSetMapping>,
+    /// The collection's accessible name (`semantics_label`).
+    pub(crate) semantics_label: Option<std::sync::Arc<str>>,
     /// How children slide into new positions after a roster change, or
     /// `None` to place them at once.
     pub(crate) placement: Option<Placement>,
@@ -421,6 +450,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
             semantics: self.semantics.clone(),
+            semantics_label: self.semantics_label.clone(),
             placement: self.placement.clone(),
         }
     }
@@ -460,6 +490,7 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             builder,
             find_index_by_key: None,
             semantics: None,
+            semantics_label: None,
             placement: None,
         }
     }
@@ -479,6 +510,14 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
         self
     }
 
+    /// Name the collection for assistive technology: the label of the list or
+    /// grid node, announced when focus enters it.
+    #[must_use]
+    pub fn semantics_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        self.semantics_label = Some(label.into());
+        self
+    }
+
     /// The mapping this view actually announces with: the one it was given,
     /// or the count-derived default resolved against the *current*
     /// `item_count`.
@@ -488,9 +527,10 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             .unwrap_or_else(|| SemanticSetMapping::one_to_one(self.item_count))
     }
 
-    /// The item count to build a render object with, probing the builder when
-    /// the caller declared [`ItemCount::Unknown`].
-    fn resolved_item_count(&self) -> usize {
+    /// The number of items: the declared count, or, for
+    /// [`ItemCount::Unknown`], the builder probed for it (`2·log₂(n)` calls).
+    #[must_use]
+    pub fn resolved_item_count(&self) -> usize {
         match self.item_count {
             ItemCount::Exact(count) => count,
             ItemCount::Unknown => probe_item_count(&*self.builder),
@@ -507,6 +547,38 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
         find: impl Fn(&dyn ViewKey) -> Option<usize> + 'static,
     ) -> Self {
         self.find_index_by_key = Some(Rc::new(find));
+        self
+    }
+
+    /// Wrap every child this sliver builds: `wrap` receives the child's
+    /// logical index and the child, and returns the view the sliver mounts
+    /// in its place.
+    ///
+    /// A low-level hook for widgets that decorate a sliver they do not own
+    /// (a focus marker per row, say). The wrapper must keep the child's key
+    /// (salted, as `RepaintBoundary` does) so the reconcile still matches
+    /// keyed rows, and must answer for exactly the children the sliver
+    /// builds: it cannot add or drop children. Over static children the
+    /// wrapped delegate is a new one, so call this once per value, not on
+    /// every rebuild, or the residents are refreshed each time.
+    #[must_use]
+    pub fn map_children(mut self, wrap: impl Fn(usize, BoxedView) -> BoxedView + 'static) -> Self {
+        let wrap: ChildMap = Rc::new(wrap);
+        if let Some(children) = self.static_children.take() {
+            let map: ChildMap = match children.map.clone() {
+                Some(inner) => Rc::new(move |index, child| wrap(index, inner(index, child))),
+                None => wrap,
+            };
+            let mapped = Rc::new(StaticChildren {
+                children: children.children.clone(),
+                key_to_index: std::cell::OnceCell::new(),
+                map: Some(map),
+                delegate_pair: std::cell::OnceCell::new(),
+            });
+            return self.over_static_children(&mapped);
+        }
+        let inner = Rc::clone(&self.builder);
+        self.builder = Rc::new(move |index| inner(index).map(|child| wrap(index, child)));
         self
     }
 }
@@ -528,6 +600,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         // A fresh object reports layout for any placement; it lays out anyway.
         let _ = render_object.set_placement(self.placement.as_ref());
         let _ = render_object.set_semantic_set_size(self.effective_semantics().declared_count());
+        let _ = render_object.set_collection_label(self.semantics_label.as_ref());
         render_object
     }
 
@@ -552,6 +625,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         };
         count_impact
             | render_object.set_semantic_set_size(self.effective_semantics().declared_count())
+            | render_object.set_collection_label(self.semantics_label.as_ref())
             | render_object.update(&self.config)
             | render_object.set_placement(self.placement.as_ref())
     }
@@ -753,7 +827,8 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
         }
         let count_clamped = reached_end_at
             .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
-        retain_did_work || refresh_did_work || any_new_build || count_clamped
+        let pins_changed = self.sync_pinned(retain_first, retain_last, host, tree, owner, pipeline);
+        retain_did_work || refresh_did_work || any_new_build || count_clamped || pins_changed
     }
 
     fn forget_child(&mut self, child: ElementId) {
@@ -773,6 +848,48 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
 }
 
 impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
+    /// Hand the render object the logical indices of this host's pinned
+    /// residents outside `[retain_first, retain_last)`, and watch for pins on
+    /// its behalf so a pin taken or released later lays it out again. Returns
+    /// whether the render object's pinned set changed.
+    fn sync_pinned(
+        &mut self,
+        retain_first: usize,
+        retain_last: usize,
+        host: ElementId,
+        tree: &ElementTree,
+        owner: &ElementOwner<'_>,
+        pipeline: &PipelineCell,
+    ) -> bool {
+        let Some(render_id) = self.render_id else {
+            return false;
+        };
+        let pinned_children = owner.keep_alive.pinned_children(tree);
+        let pinned: BTreeSet<usize> = self
+            .sparse_children
+            .iter_built()
+            .filter(|(index, child)| {
+                (*index < retain_first || *index >= retain_last) && pinned_children.contains(child)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        pipeline.with_mut(|pipeline_owner| {
+            if let Some(handle) = pipeline_owner.local_render_invalidation_handle(render_id) {
+                owner.keep_alive.watch_pins(host, handle);
+            }
+            let Some(render_object) = pipeline_owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<R>())
+            else {
+                return false;
+            };
+            let impact = render_object.set_pinned_indices(&pinned);
+            pipeline_owner.apply_render_update_impact(render_id, impact);
+            !impact.is_none()
+        })
+    }
+
     /// The render object's current item count (the manager's view of the
     /// data source length).
     fn item_count(&self, pipeline: &PipelineCell) -> usize {
@@ -1173,6 +1290,19 @@ impl LazyMultiBoxRender for RenderSliverList {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverList::set_semantic_set_size(self, count)
     }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_collection_label(self, label)
+    }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_pinned_indices(self, pinned)
+    }
     type Config = ListConfig;
 
     const KIND: &'static str = "SliverList";
@@ -1477,6 +1607,19 @@ impl LazyMultiBoxRender for RenderSliverGrid {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_semantic_set_size(self, count)
     }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_collection_label(self, label)
+    }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_pinned_indices(self, pinned)
+    }
     type Config = Rc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
     const KIND: &'static str = "SliverGrid";
@@ -1576,6 +1719,19 @@ impl LazyMultiBoxRender for RenderSliverFixedExtentList {
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverFixedExtentList::set_semantic_set_size(self, count)
     }
+
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_collection_label(self, label)
+    }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_pinned_indices(self, pinned)
+    }
     type Config = FixedExtentConfig;
 
     const KIND: &'static str = "SliverFixedExtentList";
@@ -1662,6 +1818,18 @@ impl LazyMultiBoxRender for RenderSliverCarousel {
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
         RenderSliverCarousel::set_semantic_set_size(self, count)
+    }
+    fn set_pinned_indices(
+        &mut self,
+        pinned: &BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_pinned_indices(self, pinned)
+    }
+    fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverCarousel::set_collection_label(self, label)
     }
     type Config = CarouselSliverConfig;
 

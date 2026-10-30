@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn a_closed_queue_runs_each_owed_removal_contained_alone() {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+        let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
         let handle = owner.post_frame_handle();
         assert!(owner.retire().is_none(), "a healthy close");
         let ran = Rc::new(Cell::new(0));

@@ -2,8 +2,9 @@
 //! (`flui_painting::text_boundaries`, ADR-0092 §6).
 
 use flui_painting::text_boundaries::{
-    graphemes, is_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary,
-    word_segments, word_segments_from,
+    graphemes, is_grapheme_boundary, next_grapheme_boundary, next_word_start,
+    previous_grapheme_boundary, previous_word_start, word_segments, word_segments_from,
+    word_starts,
 };
 
 /// Starting a query at its line, rather than at the text's start,
@@ -60,6 +61,42 @@ fn a_query_from_its_line_answers_as_the_whole_text_does() {
             assert!(
                 whole.ends_with(&from_line),
                 "{text:?} from {at}: {from_line:?} is not a tail of {whole:?}"
+            );
+        }
+    }
+}
+
+/// A word-wise step, forward or back, lands on the nearest of the word
+/// starts the text publishes, from every byte offset and across lines: the
+/// caret and a screen reader share one notion of a word.
+#[test]
+fn a_word_step_lands_on_the_nearest_published_word_start() {
+    let corpus = [
+        "don't stop, café 42",
+        "  lead\n\n  \u{1f468}\u{200d}\u{1f469} x\r\n(foo) bar\u{2019}s",
+        "",
+        "   ",
+    ];
+    for text in corpus {
+        let starts: Vec<usize> = word_starts(text).collect();
+        for offset in 0..=text.len() + 1 {
+            let clamped = text.ceil_char_boundary(offset.min(text.len()));
+            let next = starts
+                .iter()
+                .copied()
+                .find(|&start| start > clamped)
+                .unwrap_or(text.len());
+            let previous = starts
+                .iter()
+                .copied()
+                .take_while(|&start| start < clamped)
+                .last()
+                .unwrap_or(0);
+            assert_eq!(next_word_start(text, offset), next, "{text:?} {offset}");
+            assert_eq!(
+                previous_word_start(text, offset),
+                previous,
+                "{text:?} {offset}"
             );
         }
     }

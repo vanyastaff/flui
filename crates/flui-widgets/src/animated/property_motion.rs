@@ -35,7 +35,7 @@ pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
 }
 
 impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
-    pub(super) fn new(
+    pub(super) fn try_new(
         label: &'static str,
         initial: Option<T>,
         motion: MotionSpec,
@@ -73,7 +73,7 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
             }
             (owner @ None, Some(target)) => {
                 // Appearing properties have no previous value to interpolate.
-                let next = Self::new(label, Some(target), motion, notifications, vsync)?;
+                let next = Self::try_new(label, Some(target), motion, notifications, vsync)?;
                 update.replace(owner, next.owner);
             }
             (owner, None) => {

@@ -1,8 +1,5 @@
 //! flui-platform's integration tests, compiled as modules of one binary.
 
-#[path = "composition_ledger.rs"]
-mod composition_ledger;
-
 #[path = "drag_plan.rs"]
 mod drag_plan;
 
@@ -21,14 +18,14 @@ mod host_notice;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 
+#[path = "parts.rs"]
+mod parts;
+
 #[path = "placement_resolve.rs"]
 mod placement_resolve;
 
 #[path = "preferences.rs"]
 mod preferences;
-
-#[path = "lock_gate.rs"]
-mod lock_gate;
 
 #[path = "window_command_validate.rs"]
 mod window_command_validate;

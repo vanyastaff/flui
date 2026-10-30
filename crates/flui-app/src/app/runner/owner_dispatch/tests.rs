@@ -766,13 +766,13 @@ fn late_event_never_crosses_ui_runtime_incarnations() {
 
 fn panic_restores_dispatch_host_for_next_event() {
     let dispatcher = install_test_ui_runtime();
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = dispatch_platform_ui_runtime(
-            dispatcher,
-            RuntimeTask::TestCallback(Box::new(|_| panic!("test panic"))),
-        );
-    }));
-    assert!(panic.is_err());
+    // The callback's panic is its operation's, contained by the owner
+    // (ADR-0258 §1): the dispatch returns.
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(|_| panic!("test panic"))),
+    )
+    .expect("a contained panic leaves the dispatch accepted");
 
     let ran = Rc::new(RefCell::new(false));
     let ran_in_event = Rc::clone(&ran);
@@ -1956,7 +1956,7 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
     use flui_native::Platform;
 
     let _clear = OwnerHostClearGuard::arm();
-    Box::new(flui_native::WindowsPlatform::new().expect("native platform"))
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native platform"))
         .run(crate::app::runner::app_handler(|owner| {
             let expected = owner
                 .preferences()?
@@ -2416,7 +2416,7 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
         ));
     });
     let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
-    let reported = flui_foundation::geometry::WindowMetrics::new(
+    let reported = flui_foundation::geometry::WindowMetrics::try_new(
         flui_foundation::geometry::DeviceSize::new(115, 201),
         1.75,
     )

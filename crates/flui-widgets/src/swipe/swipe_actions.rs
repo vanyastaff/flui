@@ -122,7 +122,7 @@ enum Host {
 /// reading start, trailing ones at the reading end.
 ///
 /// ```rust,ignore
-/// SwipeActions::new(
+/// SwipeActions::try_new(
 ///     message_row,
 ///     [SwipeAction::new(GestureCommand::new("Pin Alice", Pin("Alice")), pin_icon)],
 ///     [
@@ -179,7 +179,7 @@ impl SwipeActions {
     ///
     /// [`SwipeActionsError::NoActions`] for no action on either edge;
     /// [`SwipeActionsError::Alternatives`] for an empty or repeated label.
-    pub fn new(
+    pub fn try_new(
         child: impl IntoView,
         leading: impl IntoIterator<Item = SwipeAction>,
         trailing: impl IntoIterator<Item = SwipeAction>,
@@ -196,7 +196,7 @@ impl SwipeActions {
                     ControlSpec::new(first.command.clone(), first.content.clone()),
                     |spec, action| spec.control(action.command.clone(), action.content.clone()),
                 );
-                Host::Alternatives(GestureAlternatives::new(Alternative::VisibleControl(
+                Host::Alternatives(GestureAlternatives::try_new(Alternative::VisibleControl(
                     spec.placement(placement),
                 ))?)
             }
@@ -207,7 +207,9 @@ impl SwipeActions {
                     }),
                     |spec, action| spec.item(action.command.clone()),
                 );
-                Host::Alternatives(GestureAlternatives::new(Alternative::ContextMenu(menu))?)
+                Host::Alternatives(GestureAlternatives::try_new(Alternative::ContextMenu(
+                    menu,
+                ))?)
             }
             SwipeAlternative::ContextMenu => Host::Area(ContextMenuArea::new(
                 first.command.clone(),
@@ -357,7 +359,7 @@ impl StatefulView for SwipeActions {
     fn create_state(&self) -> Self::State {
         let anchors = self.anchors();
         SwipeActionsState {
-            controller: AnchoredDragController::new(anchors.build(None), Stop::Closed)
+            controller: AnchoredDragController::try_new(anchors.build(None), Stop::Closed)
                 .expect("BUG: every row has a closed stop"),
             geometry: Rc::default(),
             origin: Rc::default(),

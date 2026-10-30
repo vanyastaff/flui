@@ -40,14 +40,13 @@ pub mod keys {
     //! two disagree the table follows Apple's header and Firefox, and the
     //! divergence is commented at the arm.
     //!
-    //! # What never reaches these tables
+    //! # Modifier keys
     //!
     //! AppKit reports modifier keys through `flagsChanged:`, not
-    //! `keyDown:`/`keyUp:` — the modifier rows below (`kVK_Shift` …
-    //! `kVK_Function`) are complete for the table's own sake, but the backend
-    //! does not receive plain key events for them, and it does not translate
-    //! `flagsChanged:` today; modifier *state* rides every event's
-    //! `modifierFlags` instead.
+    //! `keyDown:`/`keyUp:`: the event names the key that changed and the
+    //! flags after the change, never whether it went down.
+    //! [`modifier_down`] reads that from the flags, side by side where the
+    //! device-dependent bits tell the left key from the right one.
 
     #![forbid(unsafe_code)]
 
@@ -392,8 +391,8 @@ pub mod keys {
             // though its physical `code` is the registry's NumLock position.
             kvk::ANSI_KEYPAD_CLEAR => NamedKey::Clear,
 
-            // Modifiers arrive via `flagsChanged:`, not `keyDown:` — mapped for
-            // table completeness (see the module doc).
+            // Modifiers arrive via `flagsChanged:`, not `keyDown:` (see the
+            // module doc).
             kvk::SHIFT | kvk::RIGHT_SHIFT => NamedKey::Shift,
             kvk::CONTROL | kvk::RIGHT_CONTROL => NamedKey::Control,
             kvk::OPTION | kvk::RIGHT_OPTION => NamedKey::Alt,
@@ -417,9 +416,139 @@ pub mod keys {
         };
         Some(Key::Named(named))
     }
+
+    /// `NSEventModifierFlags` bits, raw (AppKit `NSEvent.h`), and the
+    /// device-dependent bits under them that tell the left key from the right
+    /// (`NX_DEVICE*KEYMASK`, IOKit `IOLLEvent.h`).
+    mod flags {
+        pub(super) const CAPS_LOCK: usize = 1 << 16;
+        pub(super) const SHIFT: usize = 1 << 17;
+        pub(super) const CONTROL: usize = 1 << 18;
+        pub(super) const OPTION: usize = 1 << 19;
+        pub(super) const COMMAND: usize = 1 << 20;
+        pub(super) const FUNCTION: usize = 1 << 23;
+
+        pub(super) const LEFT_CONTROL: usize = 0x0001;
+        pub(super) const LEFT_SHIFT: usize = 0x0002;
+        pub(super) const RIGHT_SHIFT: usize = 0x0004;
+        pub(super) const LEFT_COMMAND: usize = 0x0008;
+        pub(super) const RIGHT_COMMAND: usize = 0x0010;
+        pub(super) const LEFT_OPTION: usize = 0x0020;
+        pub(super) const RIGHT_OPTION: usize = 0x0040;
+        pub(super) const RIGHT_CONTROL: usize = 0x2000;
+        pub(super) const DEVICE: usize = 0x207F;
+    }
+
+    /// Whether the modifier key `key_code` is down after a `flagsChanged:`
+    /// whose `modifierFlags` are `modifier_flags`; `None` for a key that is
+    /// not a modifier.
+    ///
+    /// A side's own bit decides when the event carries device-dependent bits,
+    /// so releasing the right Shift while the left one is held reads as a
+    /// release; an event that carries none falls back to the shared flag.
+    /// Caps Lock is down while its lock is on, so each toggle reads as one
+    /// press or one release.
+    pub fn modifier_down(key_code: u16, modifier_flags: usize) -> Option<bool> {
+        let (side, shared) = match key_code {
+            kvk::SHIFT => (Some(flags::LEFT_SHIFT), flags::SHIFT),
+            kvk::RIGHT_SHIFT => (Some(flags::RIGHT_SHIFT), flags::SHIFT),
+            kvk::CONTROL => (Some(flags::LEFT_CONTROL), flags::CONTROL),
+            kvk::RIGHT_CONTROL => (Some(flags::RIGHT_CONTROL), flags::CONTROL),
+            kvk::OPTION => (Some(flags::LEFT_OPTION), flags::OPTION),
+            kvk::RIGHT_OPTION => (Some(flags::RIGHT_OPTION), flags::OPTION),
+            kvk::COMMAND => (Some(flags::LEFT_COMMAND), flags::COMMAND),
+            kvk::RIGHT_COMMAND => (Some(flags::RIGHT_COMMAND), flags::COMMAND),
+            kvk::CAPS_LOCK => (None, flags::CAPS_LOCK),
+            kvk::FUNCTION => (None, flags::FUNCTION),
+            _ => return None,
+        };
+        let bit = side
+            .filter(|_| modifier_flags & flags::DEVICE != 0)
+            .unwrap_or(shared);
+        Some(modifier_flags & bit != 0)
+    }
+
+    /// The text a key press types, from its `characters` and its
+    /// `charactersIgnoringModifiers`.
+    ///
+    /// `characters` is the layout's translation with every modifier applied,
+    /// and Control applied to a letter makes it a C0 control character
+    /// (Control+A is U+0001), which is no key value a shortcut can match.
+    /// Under Control such a character gives way to the press without its
+    /// modifiers, Shift kept, the way the Android backend looks the key up
+    /// without Control.
+    pub fn typed_text<'a>(
+        characters: &'a str,
+        ignoring_modifiers: &'a str,
+        control: bool,
+    ) -> &'a str {
+        let mut chars = characters.chars();
+        let control_character = matches!(
+            (chars.next(), chars.next()),
+            (Some('\u{0}'..='\u{1f}' | '\u{7f}'), None)
+        );
+        if control && control_character && !ignoring_modifiers.is_empty() {
+            ignoring_modifiers
+        } else {
+            characters
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{flags, kvk, modifier_down, typed_text};
+
+        #[test]
+        fn a_modifier_key_reads_its_own_side() {
+            let left = flags::SHIFT | flags::LEFT_SHIFT;
+            for (name, key_code, modifier_flags, down) in [
+                ("left pressed", kvk::SHIFT, left, Some(true)),
+                (
+                    "right pressed while left held",
+                    kvk::RIGHT_SHIFT,
+                    left | flags::RIGHT_SHIFT,
+                    Some(true),
+                ),
+                (
+                    "right released, left held",
+                    kvk::RIGHT_SHIFT,
+                    left,
+                    Some(false),
+                ),
+                ("last released", kvk::SHIFT, 0, Some(false)),
+                (
+                    "no device bits: the shared flag",
+                    kvk::RIGHT_COMMAND,
+                    flags::COMMAND,
+                    Some(true),
+                ),
+                ("Caps Lock on", kvk::CAPS_LOCK, flags::CAPS_LOCK, Some(true)),
+                ("Caps Lock off", kvk::CAPS_LOCK, 0, Some(false)),
+                ("Fn", kvk::FUNCTION, flags::FUNCTION, Some(true)),
+                ("not a modifier", kvk::ANSI_A, flags::SHIFT, None),
+            ] {
+                assert_eq!(modifier_down(key_code, modifier_flags), down, "{name}");
+            }
+        }
+
+        #[test]
+        fn control_types_the_key_not_a_control_character() {
+            for (name, characters, ignoring, control, typed) in [
+                ("Control+A", "\u{1}", "a", true, "a"),
+                ("Control+Shift+A", "\u{1}", "A", true, "A"),
+                ("Control+[", "\u{1b}", "[", true, "["),
+                ("Control on a non-letter", "1", "1", true, "1"),
+                ("no Control", "\u{1b}", "[", false, "\u{1b}"),
+                ("nothing to fall back to", "\u{1}", "", true, "\u{1}"),
+                ("Option layer kept", "å", "a", false, "å"),
+            ] {
+                assert_eq!(typed_text(characters, ignoring, control), typed, "{name}");
+            }
+        }
+    }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod wheel {
     //! AppKit's wheel step. An `NSEvent`'s `scrollingDeltaX` and
     //! `scrollingDeltaY` move the content, in points when the device reports
@@ -452,6 +581,371 @@ pub(crate) mod wheel {
         )
         .unwrap_or_else(|_| ScrollDelta::zero(unit));
         (delta, precision)
+    }
+
+    /// The step of a UIKit discrete scroll (a mouse wheel's notches), which
+    /// the pan recognizer reports as a translation in points.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn notched_points(dx: f64, dy: f64) -> (ScrollDelta, ScrollPrecision) {
+        let delta = wheel_step(
+            ScrollUnit::Pixels,
+            WheelAmount::content(dx),
+            WheelAmount::content(dy),
+        )
+        .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Pixels));
+        (delta, ScrollPrecision::Notched)
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod force {
+    //! A Force Touch trackpad's pressure across one click. AppKit reports it
+    //! only on `NSEventTypePressure` events, between the press and the
+    //! release, while the drags between them carry none; and a force click
+    //! starts a second stage whose normalized curve begins again at zero.
+    //! The click's pressure is the first stage's latest reading, carried
+    //! onto the drags and held full through the second stage.
+
+    #![forbid(unsafe_code)]
+
+    /// The pressure of the click in progress.
+    #[derive(Debug, Default)]
+    pub(crate) struct ForceClick {
+        pressure: Option<f64>,
+    }
+
+    impl ForceClick {
+        /// A press or release: the next click starts unread.
+        pub(crate) fn reset(&mut self) {
+            self.pressure = None;
+        }
+
+        /// The click's pressure after a pressure event at `stage` reading
+        /// `pressure`. A first-stage reading outside `0..=1` is no reading
+        /// and keeps the last one; stage 0 means the trackpad no longer reads
+        /// a click.
+        pub(crate) fn pressure_event(&mut self, stage: isize, pressure: f32) -> Option<f64> {
+            match stage {
+                0 => self.pressure = None,
+                1 => {
+                    let pressure = f64::from(pressure);
+                    if (0.0..=1.0).contains(&pressure) {
+                        self.pressure = Some(pressure);
+                    }
+                }
+                _ => self.pressure = Some(1.0),
+            }
+            self.pressure
+        }
+
+        /// The pressure a drag within the click carries.
+        pub(crate) fn drag(&self) -> Option<f64> {
+            self.pressure
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::ForceClick;
+
+        #[test]
+        fn a_force_click_keeps_its_pressure_across_drags_and_stages() {
+            let mut click = ForceClick::default();
+            assert_eq!(click.drag(), None, "an unread click");
+            assert_eq!(click.pressure_event(1, 0.25), Some(0.25));
+            assert_eq!(click.drag(), Some(0.25), "a drag carries the reading");
+            assert_eq!(click.pressure_event(1, f32::NAN), Some(0.25), "no reading");
+            assert_eq!(click.pressure_event(1, 0.75), Some(0.75));
+            assert_eq!(
+                click.pressure_event(2, 0.0),
+                Some(1.0),
+                "the second stage holds the first full"
+            );
+            assert_eq!(click.drag(), Some(1.0));
+            assert_eq!(click.pressure_event(1, 0.5), Some(0.5), "back to the first");
+            assert_eq!(click.pressure_event(0, 0.0), None, "no click read");
+            click.pressure_event(1, 0.5);
+            click.reset();
+            assert_eq!(click.drag(), None, "the next click starts unread");
+        }
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod indirect {
+    //! An iPad's trackpad and mouse, as UIKit's gesture recognizers report
+    //! them. A recognizer reports a value cumulative since its gesture began
+    //! (a pan's translation, a pinch's scale, a rotation's angle) where the
+    //! assembly takes each event's change, so each gesture keeps the value it
+    //! last reported.
+
+    #![forbid(unsafe_code)]
+
+    use crate::input::assembly::GesturePhase;
+
+    /// Where a recognizer's gesture is, from its state: `None` for a state
+    /// that reports nothing (possible, failed).
+    pub(crate) fn phase(state: isize) -> Option<GesturePhase> {
+        // UIGestureRecognizerState: possible, began, changed, ended,
+        // cancelled, failed.
+        match state {
+            1 => Some(GesturePhase::Began),
+            2 => Some(GesturePhase::Changed),
+            3 => Some(GesturePhase::Ended),
+            4 => Some(GesturePhase::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// The last cumulative value of each indirect gesture.
+    #[derive(Debug, Default)]
+    pub(crate) struct IndirectGestures {
+        translation: Option<(f64, f64)>,
+        scale: Option<f64>,
+        rotation: Option<f64>,
+    }
+
+    impl IndirectGestures {
+        /// A pan's change in `phase` to `translation`; a non-finite
+        /// translation moves nothing.
+        pub(crate) fn translate(
+            &mut self,
+            phase: GesturePhase,
+            translation: (f64, f64),
+        ) -> (f64, f64) {
+            let last = self.translation.unwrap_or((0.0, 0.0));
+            let finite = translation.0.is_finite() && translation.1.is_finite();
+            let now = if finite { translation } else { last };
+            self.translation = keep(phase, now);
+            (now.0 - last.0, now.1 - last.1)
+        }
+
+        /// A pinch's change in `phase` to `scale`, as a ratio; a scale that
+        /// is not positive and finite changes nothing.
+        pub(crate) fn scale(&mut self, phase: GesturePhase, scale: f64) -> f64 {
+            let last = self.scale.unwrap_or(1.0);
+            let now = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                last
+            };
+            self.scale = keep(phase, now);
+            now / last
+        }
+
+        /// A rotation's change in `phase` to `radians`, clockwise.
+        pub(crate) fn rotate(&mut self, phase: GesturePhase, radians: f64) -> f64 {
+            let last = self.rotation.unwrap_or(0.0);
+            let now = if radians.is_finite() { radians } else { last };
+            self.rotation = keep(phase, now);
+            now - last
+        }
+    }
+
+    /// The value a gesture keeps after `phase`: none once it is over.
+    fn keep<T>(phase: GesturePhase, value: T) -> Option<T> {
+        matches!(phase, GesturePhase::Began | GesturePhase::Changed).then_some(value)
+    }
+
+    /// The button an indirect press is, from its event's `buttonMask`.
+    pub(crate) fn button(mask: isize) -> flui_platform::pointer::PointerButton {
+        use flui_platform::pointer::PointerButton;
+        // UIEventButtonMask: primary 1 << 0, secondary 1 << 1.
+        if mask & 0b10 != 0 && mask & 0b01 == 0 {
+            PointerButton::SECONDARY
+        } else {
+            PointerButton::PRIMARY
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{IndirectGestures, button, phase};
+        use crate::input::assembly::GesturePhase::{Began, Cancelled, Changed, Ended};
+        use flui_platform::pointer::PointerButton;
+
+        #[test]
+        fn cumulative_recognizer_values_become_changes() {
+            let mut gestures = IndirectGestures::default();
+            assert_eq!(gestures.translate(Began, (2.0, -1.0)), (2.0, -1.0));
+            assert_eq!(gestures.translate(Changed, (5.0, -1.0)), (3.0, 0.0));
+            assert_eq!(
+                gestures.translate(Changed, (f64::NAN, 0.0)),
+                (0.0, 0.0),
+                "no reading"
+            );
+            assert_eq!(gestures.translate(Ended, (6.0, 1.0)), (1.0, 2.0));
+            assert_eq!(
+                gestures.translate(Began, (1.0, 1.0)),
+                (1.0, 1.0),
+                "the next pan starts from rest"
+            );
+
+            assert_eq!(gestures.scale(Began, 2.0), 2.0);
+            assert_eq!(gestures.scale(Changed, 3.0), 1.5);
+            assert_eq!(gestures.scale(Changed, 0.0), 1.0, "no reading");
+            assert_eq!(gestures.scale(Cancelled, 1.5), 0.5);
+            assert_eq!(gestures.scale(Began, 1.25), 1.25);
+
+            assert_eq!(gestures.rotate(Began, 0.5), 0.5);
+            assert_eq!(gestures.rotate(Changed, 0.25), -0.25);
+            assert_eq!(gestures.rotate(Ended, 0.25), 0.0);
+            assert_eq!(gestures.rotate(Began, 0.1), 0.1);
+        }
+
+        #[test]
+        fn a_wheel_notch_reads_as_notched_points_and_a_trackpad_as_precise() {
+            use flui_platform::pointer::{ScrollPrecision, ScrollUnit};
+            let (notch, precision) = crate::input::apple::wheel::notched_points(0.0, 12.0);
+            assert_eq!(precision, ScrollPrecision::Notched);
+            assert_eq!(notch.unit(), ScrollUnit::Pixels);
+            let (_, precision) = crate::input::apple::wheel::step(true, 0.0, 12.0);
+            assert_eq!(precision, ScrollPrecision::Precise);
+        }
+
+        #[test]
+        fn recognizer_states_and_buttons_read_as_uikit_documents_them() {
+            let phases = [0, 1, 2, 3, 4, 5].map(phase);
+            assert_eq!(
+                phases,
+                [
+                    None,
+                    Some(Began),
+                    Some(Changed),
+                    Some(Ended),
+                    Some(Cancelled),
+                    None
+                ]
+            );
+            assert_eq!(button(0b01), PointerButton::PRIMARY);
+            assert_eq!(button(0b10), PointerButton::SECONDARY);
+            assert_eq!(
+                button(0b11),
+                PointerButton::PRIMARY,
+                "the first press leads"
+            );
+            assert_eq!(button(0), PointerButton::PRIMARY, "no mask: a tap");
+        }
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod samples {
+    //! A UIKit move with the touches UIKit coalesced into it and the ones it
+    //! predicts, assembled as one batch.
+
+    #![forbid(unsafe_code)]
+
+    use crate::input::assembly::{
+        Assembled, ContactRegistry, DecodeError, MoveBatch, NativeReading,
+    };
+
+    /// Assemble `current` with `coalesced`, UIKit's samples oldest first and
+    /// ending with the touch itself, which is `current` and so is not attached
+    /// again, and the samples UIKit `predicted` after it.
+    pub(crate) fn assemble_move(
+        contacts: &mut ContactRegistry,
+        batch: &mut MoveBatch,
+        current: &NativeReading,
+        coalesced: impl IntoIterator<Item = NativeReading>,
+        predicted: impl IntoIterator<Item = NativeReading>,
+    ) -> Assembled {
+        let mut coalesced = coalesced.into_iter().peekable();
+        while let Some(sample) = coalesced.next() {
+            if coalesced.peek().is_some() {
+                batch.push_coalesced(sample);
+            }
+        }
+        for sample in predicted {
+            batch.push_predicted(sample);
+        }
+        batch
+            .decode(contacts, current)
+            .unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::assemble_move;
+        use crate::input::assembly::{
+            ContactRegistry, MoveBatch, NativeClock, NativeContact, NativeReading, ReadingAction,
+            ReadingTime, decode,
+        };
+        use flui_platform::EventTime;
+        use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, PointerSample};
+
+        fn pencil(action: ReadingAction, ms: u64, x: f64) -> NativeReading {
+            NativeReading::new(
+                NativeContact(0),
+                PointerKind::Pen {
+                    tool: flui_platform::pointer::PenTool::Tip,
+                },
+                action,
+                ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
+            )
+            .at(x, 20.0, 1.0)
+        }
+
+        #[test]
+        fn a_uikit_move_attaches_its_coalesced_history_once_and_its_predictions() {
+            let xs = |samples: &[PointerSample]| {
+                samples
+                    .iter()
+                    .map(|sample| sample.position.get().x)
+                    .collect::<Vec<_>>()
+            };
+            let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
+            let mut batch = MoveBatch::new();
+            decode(
+                &mut contacts,
+                &pencil(ReadingAction::Press(PointerButton::PRIMARY), 10, 10.0),
+            )
+            .expect("valid");
+            let current = pencil(ReadingAction::Move, 13, 13.0);
+            let assembled = assemble_move(
+                &mut contacts,
+                &mut batch,
+                &current,
+                [11.0, 12.0, 13.0]
+                    .into_iter()
+                    .zip(11..)
+                    .map(|(x, ms)| pencil(ReadingAction::Move, ms, x)),
+                [pencil(ReadingAction::Move, 15, 15.0)],
+            )
+            .into_vec();
+            let [input] = assembled.as_slice() else {
+                panic!("one move, got {assembled:?}")
+            };
+            let Some(PointerEvent::Move(movement)) = input.as_pointer() else {
+                panic!("a move")
+            };
+            assert_eq!(
+                xs(movement.coalesced()),
+                [11.0, 12.0],
+                "the history without the touch itself"
+            );
+            assert_eq!(movement.current().position.get().x, 13.0);
+            assert_eq!(xs(movement.predicted()), [15.0]);
+
+            let alone = assemble_move(
+                &mut contacts,
+                &mut batch,
+                &pencil(ReadingAction::Move, 16, 16.0),
+                [pencil(ReadingAction::Move, 16, 16.0)],
+                [],
+            )
+            .into_vec();
+            let [input] = alone.as_slice() else {
+                panic!("one move")
+            };
+            let Some(PointerEvent::Move(movement)) = input.as_pointer() else {
+                panic!("a move")
+            };
+            assert!(
+                movement.coalesced().is_empty() && movement.predicted().is_empty(),
+                "a move UIKit coalesced nothing into carries only itself"
+            );
+        }
     }
 }
 
@@ -514,8 +1008,9 @@ pub(crate) mod macos {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
-            PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition, PointerRole, ScrollEvent, ScrollPhase,
+            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollPhase,
+            SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
@@ -537,6 +1032,7 @@ pub(crate) mod macos {
         pub(super) struct MacInputState {
             contacts: ContactRegistry,
             scrolling: ScrollPhases,
+            force: crate::input::apple::force::ForceClick,
         }
 
         impl Default for MacInputState {
@@ -552,6 +1048,7 @@ pub(crate) mod macos {
                 Self {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
+                    force: crate::input::apple::force::ForceClick::default(),
                 }
             }
         }
@@ -597,6 +1094,29 @@ pub(crate) mod macos {
                         ),
                     )];
                 }
+                if event_type == NSEventType::FlagsChanged {
+                    let key_code = event.keyCode();
+                    let Some(down) = crate::input::apple::keys::modifier_down(
+                        key_code,
+                        event.modifierFlags().bits(),
+                    ) else {
+                        return Vec::new();
+                    };
+                    let Some(key) = crate::input::apple::keys::keycode_to_key(key_code) else {
+                        return Vec::new();
+                    };
+                    let code = crate::input::apple::keys::keycode_to_code(key_code);
+                    return vec![PlatformInput::Keyboard(
+                        KeyEvent::new(
+                            if down { KeyState::Down } else { KeyState::Up },
+                            key,
+                            code,
+                            time,
+                        )
+                        .with_location(crate::input::keys::location_for_code(code))
+                        .with_modifiers(extract_modifiers(event)),
+                    )];
+                }
                 let modifiers = extract_modifiers(event);
                 let location = event.locationInWindow();
                 let (x, y) = (location.x, view_height - location.y);
@@ -629,6 +1149,7 @@ pub(crate) mod macos {
                     let Some(button) = mouse_button(event.buttonNumber()) else {
                         return Vec::new();
                     };
+                    self.force.reset();
                     let mut press = mouse(ReadingAction::Press(button));
                     if let Ok(count) = u8::try_from(event.clickCount())
                         && let Some(count) = NonZeroU8::new(count)
@@ -645,24 +1166,47 @@ pub(crate) mod macos {
                     let Some(button) = mouse_button(event.buttonNumber()) else {
                         return Vec::new();
                     };
+                    self.force.reset();
                     mouse(ReadingAction::Release(button))
+                } else if event_type == NSEventType::MouseMoved {
+                    // AppKit sends a plain move only while no button is held
+                    // (a held one makes it a drag), so the move itself says
+                    // the set is empty, as of the event: a release lost while
+                    // focus was elsewhere ends the press here instead of
+                    // swallowing the next one.
+                    mouse(ReadingAction::Move).with_buttons(PointerButtons::NONE)
                 } else if matches!(
                     event_type,
-                    NSEventType::MouseMoved
-                        | NSEventType::LeftMouseDragged
+                    NSEventType::LeftMouseDragged
                         | NSEventType::RightMouseDragged
                         | NSEventType::OtherMouseDragged
                         | NSEventType::Pressure
                 ) {
-                    // AppKit pressure stages have separate normalized curves. Keep the
-                    // first-stage reading; summing stages would invent a pressure range.
-                    let pressure = (event_type == NSEventType::Pressure && event.stage() == 1)
-                        .then(|| f64::from(event.pressure()))
-                        .filter(|pressure| (0.0..=1.0).contains(pressure));
+                    // AppKit pressure stages have separate normalized curves: the
+                    // click keeps its first stage's reading, carried onto the drags
+                    // between pressure events (`force`).
+                    let pressure = if event_type == NSEventType::Pressure {
+                        self.force.pressure_event(event.stage(), event.pressure())
+                    } else {
+                        self.force.drag()
+                    };
                     mouse(ReadingAction::Move).with_sensors(RawSensors {
                         pressure,
                         ..RawSensors::default()
                     })
+                } else if event_type == NSEventType::SmartMagnify {
+                    let Ok(position) =
+                        PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+                    else {
+                        return Vec::new();
+                    };
+                    let pointer = self
+                        .contacts
+                        .pointer(NativeSurface::default(), None, GESTURE)
+                        .unwrap_or_else(mouse_info);
+                    return vec![PlatformInput::Pointer(PointerEvent::SmartZoom(
+                        SmartZoomEvent::new(pointer, time, position).with_modifiers(modifiers),
+                    ))];
                 } else if event_type == NSEventType::ScrollWheel {
                     return self.scroll(event, time, x, y, modifiers);
                 } else if let Some((component, delta)) = gesture_component(event, event_type) {
@@ -712,13 +1256,23 @@ pub(crate) mod macos {
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
                     .with_precision(precision);
-                if let Some(phase) = scroll_phase(
-                    &mut self.scrolling,
-                    event.phase(),
-                    event.momentumPhase(),
-                    precise,
-                ) {
-                    scroll = scroll.with_phase(phase);
+                let (phase, momentum) = (event.phase(), event.momentumPhase());
+                if phase == NSEventPhase::MayBegin && momentum == NSEventPhase::None {
+                    // Fingers came to rest on the trackpad: a fling in
+                    // progress stops, as the platform's own momentum would.
+                    return vec![PlatformInput::Pointer(PointerEvent::ScrollInertiaCancel(
+                        PointerSignal::new(pointer, time).with_position(position),
+                    ))];
+                }
+                match scroll_phase(&mut self.scrolling, phase, momentum, precise) {
+                    Some(phase) => scroll = scroll.with_phase(phase),
+                    // A phased event the grammar declines (a cancel of a
+                    // gesture that never began) moved nothing: it is no wheel
+                    // tick either.
+                    None if phase != NSEventPhase::None || momentum != NSEventPhase::None => {
+                        return Vec::new();
+                    }
+                    None => {}
                 }
                 vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
             }
@@ -854,11 +1408,19 @@ pub(crate) mod macos {
                 return Key::Named(NamedKey::Unidentified);
             };
 
-            let chars_str = chars.to_string();
-            if chars_str.is_empty() {
+            let chars = chars.to_string();
+            let ignoring = event
+                .charactersIgnoringModifiers()
+                .map(|ignoring| ignoring.to_string())
+                .unwrap_or_default();
+            let control = event
+                .modifierFlags()
+                .contains(NSEventModifierFlags::Control);
+            let typed = crate::input::apple::keys::typed_text(&chars, &ignoring, control);
+            if typed.is_empty() {
                 return Key::Named(NamedKey::Unidentified);
             }
-            Key::character(chars_str)
+            Key::character(typed)
         }
 
         /// Extract modifiers from NSEvent
@@ -909,11 +1471,7 @@ pub(crate) mod macos {
                         NSEventPhase::None,
                         Some(ScrollPhase::Ended),
                     ),
-                    (
-                        NSEventPhase::Cancelled,
-                        NSEventPhase::None,
-                        Some(ScrollPhase::Cancelled),
-                    ),
+                    (NSEventPhase::Cancelled, NSEventPhase::None, None),
                     (
                         NSEventPhase::None,
                         NSEventPhase::Began,
@@ -1036,37 +1594,60 @@ pub(crate) mod ios {
     // which has no safe wrapper.
     #![expect(unsafe_code)]
 
+    use std::num::NonZeroU64;
     use std::time::Duration;
 
     use flui_platform::EventTime;
-    use flui_platform::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
+    use flui_platform::pointer::{
+        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerPosition, PointerRole, ScrollEvent,
+    };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
     use objc2_foundation::NSProcessInfo;
     use objc2_ui_kit::{
-        UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer, UITouch,
-        UITouchType, UITraitEnvironment, UIView,
+        UIEvent, UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer,
+        UITouch, UITouchType, UITraitEnvironment, UIView,
     };
 
+    use crate::input::apple::indirect::IndirectGestures;
     use crate::input::assembly::{
-        ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
-        NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+        ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
+        GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact, NativeReading,
+        NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases,
+        ScrollReading, decode,
     };
-    use crate::owner::apple::ios::{TouchPhase, ViewTouches};
+    use crate::owner::apple::ios::{TouchPhase, TrackpadGesture, ViewTouches};
     use flui_platform::PlatformInput;
 
     /// The view's touches are its input's: each view keeps its own contacts.
     impl ViewTouches for TouchInputState {
-        fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
-            self.convert(touch, phase)
+        fn touch(
+            &mut self,
+            touch: &UITouch,
+            phase: TouchPhase,
+            event: Option<&UIEvent>,
+        ) -> Vec<PlatformInput> {
+            self.convert(touch, phase, event)
         }
 
         fn hover(
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
-            TouchInputState::hover(self, recognizer, view)
+            TouchInputState::hover(self, recognizer, view, stamp)
+        }
+
+        fn trackpad(
+            &mut self,
+            gesture: TrackpadGesture,
+            state: isize,
+            location: (f64, f64),
+            stamp: Option<f64>,
+        ) -> Vec<PlatformInput> {
+            TouchInputState::trackpad(self, gesture, state, location, stamp)
         }
     }
 
@@ -1076,12 +1657,25 @@ pub(crate) mod ios {
     /// The indirect pointer (a trackpad or mouse cursor): one contact for every
     /// `UITouch` UIKit makes for it.
     const CURSOR: NativeContact = NativeContact(1);
+    /// The trackpad's pinch and rotation, one session. A touch's contact is
+    /// its address, which is never 2.
+    const TRACKPAD: NativeContact = NativeContact(2);
 
     /// Contacts admitted by one UIKit view; no address arithmetic mints identities.
     pub(crate) struct TouchInputState {
         contacts: ContactRegistry,
         /// The touch the primary Pencil's contact is, while its tip is down.
         pencil_touch: Option<usize>,
+        /// The button the indirect pointer holds, from its press to its release.
+        cursor_button: Option<PointerButton>,
+        /// The trackpad's two-finger scrolls.
+        scrolling: ScrollPhases,
+        /// The last value each indirect gesture reported.
+        indirect: IndirectGestures,
+        /// The last translation the mouse wheel's recognizer reported.
+        wheel: IndirectGestures,
+        /// The coalesced and predicted samples of the move being assembled.
+        batch: MoveBatch,
     }
 
     impl Default for TouchInputState {
@@ -1097,17 +1691,25 @@ pub(crate) mod ios {
             Self {
                 contacts: ContactRegistry::new(clock).with_reserved_contact(PENCIL),
                 pencil_touch: None,
+                cursor_button: None,
+                scrolling: ScrollPhases::default(),
+                indirect: IndirectGestures::default(),
+                wheel: IndirectGestures::default(),
+                batch: MoveBatch::new(),
             }
         }
     }
 
     impl TouchInputState {
         /// The recognizer is restricted to Stylus at registration; a mouse cannot
-        /// acquire Pencil sensors through this path.
+        /// acquire Pencil sensors through this path. `stamp` is the uptime of
+        /// the event that drove the recognizer: the clock the Pencil's touches
+        /// are stamped on, so its hover and its contact share one.
         pub(crate) fn hover(
             &mut self,
             recognizer: &UIHoverGestureRecognizer,
             view: &UIView,
+            stamp: Option<f64>,
         ) -> Vec<PlatformInput> {
             if self.pencil_touch.is_some() {
                 // Contact samples own this Pencil while its tip is down.
@@ -1116,8 +1718,12 @@ pub(crate) mod ios {
             // SAFETY: UIKit invokes this target with a live gesture recognizer;
             // `state` is its documented enum-valued getter (omitted by the bindings).
             let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
-            let time =
-                ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let time = match stamp {
+                Some(uptime) => ReadingTime::coarse(NativeTime::UptimeSeconds(uptime)),
+                None => {
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()))
+                }
+            };
             let pencil = |action| {
                 NativeReading::new(
                     PENCIL,
@@ -1163,7 +1769,153 @@ pub(crate) mod ios {
             events
         }
 
-        pub(crate) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
+        /// An indirect gesture: a two-finger scroll is phased scroll, a pinch
+        /// and a rotation are one trackpad session, and the cursor's hover
+        /// enters, moves and leaves while no button is held.
+        pub(crate) fn trackpad(
+            &mut self,
+            gesture: TrackpadGesture,
+            state: isize,
+            (x, y): (f64, f64),
+            stamp: Option<f64>,
+        ) -> Vec<PlatformInput> {
+            let Some(phase) = crate::input::apple::indirect::phase(state) else {
+                return Vec::new();
+            };
+            let reading_time = match stamp {
+                Some(uptime) => ReadingTime::coarse(NativeTime::UptimeSeconds(uptime)),
+                None => {
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()))
+                }
+            };
+            let placed = |reading: NativeReading| {
+                if x.is_finite() && y.is_finite() {
+                    reading.at(x, y, 1.0)
+                } else {
+                    reading
+                }
+            };
+            let (component, delta) = match gesture {
+                TrackpadGesture::Scroll { translation } => {
+                    let (dx, dy) = self.indirect.translate(phase, translation);
+                    return self.trackpad_scroll(true, phase, (dx, dy), (x, y), reading_time);
+                }
+                TrackpadGesture::Wheel { translation } => {
+                    let (dx, dy) = self.wheel.translate(phase, translation);
+                    return self.trackpad_scroll(false, phase, (dx, dy), (x, y), reading_time);
+                }
+                TrackpadGesture::Pinch { scale } => (
+                    GestureComponent::Scale,
+                    GestureDelta::Scale(self.indirect.scale(phase, scale)),
+                ),
+                TrackpadGesture::Rotation { radians } => (
+                    GestureComponent::Rotation,
+                    GestureDelta::Rotation(self.indirect.rotate(phase, radians)),
+                ),
+                TrackpadGesture::Hover => {
+                    // A held button makes the cursor's moves the press's own.
+                    if self.cursor_button.is_some() {
+                        return Vec::new();
+                    }
+                    let cursor = |action| {
+                        placed(
+                            NativeReading::new(CURSOR, PointerKind::Mouse, action, reading_time)
+                                .with_primary(true),
+                        )
+                    };
+                    return match phase {
+                        GesturePhase::Began => {
+                            let mut events = self.assemble(&cursor(ReadingAction::Enter));
+                            events.extend(self.assemble(&cursor(ReadingAction::Move)));
+                            events
+                        }
+                        GesturePhase::Changed => self.assemble(&cursor(ReadingAction::Move)),
+                        GesturePhase::Ended | GesturePhase::Cancelled => {
+                            self.assemble(&cursor(ReadingAction::Leave))
+                        }
+                    };
+                }
+            };
+            let reading = placed(
+                NativeReading::new(
+                    TRACKPAD,
+                    PointerKind::Trackpad,
+                    ReadingAction::Gesture(GestureReading {
+                        component,
+                        phase,
+                        delta,
+                    }),
+                    reading_time,
+                )
+                .with_primary(true),
+            );
+            self.assemble(&reading)
+        }
+
+        /// One step of a scroll, `delta` in view points the content moves:
+        /// a trackpad's two fingers are precise and phased, a mouse wheel's
+        /// notches are neither, so no notch opens a trackpad contact.
+        fn trackpad_scroll(
+            &mut self,
+            precise: bool,
+            phase: GesturePhase,
+            (dx, dy): (f64, f64),
+            (x, y): (f64, f64),
+            reading_time: ReadingTime,
+        ) -> Vec<PlatformInput> {
+            let owned = if precise {
+                let Some(owned) = self.scrolling.phase(
+                    NativeSurface::default(),
+                    None,
+                    ScrollReading::fingers(phase, true),
+                ) else {
+                    return Vec::new();
+                };
+                Some(owned)
+            } else {
+                // A wheel's recognizer ends where its notches stop; the end
+                // moves nothing.
+                if !matches!(phase, GesturePhase::Began | GesturePhase::Changed) {
+                    return Vec::new();
+                }
+                None
+            };
+            let Ok(position) =
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+            else {
+                return Vec::new();
+            };
+            let time = self
+                .contacts
+                .clock()
+                .stamp(reading_time, ClockChoice::Coarse)
+                .unwrap_or_else(|| EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let pointer = self
+                .contacts
+                .pointer(NativeSurface::default(), None, CURSOR)
+                .unwrap_or_else(|| {
+                    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+                        .with_role(PointerRole::Primary)
+                });
+            let (delta, precision) = if precise {
+                crate::input::apple::wheel::step(true, dx, dy)
+            } else {
+                crate::input::apple::wheel::notched_points(dx, dy)
+            };
+            let scroll = ScrollEvent::new(pointer, time, position, delta).with_precision(precision);
+            let scroll = match owned {
+                Some(owned) => scroll.with_phase(owned),
+                None => scroll,
+            };
+            vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
+        }
+
+        pub(crate) fn convert(
+            &mut self,
+            touch: &UITouch,
+            phase: TouchPhase,
+            event: Option<&UIEvent>,
+        ) -> Vec<PlatformInput> {
             let address = std::ptr::from_ref(touch) as usize;
             let kind = pointer_kind(touch);
             let contact = if kind == PointerKind::Mouse {
@@ -1181,45 +1933,67 @@ pub(crate) mod ios {
             if contact == PENCIL && matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
                 self.pencil_touch = None;
             }
+            // An indirect press is the button its event names (iOS 13.4); a
+            // finger or a Pencil is the primary one.
+            let pressed = if contact == CURSOR {
+                match phase {
+                    TouchPhase::Down => {
+                        let buttons = event
+                            .filter(|event| event.respondsToSelector(sel!(buttonMask)))
+                            .map_or(0, |event| event.buttonMask().0);
+                        let button = crate::input::apple::indirect::button(buttons);
+                        self.cursor_button = Some(button);
+                        button
+                    }
+                    TouchPhase::Up | TouchPhase::Cancel => {
+                        self.cursor_button.take().unwrap_or(PointerButton::PRIMARY)
+                    }
+                    TouchPhase::Move => PointerButton::PRIMARY,
+                }
+            } else {
+                PointerButton::PRIMARY
+            };
             let action = match phase {
-                TouchPhase::Down => ReadingAction::Press(PointerButton::PRIMARY),
+                TouchPhase::Down => ReadingAction::Press(pressed),
                 TouchPhase::Move => ReadingAction::Move,
-                TouchPhase::Up => ReadingAction::Release(PointerButton::PRIMARY),
+                TouchPhase::Up => ReadingAction::Release(pressed),
                 TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
             };
             let view = touch.view();
-            let location = touch.locationInView(view.as_deref());
-            let is_pen = matches!(kind, PointerKind::Pen { .. });
-            let has_force = is_pen
+            let has_force = matches!(kind, PointerKind::Pen { .. })
                 || view.as_ref().is_some_and(|view| {
                     view.traitCollection().forceTouchCapability()
                         == UIForceTouchCapability::Available
                 });
-            let mut sensors = touch_sensors(
-                has_force,
-                touch.force(),
-                touch.maximumPossibleForce(),
-                touch.majorRadius(),
-            );
-            if is_pen {
-                sensors.angles = pen_angles(
-                    touch.altitudeAngle(),
-                    touch.azimuthAngleInView(view.as_deref()),
-                );
-            }
-            let reading = NativeReading::new(
-                contact,
-                kind,
-                action,
-                ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
-            )
-            .at(location.x, location.y, 1.0)
-            .with_sensors(sensors);
-            let reading = if contact == PENCIL || contact == CURSOR {
-                reading.with_primary(true)
-            } else {
-                reading
+            let read = |sample: &UITouch, action| {
+                touch_reading(sample, contact, kind, action, view.as_deref(), has_force)
             };
+            let reading = read(touch, action);
+            // A move carries the samples UIKit coalesced into it (a Pencil
+            // reports at 240 Hz, the display takes fewer) and the ones it
+            // predicts. The coalesced list ends with the touch itself.
+            if let (TouchPhase::Move, Some(event)) = (phase, event) {
+                let coalesced = event
+                    .coalescedTouchesForTouch(touch)
+                    .map(|samples| samples.to_vec())
+                    .unwrap_or_default();
+                let predicted = event
+                    .predictedTouchesForTouch(touch)
+                    .map(|samples| samples.to_vec())
+                    .unwrap_or_default();
+                return crate::input::apple::samples::assemble_move(
+                    &mut self.contacts,
+                    &mut self.batch,
+                    &reading,
+                    coalesced
+                        .iter()
+                        .map(|sample| read(sample, ReadingAction::Move)),
+                    predicted
+                        .iter()
+                        .map(|sample| read(sample, ReadingAction::Move)),
+                )
+                .into_vec();
+            }
             self.assemble(&reading)
         }
 
@@ -1227,6 +2001,42 @@ pub(crate) mod ios {
             decode(&mut self.contacts, reading)
                 .unwrap_or_else(DecodeError::into_inputs)
                 .into_vec()
+        }
+    }
+
+    /// One UIKit sample of `contact` as a reading: its location in `view`,
+    /// its force where `has_force`, its radius and a Pencil's angles, on its
+    /// hardware uptime.
+    fn touch_reading(
+        touch: &UITouch,
+        contact: NativeContact,
+        kind: PointerKind,
+        action: ReadingAction,
+        view: Option<&UIView>,
+        has_force: bool,
+    ) -> NativeReading {
+        let location = touch.locationInView(view);
+        let mut sensors = touch_sensors(
+            has_force,
+            touch.force(),
+            touch.maximumPossibleForce(),
+            touch.majorRadius(),
+        );
+        if matches!(kind, PointerKind::Pen { .. }) {
+            sensors.angles = pen_angles(touch.altitudeAngle(), touch.azimuthAngleInView(view));
+        }
+        let reading = NativeReading::new(
+            contact,
+            kind,
+            action,
+            ReadingTime::coarse(NativeTime::UptimeSeconds(touch.timestamp())),
+        )
+        .at(location.x, location.y, 1.0)
+        .with_sensors(sensors);
+        if contact == PENCIL || contact == CURSOR {
+            reading.with_primary(true)
+        } else {
+            reading
         }
     }
 

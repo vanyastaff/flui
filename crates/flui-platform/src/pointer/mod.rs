@@ -17,7 +17,8 @@
 //! - **Scrolling and trackpad gestures.** [`ScrollEvent`] keeps the delta's unit, its
 //!   precision and its gesture phase, and a two-finger trackpad pan is a phased scroll on
 //!   every backend; [`PanZoomEvent`] carries a trackpad's pinch and rotation as one cumulative
-//!   transform about a focal point between `Start` and `End`.
+//!   transform about a focal point between `Start` and `End`; [`SmartZoomEvent`] is the
+//!   trackpad's two-finger double-tap.
 //! - **Revisions and pen actions.** [`PointerRevision`] corrects an estimated reading for
 //!   listeners; [`PenSqueeze`] is a barrel squeeze, not a contact.
 //!
@@ -64,7 +65,7 @@ use core::marker::PhantomData;
 use core::num::{NonZeroU8, NonZeroU64, TryFromIntError};
 
 pub use buttons::{InvalidButtonNumber, PointerButton, PointerButtons};
-pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform, SmartZoomEvent};
 pub use sample::PointerSample;
 pub use scroll::{ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit};
 pub use value::{
@@ -910,6 +911,9 @@ pub enum PointerEvent {
     /// A trackpad pinch/rotate gesture event. A two-finger pan is a phased
     /// [`Scroll`](Self::Scroll), never this.
     PanZoom(PanZoomEvent),
+    /// The platform's smart zoom: a two-finger double-tap on a trackpad. One discrete
+    /// event, offered to the innermost target that claims it.
+    SmartZoom(SmartZoomEvent),
     /// Final sensor values for a reading already delivered. Reaches pointer listeners and
     /// recordings only, never gesture recognizers.
     Revise(PointerRevision),

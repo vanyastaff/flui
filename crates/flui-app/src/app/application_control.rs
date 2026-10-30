@@ -5,7 +5,10 @@ use parking_lot::Mutex;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -105,8 +108,31 @@ enum Phase {
     Quitting,
     Closed,
 }
+/// A quit the application asked for through [`AppHandle::request_quit`],
+/// until the owner commits it or it is cancelled.
+#[derive(Debug, Default, PartialEq, Eq)]
+enum QuitAsk {
+    #[default]
+    None,
+    /// The owner asks every presentation on its next turn.
+    Asked,
+    /// The owner is asking now.
+    Consulting,
+    /// Presentations refused, each recording the close on its guard; the
+    /// quit waits for each record to be carried out.
+    Deferred(Vec<PresentationAddress>),
+}
+/// What the presentations answered a quit the application asked for.
+pub(crate) enum QuitAnswer {
+    /// A refusal recorded nothing to wait on: the quit is cancelled.
+    Cancelled,
+    /// The presentations whose recorded close the quit waits on; none, and
+    /// the quit goes ahead.
+    Waiting(Vec<PresentationAddress>),
+}
 struct State {
     phase: Phase,
+    quit: QuitAsk,
     intent: bool,
     active: bool,
     batch: Option<Arc<()>>,
@@ -133,14 +159,58 @@ impl AppHandle {
     pub fn request_show_main_window(&self) -> Result<WindowRequest, AppControlError> {
         self.ingress.request_show()
     }
-    /// Fence new work immediately and request ordinary application shutdown.
+    /// Ask to quit the application.
+    ///
+    /// The quit is a close every presentation may refuse, as
+    /// [`CloseReason::Program`](crate::app::CloseReason::Program). On the
+    /// owner's next turn each one is asked: its close guard first, then its
+    /// close-request handler. When none refuses, new work is fenced and the
+    /// application shuts down as it always did. When some refuse, each
+    /// records the close on its guard and the quit is deferred: it goes ahead
+    /// once every record is carried out (the holds released, or
+    /// `PendingClose::discard_and_close`), without asking again, and is
+    /// cancelled when one is resolved with `PendingClose::stay_open`. A
+    /// refusal that records nothing, a handler that panicked or a
+    /// presentation without a guard, cancels the quit at once. A second call
+    /// while the quit is deferred asks every presentation again.
+    ///
+    /// # Errors
+    ///
+    /// [`AppControlError::OwnerGone`] once the application has shut down,
+    /// and [`AppControlError::WakeFailed`] when the owner could not be woken
+    /// to ask.
     pub fn request_quit(&self) -> Result<(), AppControlError> {
         let mut state = self.ingress.state.lock();
-        if state.phase == Phase::Closed {
+        match state.phase {
+            Phase::Closed => return Err(AppControlError::OwnerGone),
+            Phase::Quitting => return Ok(()),
+            Phase::Accepting => {}
+        }
+        self.ingress.proxy.wake().map_err(control_error)?;
+        state.quit = QuitAsk::Asked;
+        Ok(())
+    }
+    /// Ask every window whose GPU device rebuild was given up to try again
+    /// (ADR-0267).
+    ///
+    /// A device that keeps failing to rebuild is given up after ten failures
+    /// at the one-second retry ceiling, about twelve seconds after the loss:
+    /// the window reports
+    /// [`DeviceRecovery::Abandoned`](crate::DeviceRecovery::Abandoned) through
+    /// its [`FrameFailureHandler`](crate::FrameFailureHandler), attempts no
+    /// more frames and stays as it was until this call, typically after the
+    /// user installed a driver or reconnected a GPU. The rebuild then starts
+    /// over at once, with a fresh streak. A window whose device is healthy or
+    /// still being rebuilt ignores the request.
+    ///
+    /// Every rendering window of the application this handle controls follows
+    /// the request.
+    pub fn retry_render_device(&self) -> Result<(), AppControlError> {
+        if self.ingress.state.lock().phase == Phase::Closed {
             return Err(AppControlError::OwnerGone);
         }
-        state.phase = Phase::Quitting;
-        self.ingress.proxy.request_quit().map_err(control_error)
+        self.ingress.device_retry.request();
+        Ok(())
     }
 }
 
@@ -179,16 +249,67 @@ impl Future for WindowRequest {
     }
 }
 
+/// The application's requests to rebuild a given-up GPU device (ADR-0267),
+/// shared by [`AppHandle`] and the windows that render.
+#[derive(Default)]
+pub(crate) struct DeviceRetry {
+    /// Requests so far; a window compares it with the count it last acted on.
+    requests: AtomicU64,
+    /// Each rendering window's frame wake, held weakly so a closed window's
+    /// UI runtime is not kept alive.
+    wakes: Mutex<Vec<Weak<dyn Fn() + Send + Sync>>>,
+}
+impl DeviceRetry {
+    /// Follow the requests on behalf of a window that `wake` asks a frame of.
+    pub(crate) fn watch(self: &Arc<Self>, wake: &Arc<dyn Fn() + Send + Sync>) -> DeviceRetryWatch {
+        let mut wakes = self.wakes.lock();
+        wakes.retain(|wake| wake.strong_count() > 0);
+        wakes.push(Arc::downgrade(wake));
+        drop(wakes);
+        DeviceRetryWatch {
+            seen: self.requests.load(Ordering::Acquire),
+            retry: Arc::clone(self),
+        }
+    }
+    /// Count a request and ask every live window for a frame, which acts on
+    /// it. The wakes run without the list's lock held.
+    fn request(&self) {
+        self.requests.fetch_add(1, Ordering::AcqRel);
+        let wakes: Vec<_> = self.wakes.lock().iter().filter_map(Weak::upgrade).collect();
+        for wake in wakes {
+            wake();
+        }
+    }
+}
+
+/// One window's view of [`DeviceRetry`]: whether a request arrived since its
+/// last frame.
+pub(crate) struct DeviceRetryWatch {
+    retry: Arc<DeviceRetry>,
+    seen: u64,
+}
+impl DeviceRetryWatch {
+    /// Whether the application asked for a rebuild since the last call.
+    pub(crate) fn take_request(&mut self) -> bool {
+        let requests = self.retry.requests.load(Ordering::Acquire);
+        let requested = requests != self.seen;
+        self.seen = requests;
+        requested
+    }
+}
 pub(crate) struct Ingress {
     state: Mutex<State>,
     proxy: PlatformProxy,
+    device_retry: Arc<DeviceRetry>,
 }
 impl Ingress {
     pub(crate) fn new(proxy: PlatformProxy, startup_open: bool) -> Arc<Self> {
         Arc::new(Self {
+            device_retry: Arc::default(),
             proxy,
             state: Mutex::new(State {
                 phase: Phase::Accepting,
+                quit: QuitAsk::None,
                 intent: startup_open,
                 active: false,
                 batch: None,
@@ -200,6 +321,9 @@ impl Ingress {
                 replies: Vec::new(),
             }),
         })
+    }
+    pub(crate) fn device_retry(&self) -> &Arc<DeviceRetry> {
+        &self.device_retry
     }
     pub(crate) fn handle(self: &Arc<Self>) -> AppHandle {
         AppHandle {
@@ -354,6 +478,104 @@ impl Ingress {
             contain(|| drop(reply));
         }
     }
+    /// Quit now, past every presentation: the application's own failure
+    /// (its initial window, a service that would not start, `on_ready`
+    /// panicking), which no presentation may refuse. New work is fenced at
+    /// once.
+    pub(crate) fn quit_now(&self) -> Result<(), AppControlError> {
+        let mut state = self.state.lock();
+        if state.phase == Phase::Closed {
+            return Err(AppControlError::OwnerGone);
+        }
+        Self::commit_quit(&mut state, &self.proxy)
+    }
+
+    fn commit_quit(state: &mut State, proxy: &PlatformProxy) -> Result<(), AppControlError> {
+        state.phase = Phase::Quitting;
+        state.quit = QuitAsk::None;
+        proxy.request_quit().map_err(control_error)
+    }
+
+    /// Start the owner's consultation of a quit the application asked for:
+    /// `true` when one is asked and nothing has fenced the application yet.
+    pub(crate) fn begin_quit_consult(&self) -> bool {
+        let mut state = self.state.lock();
+        if state.phase != Phase::Accepting || state.quit != QuitAsk::Asked {
+            return false;
+        }
+        state.quit = QuitAsk::Consulting;
+        true
+    }
+
+    /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
+    /// started with what the presentations answered. A quit asked again
+    /// while they were asked stays asked for the next turn.
+    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) {
+        let mut state = self.state.lock();
+        if state.quit != QuitAsk::Consulting {
+            return;
+        }
+        match answer {
+            QuitAnswer::Cancelled => {
+                state.quit = QuitAsk::None;
+                drop(state);
+                tracing::info!(
+                    "a presentation refused the quit without recording it; quit cancelled"
+                );
+            }
+            QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
+                state.quit = QuitAsk::Deferred(waiting);
+            }
+            QuitAnswer::Waiting(_) => {
+                if let Err(error) = Self::commit_quit(&mut state, &self.proxy) {
+                    drop(state);
+                    tracing::error!(%error, "quit notification failed");
+                }
+            }
+        }
+    }
+
+    /// The presentation at `address` gave the deferred quit its consent: its
+    /// recorded close was carried out, or it is gone. The quit goes ahead
+    /// once no presentation is left to wait on.
+    pub(crate) fn quit_consented(&self, address: PresentationAddress) {
+        let mut state = self.state.lock();
+        let QuitAsk::Deferred(waiting) = &mut state.quit else {
+            return;
+        };
+        waiting.retain(|waited| *waited != address);
+        if waiting.is_empty()
+            && let Err(error) = Self::commit_quit(&mut state, &self.proxy)
+        {
+            drop(state);
+            tracing::error!(%error, "deferred quit notification failed");
+        }
+    }
+
+    /// The presentation at `address` kept itself open: the deferred quit it
+    /// was waited on for is cancelled.
+    pub(crate) fn quit_declined(&self, address: PresentationAddress) {
+        let mut state = self.state.lock();
+        if let QuitAsk::Deferred(waiting) = &state.quit
+            && waiting.contains(&address)
+        {
+            state.quit = QuitAsk::None;
+            drop(state);
+            tracing::info!(
+                ?address,
+                "a presentation stayed open; deferred quit cancelled"
+            );
+        }
+    }
+
+    /// The presentations a deferred quit still waits on.
+    pub(crate) fn quit_waiting(&self) -> Vec<PresentationAddress> {
+        match &self.state.lock().quit {
+            QuitAsk::Deferred(waiting) => waiting.clone(),
+            QuitAsk::None | QuitAsk::Asked | QuitAsk::Consulting => Vec::new(),
+        }
+    }
+
     pub(crate) fn try_auto_quit(&self) -> bool {
         let mut state = self.state.lock();
         if state.phase != Phase::Accepting {

@@ -307,7 +307,7 @@ struct ViewerConfig {
 /// };
 /// use flui_painting::styling::Color;
 ///
-/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+/// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(
 ///     ControlSpec::new(GestureCommand::new("Zoom in", ZoomIntent::In), SizedBox::new(16.0, 16.0))
 ///         .control(GestureCommand::new("Zoom out", ZoomIntent::Out), SizedBox::new(16.0, 16.0)),
 /// ))
@@ -455,8 +455,8 @@ impl InteractiveViewer {
         self
     }
 
-    /// Whether a double tap performs the first command of the alternatives
-    /// (default `true`). A double tap holds a single tap on the content
+    /// Whether a double tap, or a trackpad's smart zoom, performs the first
+    /// command of the alternatives (default `true`). A double tap holds a single tap on the content
     /// until the double-tap timeout passes; turn it off where the content's
     /// own taps must not wait.
     #[must_use]
@@ -1636,7 +1636,7 @@ impl FocalFling {
         self.stop(ScrollEndReason::Preempted);
         let speed = velocity.dx.hypot(velocity.dy);
         let geometry = core.geometry();
-        let simulation = FrictionSimulation::new(0.1, 0.0, speed, Tolerance::DEFAULT);
+        let simulation = FrictionSimulation::try_new(0.1, 0.0, speed, Tolerance::DEFAULT);
         let (Some(post_frame), Some((viewport, boundary)), Ok(simulation), true) = (
             post_frame,
             geometry,
@@ -2380,11 +2380,17 @@ impl InteractiveViewerState {
             if config.double_tap_zoom {
                 let hint_core = Rc::clone(&core);
                 let tap_core = Rc::clone(&core);
+                let zoom_core = Rc::clone(&core);
                 recognized = recognized
                     .on_double_tap_down(move |_cx, details| {
                         hint_core.focal_hint.set(Some(details.local_position));
                     })
-                    .on_double_tap(move |cx| double_tap(&tap_core, cx));
+                    .on_double_tap(move |cx| double_tap(&tap_core, cx))
+                    // A trackpad's smart zoom is the same gesture.
+                    .on_smart_zoom(move |cx, details| {
+                        zoom_core.focal_hint.set(Some(details.local_position));
+                        double_tap(&zoom_core, cx);
+                    });
             }
             let recognized = recognized.child(clipped);
 

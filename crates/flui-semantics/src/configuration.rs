@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
+    action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     collection::{CellPosition, SetSize, SortDirection, TableShape},
     properties::{
@@ -20,7 +20,7 @@ use crate::{
         TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::{Assertiveness, SemanticsRole},
+    role::{LiveSetting, SemanticsRole},
     states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled},
 };
 
@@ -93,6 +93,12 @@ pub struct SemanticsConfiguration {
     /// If true, children semantics won't be merged into this node.
     is_semantics_boundary: bool,
 
+    /// Whether this node stops an outer merge without merging its own
+    /// descendants (ADR-0214 §3): it keeps a node of its own under a merging
+    /// ancestor, and its descendants form their nodes as they would outside
+    /// any merge.
+    is_merge_boundary: bool,
+
     /// Whether pointer-related user actions from this configuration and its
     /// subtree are blocked from assistive-technology dispatch.
     ///
@@ -135,6 +141,11 @@ pub struct SemanticsConfiguration {
     /// A merge renumbers the published id; the handler still receives this one.
     custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
+    /// Told when the assistive technology's cursor enters or leaves the
+    /// subtree of the node this configuration forms or merges into. Merging
+    /// keeps every contributor's.
+    assistive_focus_handlers: SmallVec<[AssistiveFocusHandler; 1]>,
+
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
 }
@@ -152,6 +163,7 @@ impl PartialEq for SemanticsConfiguration {
         self.has_reveal_ancestor == other.has_reveal_ancestor
             && self.has_been_annotated == other.has_been_annotated
             && self.is_semantics_boundary == other.is_semantics_boundary
+            && self.is_merge_boundary == other.is_merge_boundary
             && self.blocks_user_actions == other.blocks_user_actions
             && self.blocks_previous_siblings == other.blocks_previous_siblings
             && self.collection == other.collection
@@ -165,6 +177,12 @@ impl PartialEq for SemanticsConfiguration {
                 .iter()
                 .zip(&other.custom_handlers)
                 .all(|((a_id, a), (b_id, b))| a_id == b_id && Rc::ptr_eq(a, b))
+            && self.assistive_focus_handlers.len() == other.assistive_focus_handlers.len()
+            && self
+                .assistive_focus_handlers
+                .iter()
+                .zip(&other.assistive_focus_handlers)
+                .all(|(a, b)| Rc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -187,6 +205,7 @@ impl SemanticsConfiguration {
         let Self {
             actions,
             custom_handlers,
+            assistive_focus_handlers,
             attributes,
             ..
         } = self;
@@ -194,6 +213,9 @@ impl SemanticsConfiguration {
             recovery.retire(handler);
         }
         for (_, handler) in custom_handlers {
+            recovery.retire(handler);
+        }
+        for handler in assistive_focus_handlers {
             recovery.retire(handler);
         }
         drop(attributes);
@@ -279,6 +301,30 @@ impl SemanticsConfiguration {
     /// its parent, creating a distinct semantics node.
     pub fn set_semantics_boundary(&mut self, value: bool) {
         self.is_semantics_boundary = value;
+    }
+
+    /// Returns whether this node is a merge boundary (ADR-0214 §3).
+    #[inline]
+    pub fn is_merge_boundary(&self) -> bool {
+        self.is_merge_boundary
+    }
+
+    /// Makes this node a merge boundary (ADR-0214 §3): it forms a node of its
+    /// own even under a merging ancestor, as a nested merger does, but merges
+    /// none of its descendants, so a control inside it keeps its own node. A
+    /// `SelectionArea` is one, so its paragraphs and controls stay addressable
+    /// inside a merged list tile.
+    pub fn set_merge_boundary(&mut self, value: bool) {
+        self.is_merge_boundary = value;
+    }
+
+    /// Whether this node makes selections for the texts it holds: a merge
+    /// boundary that takes `SetTextSelection` (ADR-0214 §4). A request on
+    /// one of those texts is routed here, and a document beneath this one
+    /// holds its own texts.
+    pub(crate) fn makes_document_selections(&self) -> bool {
+        self.is_merge_boundary
+            && self.effective_actions_as_bits() & SemanticsAction::SetTextSelection.value() != 0
     }
 
     /// Returns whether pointer-related user actions are blocked.
@@ -644,17 +690,45 @@ impl SemanticsConfiguration {
 
     /// Makes this node a live region, whose changes assistive technology
     /// announces without the user moving to it: politely, after what is being
-    /// read, or assertively, interrupting it. `None` makes it an ordinary node.
-    pub fn set_live_region(&mut self, politeness: Option<Assertiveness>) {
-        self.attributes.live = politeness;
+    /// read, or assertively, interrupting it; `Off` keeps it silent inside an
+    /// enclosing region.
+    pub fn set_live_region(&mut self, setting: LiveSetting) {
+        self.attributes.live = Some(setting);
         self.mark_annotated();
     }
 
-    /// How this live region's changes are announced, or `None` when it is
-    /// not one.
+    /// How this live region's changes are announced, or `None` when the node
+    /// declares no setting: then its role's ARIA default applies, else the
+    /// enclosing region's.
     #[must_use]
-    pub fn live_region(&self) -> Option<Assertiveness> {
+    pub fn live_region(&self) -> Option<LiveSetting> {
         self.attributes.live
+    }
+
+    /// Declares whether a change announces the whole region rather than only
+    /// what changed (`aria-atomic`). Undeclared, an `Alert` or `Status` is
+    /// atomic and anything else is not.
+    pub fn set_live_atomic(&mut self, atomic: bool) {
+        self.attributes.live_atomic = Some(atomic);
+        self.mark_annotated();
+    }
+
+    /// Whether a change announces the whole region, `None` when not declared.
+    #[must_use]
+    pub fn live_atomic(&self) -> Option<bool> {
+        self.attributes.live_atomic
+    }
+
+    /// Declares whether this node is being updated (`aria-busy`): a screen
+    /// reader holds back the announcements of its subtree until it is not.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.declare(|states| states.busy = Some(busy));
+    }
+
+    /// Whether this node is being updated, `None` when not declared.
+    #[inline]
+    pub fn busy(&self) -> Option<bool> {
+        self.attributes.states.busy
     }
 
     // ========================================================================
@@ -818,7 +892,8 @@ impl SemanticsConfiguration {
 
     /// Sets the stable identifier tests and automation select this node by
     /// (ADR-0240), published as AccessKit `author_id`: UI Automation's
-    /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id.
+    /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id, iOS's
+    /// `accessibilityIdentifier` and Android's `viewIdResourceName`.
     ///
     /// It is never announced, and it is not semantic payload: setting it
     /// marks nothing annotated and makes no boundary, so adding one never
@@ -909,6 +984,22 @@ impl SemanticsConfiguration {
         self.actions
             .values()
             .chain(self.custom_handlers.iter().map(|(_, handler)| handler))
+    }
+
+    /// Tell `handler` when the assistive technology's cursor enters or leaves
+    /// the subtree of the node this configuration forms or merges into.
+    /// Annotates the configuration, as an action does, so a handler alone
+    /// merges into the node above it.
+    pub fn add_assistive_focus_handler(&mut self, handler: AssistiveFocusHandler) {
+        self.assistive_focus_handlers.push(handler);
+        self.mark_annotated();
+    }
+
+    /// The handlers told when the assistive technology's cursor enters or
+    /// leaves this node's subtree, in the order they were added and merged.
+    #[must_use]
+    pub fn assistive_focus_handlers(&self) -> &[AssistiveFocusHandler] {
+        &self.assistive_focus_handlers
     }
 
     /// Record the ancestor reveal route discovered during render assembly.
@@ -1370,6 +1461,41 @@ impl SemanticsConfiguration {
         self.attributes.current_value_length
     }
 
+    /// Declares the field's text as runs, with its selection: published as
+    /// the field's `TextRun` children once the pipeline has given the runs
+    /// their identities. Only a text field publishes runs.
+    pub fn set_text_content(&mut self, content: crate::TextContent) {
+        self.attributes.text = Some(Arc::new(content));
+        self.mark_annotated();
+    }
+
+    /// Removes the field's text runs, as when their geometry cannot be
+    /// published.
+    pub fn clear_text_content(&mut self) {
+        self.attributes.text = None;
+    }
+
+    /// The field's text as runs, if declared.
+    #[inline]
+    pub fn text_content(&self) -> Option<&crate::TextContent> {
+        self.attributes.text.as_deref()
+    }
+
+    /// Declares the document's selection across the texts beneath this node
+    /// (ADR-0214 §3): published as the node's text selection in the runs of
+    /// the texts whose anchors it names, once both are published beneath it.
+    /// `None` clears it.
+    pub fn set_document_selection(&mut self, selection: Option<crate::DocumentSelection>) {
+        self.attributes.document_selection = selection;
+        self.mark_annotated();
+    }
+
+    /// The document's selection, if declared.
+    #[inline]
+    pub fn document_selection(&self) -> Option<&crate::DocumentSelection> {
+        self.attributes.document_selection.as_ref()
+    }
+
     // ========================================================================
     // Relations
     // ========================================================================
@@ -1470,6 +1596,7 @@ impl SemanticsConfiguration {
         let SemanticsAttributes {
             states,
             live,
+            live_atomic,
             label: _,
             value,
             numeric_range,
@@ -1498,6 +1625,8 @@ impl SemanticsConfiguration {
             platform_view_id,
             max_value_length,
             current_value_length,
+            text,
+            document_selection,
             heading_level: _,
             anchors: _,
             relations: _,
@@ -1525,7 +1654,11 @@ impl SemanticsConfiguration {
             || both(scrolls, their_scrolls)
             // A collection group is one entry's place in one set.
             || collection.conflicts(&theirs.collection)
-            || both(live.is_some(), theirs.live.is_some())
+            // A live group is one region's setting and atomicity.
+            || both(
+                live.is_some() || live_atomic.is_some(),
+                theirs.live.is_some() || theirs.live_atomic.is_some(),
+            )
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), theirs.numeric_range.is_some())
             || both(
@@ -1536,6 +1669,13 @@ impl SemanticsConfiguration {
             || both(
                 max_value_length.is_some() || current_value_length.is_some(),
                 theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
+            )
+            // Runs describe one field's layout.
+            || both(text.is_some(), theirs.text.is_some())
+            // A selection is one document's.
+            || both(
+                document_selection.is_some(),
+                theirs.document_selection.is_some(),
             ))
     }
 
@@ -1561,6 +1701,7 @@ impl SemanticsConfiguration {
     /// - **Custom actions** — the contributor's follow the receiver's, each
     ///   with its own handler; a contributor that blocks user actions adds
     ///   none.
+    /// - **Assistive-focus handlers** — the contributor's follow the receiver's.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Identifier** — never absorbed: the receiver keeps its own (ADR-0240).
@@ -1595,11 +1736,16 @@ impl SemanticsConfiguration {
                     .map(|(id, handler)| (*id, Rc::clone(handler))),
             );
         }
+        // The cursor in the contributor's subtree is in the merged node's:
+        // every handler goes along, blocked user actions or not.
+        self.assistive_focus_handlers
+            .extend(other.assistive_focus_handlers.iter().map(Rc::clone));
 
         // Exhaustive: a new attribute does not compile until it decides here.
         let SemanticsAttributes {
             states,
             live,
+            live_atomic,
             label,
             value,
             numeric_range,
@@ -1629,6 +1775,8 @@ impl SemanticsConfiguration {
             platform_view_id,
             max_value_length,
             current_value_length,
+            text,
+            document_selection,
             heading_level,
             anchors,
             relations,
@@ -1693,7 +1841,11 @@ impl SemanticsConfiguration {
             mine.scroll_extent_min = *scroll_extent_min;
             mine.scroll_index = *scroll_index;
         }
-        keep(&mut mine.live, live.as_ref());
+        // A live group is copied whole, never mixed from two regions.
+        if mine.live.is_none() && mine.live_atomic.is_none() {
+            mine.live = *live;
+            mine.live_atomic = *live_atomic;
+        }
         keep(&mut mine.numeric_range, numeric_range.as_ref());
         keep(&mut mine.value, value.as_ref());
         keep(&mut mine.increased_value, increased_value.as_ref());
@@ -1724,6 +1876,8 @@ impl SemanticsConfiguration {
             mine.max_value_length = *max_value_length;
             mine.current_value_length = *current_value_length;
         }
+        keep(&mut mine.text, text.as_ref());
+        keep(&mut mine.document_selection, document_selection.as_ref());
         keep(&mut mine.heading_level, heading_level.as_ref());
         // A level belongs to a heading, as in `set_role`: a merge whose role is
         // not one publishes no level and keeps none to revive.
@@ -1796,6 +1950,7 @@ impl std::fmt::Debug for SemanticsConfiguration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsConfiguration")
             .field("is_semantics_boundary", &self.is_semantics_boundary)
+            .field("is_merge_boundary", &self.is_merge_boundary)
             .field(
                 "is_merging_semantics_of_descendants",
                 &self.is_merging_semantics_of_descendants(),
@@ -1935,9 +2090,9 @@ mod tests {
         assert_compatibility_is_symmetric(&unfocused, &unrelated, true);
 
         let mut live_a = SemanticsConfiguration::new();
-        live_a.set_live_region(Some(Assertiveness::Polite));
+        live_a.set_live_region(LiveSetting::Polite);
         let mut live_b = SemanticsConfiguration::new();
-        live_b.set_live_region(Some(Assertiveness::Assertive));
+        live_b.set_live_region(LiveSetting::Assertive);
         assert_compatibility_is_symmetric(&live_a, &live_b, false);
 
         let mut tooltip_a = SemanticsConfiguration::new();

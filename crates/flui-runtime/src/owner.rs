@@ -213,6 +213,26 @@ pub struct PreparedInstall {
     delivery: Option<InstallToken>,
 }
 
+impl PreparedInstall {
+    /// The close guard of the prepared presentation: the host answers the
+    /// platform's close requests for its window with it. `None` once the
+    /// proposal is consumed.
+    #[must_use]
+    pub fn close_guard(&self) -> Option<flui_view::__runtime::CloseGuardSource> {
+        match self.payload.as_ref()? {
+            InstallPayload::Runtime(entry) => match &entry.residence {
+                Residence::Resident(runtime) => {
+                    runtime.close_guard_of(self.address.presentation_id)
+                }
+                Residence::CheckedOut | Residence::RetiringCheckedOut => None,
+            },
+            InstallPayload::Presentation { presentation, .. } => {
+                Some(presentation.close_guard().clone())
+            }
+        }
+    }
+}
+
 impl Drop for PreparedInstall {
     fn drop(&mut self) {
         let mut first_failure = None;
@@ -452,6 +472,25 @@ impl OwnerHost {
 }
 
 impl OwnerState {
+    /// Whether `work` closes the last presentation of the last UI runtime
+    /// still running: a failure in it is terminal (ADR-0258 §2), since
+    /// nothing is left to go on after it.
+    fn closes_last_runtime(&self, work: &RuntimeWork) -> bool {
+        let RuntimeWork::Close(address) = work else {
+            return false;
+        };
+        let running = self
+            .runtimes
+            .iter()
+            .filter(|entry| !matches!(entry.residence, Residence::RetiringCheckedOut))
+            .count();
+        running == 1
+            && self.runtimes.iter().any(|entry| {
+                entry.id == address.ui_runtime_id
+                    && entry.presentations.as_slice() == [address.presentation_id]
+            })
+    }
+
     fn authorizer(&self, address: PresentationAddress) -> Result<usize, PublicationError> {
         let index = self.presentation_index(address)?;
         if self.runtimes[index]

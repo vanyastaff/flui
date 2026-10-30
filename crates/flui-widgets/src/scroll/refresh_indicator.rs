@@ -335,7 +335,7 @@ type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 ///     SizedBox, Text,
 /// };
 ///
-/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+/// let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(ControlSpec::new(
 ///     RefreshIntent::command("Refresh inbox"),
 ///     Text::new("Refresh"),
 /// )))

@@ -61,7 +61,7 @@ impl ScrollPhases {
     /// Momentum wins over a finger phase reported with it. A `Changed`
     /// outside an open gesture is a phased step only when precise: a notched
     /// wheel that reports "moved" with no begin is a wheel tick, with no
-    /// phase.
+    /// phase. A `Cancelled` outside an open gesture has no phase either.
     pub fn phase(
         &mut self,
         surface: NativeSurface,
@@ -93,12 +93,12 @@ impl ScrollPhases {
                 }
                 Some(ScrollPhase::Ended)
             }
-            GesturePhase::Cancelled => {
-                if let Some(index) = open {
-                    self.open.swap_remove(index);
-                }
-                Some(ScrollPhase::Cancelled)
-            }
+            // A cancel of a gesture that never began (AppKit cancels a
+            // finger that only rested) has nothing to take back.
+            GesturePhase::Cancelled => open.map(|index| {
+                self.open.swap_remove(index);
+                ScrollPhase::Cancelled
+            }),
         }
     }
 

@@ -33,7 +33,7 @@ fn test_full_frame_lifecycle() {
     }));
 
     // Execute frame
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             flui_scheduler::Instant::now(),
@@ -49,7 +49,7 @@ fn test_full_frame_lifecycle() {
     assert_eq!(post_frame_called.load(Ordering::SeqCst), 1);
 
     // Execute another frame - only persistent should be called again
-    flui_scheduler::OwnerFrame::new(&scheduler)
+    flui_scheduler::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             flui_scheduler::Instant::now(),
@@ -120,7 +120,7 @@ fn frame_span_carries_the_budget_period() {
     tracing::subscriber::with_default(Periods(Arc::clone(&seen)), || {
         let scheduler = UpdateScheduler::new();
         let drive = || {
-            flui_scheduler::OwnerFrame::new(&scheduler)
+            flui_scheduler::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
                 .drive_frame(
                     flui_scheduler::Instant::now(),

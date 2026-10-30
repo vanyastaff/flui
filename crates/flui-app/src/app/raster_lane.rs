@@ -370,33 +370,16 @@ impl<B: RasterBackend> RasterLane<B> {
         let outcome = self.owner.pump();
         self.drain_acks();
         match outcome {
-            PumpOutcome::Presented { .. } => {
-                // `PumpOutcome::Presented` classifies a successful render
-                // attempt; what the frame actually became rides the reliable
-                // completion slot (see `RasterOwner::pump`'s own comment at
-                // its `Ok(reported)` arm). The pacing decision must read
-                // that, never infer it from the outcome name.
-                let disposition = self
-                    .handle
-                    .surface_state()
-                    .last_completion
-                    .filter(|completion| completion.epoch == epoch)
-                    .map(|completion| completion.disposition);
-                match disposition {
-                    Some(PresentDisposition::Presented) => SubmitVerdict::Presented,
-                    Some(PresentDisposition::NotShown) => SubmitVerdict::NotShown,
-                    // Two different facts, one verdict. `NoDamage` is the
-                    // backend answering "this frame owed the screen
-                    // nothing"; `None` is the slot having no answer at all
-                    // for this epoch — the pump reported a successful
-                    // render, so the frame did run, but it recorded no
-                    // disposition. Neither is a reason to retry: only
-                    // `NotShown` says content was produced and lost, and
-                    // inventing a retry from a missing fact would repaint an
-                    // app that has nothing to draw.
-                    Some(PresentDisposition::NoDamage) | None => SubmitVerdict::NoPresent,
-                }
-            }
+            // `PumpOutcome::Presented` classifies a successful render
+            // attempt; what the frame became is its `disposition`, which the
+            // pacing decision and frame-aligned haptics read, never the
+            // outcome name. The pump runs inline, so the outcome carries the
+            // backend's own answer for this very frame.
+            PumpOutcome::Presented { disposition, .. } => match disposition {
+                PresentDisposition::Presented => SubmitVerdict::Presented,
+                PresentDisposition::NotShown => SubmitVerdict::NotShown,
+                PresentDisposition::NoDamage => SubmitVerdict::NoPresent,
+            },
             PumpOutcome::SurfaceOutdated { stale, current, .. } => {
                 // Covers both a stale-stamp rejection and a mid-render
                 // surface loss/validation failure (the pump mints a fresh
@@ -1000,6 +983,28 @@ mod tests {
         }
     }
 
+    /// Each answer a backend gives for a rendered frame maps to one verdict,
+    /// the same in the raster lane and the direct sink: frame-aligned haptics
+    /// and the commit read that verdict.
+    fn every_present_disposition_maps_the_same_in_lane_and_direct_sink() {
+        for (disposition, expected) in [
+            (PresentDisposition::Presented, SubmitVerdict::Presented),
+            (PresentDisposition::NoDamage, SubmitVerdict::NoPresent),
+            (PresentDisposition::NotShown, SubmitVerdict::NotShown),
+        ] {
+            let backend = ScriptedBackend::presenting().queue(Ok(disposition));
+            let mut lane = RasterLane::new(backend, test_address(), 100, 100);
+            assert_eq!(
+                lane.submit_and_pump(test_scene()),
+                expected,
+                "{disposition:?}"
+            );
+            let mut backend = ScriptedBackend::presenting().queue(Ok(disposition));
+            let mut direct = DirectSink::new(&mut backend);
+            assert_eq!(direct.submit(test_scene()), expected, "{disposition:?}");
+        }
+    }
+
     #[test]
     fn raster_lane_outcome_matrix() {
         crate::table_test::run_table(
@@ -1012,6 +1017,10 @@ mod tests {
                 (
                     "transient_and_hard_failures_map_consistently_in_lane_and_direct_sink",
                     transient_and_hard_failures_map_consistently_in_lane_and_direct_sink as fn(),
+                ),
+                (
+                    "every_present_disposition_maps_the_same_in_lane_and_direct_sink",
+                    every_present_disposition_maps_the_same_in_lane_and_direct_sink as fn(),
                 ),
                 (
                     "a_presented_frame_classifies_presented_and_renders_through_the_mailbox",

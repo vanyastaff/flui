@@ -34,6 +34,9 @@ enum Queued {
     /// Ask the window to close through the application's close-request
     /// handler, which may veto.
     Close,
+    /// Carry out a close the window's close guard recorded and has now let
+    /// through, without asking again.
+    DueClose,
 }
 
 /// A window's queued work and the way back to the window.
@@ -99,6 +102,11 @@ impl WindowQueue {
                         batch.rest.clear();
                     }
                 }
+                Queued::DueClose => {
+                    if self.close_now() {
+                        batch.rest.clear();
+                    }
+                }
             }
         }
     }
@@ -112,6 +120,12 @@ impl WindowQueue {
         if self.router.consult(self.address, CloseReason::Program) != CloseResponse::Close {
             return false;
         }
+        self.close_now()
+    }
+
+    /// Close the window now, past every veto. `true` as [`Self::close_with_veto`]
+    /// answers it.
+    fn close_now(&self) -> bool {
         match self.router.request_close(self.address) {
             Ok(())
             | Err(CloseRequestError::Failed {
@@ -243,6 +257,22 @@ impl WindowCommandQueues {
                 .then(|| queue.window.upgrade())
                 .flatten()
         })
+    }
+
+    /// Queue the close of the window presented at `address` that its close
+    /// guard has let through: carried out on the next turn without asking
+    /// again. Nothing happens once the window is gone.
+    pub(crate) fn close_due(&self, address: PresentationAddress) {
+        let queue = self
+            .live()
+            .into_iter()
+            .find(|queue| queue.address == address);
+        if let Some(queue) = queue
+            && let Some(window) = queue.window.upgrade()
+        {
+            queue.pending.borrow_mut().push_back(Queued::DueClose);
+            queue.ask_for_turn(&*window);
+        }
     }
 
     fn live(&self) -> Vec<Rc<WindowQueue>> {

@@ -11,6 +11,13 @@ fn thread_boundary_ui() {
     );
     cases.compile_fail("crates/flui-animation/tests/compile_fail/registering_a_bare_controller_does_not_compile.rs");
     cases.compile_fail("tests/ui/thread_boundary/*.rs");
+    // A catalog's controllers are reachable exactly with its feature.
+    if cfg!(feature = "material") {
+        cases.compile_fail("tests/ui/thread_boundary/material/*.rs");
+    }
+    if cfg!(feature = "cupertino") {
+        cases.compile_fail("tests/ui/thread_boundary/cupertino/*.rs");
+    }
     // The unstable input vocabulary is reachable exactly when the additive
     // feature is on (ADR-0213 §5, ADR-0210 §9); trybuild builds the fixtures
     // with this crate's features.

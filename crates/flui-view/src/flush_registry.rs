@@ -569,7 +569,9 @@ impl FlushReport {
 
 /// The host's side of the flush registry: it builds the registry, settles it
 /// on the owner's turn and flushes it when the application or the session
-/// ends. Only the host holds it; documents get a [`FlushRegistry`].
+/// ends. Only the host holds it, and a clone of it flushes at exit; documents
+/// get a [`FlushRegistry`].
+#[derive(Clone)]
 pub struct FlushHost {
     shared: Arc<Shared>,
 }

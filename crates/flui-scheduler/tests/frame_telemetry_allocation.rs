@@ -36,7 +36,7 @@ use std::cell::Cell;
 
 use flui_scheduler::{
     ClockSource, DemandKind, FrameClock, FramePhaseDurations, FrameTimes, PollDecision,
-    PresentOutcome, PresentationId,
+    PresentOutcome, PresentationAddress, PresentationId, UiRuntimeId,
 };
 
 // Per-thread, not process-global: a `GlobalAlloc` sees every thread's
@@ -118,11 +118,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
     assert_eq!(clock.poll(now), PollDecision::Produce, "warmup produce");
-    let _ = clock.record_frame(
-        PresentationId::new(1),
-        frame_times(now),
-        PresentOutcome::Presented,
-    );
+    let _ = clock.record_frame(address(), frame_times(now), PresentOutcome::Presented);
 
     const CYCLES: usize = 10_000;
     let mut cycles_with_allocation = 0usize;
@@ -140,11 +136,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         let now = clock.now();
         let decision = clock.poll(now);
         assert_eq!(decision, PollDecision::Produce, "every cycle must produce");
-        let _snapshot = clock.record_frame(
-            PresentationId::new(1),
-            frame_times(now),
-            PresentOutcome::Presented,
-        );
+        let _snapshot = clock.record_frame(address(), frame_times(now), PresentOutcome::Presented);
 
         let calls_this_cycle = read(&ALLOC_COUNT) - count_before;
         let bytes_this_cycle = read(&ALLOC_BYTES) - bytes_before;
@@ -183,6 +175,14 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         "frames_since must allocate its returned Vec — if it didn't, the frame-path \
          zero-allocation claim above would be proving nothing"
     );
+}
+
+/// The one presentation these frames belong to.
+fn address() -> PresentationAddress {
+    PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(1),
+    }
 }
 
 /// Every stage of a frame at one instant.

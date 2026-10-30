@@ -14,7 +14,7 @@ impl Distance {
     ///
     /// # Errors
     /// Refuses negative and nonfinite values.
-    pub fn new(value: f64) -> Result<Self, InvalidPreference> {
+    pub fn try_new(value: f64) -> Result<Self, InvalidPreference> {
         if value.is_finite() && value >= 0.0 {
             Ok(Self(value))
         } else {
@@ -41,7 +41,7 @@ impl FlingSpeeds {
     ///
     /// # Errors
     /// Refuses nonpositive/nonfinite speeds and a minimum greater than maximum.
-    pub fn new(min: f64, max: f64) -> Result<Self, InvalidPreference> {
+    pub fn try_new(min: f64, max: f64) -> Result<Self, InvalidPreference> {
         if !min.is_finite() || !max.is_finite() || min <= 0.0 || max <= 0.0 {
             return Err(InvalidPreference::Speed);
         }
@@ -84,7 +84,7 @@ impl NativeMouseGeometry {
     ///
     /// # Errors
     /// Refuses negative dimensions or half-extents.
-    pub fn new(
+    pub fn try_new(
         double_click_area: DeviceSize,
         drag_tolerance: DeviceSize,
         pixel_ratio: DevicePixelRatio,
@@ -140,7 +140,7 @@ impl NativeTouchGeometry {
     ///
     /// # Errors
     /// Refuses negative distances, nonpositive speeds, or an inverted range.
-    pub fn new(
+    pub fn try_new(
         touch_slop: i32,
         double_tap_slop: i32,
         min_fling: i32,
@@ -262,13 +262,13 @@ impl GestureGeometry {
     pub fn from_native_touch(native: &NativeTouchGeometry) -> Result<Self, InvalidPreference> {
         let ratio = native.pixel_ratio;
         Ok(Self::new(ratio)
-            .with_touch_slop(Distance::new(
+            .with_touch_slop(Distance::try_new(
                 ratio.to_logical(f64::from(native.touch_slop)),
             )?)
-            .with_touch_double_tap_slop(Distance::new(
+            .with_touch_double_tap_slop(Distance::try_new(
                 ratio.to_logical(f64::from(native.double_tap_slop)),
             )?)
-            .with_fling_speeds(FlingSpeeds::new(
+            .with_fling_speeds(FlingSpeeds::try_new(
                 ratio.to_logical(f64::from(native.min_fling)),
                 ratio.to_logical(f64::from(native.max_fling)),
             )?))

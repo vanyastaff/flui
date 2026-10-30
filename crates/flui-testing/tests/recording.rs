@@ -106,7 +106,7 @@ fn recorded_on(
 ) -> (Vec<u8>, Vec<&'static str>) {
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut host = make(&log);
-    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(privacy))
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(privacy))
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     session(&mut host);
@@ -116,7 +116,7 @@ fn recorded_on(
 }
 
 fn replayable(bytes: &[u8]) -> Result<ReplayableRecording, RecordingError> {
-    ReplayableRecording::read(RecordingReader::new(bytes)?)
+    ReplayableRecording::read(RecordingReader::try_new(bytes)?)
 }
 
 fn accepted(decisions: &[DecisionRow]) -> Vec<(u64, String)> {
@@ -248,7 +248,7 @@ fn a_replay_starts_at_the_recorded_scale() {
     let mut recorder = host(&log);
     recorder.set_scale_factor(recorder.primary_window(), 2.0);
     let _ = recorder.pump(Duration::from_millis(16));
-    let writer = RecordingWriter::new(Vec::new(), &recorder.recording_header(Privacy::Redact))
+    let writer = RecordingWriter::try_new(Vec::new(), &recorder.recording_header(Privacy::Redact))
         .expect("the header writes");
     let recording = record(recorder.input_taps(), writer).expect("first tap registration");
     press(&mut recorder, 1, 3);
@@ -283,7 +283,7 @@ fn a_decision_row_carries_its_commit_time() {
     )
     .expect("attach");
     let _ = host.pump(Duration::from_millis(16));
-    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     touch(&host, 1, true);
@@ -369,7 +369,7 @@ fn an_unknown_variant_is_a_typed_error_not_a_skipped_row() {
         (r#"{"teleport":{"rows":1}}"#.to_owned(), "teleport"),
     ] {
         let damaged = with_line(&bytes, pointer_row, &row);
-        let rows: Vec<_> = RecordingReader::new(&damaged[..])
+        let rows: Vec<_> = RecordingReader::try_new(&damaged[..])
             .expect("header")
             .collect();
         let line = u64::try_from(pointer_row + 1).expect("small");
@@ -495,7 +495,7 @@ fn written(privacy: Privacy) -> Vec<u8> {
             Some("Secret pen".to_owned()),
         );
     header.privacy = privacy;
-    let mut writer = RecordingWriter::new(Vec::new(), &header).expect("header");
+    let mut writer = RecordingWriter::try_new(Vec::new(), &header).expect("header");
     for row in text_rows() {
         writer.write(&row).expect("row");
     }
@@ -509,7 +509,7 @@ fn recordings_redact_text_titles_and_device_names_by_default() {
     for secret in SECRETS {
         assert!(!text.contains(secret), "{secret} reached the file:\n{text}");
     }
-    let reader = RecordingReader::new(&redacted[..]).expect("header");
+    let reader = RecordingReader::try_new(&redacted[..]).expect("header");
     assert_eq!(reader.header().privacy, Privacy::Redact);
     assert_ne!(
         reader.header().windows[0].title.as_deref(),
@@ -531,7 +531,7 @@ fn recordings_redact_text_titles_and_device_names_by_default() {
             "{secret} was dropped under keep-text"
         );
     }
-    let read: Vec<String> = RecordingReader::new(&kept[..])
+    let read: Vec<String> = RecordingReader::try_new(&kept[..])
         .expect("header")
         .map(|row| {
             let row = row.expect("row");
@@ -547,7 +547,7 @@ fn recordings_redact_text_titles_and_device_names_by_default() {
 fn password_session(privacy: Privacy) -> (Vec<u8>, Vec<String>) {
     let (host, changes) = password_host();
     let mut host = host;
-    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(privacy))
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(privacy))
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     set_password(&mut host, "hunter2");
@@ -653,7 +653,7 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     host.set_scale_factor(host.primary_window(), 1.5);
     let headless = host.recording_header(Privacy::Redact);
     let factory = flui_testing::recording::tap_factory(move |header| {
-        RecordingWriter::new(
+        RecordingWriter::try_new(
             Handover {
                 bytes: Vec::new(),
                 done: done.clone(),
@@ -1068,7 +1068,7 @@ fn two_members_of_one_type_replay_to_the_right_winner() {
 
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut host = nested(&log);
-    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     press(&mut host, 1, 1);
@@ -1277,7 +1277,8 @@ fn header_gesture_values_read_back_exactly() {
         let mut values = base.for_kind(PointerKind::Mouse).values();
         values.velocity_estimator = estimator;
         values.remainder_handoff = handoffs[index % handoffs.len()];
-        values.position_smoothing = Some(OneEuroTuning::new(1.5, 0.25, 2.0).expect("valid tuning"));
+        values.position_smoothing =
+            Some(OneEuroTuning::try_new(1.5, 0.25, 2.0).expect("valid tuning"));
         values.max_resolution_delay = Duration::from_nanos(1_234_567_891);
         values.min_target = 31.5;
         let mouse = GestureSettings::try_from_values(values.clone()).expect("valid values");
@@ -1285,11 +1286,11 @@ fn header_gesture_values_read_back_exactly() {
         let header = RecordingHeader::new(RecordingClock::Virtual).with_window(
             RecordedWindow::new(WindowId(3), 1.25).with_gesture_profiles(profiles.clone()),
         );
-        let bytes = RecordingWriter::new(Vec::new(), &header)
+        let bytes = RecordingWriter::try_new(Vec::new(), &header)
             .expect("the header writes")
             .finish()
             .expect("flush");
-        let read = RecordingReader::new(&bytes[..]).expect("the header reads");
+        let read = RecordingReader::try_new(&bytes[..]).expect("the header reads");
         let read = read.header().windows[0]
             .gesture_profiles
             .as_ref()

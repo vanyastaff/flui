@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_foundation::geometry::Size;
 use flui_platform::ImeEvent;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreStatus, project_ime_event,
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore,
+    TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    project_ime_event,
 };
+use flui_testing::text_store_kit::InMemoryTextStore;
 use windows::Win32::Foundation::{E_UNEXPECTED, HWND};
 use windows::Win32::UI::TextServices::{
     GUID_SYSTEM_FUNCTIONPROVIDER, ITextStoreACP, ITextStoreACP_Impl, ITfComposition, ITfContext,
@@ -825,16 +826,15 @@ fn a_tsf_call_failing_past_its_poisoning_leaves_no_depth(hwnd: HWND) {
         .cast_object_ref::<TsfStore>()
         .expect("the document's own object");
     store.fail_lock.set(true);
-    let queue = services.pending.borrow();
+    let queue = services.queue.hold();
     let answer = catch_unwind(AssertUnwindSafe(|| {
         document.RequestLock(TS_LF_READ.0 | TS_LF_SYNC)
     }));
     drop(queue);
     let answer = answer.expect("no panic leaves the COM entry");
     assert_eq!(answer.map_err(|error| error.code()), Err(E_UNEXPECTED));
-    assert_eq!(
-        services.entry_depth.get(),
-        0,
+    assert!(
+        !services.queue.is_entered(),
         "the entry left no depth behind"
     );
     services.focus_store(None);
@@ -888,7 +888,7 @@ fn the_document_status_follows_the_store_status() {
 fn a_window_offers_its_text_services_as_its_host() {
     use crate::host_window::{HostWindow as _, OwnerThreadToken};
 
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -996,7 +996,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         WM_DPICHANGED, WM_EXITSIZEMOVE,
     };
 
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -1116,7 +1116,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
     use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SendMessageW, WM_DPICHANGED};
 
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -1158,7 +1158,7 @@ type Row = (&'static str, fn(HWND));
 
 #[test]
 fn the_text_services_answer_a_completion_for_its_store() {
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -1420,7 +1420,7 @@ fn orphan_detection_ignores_a_foreign_owner_but_still_finds_its_own_window() {
 #[test]
 fn a_panicking_activation_diagnostic_orphans_no_window() {
     const TITLE: &str = "flui panicking TSF diagnostic";
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
         catch_unwind(AssertUnwindSafe(|| {
             platform.open_window(
@@ -1468,7 +1468,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
         // SAFETY: the owner thread, on the window being built.
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
     }
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     super::super::BEFORE_TSF_ACTIVATION.set(Some(destroy));
     let opened = platform.open_window(
         WindowOptions::default()
@@ -1517,7 +1517,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
     }
 
     assert!(!thread_in_apartment(), "the test thread starts outside STA");
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()

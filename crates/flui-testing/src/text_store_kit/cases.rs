@@ -80,7 +80,7 @@ fn at(units: usize) -> Utf16Offset {
 }
 
 fn range(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(at(start), at(end)).expect("BUG: the kit only builds ordered ranges")
+    Utf16Range::try_new(at(start), at(end)).expect("BUG: the kit only builds ordered ranges")
 }
 
 fn ensure(condition: bool, message: impl FnOnce() -> String) -> Outcome {
@@ -1132,7 +1132,7 @@ fn scalar_rects(store: &Rc<dyn TextStore>) -> Result<Vec<(Utf16Offset, Bounds<f6
             .windows(2)
             .map(|pair| {
                 let rect = session
-                    .rect_for_range(Utf16Range::new(pair[0], pair[1]).expect("BUG: ascending"))
+                    .rect_for_range(Utf16Range::try_new(pair[0], pair[1]).expect("BUG: ascending"))
                     .map_err(|error| format!("rect_for_range({pair:?}): {error}"))?;
                 Ok((pair[0], rect.bounds))
             })

@@ -200,6 +200,86 @@ impl UiRuntime {
         }
     }
 
+    /// Whether presentation `id`'s close guard refuses a close for `reason`.
+    /// A refused close is recorded on the guard, once per reason, and is
+    /// carried out when the last hold over it is released: the host does not
+    /// close the presentation now, and the next
+    /// [`settle_close_guards`](Self::settle_close_guards) after that release
+    /// hands the close back. `false`, and nothing recorded, for a reason the
+    /// platform does not let the application refuse and for a presentation
+    /// that is gone.
+    #[must_use]
+    pub fn close_refused(&self, id: PresentationId, reason: flui_view::CloseReason) -> bool {
+        self.presentations
+            .get(id)
+            .is_some_and(|presentation| presentation.close_guard().refuses(reason))
+    }
+
+    /// Presentation `id`'s close guard, for the host to answer its window's
+    /// close requests with.
+    pub(crate) fn close_guard_of(
+        &self,
+        id: PresentationId,
+    ) -> Option<flui_view::__runtime::CloseGuardSource> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.close_guard().clone())
+    }
+
+    /// Withdraw the close presentation `id`'s guard recorded for `reason`:
+    /// the platform cancelled it, as when a log-off is cancelled. Closes
+    /// recorded for other reasons stay recorded.
+    pub fn withdraw_close(&self, id: PresentationId, reason: flui_view::CloseReason) {
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.close_guard().withdraw(reason);
+        }
+    }
+
+    /// Settle every presentation's close guard on the owner's turn: wake the
+    /// waiters each change resolved, one by one, and return the closes now
+    /// due, for the host to carry out without asking the application again,
+    /// and the recorded closes the application declined to carry out.
+    /// Nothing happens when no guard signalled since the last settle.
+    ///
+    /// A waiter whose wake panics is reported as a
+    /// [`CallbackPanic`](crate::frame_failure::FrameFailureKind::CallbackPanic) of its
+    /// presentation and loses neither the due closes nor the waiters after
+    /// it.
+    pub fn settle_close_guards(&self) -> SettledCloses {
+        if !self
+            .close
+            .settle_owed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return SettledCloses::default();
+        }
+        let settled: Vec<_> = self
+            .presentations
+            .iter()
+            .map(|presentation| (presentation.id(), presentation.close_guard().settle()))
+            .collect();
+        let mut closes = SettledCloses::default();
+        for (id, settled) in settled {
+            for waker in settled.wake {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
+                    self.report_contained_panic(
+                        flui_foundation::PresentationAddress {
+                            ui_runtime_id: self.id,
+                            presentation_id: id,
+                        },
+                        payload.as_ref(),
+                    );
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                }
+            }
+            closes.due.extend(settled.close.map(|reason| (id, reason)));
+            closes
+                .declined
+                .extend(settled.declined.into_iter().map(|reason| (id, reason)));
+        }
+        closes
+    }
+
     /// Attach the host's control of presentation `id`'s window: from now on its
     /// elements reach it through `LifecycleContext::window`. Call before the
     /// root widget is attached, so `init_state` finds it. `false` when no
@@ -590,10 +670,30 @@ impl UiRuntime {
                 );
             }
             for (presentation, _, step) in changed {
-                if presentation.closing_requested.get()
-                    && terminal_close_mode(first_panic.is_some())
-                        == flui_interaction::__runtime::CloseMode::PreservingFailure
-                {
+                // Every path to Detached (an accepted close, the window
+                // destroyed, the session's end) commits the focused field's
+                // composition first, keeping its text, so the observers and
+                // the save see the preedit as text (ADR-0142 item 4). The
+                // field's own unmount then finds nothing left to commit. A
+                // close already holding a failure runs no more owner code, and
+                // a commit that fails turns this close into one that does.
+                let preserving = |failed: bool| {
+                    presentation.closing_requested.get()
+                        && terminal_close_mode(failed)
+                            == flui_interaction::__runtime::CloseMode::PreservingFailure
+                };
+                if step == AppLifecycleState::Detached && !preserving(first_panic.is_some()) {
+                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                        presentation.text_input().complete_composition();
+                    }))
+                    .err();
+                    self.record_lifecycle_failure(
+                        &mut first_panic,
+                        failure,
+                        "presentation composition commit",
+                    );
+                }
+                if preserving(first_panic.is_some()) {
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         presentation
                             .widgets()
@@ -931,9 +1031,9 @@ mod tests {
     /// Red-check: drop the commit from `commit_composition_for_close` — the
     /// store is still composing.
     fn an_accepted_close_commits_the_preedit_before_the_guard() {
+        use flui_interaction::testing::InMemoryTextStore;
         use flui_platform::text_store::{
-            Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
-            Utf16Offset, Utf16Range,
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
@@ -949,7 +1049,7 @@ mod tests {
             .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
             .expect("headless presentation supports text input");
         let composing = Composition {
-            range: Utf16Range::new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+            range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
             hides_caret: false,
         };
         assert_eq!(
@@ -977,6 +1077,74 @@ mod tests {
         assert_eq!(store.text(), "ab東京", "a second request changes nothing");
     }
 
+    /// A close whose composition commit fails holds that failure: the
+    /// presentation's observers, scoped and legacy, hear no Detached after it
+    /// (ADR-0123), and the close resumes the commit's failure.
+    ///
+    /// Red-check: drop the preserving check after the commit — the legacy
+    /// observer hears Detached.
+    fn a_failed_close_commit_withholds_the_detached_notice() {
+        use flui_interaction::testing::InMemoryTextStore;
+        use flui_platform::text_store::{
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+        };
+
+        #[derive(Default)]
+        struct Heard(parking_lot::Mutex<Vec<AppLifecycleState>>);
+
+        impl flui_view::WidgetsBindingObserver for Heard {
+            fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+                self.0.lock().push(state);
+            }
+        }
+
+        let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
+            std::sync::Arc::new(flui_native::FakeTextInput::new());
+        let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
+        let id = ui_runtime.presentation_id();
+        let _sibling = ui_runtime.install_second_presentation_for_test();
+        let store = InMemoryTextStore::new("ab");
+        let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+        let _token = ui_runtime
+            .text_input_handle()
+            .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+            .expect("headless presentation supports text input");
+        let composing = Composition {
+            range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+            hides_caret: false,
+        };
+        assert_eq!(
+            erased.request_lock(
+                LockGrant::read_write(move |session| {
+                    session.insert_at_selection("東京").expect("in range");
+                    session.set_composition(Some(composing)).expect("in range");
+                }),
+                LockTiming::Sync,
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        store.set_owner_listener(Some(Rc::new(|| panic!("the field's on_changed failed"))));
+        let heard = std::sync::Arc::new(Heard::default());
+        ui_runtime
+            .presentation_widgets_for_test(id)
+            .add_observer(std::sync::Arc::clone(&heard)
+                as std::sync::Arc<dyn flui_view::WidgetsBindingObserver>);
+
+        let closed = catch_unwind(AssertUnwindSafe(|| {
+            ui_runtime.close_presentation_entered(id)
+        }));
+        let payload = closed.expect_err("the close resumes the commit's failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("the field's on_changed failed")
+        );
+        assert!(
+            !heard.0.lock().contains(&AppLifecycleState::Detached),
+            "no Detached after the failed commit: {:?}",
+            heard.0.lock()
+        );
+    }
+
     #[test]
     fn presentation_lifecycle_matrix() {
         crate::table_test::run_table(
@@ -996,7 +1164,24 @@ mod tests {
                     "an_accepted_close_commits_the_preedit_before_the_guard",
                     an_accepted_close_commits_the_preedit_before_the_guard as fn(),
                 ),
+                (
+                    "a_failed_close_commit_withholds_the_detached_notice",
+                    a_failed_close_commit_withholds_the_detached_notice as fn(),
+                ),
             ],
         );
     }
+}
+
+/// What [`UiRuntime::settle_close_guards`] hands the host.
+#[derive(Debug, Default)]
+#[must_use = "a due close is carried out by the host"]
+#[non_exhaustive]
+pub struct SettledCloses {
+    /// The closes now due, each for its presentation and with the reason it
+    /// was recorded for.
+    pub due: Vec<(PresentationId, flui_view::CloseReason)>,
+    /// The recorded closes the application resolved by keeping the
+    /// presentation open (`PendingClose::stay_open`).
+    pub declined: Vec<(PresentationId, flui_view::CloseReason)>,
 }

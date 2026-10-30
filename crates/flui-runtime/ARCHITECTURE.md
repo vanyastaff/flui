@@ -221,6 +221,13 @@ host.
   typed report at its presentation address before returning the runtime lease.
   Reporting does not increment frame-failure streaks or replace the original
   panic; diagnostics retain their own containment boundary (ADR-0185).
+  A runtime operation's own panic stops there (ADR-0258 §1): its payload is
+  retained, the turn stays healthy and the FIFO tail behind it runs
+  (`a_failed_frame_is_contained_and_the_fifo_tail_runs`). Only a terminal one
+  leaves the turn: the close of the last presentation of the last running UI
+  runtime, or an operation the host shut down in (§2). A host hook's own
+  failure (`after_turn`, the frame-rate hook, text preparation) leaves the turn
+  as before.
 - **Owner operations form a closed vocabulary.** Input, lifecycle, normalized
   metrics, close, install, uninstall, pump and background-pump are typed
   operations or explicit methods. The host accepts no arbitrary
@@ -1161,6 +1168,26 @@ propagates with the committed semantics state intact; while it unwinds, the
 retiring container retains every envelope clone it holds, since a thread-shared
 clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
 binding's other fields, are outside this contract.
+
+### A dropping UI runtime destroys its application values before it raises a failure
+
+**Rule:** `UiRuntime::drop` raises its first failure only once no field it still owns holds an
+application value. A failure raised from `Drop::drop` unwinds through the field drop glue that
+follows; a capture whose destructor panics there is a second panic in one unwind, and aborts
+(#1165).
+
+**Choice:** after the presentations and the owner-local frame work retire, the drop takes the
+queued commands (a cross-thread signal write carries the application's closure) and the
+frame-failure handler, closes the command inbox, and only then destroys them under the same catch,
+first failure kept: a destructor that sends through a sender it kept is refused with `OwnerGone`
+rather than queueing a capture only the drop glue would reach. Once a failure
+is held, or the thread is already unwinding, it retains them instead (ADR-0127). Every other field
+holds framework values, or values already contained where they run: the input tap's calls and
+retirement, and the presentations' trees, whose `dispose` and pending futures are contained per
+element. Tested by `a_queued_command_outliving_a_teardown_failure_does_not_abort`,
+`a_handler_capture_sending_on_drop_is_refused`, `a_failing_dispose_and_future_drop_do_not_abort`
+and `user_drop_panic_inside_an_unwind_is_retained`,
+each run in a child process because the broken shape aborts.
 
 ### A presentation's frame-rate demand is decided here and delivered as an owner effect
 

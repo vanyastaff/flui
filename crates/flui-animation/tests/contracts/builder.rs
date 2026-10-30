@@ -40,7 +40,9 @@ fn non_finite_initial_value(input: f64, bounded: bool, expected: f64) {
     tracing::subscriber::with_default(WarningCount(Arc::clone(&warnings)), || {
         let builder = AnimationController::builder(Duration::from_secs(1)).initial_value(input);
         let controller = if bounded {
-            builder.bounds(ValueRange::new(3.0, 7.0).unwrap()).build()
+            builder
+                .bounds(ValueRange::try_new(3.0, 7.0).unwrap())
+                .build()
         } else {
             builder.unbounded().build()
         };
@@ -97,7 +99,9 @@ fn finite_initial_values_drive_from_the_canonical_sample() {
         ] {
             let builder = AnimationController::builder(Duration::from_secs(1)).initial_value(input);
             let controller = if bounded {
-                builder.bounds(ValueRange::new(3.0, 7.0).unwrap()).build()
+                builder
+                    .bounds(ValueRange::try_new(3.0, 7.0).unwrap())
+                    .build()
             } else {
                 builder.unbounded().build()
             };
@@ -193,7 +197,7 @@ fn bounds_rejects_non_finite_endpoints() {
         (1.0, 1.0, RangeDefect::Inverted),
     ];
     for (lower, upper, defect) in cases {
-        let result: Result<ValueRange, RangeDefect> = ValueRange::new(lower, upper);
+        let result: Result<ValueRange, RangeDefect> = ValueRange::try_new(lower, upper);
         assert_eq!(result, Err(defect), "bounds({lower}, {upper})");
     }
 }

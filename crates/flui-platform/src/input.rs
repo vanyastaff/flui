@@ -107,7 +107,7 @@ impl PointerFrame {
     /// # Errors
     ///
     /// [`EmptyPointerFrame`] when `events` is empty.
-    pub fn new(events: Vec<PointerEvent>) -> Result<Self, EmptyPointerFrame> {
+    pub fn try_new(events: Vec<PointerEvent>) -> Result<Self, EmptyPointerFrame> {
         if events.is_empty() {
             return Err(EmptyPointerFrame);
         }

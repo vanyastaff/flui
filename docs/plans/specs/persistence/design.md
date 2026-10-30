@@ -5,7 +5,7 @@
 - **База:** `main` @ `4915054c8`
 - **Требования:** [requirements.md](requirements.md)
 - **Связанные:** [teardown/design.md](../teardown/design.md) (владеет контрактом закрытия и
-  завершения сеанса), [send-flip/requirements.md](../send-flip/requirements.md) (разделение
+  завершения сеанса), [send-flip/requirements.md](https://github.com/vanyastaff/flui/blob/642ac6e75484985d042e4c522f561f60e0575ff6/docs/plans/specs/send-flip/requirements.md) (разделение
   `AsyncDriver` на `Send`-waker и owner-local очередь)
 - **Решения владельца 2026-10-28** — в конце документа. Пример Notes (`examples/two_screens`,
   `tests/fixtures/notes_flow.rs`) удалён; где ниже сказано «Notes», читать «приложение приёмки»

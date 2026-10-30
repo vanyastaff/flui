@@ -32,11 +32,11 @@ use std::{
     rc::Rc,
 };
 
-use crate::anchored_box::AnchoredBox;
+use crate::anchored_box::{AnchoredBox, AnchoredSliver};
 use crate::localization::Directionality;
-use crate::semantics::Semantics;
+use crate::semantics::{Semantics, SliverSemantics};
 use crate::support::value_callback;
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Axis, Rect};
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
     FocusSubscription, FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
@@ -44,6 +44,7 @@ use flui_interaction::focus::{
 };
 use flui_objects::SubtreeAnchor;
 use flui_platform::keyboard::KeyEvent;
+use flui_rendering::semantics::SemanticsConfiguration;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
@@ -277,6 +278,7 @@ pub struct Focus {
     include_semantics: bool,
     traversal_overrides: Option<FocusTraversalOverrides>,
     rect_provider: Option<RectProvider>,
+    sliver: bool,
 }
 
 impl Focus {
@@ -296,6 +298,7 @@ impl Focus {
             include_semantics: true,
             traversal_overrides: None,
             rect_provider: None,
+            sliver: false,
         }
     }
 
@@ -306,6 +309,15 @@ impl Focus {
     #[must_use]
     pub(crate) fn rect_provider(mut self, provider: RectProvider) -> Self {
         self.rect_provider = Some(provider);
+        self
+    }
+
+    /// Wrap a sliver child: the node is anchored, annotated and measured
+    /// with the sliver protocol (its rect is the sliver's painted region).
+    /// Taken when the widget mounts.
+    #[must_use]
+    pub(crate) fn sliver(mut self) -> Self {
+        self.sliver = true;
         self
     }
 
@@ -610,6 +622,7 @@ impl StatefulView for Focus {
             parent: None,
             anchor: SubtreeAnchor::new(),
             rect_provider: self.rect_provider.clone(),
+            sliver: self.sliver,
             rect_provider_registration: None,
             action_chain: None,
             context_registration: None,
@@ -697,6 +710,9 @@ pub struct FocusState {
     /// same mounted anchor without reacquiring build-only context. Before
     /// `init_state`, the view's own provider if it named one.
     rect_provider: Option<RectProvider>,
+    /// The child is a sliver: anchored and annotated with the sliver
+    /// protocol, measured from its committed sliver geometry.
+    sliver: bool,
     /// Generation-checked ownership of the geometry source installed on the
     /// current node.
     rect_provider_registration: Option<FocusNodeRegistration>,
@@ -843,15 +859,24 @@ impl FocusState {
             return;
         }
         self.did_autofocus = true;
-        let scope = self
-            .parent
-            .as_ref()
-            .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
-            .unwrap_or_else(|| Rc::clone(self.manager().root_scope()));
-        let provisional = scope.take_provisional_first_focus();
-        if provisional || scope.focused_child().is_none() {
-            let _ = self.node.request_focus();
-        }
+        request_autofocus(self.parent.as_ref(), self.manager(), &self.node);
+    }
+}
+
+/// The one-shot autofocus request of a control whose node hangs under
+/// `parent`: it lands when the enclosing scope has nothing focused yet, or
+/// holds only the route's provisional first focus, which it replaces.
+pub(crate) fn request_autofocus(
+    parent: Option<&Rc<FocusNode>>,
+    manager: &FocusManager,
+    node: &Rc<FocusNode>,
+) {
+    let scope = parent
+        .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
+        .unwrap_or_else(|| Rc::clone(manager.root_scope()));
+    let provisional = scope.take_provisional_first_focus();
+    if provisional || scope.focused_child().is_none() {
+        let _ = node.request_focus();
     }
 }
 
@@ -903,6 +928,7 @@ impl ViewState<Focus> for FocusState {
                 let registration = self.node.register_rect_provider(Rc::clone(&provider));
                 (provider, registration)
             }
+            None if self.sliver => install_sliver_rect_provider(&self.node, &self.anchor, ctx),
             None => install_rect_provider(&self.node, &self.anchor, ctx),
         };
         *self.reveal.rect.borrow_mut() = Some(Rc::clone(&rect_provider));
@@ -1109,6 +1135,24 @@ impl ViewState<Focus> for FocusState {
         // a `Shortcuts` hosts its key handler on — leaves the configuration
         // empty, which adds nothing to the semantics tree; setting even a
         // false flag would gather the subtree into one node.
+        if self.sliver {
+            // A sliver annotation publishes the flags; assistive focus on a
+            // sliver lands on its rows, which carry their own `Focus`.
+            let mut configuration = SemanticsConfiguration::default();
+            if view.include_semantics && self.node.can_request_focus() {
+                configuration.set_focusable(true);
+                configuration.set_focused(self.node.has_primary_focus());
+            }
+            let child = SliverSemantics::from_configuration(configuration)
+                .child(view.child.clone())
+                .into_view()
+                .boxed();
+            return FocusParentProvider {
+                parent: Rc::clone(&self.node),
+                revision: self.node_revision.get(),
+                child: BoxedView::new(AnchoredSliver::new(self.anchor.clone(), child).into_view()),
+            };
+        }
         let semantics = if view.include_semantics && self.node.can_request_focus() {
             let semantics = Semantics::new()
                 .focusable(true)
@@ -1162,6 +1206,36 @@ pub fn install_rect_provider(
                 let root = owner.root_id()?;
                 let transform = owner.transform_to(render_id, root)?;
                 Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
+            })
+            .flatten()
+    });
+    let registration = node.register_rect_provider(Rc::clone(&provider));
+    (provider, registration)
+}
+
+/// [`install_rect_provider`] for a sliver anchor: the sliver's painted
+/// region, `paint_extent` along its axis by its cross-axis extent, mapped to
+/// the render root. `None` while unmounted or not laid out.
+pub(crate) fn install_sliver_rect_provider(
+    node: &Rc<FocusNode>,
+    anchor: &SubtreeAnchor,
+    ctx: &dyn LifecycleContext,
+) -> (RectProvider, FocusNodeRegistration) {
+    let anchor = anchor.clone();
+    let owner = ctx.pipeline_owner();
+    let provider: flui_interaction::RectProvider = Rc::new(move || {
+        let render_id = anchor.get()?;
+        let owner = owner.as_ref()?;
+        owner
+            .try_with_layout(|owner| {
+                let (constraints, geometry) = owner.sliver_layout(render_id)?;
+                let root = owner.root_id()?;
+                let transform = owner.transform_to(render_id, root)?;
+                let (width, height) = match constraints.axis() {
+                    Axis::Vertical => (constraints.cross_axis_extent, geometry.paint_extent),
+                    Axis::Horizontal => (geometry.paint_extent, constraints.cross_axis_extent),
+                };
+                Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, width, height)))
             })
             .flatten()
     });

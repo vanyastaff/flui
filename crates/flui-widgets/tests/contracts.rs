@@ -158,6 +158,10 @@ fn text_editing() {
             ("editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it", crate::editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it),
             ("editable_text::native_actions::re_adoption_before_queued_delivery_retires_the_old_field_authority", crate::editable_text::native_actions::re_adoption_before_queued_delivery_retires_the_old_field_authority),
             ("editable_text::native_actions::re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit", crate::editable_text::native_actions::re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit),
+            ("editable_text::native_actions::a_screen_reader_moves_by_word_where_the_caret_steps", crate::editable_text::native_actions::a_screen_reader_moves_by_word_where_the_caret_steps),
+            ("editable_text::native_actions::a_screen_reader_types_into_an_empty_field_and_selects_in_it", crate::editable_text::native_actions::a_screen_reader_types_into_an_empty_field_and_selects_in_it),
+            ("editable_text::native_actions::a_password_field_publishes_only_its_mask", crate::editable_text::native_actions::a_password_field_publishes_only_its_mask),
+            ("editable_text::native_actions::a_long_cluster_and_a_long_line_read_whole", crate::editable_text::native_actions::a_long_cluster_and_a_long_line_read_whole),
             ("editable_text::a_double_tap_selects_the_word_under_it", crate::editable_text::a_double_tap_selects_the_word_under_it as fn()),
             ("editable_text::a_drag_selects_from_its_start_to_the_pointer", crate::editable_text::a_drag_selects_from_its_start_to_the_pointer),
             ("editable_text::disabling_the_field_retires_its_selection_contact", crate::editable_text::disabling_the_field_retires_its_selection_contact),
@@ -180,6 +184,7 @@ fn text_editing() {
             ("editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes", crate::editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes),
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),
             ("editable_text::text_store::on_changed_runs_after_the_lock_is_released", crate::editable_text::text_store::on_changed_runs_after_the_lock_is_released),
+            ("editable_text::text_store::the_owner_reads_the_controller_from_its_callbacks", crate::editable_text::text_store::the_owner_reads_the_controller_from_its_callbacks),
             ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
             ("editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification", crate::editable_text::text_store::a_no_layout_answer_is_followed_by_a_layout_notification),
             ("editable_text::text_store::focus_gain_and_loss_reach_the_store_host", crate::editable_text::text_store::focus_gain_and_loss_reach_the_store_host),
@@ -272,6 +277,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
             ("gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused", crate::gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused),
             ("gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation", crate::gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation),
+            ("gesture_detector::a_smart_zoom_reaches_only_the_innermost_detector_under_it", crate::gesture_detector::a_smart_zoom_reaches_only_the_innermost_detector_under_it),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
             ("pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it", crate::pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it as fn()),
@@ -444,6 +450,30 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::activation::keyboard_activation_matches_click as fn(),
             ),
             (
+                "keyboard_focus::list::list_keyboard_navigation",
+                crate::keyboard_focus::list::list_keyboard_navigation,
+            ),
+            (
+                "keyboard_focus::list::sliver_keyboard_navigation",
+                crate::keyboard_focus::list::sliver_keyboard_navigation,
+            ),
+            (
+                "keyboard_focus::list::grid_keyboard_navigation",
+                crate::keyboard_focus::list::grid_keyboard_navigation,
+            ),
+            (
+                "keyboard_focus::list::focused_row_is_pinned_while_scrolled_away",
+                crate::keyboard_focus::list::focused_row_is_pinned_while_scrolled_away,
+            ),
+            (
+                "keyboard_focus::list::an_empty_list_is_a_tab_stop_with_its_empty_label",
+                crate::keyboard_focus::list::an_empty_list_is_a_tab_stop_with_its_empty_label,
+            ),
+            (
+                "keyboard_focus::list::the_list_node_carries_the_list_name",
+                crate::keyboard_focus::list::the_list_node_carries_the_list_name,
+            ),
+            (
                 "keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once",
                 crate::keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once,
             ),
@@ -515,6 +545,35 @@ fn keyboard_focus_contracts() {
     );
 }
 
+/// Static text inside a `SelectionArea` publishes runs and is selected by assistive
+/// technology as one document; text outside one publishes none (ADR-0214).
+#[test]
+fn selection_area_text_runs() {
+    run_cases(
+        "selection_area_text_runs",
+        &[
+            ("selection_area::selection_area_text_publishes_runs", crate::selection_area::selection_area_text_publishes_runs as fn()),
+            ("selection_area::selection_area_accepts_assistive_selection", crate::selection_area::selection_area_accepts_assistive_selection),
+            ("selection_area::selection_area_refuses_stale_or_foreign_positions", crate::selection_area::selection_area_refuses_stale_or_foreign_positions),
+            ("selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs),
+            ("selection_area::static_text_outside_selection_area_publishes_no_runs", crate::selection_area::static_text_outside_selection_area_publishes_no_runs),
+            ("selection_area::nested_merger_paragraph_keeps_its_run_nodes", crate::selection_area::nested_merger_paragraph_keeps_its_run_nodes),
+            ("selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node", crate::selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node),
+            ("selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld", crate::selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld),
+            ("selection_area::links_in_a_selection_area_keep_their_own_nodes", crate::selection_area::links_in_a_selection_area_keep_their_own_nodes),
+            ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
+            ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
+            ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
+            ("selection_area::the_reported_text_follows_the_published_document_order", crate::selection_area::the_reported_text_follows_the_published_document_order),
+            ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
+            ("selection_area::a_silenced_text_is_left_out_of_the_selection", crate::selection_area::a_silenced_text_is_left_out_of_the_selection),
+            ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
+            ("selection_area::sort_keys_order_the_reported_text", crate::selection_area::sort_keys_order_the_reported_text),
+            ("selection_area::a_line_limit_bounds_what_a_paragraph_reports", crate::selection_area::a_line_limit_bounds_what_a_paragraph_reports),
+        ],
+    );
+}
+
 /// Widget semantics reach the platform and platform actions reach widgets, with the
 /// documented drop set and the exhaustive routing list pinned.
 #[test]
@@ -525,6 +584,7 @@ fn semantics_translation_and_routing() {
             ("collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size", crate::collection_semantics::a_lazy_list_item_reads_its_position_and_its_containers_size as fn()),
             ("collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions", crate::collection_semantics::a_virtualized_list_publishes_its_full_size_and_true_positions),
             ("collection_semantics::an_unknown_length_publishes_no_size", crate::collection_semantics::an_unknown_length_publishes_no_size),
+            ("collection_semantics::a_lazy_sliver_names_its_collection", crate::collection_semantics::a_lazy_sliver_names_its_collection),
             ("collection_semantics::separators_are_not_members_of_the_set", crate::collection_semantics::separators_are_not_members_of_the_set),
             ("collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size", crate::collection_semantics::an_unknown_set_inside_a_known_one_withholds_the_outer_size),
             ("collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size", crate::collection_semantics::a_known_set_inside_a_known_one_reads_its_own_size),
@@ -558,12 +618,14 @@ fn semantics_translation_and_routing() {
             ("semantics::semantics_sort_keys_reorder_published_siblings_after_local_updates", crate::semantics::semantics_sort_keys_reorder_published_siblings_after_local_updates),
             ("semantics::flow_repaint_and_delegate_replacement_update_accessible_children", crate::semantics::flow_repaint_and_delegate_replacement_update_accessible_children),
             ("semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size", crate::semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size),
+            ("semantics::a_fields_runs_keep_their_identities_until_their_text_changes", crate::semantics::a_fields_runs_keep_their_identities_until_their_text_changes),
             ("semantics::retained_visibility_hides_child_semantics_by_default", crate::semantics::retained_visibility_hides_child_semantics_by_default as fn()),
             ("semantics::retained_visibility_updates_semantics_without_changing_layout", crate::semantics::retained_visibility_updates_semantics_without_changing_layout as fn()),
             ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied", crate::semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
+            ("semantics::the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler", crate::semantics::the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler),
             ("semantics::controls_publish_their_identifier_on_the_node_they_form", crate::semantics::controls_publish_their_identifier_on_the_node_they_form),
             ("semantics::authored_properties_and_relations_reach_the_published_node", crate::semantics::authored_properties_and_relations_reach_the_published_node),
             ("semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout", crate::semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout),
@@ -607,6 +669,7 @@ fn scroll_physics_and_activity() {
             ("scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling", crate::scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling as fn()),
             ("scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms", crate::scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms),
             ("scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it", crate::scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it),
+            ("scroll::resting_fingers_catch_a_fling_and_leave_wheel_easing", crate::scroll::resting_fingers_catch_a_fling_and_leave_wheel_easing),
             ("scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once", crate::scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once),
             ("scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion", crate::scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion),
             ("scroll::dragging_interrupts_notched_motion_and_windows_progress_independently", crate::scroll::dragging_interrupts_notched_motion_and_windows_progress_independently),
@@ -724,7 +787,8 @@ fn lazy_slivers() {
     run_cases(
         "lazy_slivers",
         &[
-            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame as fn()),
+            ("lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released", crate::lazy_list::a_pinned_row_stays_announced_until_its_pin_is_released as fn()),
+            ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame),
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),

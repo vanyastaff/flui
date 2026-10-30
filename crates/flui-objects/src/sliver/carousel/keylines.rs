@@ -646,7 +646,7 @@ pub(crate) struct Strategy {
 impl Strategy {
     /// The strategy of `layout` over a `viewport` long main axis; `None` when the viewport is not
     /// finite or not greater than zero, or the layout has nothing to show in it.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         layout: &CarouselLayout,
         viewport: f64,
         spacing: f64,

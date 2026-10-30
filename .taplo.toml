@@ -1,7 +1,15 @@
 # TOML formatting (`taplo fmt`); only the settings that differ from taplo's
 # defaults.
 include = ["**/*.toml"]
-exclude = ["**/target/**", ".flutter/**", ".gpui/**", ".claude/**", ".10x/**", ".worktrees/**"]
+exclude = [
+    "**/target/**",
+    ".flutter/**",
+    ".gpui/**",
+    ".claude/**",
+    ".10x/**",
+    ".worktrees/**",
+    "third_party/**", # vendored as published (third_party/README.md)
+]
 
 [formatting]
 column_width = 100

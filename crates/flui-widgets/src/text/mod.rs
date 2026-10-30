@@ -5,6 +5,7 @@ mod animated_default_text_style;
 mod default_text_style;
 mod linked_paragraph;
 mod rich_text;
+mod selection_area;
 mod text;
 
 pub mod controller;
@@ -17,5 +18,6 @@ pub use controller::TextEditingController;
 pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{EditableText, EditableTextState, SubmitCallback};
 pub use rich_text::RichText;
+pub use selection_area::{SelectedText, SelectionArea, SelectionContainer};
 pub use text::Text;
 pub use text_field::{RawTextField, RawTextFieldState};

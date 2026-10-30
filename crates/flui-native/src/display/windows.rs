@@ -992,7 +992,7 @@ pub(crate) mod source {
     }
 
     impl Monitor {
-        fn new(hmonitor: HMONITOR) -> Option<Self> {
+        fn try_new(hmonitor: HMONITOR) -> Option<Self> {
             // SAFETY: `hmonitor` is a valid monitor handle the OS handed to
             // `EnumDisplayMonitors`'s callback. `MONITORINFOEXW` is zeroed with its
             // `cbSize` set before `GetMonitorInfoW`, which is that API's contract;
@@ -1060,7 +1060,7 @@ pub(crate) mod source {
                             lparam.0 as usize,
                         )
                     };
-                    if let Some(monitor) = Monitor::new(hmonitor) {
+                    if let Some(monitor) = Monitor::try_new(hmonitor) {
                         monitors.push(monitor);
                     }
                     TRUE
@@ -1342,8 +1342,8 @@ mod broadcasts {
             let (signal, wakes) = counting_signal();
             let displays: Arc<dyn HostDisplays> = Arc::new(WindowsDisplays::new());
             let subscriber = Rc::new(DisplayBroadcasts::new(&displays, &signal));
-            let receiver =
-                Receiver::new([Rc::clone(&subscriber) as Rc<dyn Subscriber>]).expect("a receiver");
+            let receiver = Receiver::try_new([Rc::clone(&subscriber) as Rc<dyn Subscriber>])
+                .expect("a receiver");
             displays.snapshot().expect("the first sample");
 
             receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
@@ -1396,7 +1396,7 @@ mod broadcasts {
             let displays = Arc::new(WindowsDisplays::new());
             let sampled: Arc<dyn HostDisplays> = Arc::clone(&displays) as _;
             let subscriber = crate::owner::winit::HostDisplays::broadcasts(displays, &signal);
-            let receiver = Receiver::new([subscriber]).expect("a receiver");
+            let receiver = Receiver::try_new([subscriber]).expect("a receiver");
             sampled.snapshot().expect("the first sample");
 
             receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);

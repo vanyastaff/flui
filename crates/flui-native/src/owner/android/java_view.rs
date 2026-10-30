@@ -37,6 +37,7 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use super::EditorState;
+use super::bridge_slot::BridgeSlot;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
 use crate::version::gate::Since;
@@ -185,6 +186,62 @@ pub(crate) trait InputMethod: Send + Sync {
     ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>>;
 }
 
+/// TalkBack's calls through `FluiView`'s node provider, which the window's
+/// accessibility bridge answers.
+///
+/// Each call comes from a native method of the view, on the Java main thread
+/// under no lock of the view, and answers at once from the tree the bridge
+/// applied on that thread. The environment and the view cross as raw
+/// pointers, because the adapter behind them is built on another `jni`
+/// release than this module.
+///
+/// # Safety
+///
+/// A caller of each method passes the environment of the native method it
+/// runs in, on that method's thread, and the local references (`host`, the
+/// bundle) that method received, none of which the call outlives.
+#[expect(
+    unsafe_code,
+    reason = "the environment and the view cross as raw pointers"
+)]
+pub(crate) trait ViewAccessibility: Send + Sync {
+    /// `createAccessibilityNodeInfo`: a local reference to the node info of
+    /// `virtual_view_id` (`HOST_VIEW_ID` for the view itself), or null.
+    unsafe fn node_info(
+        &self,
+        env: *mut jni::sys::JNIEnv,
+        host: jni::sys::jobject,
+        virtual_view_id: jint,
+    ) -> jni::sys::jobject;
+
+    /// `findFocus`: a local reference to the node info of the virtual view
+    /// holding the focus of `focus_type`, or null.
+    unsafe fn find_focus(
+        &self,
+        env: *mut jni::sys::JNIEnv,
+        host: jni::sys::jobject,
+        focus_type: jint,
+    ) -> jni::sys::jobject;
+
+    /// `performAction`: whether the tree took `action` on `virtual_view_id`,
+    /// with its `arguments` bundle (which may be null).
+    unsafe fn perform_action(
+        &self,
+        env: *mut jni::sys::JNIEnv,
+        host: jni::sys::jobject,
+        virtual_view_id: jint,
+        action: jint,
+        arguments: jni::sys::jobject,
+    ) -> bool;
+
+    /// One hover of TalkBack's explore by touch, with its `MotionEvent`
+    /// action code and its position in the view's pixels, from the native
+    /// input queue on the owner thread: whether the adapter takes it, and
+    /// the hover is then not input. The adapter applies it on the Java main
+    /// thread, through `view`.
+    fn explore(self: Arc<Self>, view: &Arc<JavaView>, action: jint, x: f32, y: f32) -> bool;
+}
+
 /// What the text feature made of one of the input method's calls through the
 /// view: the view applies it on the Java main thread and queues the work.
 pub(crate) struct InputMethodReply {
@@ -226,6 +283,9 @@ pub(crate) struct JavaView {
     transfer: Arc<dyn ViewTransfer>,
     /// What answers the input method's calls through the view.
     input_method: Box<dyn InputMethod>,
+    /// What answers TalkBack's calls through the view's node provider: the
+    /// bridge of the window over the view, while it lives.
+    accessibility: BridgeSlot<dyn ViewAccessibility>,
     state: Mutex<State>,
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
@@ -256,6 +316,7 @@ impl JavaView {
             signal,
             transfer: transfer(this.clone()),
             input_method,
+            accessibility: BridgeSlot::default(),
             state: Mutex::new(State {
                 install: Install::Pending,
                 events: VecDeque::new(),
@@ -318,6 +379,58 @@ impl JavaView {
     /// What answers the input method's calls through the view.
     pub(crate) fn input_method(&self) -> &dyn InputMethod {
         &*self.input_method
+    }
+
+    /// Hand TalkBack's calls through the node provider to `accessibility`,
+    /// the bridge of the window that opened over the view, and turn the
+    /// provider on. Owner thread; the view follows on the Java main thread.
+    pub(crate) fn provide_accessibility(
+        self: &Arc<Self>,
+        accessibility: Arc<dyn ViewAccessibility>,
+    ) {
+        // The previous bridge is dropped here, outside the slot's lock.
+        drop(self.accessibility.provide(accessibility));
+        self.provide_nodes(true);
+    }
+
+    /// Stop handing the node provider's calls to `accessibility`, unless a
+    /// window opened since put its own in its place, and turn the provider
+    /// off. Owner thread.
+    pub(crate) fn withdraw_accessibility(
+        self: &Arc<Self>,
+        accessibility: &Arc<dyn ViewAccessibility>,
+    ) {
+        if self.accessibility.withdraw(accessibility).is_some() {
+            self.provide_nodes(false);
+        }
+    }
+
+    /// One hover of TalkBack's explore by touch from the native input queue
+    /// (ADR-0255 decision 3): whether the window's bridge takes it, in which
+    /// case it is not input. Owner thread.
+    pub(crate) fn explore_by_touch(self: &Arc<Self>, action: jint, x: f32, y: f32) -> bool {
+        self.accessibility()
+            .is_some_and(|accessibility| accessibility.explore(self, action, x, y))
+    }
+
+    /// Turn the view's node provider on or off. A call the view finds gone
+    /// leaves nothing to turn off.
+    fn provide_nodes(self: &Arc<Self>, provide: bool) {
+        self.post(move |env, view| {
+            env.call_method(
+                view,
+                jni_str!("provideNodes"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(provide)],
+            )
+            .map(drop)
+        });
+    }
+
+    /// The bridge answering the node provider, cloned out of the lock so no
+    /// JNI call runs under it.
+    fn accessibility(&self) -> Option<Arc<dyn ViewAccessibility>> {
+        self.accessibility.get()
     }
 
     /// Apply what the input method's call made of it and queue its work.
@@ -660,6 +773,25 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("(J)V"),
                 native_insets_changed as *mut std::ffi::c_void,
             ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeNodeInfo"),
+                jni_str!(
+                    "(JLandroid/view/View;I)Landroid/view/accessibility/AccessibilityNodeInfo;"
+                ),
+                native_node_info as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeFindFocus"),
+                jni_str!(
+                    "(JLandroid/view/View;I)Landroid/view/accessibility/AccessibilityNodeInfo;"
+                ),
+                native_find_focus as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativePerformAction"),
+                jni_str!("(JLandroid/view/View;IILandroid/os/Bundle;)Z"),
+                native_perform_action as *mut std::ffi::c_void,
+            ),
         ]
     };
     // SAFETY: as above; every method is static, and so receives the class.
@@ -862,4 +994,97 @@ extern "system" fn native_insets_changed<'local>(
             view.push_event(ViewEvent::InsetsChanged);
         }
     });
+}
+
+/// Run one of the node provider's calls with the window's bridge, containing a
+/// panic before it reaches the JVM: the call then answers what `after_panic`
+/// makes, as it does with no bridge.
+fn node_provider<R>(
+    method: &'static str,
+    handle: jlong,
+    after_panic: fn(()) -> R,
+    body: impl FnOnce(&dyn ViewAccessibility) -> R,
+) -> R {
+    os_entry(
+        method,
+        (),
+        AfterPanic::Answer(after_panic),
+        || match bridge(handle).and_then(|view| view.accessibility()) {
+            Some(accessibility) => body(&*accessibility),
+            None => after_panic(()),
+        },
+    )
+}
+
+#[expect(unsafe_code, reason = "the bridge takes the call's raw JNI pointers")]
+extern "system" fn native_node_info<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    host: JObject<'local>,
+    virtual_view_id: jint,
+) -> jni::sys::jobject {
+    node_provider(
+        "nativeNodeInfo",
+        handle,
+        |()| std::ptr::null_mut(),
+        |accessibility| {
+            // SAFETY: this native method's own environment and local
+            // references, on its thread, for a call that returns before the
+            // method does.
+            unsafe { accessibility.node_info(env.as_raw(), host.as_raw(), virtual_view_id) }
+        },
+    )
+}
+
+#[expect(unsafe_code, reason = "the bridge takes the call's raw JNI pointers")]
+extern "system" fn native_find_focus<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    host: JObject<'local>,
+    focus_type: jint,
+) -> jni::sys::jobject {
+    node_provider(
+        "nativeFindFocus",
+        handle,
+        |()| std::ptr::null_mut(),
+        |accessibility| {
+            // SAFETY: this native method's own environment and local
+            // references, on its thread, for a call that returns before the
+            // method does.
+            unsafe { accessibility.find_focus(env.as_raw(), host.as_raw(), focus_type) }
+        },
+    )
+}
+
+#[expect(unsafe_code, reason = "the bridge takes the call's raw JNI pointers")]
+extern "system" fn native_perform_action<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    host: JObject<'local>,
+    virtual_view_id: jint,
+    action: jint,
+    arguments: JObject<'local>,
+) -> jboolean {
+    node_provider(
+        "nativePerformAction",
+        handle,
+        |()| false,
+        |accessibility| {
+            // SAFETY: this native method's own environment and local
+            // references, on its thread, for a call that returns before the
+            // method does.
+            unsafe {
+                accessibility.perform_action(
+                    env.as_raw(),
+                    host.as_raw(),
+                    virtual_view_id,
+                    action,
+                    arguments.as_raw(),
+                )
+            }
+        },
+    )
 }

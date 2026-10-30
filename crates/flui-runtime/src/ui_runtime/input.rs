@@ -893,6 +893,49 @@ impl UiRuntime {
         applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
 
+    /// Move the assistive technology's cursor in `presentation_id`, as its
+    /// adapter reported, and tell the subtrees it left and entered. Recorded
+    /// as [`HostInput::AssistiveFocus`](crate::HostInput::AssistiveFocus).
+    /// `false` when the presentation is gone.
+    pub fn dispatch_assistive_focus(
+        &self,
+        presentation_id: PresentationId,
+        node: Option<accesskit::NodeId>,
+    ) -> bool {
+        let recording = self.begin_recorded_input();
+        let applied = catch_unwind(AssertUnwindSafe(|| {
+            let Some(presentation) = self.presentations.get(presentation_id) else {
+                tracing::trace!(
+                    stamped_presentation_id = presentation_id.as_u64(),
+                    "dropping an assistive focus move for a presentation this ui_runtime no longer hosts"
+                );
+                return false;
+            };
+            // A zero id names no node: the cursor is in no subtree.
+            let node = node.and_then(|node| flui_semantics::AccessibilityNodeId::from_u64(node.0));
+            // The handlers run once the pipeline is no longer borrowed.
+            let change = presentation
+                .pipeline()
+                .with_mut(|pipeline| pipeline.move_assistive_focus(node));
+            change.invoke();
+            true
+        }));
+        if recording {
+            let outcome = match &applied {
+                Ok(false) => crate::owner::InputOutcome::Unhandled,
+                _ => crate::owner::InputOutcome::Handled,
+            };
+            self.record_dispatched(
+                presentation_id,
+                InputSurface::Window,
+                crate::HostInput::AssistiveFocus(node),
+                outcome,
+                None,
+            );
+        }
+        applied.unwrap_or_else(|payload| resume_unwind(payload))
+    }
+
     fn apply_accessibility(
         &self,
         presentation_id: PresentationId,
@@ -905,7 +948,10 @@ impl UiRuntime {
             );
             return Applied::default();
         };
-        let decoded = match flui_semantics::semantics_action_request_for(request) {
+        let decoded = match presentation
+            .pipeline()
+            .with(|pipeline| pipeline.decode_semantics_action(request))
+        {
             Ok(decoded) => decoded,
             Err(
                 error @ (flui_semantics::ActionDecodeError::UnknownTarget(_)

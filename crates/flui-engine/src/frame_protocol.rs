@@ -243,7 +243,7 @@ impl FrameProtocol {
                 parent * glam::DMat4::from_translation(glam::DVec3::new(offset.dx, offset.dy, 0.0))
             };
             if let flui_layer::Layer::BackdropFilter(layer) = layer {
-                let Ok(affine) = crate::clip_geometry::ValidatedAffine::new(transform) else {
+                let Ok(affine) = crate::clip_geometry::ValidatedAffine::try_new(transform) else {
                     self.damage.mark_full_repaint();
                     return;
                 };

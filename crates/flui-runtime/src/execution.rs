@@ -594,17 +594,18 @@ impl ExecutionServices {
     }
 
     /// Shut down: stop admission, cancel outstanding work, then join running
-    /// work, waiting at most `grace` per pool.
+    /// work until `deadline`, the IO pool first and the compute pool with
+    /// what is left.
     ///
     /// After this returns every spawn refuses with
     /// [`SpawnError::ShuttingDown`]. Idempotent. With host-injected pools
     /// only the first two stages apply — FLUI cancels the work it wrapped,
     /// but joining the host's threads is the host's own lifecycle.
     ///
-    /// `grace` bounds the wait for **running** work (an IO future between
+    /// `deadline` bounds the wait for **running** work (an IO future between
     /// await points, a compute closure mid-run); work that has not started
     /// is dropped unrun, which is the cancellation stage doing its job.
-    pub fn shutdown(&self, grace: std::time::Duration) {
+    pub fn shutdown(&self, deadline: std::time::Instant) {
         self.accepting.store(false, Ordering::Release);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -614,10 +615,14 @@ impl ExecutionServices {
                 let io = pools.io.lock().take_runtime();
                 let compute = pools.compute.lock().take_runtime();
                 if let Some(runtime) = io {
-                    runtime.shutdown_timeout(grace);
+                    runtime.shutdown_timeout(
+                        deadline.saturating_duration_since(std::time::Instant::now()),
+                    );
                 }
                 if let Some(runtime) = compute {
-                    runtime.shutdown_timeout(grace);
+                    runtime.shutdown_timeout(
+                        deadline.saturating_duration_since(std::time::Instant::now()),
+                    );
                 }
             }
         }
@@ -625,9 +630,9 @@ impl ExecutionServices {
         #[cfg(target_arch = "wasm32")]
         {
             // Sequential target: nothing to cancel or join — compute ran
-            // inline and queued microtasks cannot be revoked. `grace` is
+            // inline and queued microtasks cannot be revoked. `deadline` is
             // deliberately unused.
-            let _ = grace;
+            let _ = deadline;
         }
     }
 }
@@ -972,7 +977,7 @@ mod tests {
 
         // Frame-lane work: an owner-local task polled on THIS thread.
         let scheduler = flui_scheduler::UpdateScheduler::new();
-        let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler)
+        let owner_frame = flui_scheduler::OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame");
         let done = Arc::new(AtomicBool::new(false));
         let done_for_task = Arc::clone(&done);
@@ -986,7 +991,7 @@ mod tests {
         );
 
         gate.store(true, Ordering::Release);
-        services.shutdown(Duration::from_secs(5));
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 
     // ── deterministic executor semantics ────────────────────────────────────

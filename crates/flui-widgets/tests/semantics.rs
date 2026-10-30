@@ -756,6 +756,120 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
     }
 }
 
+/// A field's text runs keep their identities while their text stays, take
+/// new ones when it changes, and, once the identity space is exhausted, the
+/// field is published without runs or selection rather than with runs it
+/// cannot name.
+pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
+    use flui_foundation::geometry::{Point, Rect, Size};
+    use flui_painting::Canvas;
+    use flui_rendering::semantics::{
+        SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
+        TextRunParts, TextRunPosition, TextRunSelection,
+    };
+    use flui_widgets::{CustomPaint, CustomPainter};
+
+    /// A custom-drawn field: one run per line, each character ten wide.
+    #[derive(Debug)]
+    struct Field(&'static str);
+    impl CustomPainter for Field {
+        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+        fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+            false
+        }
+        fn should_rebuild_semantics(&self, _old: &dyn CustomPainter) -> bool {
+            true
+        }
+        fn semantics_regions(&self, size: Size) -> Vec<SemanticsRegion> {
+            let mut start = 0;
+            let runs = self
+                .0
+                .split_inclusive('\n')
+                .enumerate()
+                .map(|(line, text)| {
+                    let mut parts = TextRunParts::new(
+                        text,
+                        start,
+                        line,
+                        flui_widgets::SemanticsTextDirection::Ltr,
+                        Rect::from_origin_size(
+                            Point::new(0.0, 10.0 * line as f64),
+                            Size::new(10.0 * text.len() as f64, 10.0),
+                        ),
+                    );
+                    for index in 0..text.len() {
+                        parts.character_lengths.push(1);
+                        parts.character_positions.push(10.0 * index as f32);
+                        parts.character_widths.push(10.0);
+                    }
+                    parts.word_starts.push(0);
+                    start += text.len();
+                    TextRun::try_new(parts).expect("a fixture run is well formed")
+                })
+                .collect();
+            let content = TextContent::try_new(runs)
+                .expect("lines are contiguous")
+                .with_selection(TextRunSelection::collapsed(TextRunPosition::new(0, 1)))
+                .expect("the caret lies in the first line");
+            let mut config = SemanticsConfiguration::new();
+            config.set_role(SemanticsRole::TextInput);
+            config.set_label("Name");
+            config.set_value(self.0);
+            config.set_text_content(content);
+            vec![SemanticsRegion::new(
+                SemanticsRegionKey(1),
+                Rect::from_origin_size(Point::ZERO, size),
+                config,
+            )]
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    let view = |text| {
+        CustomPaint::new()
+            .size(Size::new(100.0, 20.0))
+            .painter(Field(text))
+    };
+    let mut laid = lay_out(view("ab\ncd"), loose(200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let runs = |laid: &crate::common::LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let field = tree.find_by_label("Name").expect("the field is published");
+        let selection = field.raw().text_selection().copied();
+        (field.child_ids().to_vec(), selection)
+    };
+    let (first, selection) = runs(&laid);
+    assert_eq!(first.len(), 2, "one run per line");
+    assert_eq!(
+        selection.map(|selection| selection.focus.node),
+        Some(first[0]),
+        "the caret names its run"
+    );
+
+    laid.pump_widget(view("ab\ncd"));
+    assert_eq!(runs(&laid).0, first, "the same text keeps its runs");
+
+    laid.pump_widget(view("ab\nce"));
+    let edited = runs(&laid).0;
+    assert_eq!(edited[0], first[0], "an unchanged line keeps its run");
+    assert_ne!(edited[1], first[1], "an edited line is a new run");
+
+    laid.pipeline_owner()
+        .with_mut(flui_rendering::pipeline::PipelineOwner::exhaust_semantics_identities);
+    laid.pump_widget(view("ab\ncf"));
+    let (withheld, selection) = runs(&laid);
+    assert!(
+        withheld.is_empty(),
+        "no identity for the edited line: no runs"
+    );
+    assert!(
+        selection.is_none(),
+        "and no selection on a run not published"
+    );
+}
+
 pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
     use flui_widgets::Visibility;
 
@@ -1188,6 +1302,60 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
         1,
         "the handler must have run exactly once"
     );
+}
+
+/// The screen reader's cursor, moved by the platform, tells the subtrees it
+/// enters `true` and those it leaves `false`, once each, at the next frame;
+/// moving within a subtree tells it nothing.
+pub(crate) fn the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler() {
+    use flui_widgets::Row;
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&heard);
+    let item = |label: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(label)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    let mut laid = lay_out(
+        Row::new((
+            host()
+                .on_assistive_focus_within(move |_cx, within| record.borrow_mut().push(within))
+                .child(Row::new((item("first"), item("second")))),
+            item("outside"),
+        )),
+        loose(400.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = |label: &str| {
+        tree.find_by_label(label)
+            .unwrap_or_else(|error| panic!("{label}: {error}\n{}", tree.describe()))
+            .id()
+    };
+    let (first, second, outside) = (node("first"), node("second"), node("outside"));
+
+    let steps: [(&str, Option<NodeId>, &[bool]); 5] = [
+        ("onto an item of the group", Some(first), &[true]),
+        ("to its sibling", Some(second), &[]),
+        ("out of the group", Some(outside), &[false]),
+        ("back in", Some(first), &[true]),
+        ("off the tree", None, &[false]),
+    ];
+    for (step, target, expected) in steps {
+        laid.move_assistive_focus(target);
+        assert!(heard.borrow().is_empty(), "{step}: told before the frame");
+        laid.pump();
+        assert_eq!(
+            heard.borrow_mut().drain(..).collect::<Vec<_>>(),
+            expected,
+            "{step}"
+        );
+    }
 }
 
 /// An action handler receives the dispatch's `EventCx`: its signal write

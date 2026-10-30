@@ -171,7 +171,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 
 // Diagnostics are user code too. A reporting failure cannot erase completion
 // evidence or strand a worker's accepted tail.
-fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
+pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
         flui_foundation::panic::retain_opaque_payload(payload);
     }
@@ -1476,12 +1476,11 @@ impl ServiceRegistry {
     /// the pools' own cancellation hard-drops any future still running, so
     /// this cooperative pass must come first or no service ever gets its
     /// flush window.
-    pub(crate) fn shutdown(&mut self, deadline: Duration) -> ServiceShutdownReport {
+    pub(crate) fn shutdown(&mut self, join_by: Instant) -> ServiceShutdownReport {
         self.accepting = false;
         for slot in &self.services {
             slot.signal.cancel();
         }
-        let join_by = Instant::now() + deadline;
         let mut entries = Vec::with_capacity(self.services.len());
         for mut slot in self.services.drain(..) {
             let outcome = if let Some(outcome) = slot.poll_finished() {
@@ -1505,7 +1504,7 @@ impl ServiceRegistry {
                 ServiceShutdownOutcome::DeadlineExceeded => {
                     tracing::warn!(
                         service = slot.name,
-                        ?deadline,
+                        ?join_by,
                         "service ignored cancellation past the shutdown deadline; it will be \
                          force-abandoned when the execution pools close"
                     );
@@ -2018,6 +2017,27 @@ mod tests {
         assert_eq!(events.try_next(), None);
     }
 
+    /// R19: a worker outliving its execution services refuses a submission
+    /// with `ShuttingDown`, and holds nothing that keeps them alive.
+    fn worker_handle_refuses_after_the_services_drop() {
+        let (services, _deterministic) = deterministic_services();
+        let gone = Arc::downgrade(&services);
+        let mut worker = TaskSpawner::new(&services)
+            .spawn_worker("stale", |input: u32, _context| input)
+            .expect("worker must be created");
+        drop(services);
+        assert_eq!(gone.strong_count(), 0, "the worker holds no services");
+        assert_eq!(worker.submit(1), Err(SpawnError::ShuttingDown));
+        assert_eq!(worker.try_latest(), None);
+    }
+
+    /// R19: a publisher outliving its receiver refuses with `OwnerGone`.
+    fn service_publisher_refuses_after_the_receiver_drops() {
+        let (publisher, events) = service_events::<u32>("positions", 3);
+        drop(events);
+        assert_eq!(publisher.publish(1), Err(PublishError::OwnerGone));
+    }
+
     // ── Service registry: lifetime policy, staged shutdown, deadlines ───────
 
     fn until_cancelled_service(
@@ -2058,13 +2078,13 @@ mod tests {
             )
             .expect("service must start");
 
-        let report = registry.shutdown(Duration::from_secs(10));
+        let report = registry.shutdown(Instant::now() + Duration::from_secs(10));
         assert!(report.all_completed(), "report: {report:?}");
         assert!(
             flushed.load(Ordering::Acquire),
             "the service must have used its flush window before shutdown returned"
         );
-        services.shutdown(Duration::from_secs(5));
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 
     #[test]
@@ -2115,6 +2135,14 @@ mod tests {
                 (
                     "service_events_ring_drops_oldest_and_never_blocks",
                     service_events_ring_drops_oldest_and_never_blocks as fn(),
+                ),
+                (
+                    "stale_handles_refuse_after_the_runtime_drops::worker_handle",
+                    worker_handle_refuses_after_the_services_drop as fn(),
+                ),
+                (
+                    "stale_handles_refuse_after_the_runtime_drops::service_publisher",
+                    service_publisher_refuses_after_the_receiver_drops as fn(),
                 ),
                 (
                     "shutdown_cancels_then_joins_and_the_flush_window_is_real",

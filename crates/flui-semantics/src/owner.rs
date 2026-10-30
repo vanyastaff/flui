@@ -363,6 +363,9 @@ pub struct SemanticsOwner {
     /// for as long as it lasts (debug builds only).
     #[cfg(debug_assertions)]
     reported_clashes: Vec<DuplicateIdentifier>,
+    /// The presentation's announcement queue and announcer nodes, published
+    /// as the last children of the root (ADR-0204 §4).
+    announcements: Option<crate::Announcements>,
 }
 
 /// An author error a publication found: published as declared, or left out,
@@ -374,6 +377,9 @@ pub enum SemanticsDiagnostic {
     InapplicableAttribute(InapplicableAttribute),
     /// Siblings that share an identifier, published as written.
     DuplicateIdentifier(DuplicateIdentifier),
+    /// A text field whose runs have no identities, published without its
+    /// runs and selection.
+    TextRunsWithheld(TextRunsWithheld),
 }
 
 /// A role-dependent attribute a published node declared and its role does
@@ -404,6 +410,16 @@ pub struct DuplicateIdentifier {
     pub siblings: Vec<AccessibilityNodeId>,
 }
 
+/// A text field published without its text runs and selection: the
+/// presentation's synthetic identity space is exhausted, or the content was
+/// declared without identities. Its value still reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TextRunsWithheld {
+    /// The field.
+    pub node: AccessibilityNodeId,
+}
+
 /// Reports `diagnostic` as a warning. Called by the frame driver with no
 /// borrow of the pipeline held, since a `tracing` subscriber is user code.
 pub fn report_diagnostic(diagnostic: &SemanticsDiagnostic) {
@@ -420,7 +436,23 @@ pub fn report_diagnostic(diagnostic: &SemanticsDiagnostic) {
             siblings = ?clash.siblings,
             "siblings share a semantics identifier, which must be unique among siblings"
         ),
+        SemanticsDiagnostic::TextRunsWithheld(withheld) => tracing::warn!(
+            node = ?withheld.node,
+            "a text field is published without its text runs and selection: they have no identities"
+        ),
     }
+}
+
+/// What a publication reports about `node`: its inapplicable attributes, and
+/// text runs withheld for want of identities.
+fn findings_of(node: &SemanticsNode) -> impl Iterator<Item = SemanticsDiagnostic> + '_ {
+    let withheld = node
+        .accessibility_id()
+        .filter(|_| crate::accesskit_translation::withholds_text(node.config().attributes()))
+        .map(|node| SemanticsDiagnostic::TextRunsWithheld(TextRunsWithheld { node }));
+    inapplicable_of(node)
+        .map(SemanticsDiagnostic::InapplicableAttribute)
+        .chain(withheld)
 }
 
 /// The inapplicable attributes `node` declares, when it is published.
@@ -649,7 +681,9 @@ impl PublishedState {
 /// whole-tree scan, and dead entries are dropped by a liveness check before
 /// resolution. A target's identity can change without its sources being
 /// dirty, so an incremental flush re-translates every relation source and lets
-/// the mirror diff drop the unchanged ones.
+/// the mirror diff drop the unchanged ones. A document selection (ADR-0214)
+/// resolves through the runs of the texts beneath its node, which change
+/// without dirtying it, so its node is a source too.
 #[derive(Default)]
 struct RelationIndex {
     anchored: FxHashMap<SemanticsId, SmallVec<[SemanticsAnchor; 1]>>,
@@ -674,7 +708,7 @@ impl RelationIndex {
             self.anchored
                 .insert(sid, config.anchors().iter().cloned().collect());
         }
-        if config.relations().is_empty() {
+        if config.relations().is_empty() && config.document_selection().is_none() {
             self.sources.remove(&sid);
         } else {
             self.sources.insert(sid);
@@ -742,6 +776,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -768,6 +803,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -788,6 +824,7 @@ impl SemanticsOwner {
             revision: TreeRevision::default(),
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
+            announcements: None,
         }
     }
 
@@ -814,13 +851,10 @@ impl SemanticsOwner {
     /// its adapter holds, so action resolution keeps checking against it.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
         if self.enabled
-            && let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
-                &self.tree,
-                None,
-                self.device_pixel_ratio,
-            )
+            && let Some((update, announced)) = self.full_update(None)
         {
             callback(&update);
+            self.commit_announcements(announced.as_ref(), self.revision);
             let mut mirror = PublishedState::mirror_of(update);
             mirror.record_offers(&self.tree);
             self.published = Some(mirror);
@@ -847,6 +881,9 @@ impl SemanticsOwner {
     /// Enables semantics.
     pub fn enable(&mut self) {
         self.enabled = true;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(true);
+        }
     }
 
     /// Disables semantics.
@@ -854,6 +891,9 @@ impl SemanticsOwner {
     /// When disabled, no updates are sent to the platform.
     pub fn disable(&mut self) {
         self.enabled = false;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(false);
+        }
     }
 
     // ========== Tree Access ==========
@@ -881,11 +921,7 @@ impl SemanticsOwner {
         &self,
         focus: Option<SemanticsId>,
     ) -> Option<accesskit::TreeUpdate> {
-        crate::accesskit_translation::tree_to_scaled_update(
-            &self.tree,
-            focus,
-            self.device_pixel_ratio,
-        )
+        self.full_update(focus).map(|(update, _)| update)
     }
 
     /// Returns a mutable reference to the semantics tree.
@@ -998,6 +1034,185 @@ impl SemanticsOwner {
             resolved = Some((id, node));
         }
         resolved.ok_or(SemanticsActionError::NodeNotFound { node_id })
+    }
+
+    /// Decodes a platform request against this owner's tree, as
+    /// [`semantics_action_request_for`](crate::semantics_action_request_for)
+    /// does, and also what only the tree can read: a request on one of a
+    /// field's text runs goes to the field, and a `SetTextSelection`'s run
+    /// positions become bytes of the field's value.
+    ///
+    /// # Errors
+    ///
+    /// The free function's, and [`ActionDecodeError::InvalidTextPosition`]
+    /// when a selection's end is not a position in the target field's current
+    /// runs.
+    ///
+    /// [`ActionDecodeError::InvalidTextPosition`]: crate::ActionDecodeError::InvalidTextPosition
+    pub fn semantics_action_request_for(
+        &self,
+        request: &accesskit::ActionRequest,
+    ) -> Result<SemanticsActionRequest, crate::ActionDecodeError> {
+        let mut routed = request.clone();
+        let target = AccessibilityNodeId::from_u64(request.target_node.0);
+        let text_owner = target.and_then(|run| self.field_of_run(run));
+        if let Some(field) = text_owner {
+            routed.target_node = accesskit::NodeId(field.as_u64());
+        }
+        // A selection sent to static text, or to one of its runs, is the
+        // document's to make (ADR-0214 §4). A text that blocks user actions
+        // keeps the request, which it then refuses (ADR-0216 §1).
+        if request.action == accesskit::Action::SetTextSelection
+            && let Some(at) = text_owner.or(target)
+            && !self.blocks_user_actions_at(at)
+            && let Some(document) = self.document_of(at)
+        {
+            routed.target_node = accesskit::NodeId(document.as_u64());
+            return crate::accesskit_translation::decode_request(&routed, |target, selection| {
+                Some(ActionCall::SetDocumentSelection(
+                    self.document_selection(target, selection)?,
+                ))
+            });
+        }
+        crate::accesskit_translation::decode_request(&routed, |target, selection| {
+            let root = self.tree.root()?;
+            let (_, field) = self.locate(root, target).ok()?;
+            let (content, runs) =
+                crate::accesskit_translation::published_text(field.config().attributes())?;
+            let position = |at: &accesskit::TextPosition| {
+                let run = AccessibilityNodeId::from_u64(at.node.0)?;
+                let index = runs.iter().position(|published| *published == run)?;
+                Some(crate::TextRunPosition::new(index, at.character_index))
+            };
+            content
+                .selection_bytes(crate::TextRunSelection::new(
+                    position(&selection.anchor)?,
+                    position(&selection.focus)?,
+                ))
+                .ok()
+                .map(ActionCall::SetTextSelection)
+        })
+    }
+
+    /// The texts of the document that holds the text `anchor` names, as their
+    /// anchors in the order the last publication reads them, sort keys and
+    /// all: what an adapter's range over the document covers. `None` when no
+    /// published text declares `anchor`, or no document holds it.
+    #[must_use]
+    pub fn document_texts(
+        &self,
+        anchor: &crate::SemanticsAnchor,
+    ) -> Option<Vec<crate::SemanticsAnchor>> {
+        let text = self.tree.rooted_nodes()?.into_iter().find_map(|sid| {
+            let node = self.tree.get(sid)?;
+            (node.config().anchors().contains(anchor)
+                && crate::accesskit_translation::published_text(node.config().attributes())
+                    .is_some())
+            .then(|| node.accessibility_id())
+            .flatten()
+        })?;
+        let document = self.document_of(text)?;
+        let (_, document) = self.locate(self.tree.root()?, document).ok()?;
+        Some(
+            self.tree
+                .texts_beneath(document)
+                .into_iter()
+                .filter_map(|node| node.config().anchors().first().cloned())
+                .collect(),
+        )
+    }
+
+    /// Whether the node published as `at` blocks user actions (ADR-0216 §1).
+    fn blocks_user_actions_at(&self, at: AccessibilityNodeId) -> bool {
+        self.tree
+            .root()
+            .and_then(|root| self.locate(root, at).ok())
+            .is_some_and(|(_, node)| node.config().blocks_user_actions())
+    }
+
+    /// The document that makes selections for the node published as `at`:
+    /// the node itself or its nearest ancestor that is a merge boundary and
+    /// takes `SetTextSelection` (ADR-0214 §4). `None` for a text field, which
+    /// makes its own, and for a node no such document holds.
+    fn document_of(&self, at: AccessibilityNodeId) -> Option<AccessibilityNodeId> {
+        let root = self.tree.root()?;
+        let (mut sid, node) = self.locate(root, at).ok()?;
+        if node.config().attributes().effective_role().is_text_input() {
+            return None;
+        }
+        // Bounded by the tree's size, so a malformed parent chain cannot loop.
+        for _ in 0..=self.tree.len() {
+            let node = self.tree.get(sid)?;
+            let config = node.config();
+            if config.makes_document_selections() {
+                return node.accessibility_id();
+            }
+            sid = node.parent()?;
+        }
+        None
+    }
+
+    /// A selection between two run positions as the document published as
+    /// `document` reads it: each end in the text whose run it names, as that
+    /// text's anchor and a byte of it. `None` unless both runs are current
+    /// runs of texts this document holds: texts beneath it that no nearer
+    /// document holds, so a run of another document, nested in this one or
+    /// not, or one an edit retired, is refused before the document sees it. A
+    /// character index past its run's end is read as the run's end.
+    fn document_selection(
+        &self,
+        document: AccessibilityNodeId,
+        selection: &accesskit::TextSelection,
+    ) -> Option<crate::DocumentSelection> {
+        let root = self.tree.root()?;
+        let document_id = document;
+        let (_, document) = self.locate(root, document).ok()?;
+        let position = |at: &accesskit::TextPosition| {
+            let run = AccessibilityNodeId::from_u64(at.node.0)?;
+            let text = self.field_of_run(run)?;
+            // The text belongs to this document, not to one nested in it.
+            if self.document_of(text) != Some(document_id) {
+                return None;
+            }
+            let (_, text) = self.locate(root, text).ok()?;
+            // A text that blocks user actions is no end of an assistive
+            // selection (ADR-0216 §1).
+            if text.config().blocks_user_actions() {
+                return None;
+            }
+            let anchor = text.config().anchors().first()?;
+            // The run's text must be the one the document finds by its anchor.
+            let (_, beneath) = self.tree.text_beneath(document, anchor)?;
+            if beneath.accessibility_id() != text.accessibility_id() {
+                return None;
+            }
+            let (content, runs) =
+                crate::accesskit_translation::published_text(text.config().attributes())?;
+            let index = runs.iter().position(|published| *published == run)?;
+            let character = at
+                .character_index
+                .min(content.runs().get(index)?.character_count());
+            let byte = content
+                .byte_offset(crate::TextRunPosition::new(index, character))
+                .ok()?;
+            Some(crate::DocumentPosition::new(anchor.clone(), byte))
+        };
+        Some(crate::DocumentSelection::new(
+            position(&selection.anchor)?,
+            position(&selection.focus)?,
+        ))
+    }
+
+    /// The field that publishes `run` as one of its text runs.
+    fn field_of_run(&self, run: AccessibilityNodeId) -> Option<AccessibilityNodeId> {
+        self.tree.rooted_nodes()?.into_iter().find_map(|sid| {
+            let node = self.tree.get(sid)?;
+            let (_, runs) =
+                crate::accesskit_translation::published_text(node.config().attributes())?;
+            runs.contains(&run)
+                .then(|| node.accessibility_id())
+                .flatten()
+        })
     }
 
     /// Resolves a platform request against the current rooted semantics tree,
@@ -1279,6 +1494,9 @@ impl SemanticsOwner {
         self.tree.clear();
         self.callback = None;
         self.enabled = false;
+        if let Some(announcements) = &self.announcements {
+            announcements.set_listening(false);
+        }
         self.published = None;
         self.full_publish_pending = false;
         self.focus_claimants.clear();
@@ -1305,7 +1523,133 @@ impl SemanticsOwner {
     /// frame loop consulting a narrower one would never deliver the
     /// reconnect update.
     pub fn needs_flush(&self) -> bool {
-        self.enabled && (self.tree.has_dirty_nodes() || self.full_publish_pending)
+        self.enabled
+            && (self.tree.has_dirty_nodes()
+                || self.full_publish_pending
+                || self.has_pending_announcements())
+    }
+
+    // ========== Announcements ==========
+
+    /// Installs the presentation's announcement queue: its two nodes publish
+    /// as the last children of the root from the next flush, which is a full
+    /// one so the adapter receives them.
+    pub fn set_announcements(&mut self, announcements: crate::Announcements) {
+        announcements.set_listening(self.enabled);
+        self.announcements = Some(announcements);
+        self.full_publish_pending = true;
+    }
+
+    /// Queues `message` for the next flush, which speaks it through the
+    /// announcer node of `urgency`. Use from inside a frame; application code
+    /// holds an [`Announcer`](crate::Announcer), which also requests the frame.
+    ///
+    /// # Errors
+    /// [`AnnounceError::PresentationClosed`](crate::AnnounceError::PresentationClosed)
+    /// when no announcement queue is installed: there is no node to speak
+    /// through.
+    pub fn announce(
+        &mut self,
+        message: &str,
+        urgency: crate::Urgency,
+    ) -> Result<(), crate::AnnounceError> {
+        let announcements = self
+            .announcements
+            .as_ref()
+            .ok_or(crate::AnnounceError::PresentationClosed)?;
+        announcements.enqueue(message, urgency);
+        Ok(())
+    }
+
+    /// Whether an accepted announcement waits for a flush that can deliver
+    /// it: the owner is enabled and has a root to publish under. A frame
+    /// scheduler reads it to produce the frame an idle presentation needs.
+    #[must_use]
+    pub fn has_undelivered_announcements(&self) -> bool {
+        self.enabled && self.tree.root().is_some() && self.has_pending_announcements()
+    }
+
+    /// The assistive-focus handlers of `node` and every node above it, each
+    /// once, nearest first: the subtrees a cursor on `node` is in. Empty for
+    /// a node the tree does not hold.
+    pub(crate) fn assistive_focus_chain(
+        &self,
+        node: AccessibilityNodeId,
+    ) -> Vec<crate::AssistiveFocusHandler> {
+        let Some(root) = self.tree.root() else {
+            return Vec::new();
+        };
+        let Ok((start, _)) = self.locate(root, node) else {
+            return Vec::new();
+        };
+        let mut chain: Vec<crate::AssistiveFocusHandler> = Vec::new();
+        let mut visited = FxHashSet::default();
+        let mut current = Some(start);
+        while let Some(id) = current {
+            if !visited.insert(id) {
+                break;
+            }
+            let Some(node) = self.tree.get(id) else {
+                break;
+            };
+            for handler in node.config().assistive_focus_handlers() {
+                if !chain.iter().any(|held| Rc::ptr_eq(held, handler)) {
+                    chain.push(Rc::clone(handler));
+                }
+            }
+            current = node.parent();
+        }
+        chain
+    }
+
+    /// The announcer nodes' identities, when an announcement queue is
+    /// installed: published for assistive technology, which speaks their
+    /// value changes, and not part of the interface an agent reads.
+    pub(crate) fn announcer_node_ids(&self) -> Option<[AccessibilityNodeId; 2]> {
+        self.announcements.as_ref().map(|announcements| {
+            [crate::Urgency::Polite, crate::Urgency::Assertive]
+                .map(|urgency| announcements.node_id(urgency))
+        })
+    }
+    fn has_pending_announcements(&self) -> bool {
+        self.announcements
+            .as_ref()
+            .is_some_and(crate::Announcements::has_pending)
+    }
+
+    /// The announcer nodes for `prepared`, polite then assertive: static text
+    /// whose value is the message, live at its urgency, with no area, named
+    /// by [`Urgency::announcer_identifier`](crate::Urgency::announcer_identifier).
+    fn announcer_nodes(
+        announcements: &crate::Announcements,
+        prepared: &crate::announce::PreparedAnnouncements,
+    ) -> [(accesskit::NodeId, accesskit::Node); 2] {
+        let node = |urgency: crate::Urgency, value: &str| {
+            let mut node = accesskit::Node::new(accesskit::Role::Label);
+            node.set_live(match urgency {
+                crate::Urgency::Assertive => accesskit::Live::Assertive,
+                crate::Urgency::Polite => accesskit::Live::Polite,
+            });
+            node.set_live_atomic();
+            node.set_value(value);
+            node.set_bounds(accesskit::Rect::ZERO);
+            node.set_author_id(urgency.announcer_identifier());
+            (
+                accesskit::NodeId(announcements.node_id(urgency).as_u64()),
+                node,
+            )
+        };
+        [
+            node(crate::Urgency::Polite, &prepared.polite),
+            node(crate::Urgency::Assertive, &prepared.assertive),
+        ]
+    }
+
+    /// Appends the announcer nodes to `root`'s children.
+    fn adopt_announcers(announcements: &crate::Announcements, root: &mut accesskit::Node) {
+        for urgency in [crate::Urgency::Polite, crate::Urgency::Assertive] {
+            root.push_child(accesskit::NodeId(announcements.node_id(urgency).as_u64()));
+        }
     }
 
     /// Marks a specific node as dirty.
@@ -1352,7 +1696,7 @@ impl SemanticsOwner {
     /// for a full publish, the changed nodes for an incremental one, and 0
     /// when nothing was delivered. The pipeline's phase counters sum it.
     pub fn flush(&mut self) -> usize {
-        if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
+        if !self.needs_flush() {
             return 0;
         }
         // While two live nodes share an identity, a diff could carry the
@@ -1389,16 +1733,76 @@ impl SemanticsOwner {
             .map(|id| accesskit::NodeId(id.as_u64()))
     }
 
+    /// The whole rooted tree as one update, the announcer nodes included, and
+    /// the announcements it would deliver. `None` while the tree has no root.
+    fn full_update(
+        &self,
+        focus: Option<SemanticsId>,
+    ) -> Option<(
+        accesskit::TreeUpdate,
+        Option<crate::announce::PreparedAnnouncements>,
+    )> {
+        let mut update = crate::accesskit_translation::tree_to_scaled_update(
+            &self.tree,
+            focus,
+            self.device_pixel_ratio,
+        )?;
+        let prepared = self.announcements.as_ref().map(|announcements| {
+            let prepared = announcements.prepare();
+            let root = update
+                .tree
+                .as_ref()
+                .expect("BUG: a full update names its root")
+                .root;
+            if let Some((_, node)) = update.nodes.iter_mut().find(|(id, _)| *id == root) {
+                Self::adopt_announcers(announcements, node);
+            }
+            update
+                .nodes
+                .extend(Self::announcer_nodes(announcements, &prepared));
+            prepared
+        });
+        Some((update, prepared))
+    }
+
+    /// Removes from the queue what a delivered update carried, journaling it
+    /// under `revision`, the revision that update makes current.
+    fn commit_announcements(
+        &self,
+        delivered: Option<&crate::announce::PreparedAnnouncements>,
+        revision: TreeRevision,
+    ) {
+        if let (Some(announcements), Some(delivered)) = (&self.announcements, delivered) {
+            announcements.commit(delivered, revision);
+        }
+    }
+
+    /// The announcements this presentation delivered after `params.since`,
+    /// for an agent: assistive technology hears them as announcer node
+    /// values, which an agent's reads leave out. Empty when no announcement
+    /// queue is installed.
+    #[must_use]
+    pub fn announcement_journal(
+        &self,
+        params: &flui_protocol::AnnouncementsParams,
+    ) -> flui_protocol::AnnouncementJournal {
+        self.announcements
+            .as_ref()
+            .map(|announcements| announcements.journal(params.since, params.max_entries))
+            .unwrap_or_default()
+    }
+
+    /// The revision the publication in progress makes current.
+    fn next_revision(&self) -> TreeRevision {
+        TreeRevision(self.revision.0.saturating_add(1))
+    }
+
     /// Publishes the complete rooted tree and resets the mirror to it.
     /// Returns the number of nodes delivered (0 when there is no root yet).
     fn publish_full(&mut self) -> usize {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
-        let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
-            &self.tree,
-            None,
-            self.device_pixel_ratio,
-        ) else {
+        let Some((update, announced)) = self.full_update(None) else {
             // No root yet — nothing an adapter could apply. Leave the tree
             // dirty (and any full publish pending) so the next flush retries
             // once assembly has rooted it, rather than silently swallowing
@@ -1421,6 +1825,8 @@ impl SemanticsOwner {
         if let Some(callback) = callback {
             callback(&update);
         }
+        // Delivered: a panic above leaves the messages queued for the retry.
+        self.commit_announcements(announced.as_ref(), self.next_revision());
 
         let published = update.nodes.len();
         self.revision = TreeRevision(self.revision.0.saturating_add(1));
@@ -1446,8 +1852,7 @@ impl SemanticsOwner {
             .into_iter()
             .filter_map(|sid| self.tree.get(sid))
             .filter(|node| node.is_dirty())
-            .flat_map(inapplicable_of)
-            .map(SemanticsDiagnostic::InapplicableAttribute)
+            .flat_map(findings_of)
             .collect();
         self.queue_diagnostics(findings);
         #[cfg(debug_assertions)]
@@ -1624,15 +2029,26 @@ impl SemanticsOwner {
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
-            findings.extend(inapplicable_of(node).map(SemanticsDiagnostic::InapplicableAttribute));
-            let translated = crate::accesskit_translation::to_published_node(
+            findings.extend(findings_of(node));
+            let mut translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
                 self.device_pixel_ratio,
                 &anchors,
             );
+            if id == state.root
+                && let Some(announcements) = &self.announcements
+            {
+                Self::adopt_announcers(announcements, &mut translated);
+            }
             if held(&id) != Some(&translated) {
                 changed.push((id, translated));
+            }
+            // A field's runs change with its text or layout, which dirties it.
+            for (run, translated) in crate::accesskit_translation::text_run_nodes(data.attrs) {
+                if held(&run) != Some(&translated) {
+                    changed.push((run, translated));
+                }
             }
         }
 
@@ -1656,16 +2072,32 @@ impl SemanticsOwner {
             if held(&id).is_none() {
                 continue;
             }
-            let translated = crate::accesskit_translation::to_published_node(
+            let mut translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
                 self.device_pixel_ratio,
                 &anchors,
             );
+            if id == state.root
+                && let Some(announcements) = &self.announcements
+            {
+                Self::adopt_announcers(announcements, &mut translated);
+            }
             if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
         }
+
+        // An announcement changes only its node's value.
+        let announced = self.announcements.as_ref().map(|announcements| {
+            let prepared = announcements.prepare();
+            for (id, node) in Self::announcer_nodes(announcements, &prepared) {
+                if held(&id) != Some(&node) {
+                    changed.push((id, node));
+                }
+            }
+            prepared
+        });
 
         #[cfg(any(test, feature = "testing"))]
         {
@@ -1735,6 +2167,10 @@ impl SemanticsOwner {
         let callback = self.callback.as_ref().map(Arc::clone);
         if let Some(callback) = callback {
             callback(&update);
+        }
+        // Delivered: a panic above leaves the messages queued for the retry.
+        if let (Some(announcements), Some(announced)) = (&self.announcements, &announced) {
+            announcements.commit(announced, TreeRevision(self.revision.0.saturating_add(1)));
         }
 
         #[cfg(debug_assertions)]

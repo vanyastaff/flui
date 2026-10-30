@@ -6,12 +6,12 @@
 //! view keeps its window's callbacks and the parts the host's table made for
 //! it ([`ViewHooks`]): the input ([`ViewInput`]), which converts the mouse,
 //! trackpad and keyboard events, and the text input ([`ViewText`]), which
-//! keeps the composition the `NSTextInputClient` methods report and update.
-//! Each part keeps its state of the window in itself, one per view, made with
-//! the view and dropped with it.
+//! answers the `NSTextInputClient` methods from the focused field. Each part
+//! keeps its state of the window in itself, one per view, made with the view
+//! and dropped with it.
 //!
 //! The view routes a key press between them: to the input method
-//! (`interpretKeyEvents:`) while the text input composes, to the input
+//! (`interpretKeyEvents:`) while a field has focus, to the input
 //! otherwise, and a key the input method declines (`doCommandBySelector:`)
 //! back to the input; a release that lands inside an open composition reaches
 //! neither. Its `updateLayer` asks the window for a frame inside a display pass
@@ -29,9 +29,12 @@
 
 use std::cell::Cell;
 use std::ffi::CStr;
+use std::rc::Rc;
 use std::sync::Weak;
 
-use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::{Bounds, Point};
+use flui_platform::text_store::TextStoreHost;
+use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::{PlatformInput, WindowAppearance};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
@@ -70,14 +73,22 @@ pub(crate) trait ViewInput {
     fn event(&self, view: &ContentView<'_>, event: &NSEvent);
 }
 
-/// The text input's part of one content view: the composition AppKit's input
-/// method drives through the view's `NSTextInputClient` methods, and the
-/// window's text-input capability (`PlatformTextInput`), which reaches it on
-/// the owner lane.
+/// The text input's part of one content view: the document AppKit's input
+/// method reads and edits through the view's `NSTextInputClient` methods, and
+/// the window's store host, through which the presentation names the field it
+/// is. Ranges are UTF-16 code units, as `NSRange` counts; `None` stands for
+/// `NSNotFound`. Coordinates are the window's logical ones (top-left origin).
 pub(crate) trait ViewText {
-    /// Whether a key press goes to the input method: a text input is
-    /// attached and may compose. `false` until a presentation attaches one,
-    /// so a window without one takes every key as a key event.
+    /// The view exists: the text input may now reach its input context. The
+    /// pointer stays valid until the text input is dropped, in the view's
+    /// `dealloc`.
+    fn bind(&self, view: *mut AnyObject);
+
+    /// The window's store host, for the presentation.
+    fn store_host(&self) -> Rc<dyn TextStoreHost>;
+
+    /// Whether a key press goes to the input method: a field has focus. A
+    /// window without one takes every key as a key event.
     fn takes_key_presses(&self) -> bool;
 
     /// Whether a key release still belongs to the input: `false` exactly
@@ -85,35 +96,32 @@ pub(crate) trait ViewText {
     /// the input method.
     fn reports_key_release(&self) -> bool;
 
-    /// The input method committed `text` (`insertText:replacementRange:`).
-    fn commit(&self, view: &ContentView<'_>, text: String);
+    /// `insertText:replacementRange:`.
+    fn insert_text(&self, text: String, replacement: Option<Utf16Range>);
 
-    /// The composition is now `text`, with the caret at the UTF-16 range
-    /// `selected` within it (`setMarkedText:selectedRange:replacementRange:`).
-    fn compose(&self, view: &ContentView<'_>, text: String, selected: (usize, usize));
+    /// `setMarkedText:selectedRange:replacementRange:`; `selected` is the
+    /// selection within `text`.
+    fn set_marked_text(&self, text: String, selected: Utf16Range, replacement: Option<Utf16Range>);
 
-    /// The composition was abandoned (`unmarkText`).
-    fn unmark(&self, view: &ContentView<'_>);
+    /// `unmarkText`.
+    fn unmark_text(&self);
 
-    /// The composition's UTF-16 range; `None` when nothing is marked.
-    fn marked_range(&self) -> Option<(usize, usize)>;
+    /// `markedRange`; `None` when nothing is marked.
+    fn marked_range(&self) -> Option<Utf16Range>;
 
-    /// The caret's UTF-16 range within the composition; `None` when nothing
-    /// is marked.
-    fn selected_range(&self) -> Option<(usize, usize)>;
+    /// `selectedRange`; `None` when no field has focus.
+    fn selected_range(&self) -> Option<Utf16Range>;
 
-    /// Where an input method places its candidates: the caret's area in the
-    /// window's logical coordinates (top-left origin), and the UTF-16 range
-    /// it corresponds to; `None` while no area is set.
-    fn candidate_area(&self) -> Option<(Bounds<f64>, (usize, usize))>;
+    /// `attributedSubstringForProposedRange:actualRange:`: the text and the
+    /// range it covers.
+    fn substring(&self, range: Utf16Range) -> Option<(String, Utf16Range)>;
 
-    /// Whether the focused field may compose (`set_ime_allowed`); a field
-    /// that may not drops its composition.
-    fn set_composing(&self, view: &ContentView<'_>, allowed: bool);
+    /// `firstRectForCharacterRange:actualRange:`: the rectangle and the
+    /// range it covers.
+    fn first_rect(&self, range: Option<Utf16Range>) -> Option<(Bounds<f64>, Utf16Range)>;
 
-    /// The caret's area, in the window's logical coordinates
-    /// (`set_ime_cursor_area`).
-    fn set_caret_area(&self, area: Bounds<f64>);
+    /// `characterIndexForPoint:`, the point converted to the window.
+    fn character_index(&self, point: Point<f64>) -> Option<Utf16Offset>;
 }
 
 /// One live content view, as the parts it dispatches to reach it.
@@ -211,6 +219,12 @@ pub(crate) fn create(
     unsafe {
         let slot: *mut *mut std::ffi::c_void = ivar.load_ptr(&view);
         *slot = context;
+    }
+    // SAFETY: `view` is a live FLUIContentView whose context was just stored.
+    unsafe {
+        with_this(&view, |this| {
+            this.text().bind(Retained::as_ptr(&view).cast_mut());
+        });
     }
     // Layer-backed from the start, so the view's `FluiMetalLayer` is there
     // before a renderer builds a surface on the view, and it reports to this
@@ -346,43 +360,69 @@ extern "C-unwind" fn input_event(this: &AnyObject, _sel: Sel, event: *mut AnyObj
     );
 }
 
-/// `keyDown:` — the input method's route while the text input composes, the
+/// `keyDown:` — the input method's route while a field has focus, the
 /// input's otherwise.
 ///
-/// The gate's default is the load-bearing part: until a presentation attaches
-/// a text input and lets it compose, every press goes straight to the input.
-/// Only while one may compose does the press take AppKit's input method,
-/// through `interpretKeyEvents:`, which comes back into the view's
-/// `NSTextInputClient` methods (`setMarkedText:` while composing,
-/// `insertText:` on commit); a press delivered to both routes would reach the
-/// application twice. `doCommandBySelector:` is the way back for the keys the
-/// input method declines.
+/// The gate's default is the load-bearing part: until a presentation focuses
+/// a field, every press goes straight to the input. Only while one has focus
+/// does the press take AppKit's input method, through `interpretKeyEvents:`,
+/// which comes back into the view's `NSTextInputClient` methods
+/// (`setMarkedText:` while composing, `insertText:` on commit); a press
+/// delivered to both routes would reach the field twice.
+/// `doCommandBySelector:` is the way back for the keys the input method
+/// declines.
 ///
 /// The pending event is saved and restored rather than set and cleared: an
 /// input method can route a second `keyDown:` through the view while this one
 /// is inside `interpretKeyEvents:` (the character palette does), and a plain
 /// clear would leave the outer event's `doCommandBySelector:` reading null and
-/// dropping a command that belongs to this press.
+/// dropping a command that belongs to this press. It is restored by a guard,
+/// so a panic unwinding out of `interpretKeyEvents:` leaves no event a later
+/// `doCommandBySelector:` would read once AppKit has let it go.
 extern "C-unwind" fn key_down(this: &AnyObject, sel: Sel, event: *mut AnyObject) {
     os_entry("keyDown:", (), AfterPanic::Answer(|()| ()), || {
         // SAFETY: `this` is a live FLUIContentView; `event` is a valid NSEvent*
         // for the duration of the call, and `interpretKeyEvents:` retains it
         // for the span of its own dispatch. The array is created by an NSArray
-        // class constructor and autoreleased.
+        // class constructor and autoreleased. The context borrowed across
+        // `interpretKeyEvents:` is the view's own, kept until its `dealloc`,
+        // which cannot run while AppKit is inside one of its methods.
         unsafe {
             let composes = with_this(this, |view| view.context.text.takes_key_presses());
             if composes != Some(true) {
                 input_event(this, sel, event);
                 return;
             }
-            let previous = with_this(this, |view| view.context.pending_key_event.replace(event));
-            let events: *mut AnyObject = msg_send![objc2::class!(NSArray), arrayWithObject: event];
-            let _: () = msg_send![this, interpretKeyEvents: events];
-            if let Some(previous) = previous {
-                with_this(this, |view| view.context.pending_key_event.set(previous));
-            }
+            with_this(this, |view| {
+                let _restore = PendingKeyEvent::hold(&view.context.pending_key_event, event);
+                let events: *mut AnyObject =
+                    msg_send![objc2::class!(NSArray), arrayWithObject: event];
+                let _: () = msg_send![this, interpretKeyEvents: events];
+            });
         }
     });
+}
+
+/// The `keyDown:` event `interpretKeyEvents:` is dispatching, until it
+/// returns or unwinds: the event before it is put back on drop.
+struct PendingKeyEvent<'a> {
+    slot: &'a Cell<*mut AnyObject>,
+    previous: *mut AnyObject,
+}
+
+impl<'a> PendingKeyEvent<'a> {
+    fn hold(slot: &'a Cell<*mut AnyObject>, event: *mut AnyObject) -> Self {
+        Self {
+            previous: slot.replace(event),
+            slot,
+        }
+    }
+}
+
+impl Drop for PendingKeyEvent<'_> {
+    fn drop(&mut self) {
+        self.slot.set(self.previous);
+    }
 }
 
 /// `keyUp:` — the input's, except while a composition is open: the press was
@@ -590,58 +630,82 @@ unsafe fn write_actual_range(actual_range: *mut NSRange, range: NSRange) {
     }
 }
 
+/// `range` as a span of the document; `None` for `NSNotFound` or a range
+/// whose end overflows.
+fn utf16_range(range: NSRange) -> Option<Utf16Range> {
+    if range.location == NSNotFound as usize {
+        return None;
+    }
+    let end = range.location.checked_add(range.length)?;
+    Utf16Range::try_new(Utf16Offset::new(range.location), Utf16Offset::new(end))
+}
+
+/// `range` as AppKit's, `{NSNotFound, 0}` for none.
+fn ns_range(range: Option<Utf16Range>) -> NSRange {
+    range.map_or_else(not_found, |range| {
+        NSRange::new(range.start().get(), range.len())
+    })
+}
+
 /// `insertText:replacementRange:` — the input method committed text.
 extern "C-unwind" fn insert_text(
     this: &AnyObject,
     _sel: Sel,
     string: *mut AnyObject,
-    _replacement_range: NSRange,
+    replacement_range: NSRange,
 ) {
     // SAFETY: `this` is a live FLUIContentView; `string` is the live argument
     // for the duration of the call, and its bytes are copied before this
     // function returns.
     os_entry(
         "insertText:replacementRange:",
-        (),
-        AfterPanic::Answer(|()| ()),
+        replacement_range,
+        AfterPanic::Answer(|_| ()),
         || unsafe {
             let Some(text) = insert_text_argument_string(string) else {
                 tracing::trace!("insertText: carried no readable string; commit dropped");
                 return;
             };
-            with_this(this, |view| view.context.text.commit(view, text));
+            let replacement = utf16_range(replacement_range);
+            with_this(this, |view| view.text().insert_text(text, replacement));
         },
     );
 }
 
 /// `setMarkedText:selectedRange:replacementRange:` — the composition changed.
-/// `selectedRange` is the caret's position within the composition.
+/// `selectedRange` is the selection within the marked text.
 extern "C-unwind" fn set_marked_text(
     this: &AnyObject,
     _sel: Sel,
     string: *mut AnyObject,
     selected_range: NSRange,
-    _replacement_range: NSRange,
+    replacement_range: NSRange,
 ) {
     // SAFETY: `this` is a live FLUIContentView; `string` is the live argument
     // for the duration of the call, copied out immediately.
     os_entry(
         "setMarkedText:selectedRange:replacementRange:",
-        (),
-        AfterPanic::Answer(|()| ()),
+        (selected_range, replacement_range),
+        AfterPanic::Answer(|_| ()),
         || unsafe {
-            let text = ns_string_to_owned(string).unwrap_or_default();
-            let selected = (selected_range.location, selected_range.length);
-            with_this(this, |view| view.context.text.compose(view, text, selected));
+            let text = insert_text_argument_string(string).unwrap_or_default();
+            let selected = utf16_range(selected_range).unwrap_or_else(|| {
+                let end = Utf16Offset::new(text.encode_utf16().count());
+                Utf16Range::collapsed(end)
+            });
+            let replacement = utf16_range(replacement_range);
+            with_this(this, |view| {
+                view.text().set_marked_text(text, selected, replacement);
+            });
         },
     );
 }
 
-/// `unmarkText` — the composition was abandoned; nothing is committed.
+/// `unmarkText` — the composition ends, keeping its text.
 extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView.
     os_entry("unmarkText", (), AfterPanic::Answer(|()| ()), || unsafe {
-        with_this(this, |view| view.context.text.unmark(view));
+        with_this(this, |view| view.text().unmark_text());
     });
 }
 
@@ -653,21 +717,14 @@ extern "C-unwind" fn has_marked_text(this: &AnyObject, _sel: Sel) -> Bool {
         AfterPanic::Answer(|()| Bool::NO),
         || {
             // SAFETY: `this` is a live FLUIContentView.
-            let marked =
-                unsafe { with_this(this, |view| view.context.text.marked_range().is_some()) };
+            let marked = unsafe { with_this(this, |view| view.text().marked_range().is_some()) };
             Bool::new(marked == Some(true))
         },
     )
 }
 
-/// `range` as AppKit's, `{NSNotFound, 0}` for none.
-fn ns_range(range: Option<(usize, usize)>) -> NSRange {
-    range.map_or_else(not_found, |(location, length)| {
-        NSRange::new(location, length)
-    })
-}
-
-/// `markedRange` — the range of the composition, in UTF-16 units.
+/// `markedRange` — the composition's span in the field, `{NSNotFound, 0}`
+/// for none.
 extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
     os_entry(
         "markedRange",
@@ -675,15 +732,13 @@ extern "C-unwind" fn marked_range(this: &AnyObject, _sel: Sel) -> NSRange {
         AfterPanic::Answer(|()| not_found()),
         || {
             // SAFETY: `this` is a live FLUIContentView.
-            ns_range(unsafe { with_this(this, |view| view.context.text.marked_range()) }.flatten())
+            ns_range(unsafe { with_this(this, |view| view.text().marked_range()) }.flatten())
         },
     )
 }
 
-/// `selectedRange` — the caret's range within the composition; `{NSNotFound,
-/// 0}` outside one: a view with no document of its own cannot truthfully name
-/// a selection the application has not reported, and AppKit documents that
-/// pair as "no selection".
+/// `selectedRange` — the field's selection, `{NSNotFound, 0}` when no field
+/// has focus or the field cannot be read now.
 extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
     os_entry(
         "selectedRange",
@@ -691,9 +746,7 @@ extern "C-unwind" fn selected_range(this: &AnyObject, _sel: Sel) -> NSRange {
         AfterPanic::Answer(|()| not_found()),
         || {
             // SAFETY: `this` is a live FLUIContentView.
-            ns_range(
-                unsafe { with_this(this, |view| view.context.text.selected_range()) }.flatten(),
-            )
+            ns_range(unsafe { with_this(this, |view| view.text().selected_range()) }.flatten())
         },
     )
 }
@@ -715,39 +768,55 @@ extern "C-unwind" fn valid_attributes_for_marked_text(
     )
 }
 
-/// `attributedSubstringForProposedRange:actualRange:` — `nil`, with
-/// `actualRange` answered `{NSNotFound, 0}`: the view holds no attributed text
-/// to slice, and that is the documented answer for a range that cannot be
-/// satisfied.
+/// `attributedSubstringForProposedRange:actualRange:` — the field's text of
+/// `range`, as far as the field reaches, with `actualRange` the range it
+/// covers; `nil` and `{NSNotFound, 0}` when it cannot be read (a password
+/// field, no focus, a range that splits a character).
 extern "C-unwind" fn attributed_substring_for_proposed_range(
-    _this: &AnyObject,
+    this: &AnyObject,
     _sel: Sel,
-    _range: NSRange,
+    range: NSRange,
     actual_range: *mut NSRange,
 ) -> *mut AnyObject {
     os_entry(
         "attributedSubstringForProposedRange:actualRange:",
-        (),
-        AfterPanic::Answer(|()| std::ptr::null_mut()),
+        range,
+        AfterPanic::Answer(|_| std::ptr::null_mut()),
         || {
-            // SAFETY: `actual_range` is AppKit's own out-parameter for this
-            // call — null or a valid writable `NSRange*`.
-            unsafe { write_actual_range(actual_range, not_found()) };
-            std::ptr::null_mut()
+            // SAFETY: `this` is a live FLUIContentView; `actual_range` is
+            // AppKit's own out-parameter for this call — null or a valid
+            // writable `NSRange*`. The string is made by Foundation's own
+            // constructors and handed back autoreleased, as the method's
+            // getter convention asks.
+            unsafe {
+                let read = utf16_range(range)
+                    .and_then(|range| with_this(this, |view| view.text().substring(range)))
+                    .flatten();
+                let Some((text, covered)) = read else {
+                    write_actual_range(actual_range, not_found());
+                    return std::ptr::null_mut();
+                };
+                write_actual_range(actual_range, ns_range(Some(covered)));
+                let string = objc2_foundation::NSString::from_str(&text);
+                let attributed: *mut AnyObject =
+                    msg_send![objc2::class!(NSAttributedString), alloc];
+                let attributed: *mut AnyObject = msg_send![attributed, initWithString: &*string];
+                msg_send![attributed, autorelease]
+            }
         },
     )
 }
 
-/// `firstRectForCharacterRange:actualRange:` — where to place candidates: the
-/// text input's caret area, converted to screen coordinates. The Y axis is
-/// flipped on the way in: the framework's window coordinates have their
-/// origin at the top-left, AppKit's at the bottom-left, and without the flip
-/// the candidate window would sit mirrored about the window's vertical
-/// centre.
+/// `firstRectForCharacterRange:actualRange:` — where to place candidates:
+/// the rectangle of `range` (the composition, else the selection, when it is
+/// `NSNotFound`), converted to screen coordinates. The Y axis is flipped on
+/// the way: the field's coordinates have their origin at the top-left,
+/// AppKit's at the bottom-left, and without the flip the candidate window
+/// would sit mirrored about the view's vertical centre.
 extern "C-unwind" fn first_rect_for_character_range(
     this: &AnyObject,
     _sel: Sel,
-    _range: NSRange,
+    range: NSRange,
     actual_range: *mut NSRange,
 ) -> NSRect {
     // SAFETY: `this` is a live FLUIContentView; `actual_range` is AppKit's own
@@ -756,43 +825,66 @@ extern "C-unwind" fn first_rect_for_character_range(
     // window (mid-teardown) has no screen rectangle to answer with.
     os_entry(
         "firstRectForCharacterRange:actualRange:",
-        (),
-        AfterPanic::Answer(|()| zero_rect()),
+        range,
+        AfterPanic::Answer(|_| zero_rect()),
         || unsafe {
             write_actual_range(actual_range, not_found());
-            let Some((area, corresponding, height)) = with_this(this, |view| {
-                view.context
-                    .text
-                    .candidate_area()
-                    .map(|(area, corresponding)| (area, corresponding, view.height()))
+            let Some((area, covered, height)) = with_this(this, |view| {
+                view.text()
+                    .first_rect(utf16_range(range))
+                    .map(|(area, covered)| (area, covered, view.height()))
             })
             .flatten() else {
                 return zero_rect();
             };
-            let flipped_y = height - (area.origin.y + area.size.height);
-            let window_rect = NSRect::new(
-                NSPoint::new(area.origin.x, flipped_y),
-                NSSize::new(area.size.width, area.size.height),
-            );
             let window: *mut AnyObject = msg_send![this, window];
             if window.is_null() {
                 return zero_rect();
             }
+            let flipped_y = height - (area.origin.y + area.size.height);
+            let view_rect = NSRect::new(
+                NSPoint::new(area.origin.x, flipped_y),
+                NSSize::new(area.size.width, area.size.height),
+            );
+            let window_rect: NSRect =
+                msg_send![this, convertRect: view_rect, toView: std::ptr::null_mut::<AnyObject>()];
             let screen_rect: NSRect = msg_send![window, convertRectToScreen: window_rect];
-            write_actual_range(actual_range, NSRange::new(corresponding.0, corresponding.1));
+            write_actual_range(actual_range, ns_range(Some(covered)));
             screen_rect
         },
     )
 }
 
-/// `characterIndexForPoint:` — `NSNotFound`: the view owns no text, so it can
-/// answer no index into one.
+/// `characterIndexForPoint:` — the field's character boundary nearest
+/// `point`, a screen point; `NSNotFound` when no field has focus or the view
+/// has no window.
 extern "C-unwind" fn character_index_for_point(
-    _this: &AnyObject,
+    this: &AnyObject,
     _sel: Sel,
-    _point: NSPoint,
+    point: NSPoint,
 ) -> NSUInteger {
-    NSNotFound as NSUInteger
+    // SAFETY: `this` is a live FLUIContentView; `window` is AppKit's own
+    // getter, nil-checked before the conversions, which are NSWindow's and
+    // NSView's own.
+    os_entry(
+        "characterIndexForPoint:",
+        (point.x, point.y),
+        AfterPanic::Answer(|_| NSNotFound as NSUInteger),
+        || unsafe {
+            let window: *mut AnyObject = msg_send![this, window];
+            if window.is_null() {
+                return NSNotFound as NSUInteger;
+            }
+            let in_window: NSPoint = msg_send![window, convertPointFromScreen: point];
+            let in_view: NSPoint = msg_send![this, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
+            let index = with_this(this, |view| {
+                let at = Point::new(in_view.x, view.height() - in_view.y);
+                view.text().character_index(at)
+            })
+            .flatten();
+            index.map_or(NSNotFound as NSUInteger, |index| index.get() as NSUInteger)
+        },
+    )
 }
 
 /// `doCommandBySelector:` — a key the input method declined goes back to the
@@ -843,14 +935,6 @@ fn view_class() -> &'static AnyClass {
         // A constant answer runs no code, so it needs no boundary.
         extern "C-unwind" fn yes(_this: &AnyObject, _sel: Sel) -> Bool {
             Bool::YES
-        }
-
-        // `flagsChanged:` — modifier state is carried on every converted
-        // event, so flag-only transitions are observed but not dispatched.
-        extern "C-unwind" fn flags_changed(_this: &AnyObject, _sel: Sel, _event: *mut AnyObject) {
-            os_entry("flagsChanged:", (), AfterPanic::Answer(|()| ()), || {
-                tracing::trace!("Modifier flags changed");
-            });
         }
 
         // A context whose teardown panics is contained apart, so the
@@ -926,12 +1010,13 @@ fn view_class() -> &'static AnyClass {
                 sel!(keyUp:),
                 key_up as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            builder.add_method(
-                sel!(flagsChanged:),
-                flags_changed as extern "C-unwind" fn(_, _, *mut AnyObject),
-            );
-
+            // A modifier key is a key event of its own (the input reads
+            // whether it went down from the flags); `mouseCancelled:` takes a
+            // press back; `smartMagnifyWithEvent:` is the smart zoom.
             for event in [
+                sel!(flagsChanged:),
+                sel!(mouseCancelled:),
+                sel!(smartMagnifyWithEvent:),
                 sel!(mouseDown:),
                 sel!(mouseUp:),
                 sel!(mouseMoved:),

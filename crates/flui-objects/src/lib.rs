@@ -72,8 +72,8 @@ pub use proxy::{
     RenderColoredBox, RenderCustomPaint, RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer,
     RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel,
     RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
-    RenderShimmerMask, RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry,
-    SubtreeAnchor, TransformMotion,
+    RenderShimmerMask, RenderSkeleton, RenderSliverSubtreeAnchor, RenderSubtreeAnchor,
+    RenderVisibility, RoundedClipGeometry, SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
@@ -100,7 +100,7 @@ pub use image::{RenderImage, RenderTexture};
 // --- flat re-exports (sliver) ---
 pub use sliver::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselItemPlacement, CarouselLayout,
-    CarouselLayoutError, MAX_ITEM_EXTENT, RenderSliverCarousel,
+    CarouselLayoutError, CarouselLayoutKind, MAX_ITEM_EXTENT, RenderSliverCarousel,
 };
 pub use sliver::{
     FloatingHeaderSnapConfiguration, InvalidSliverCrossAxisExtent,

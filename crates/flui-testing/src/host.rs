@@ -36,7 +36,6 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform::TextStoreHost;
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
@@ -44,6 +43,7 @@ use flui_platform::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
     PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
+use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
 use flui_runtime::frame_failure::{
@@ -56,8 +56,11 @@ use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
+    PlatformAccessibility,
 };
+use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
+use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
@@ -121,7 +124,7 @@ impl SentInputRegions {
     fn update(&mut self, regions: &[InputRegion], scale: f64, display: Option<DisplayId>) {
         // A scale that is not a positive finite number projects nothing; the OS keeps
         // what it holds.
-        let Some(ratio) = DevicePixelRatio::new(scale) else {
+        let Some(ratio) = DevicePixelRatio::try_new(scale) else {
             return;
         };
         let projected: Vec<DeviceInputRegion> = regions
@@ -446,6 +449,7 @@ struct HeadlessAccessibility {
     active: AtomicBool,
     activation: Mutex<Option<AccessibilityActivationListener>>,
     action: Mutex<Option<AccessibilityActionListener>>,
+    assistive_focus: Mutex<Option<AssistiveFocusListener>>,
     published: Mutex<Option<accesskit::TreeUpdate>>,
 }
 
@@ -509,6 +513,16 @@ impl PlatformAccessibility for HeadlessAccessibility {
 
     fn set_action_listener(&self, listener: AccessibilityActionListener) {
         *self.action.lock() = Some(listener);
+    }
+
+    /// A test plays the screen reader, so the cursor is reported: through
+    /// [`HeadlessHost::move_assistive_focus`].
+    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+        flui_semantics::AssistiveFocusSupport::Reported
+    }
+
+    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
+        *self.assistive_focus.lock() = Some(listener);
     }
 }
 
@@ -601,6 +615,9 @@ impl std::fmt::Debug for HeadlessDevAgent {
             .finish_non_exhaustive()
     }
 }
+/// How long [`HeadlessHost::end_session`]'s `Ending` phase writes what the
+/// documents published (ADR-0260).
+pub const SESSION_END_BUDGET: Duration = Duration::from_secs(3);
 
 /// A [`UiRuntime`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
@@ -624,6 +641,14 @@ pub struct HeadlessHost {
     /// The presentation report the next pump's frame requests carry
     /// ([`Self::report_presented`]).
     presented: Option<flui_platform::FramePresented>,
+    /// The flush registry's host side, when the host was given storage: what
+    /// the widgets' documents publish, written as a runner writes it.
+    flush: Option<FlushHost>,
+    /// The registry's writes waiting for the next pump to run them, as a
+    /// runner's IO pool runs them.
+    flush_writes: Arc<Mutex<Vec<FlushWrite>>>,
+    /// Whether the primary window was closed.
+    primary_closed: bool,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -676,6 +701,19 @@ impl HeadlessHost {
         // runtime's demand for a next frame is observable here.
         let needs_redraw = Arc::new(AtomicBool::new(false));
         let wake_flag = Arc::clone(&needs_redraw);
+        let flush_writes = Arc::new(Mutex::new(Vec::new()));
+        let flush = storage.as_ref().map(|storage| {
+            let queued = Arc::clone(&flush_writes);
+            FlushHost::new(
+                Arc::clone(storage),
+                Box::new(move |write| {
+                    queued.lock().push(write);
+                    Ok(())
+                }),
+                // Every pump settles the registry, so a signal has nothing to wake.
+                OwnerNotify::new(|_| Ok(())),
+            )
+        });
         let mut host = RuntimeHostServices::new(
             Arc::new(move || wake_flag.store(true, Ordering::Relaxed)),
             needs_redraw,
@@ -686,6 +724,14 @@ impl HeadlessHost {
         if let Some(storage) = storage {
             host = host.with_storage(storage);
         }
+        if let Some(flush) = &flush {
+            host = host.with_flush_registry(flush.registry());
+        }
+        host = host.with_close_vetoes(&[
+            CloseReason::User,
+            CloseReason::Program,
+            CloseReason::SessionEnd,
+        ]);
         let ui_runtime = UiRuntime::new(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
@@ -722,6 +768,9 @@ impl HeadlessHost {
             embedded: Vec::new(),
             failures,
             presented: None,
+            flush,
+            flush_writes,
+            primary_closed: false,
         }
     }
 
@@ -796,6 +845,7 @@ impl HeadlessHost {
             panic!("{failure}");
         }
         self.clock.advance(dt);
+        self.settle_lifecycle();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -950,6 +1000,25 @@ impl HeadlessHost {
         self.accessibility.action.lock().clone()
     }
 
+    /// Move the screen reader's cursor to `node` of the published tree, or
+    /// off it for `None`, as VoiceOver or TalkBack reports it: the UI runtime
+    /// queues the move in its owner inbox for the next [`pump`](Self::pump),
+    /// which tells the subtrees the cursor left and entered.
+    ///
+    /// # Panics
+    ///
+    /// Before the UI runtime registered its listener, which it does as the
+    /// window opens.
+    pub fn move_assistive_focus(&self, node: Option<accesskit::NodeId>) {
+        let listener = self
+            .accessibility
+            .assistive_focus
+            .lock()
+            .clone()
+            .expect("BUG: the UI runtime registers its cursor listener as the window opens");
+        listener(node);
+    }
+
     /// Run `f` inside the UI runtime's owner scope (its interaction lane, global
     /// key registry and post-frame lane), as every UI runtime entry point does.
     ///
@@ -1050,6 +1119,56 @@ impl HeadlessHost {
     #[must_use]
     pub fn primary_window(&self) -> HeadlessWindowId {
         HeadlessWindowId(self.ui_runtime.presentation_id())
+    }
+
+    /// Ask to close `window` for `reason`, as its platform does when the user
+    /// clicks its close button (or as the program or the session asks). The
+    /// window's close guard is asked first: a close it refuses is recorded,
+    /// nothing is torn down, and the pump after the last hold is released
+    /// carries it out. `true` when the window closed now; `false` when the
+    /// guard refused or the window is already gone.
+    pub fn request_close(&mut self, window: HeadlessWindowId, reason: CloseReason) -> bool {
+        if self.ui_runtime.close_refused(window.0, reason) {
+            return false;
+        }
+        self.ui_runtime.commit_composition_for_close(window.0);
+        self.close_presentation(window.0)
+    }
+
+    /// One phase of the user's session ending, as the operating system reports
+    /// it (ADR-0260). `Query` asks every window's guard for the session's
+    /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
+    /// `Cancelled` withdraws only those session-end records; `Ending` writes
+    /// what the documents published, within [`SESSION_END_BUDGET`].
+    pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        let windows = self.presentation_ids();
+        match phase {
+            SessionEndPhase::Query => {
+                let mut answer = SessionEndAnswer::Proceed;
+                for id in windows {
+                    if self.ui_runtime.close_refused(id, CloseReason::SessionEnd) {
+                        answer = SessionEndAnswer::Block;
+                    }
+                }
+                answer
+            }
+            SessionEndPhase::Cancelled => {
+                for id in windows {
+                    self.ui_runtime.withdraw_close(id, CloseReason::SessionEnd);
+                }
+                SessionEndAnswer::Proceed
+            }
+            SessionEndPhase::Ending => {
+                self.run_flush_writes();
+                if let Some(flush) = &self.flush {
+                    let _report =
+                        flush.flush_within(std::time::Instant::now() + SESSION_END_BUDGET);
+                }
+                SessionEndAnswer::Proceed
+            }
+            // A phase added later asks this host nothing.
+            _ => SessionEndAnswer::Proceed,
+        }
     }
 
     /// Open `window` beside the existing ones, as a runner installs a
@@ -1252,6 +1371,19 @@ impl HeadlessHost {
         });
     }
 
+    /// Report that the primary window gained (`true`) or lost OS focus, as a
+    /// backend's focus callback does: the host delivers
+    /// `WindowObservation::Focus(focused)`. A window that loses focus forgets
+    /// its pressed keys and cancels its pointer sequences; the focus inside
+    /// its tree stays where it was. [`focus_window`](Self::focus_window)
+    /// moves the OS focus between windows this host opened.
+    pub fn set_window_focused(&self, focused: bool) {
+        self.observe(
+            self.ui_runtime.presentation_id(),
+            flui_runtime::owner::WindowObservation::Focus(focused),
+        );
+    }
+
     /// The primary window's gesture arena, the one its detectors compete in:
     /// observe it to watch the arena decide what this host dispatches.
     #[must_use]
@@ -1409,6 +1541,11 @@ impl HeadlessHost {
                         HostInput::Accessibility(request) => {
                             self.ui_runtime.enter(|ui_runtime| {
                                 ui_runtime.dispatch_accessibility(presentation, request);
+                            });
+                        }
+                        HostInput::AssistiveFocus(node) => {
+                            self.ui_runtime.enter(|ui_runtime| {
+                                ui_runtime.dispatch_assistive_focus(presentation, *node);
                             });
                         }
                         other => panic!("this host cannot replay {other:?}"),
@@ -1631,6 +1768,51 @@ impl HeadlessHost {
     }
 
     /// Every window's presentation, the primary first.
+    /// The owner turn's settle, before its frame: carry out the closes the
+    /// windows' guards now let through, run the registry's queued writes and
+    /// wake what they resolved.
+    fn settle_lifecycle(&mut self) {
+        for (id, _reason) in self.ui_runtime.settle_close_guards().due {
+            self.close_presentation(id);
+        }
+        self.run_flush_writes();
+        if let Some(flush) = &self.flush {
+            for waker in flush.settle() {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Poll every queued registry write once, keeping those still waiting
+    /// for their storage. The queue's lock is not held while a write runs.
+    fn run_flush_writes(&self) {
+        let writes = std::mem::take(&mut *self.flush_writes.lock());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let waiting: Vec<FlushWrite> = writes
+            .into_iter()
+            .filter_map(|mut write| write.as_mut().poll(&mut cx).is_pending().then_some(write))
+            .collect();
+        self.flush_writes.lock().extend(waiting);
+    }
+
+    /// Close presentation `id`: a secondary window's presentation is closed
+    /// and removed, as a runner closes a window; the primary one stops and
+    /// its tree stays mounted for the test to inspect, as a runner's last
+    /// window stays until the loop's teardown. `false` when it is already
+    /// closed.
+    fn close_presentation(&mut self, id: PresentationId) -> bool {
+        if id == self.ui_runtime.presentation_id() {
+            if std::mem::replace(&mut self.primary_closed, true) {
+                return false;
+            }
+            self.ui_runtime
+                .enter(|ui_runtime| ui_runtime.stop_presentation_for_test(id));
+            return true;
+        }
+        self.secondary.retain(|secondary| secondary.id != id);
+        self.ui_runtime.close_presentation_entered(id)
+    }
+
     fn presentation_ids(&self) -> Vec<PresentationId> {
         std::iter::once(self.ui_runtime.presentation_id())
             .chain(self.secondary.iter().map(|secondary| secondary.id))

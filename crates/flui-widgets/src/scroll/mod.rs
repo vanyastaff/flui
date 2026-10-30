@@ -22,8 +22,10 @@ mod animated_list;
 mod collapsing_header;
 mod custom_scroll_view;
 mod drag_autoscroll;
+mod focusable_sliver;
 mod grid_view;
 mod interactive_viewer;
+mod list_focus;
 mod list_view;
 pub mod nested;
 mod page_view;
@@ -58,14 +60,15 @@ pub use anchored_drag::{
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use carousel::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselState, KeylineSnap, MAX_ITEM_EXTENT,
-    MIN_AUTOPLAY_PERIOD,
+    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
+    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
 };
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
 pub use custom_scroll_view::CustomScrollView;
 pub use flui_objects::InvalidSliverCrossAxisExtent;
+pub use focusable_sliver::{FocusableSliver, FocusableSliverParts, IntoFocusableSliver};
 pub use grid_view::GridView;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,

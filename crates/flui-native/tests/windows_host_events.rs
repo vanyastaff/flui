@@ -76,7 +76,7 @@ fn hosted(
         proxy.wake().map_err(|error| error.to_string())?;
         Ok(())
     });
-    Box::new(WindowsPlatform::new().expect("native Windows platform"))
+    Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
         .run(log as Rc<dyn AppHandler>)
         .expect("the Win32 loop");
 }
@@ -176,7 +176,7 @@ fn a_query_the_host_lets_through_is_allowed() {
 }
 
 fn without_a_handler_a_query_is_allowed() {
-    let platform = WindowsPlatform::new().expect("native Windows platform");
+    let platform = WindowsPlatform::try_new().expect("native Windows platform");
     let receiver = receiver_of_this_thread();
     // SAFETY: a pointer-free message to this platform's own receiver.
     let result = unsafe { SendMessageW(receiver, WM_QUERYENDSESSION, None, None) };

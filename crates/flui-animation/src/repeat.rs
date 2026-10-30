@@ -42,7 +42,7 @@ pub enum Iterations {
 /// use flui_animation::{AnimationController, Iterations, RepeatMode, RepeatSpec, ValueRange};
 ///
 /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
-/// let range = ValueRange::new(0.2, 0.8).expect("finite, ordered range");
+/// let range = ValueRange::try_new(0.2, 0.8).expect("finite, ordered range");
 /// let _run = controller.repeat(
 ///     RepeatSpec::new(RepeatMode::Alternate)
 ///         .with_range(range)

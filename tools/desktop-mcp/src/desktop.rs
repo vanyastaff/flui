@@ -836,7 +836,7 @@ impl Desktop {
     pub fn new() -> Self {
         Self {
             a11y: a11y::backend(),
-            input: Input::new(),
+            input: Input::try_new(),
             registry: Registry::default(),
         }
     }
@@ -1877,7 +1877,7 @@ mod tests {
                 },
                 hit_tested: Rc::clone(&hit_tested),
             }),
-            input: Input::new(),
+            input: Input::try_new(),
             registry: Registry::default(),
         };
         let result = desktop.move_mouse(&Location::Element("e1".into()));

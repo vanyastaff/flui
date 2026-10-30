@@ -2071,13 +2071,22 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::PenSqueeze(_) => {
-                // A pen action, not a contact: delivered where the pen hovers
-                // (or to global observers alone), never opening a sequence.
+            PointerEvent::PenSqueeze(_) | PointerEvent::SmartZoom(_) => {
+                // A discrete action, not a contact: delivered where the
+                // pointer rests (or to global observers alone), never opening
+                // a sequence. The innermost smart zoom target then claims a
+                // smart zoom.
                 let result = event
                     .position()
                     .map_or_else(HitTestResult::new, hit_test_fn);
-                if let Some(panic) = self.dispatch_ephemeral(event, &result) {
+                let mut first_panic = self.dispatch_ephemeral(event, &result);
+                if let PointerEvent::SmartZoom(zoom) = event {
+                    let claim = RoutePanic::capture(|| {
+                        result.dispatch_smart_zoom(zoom);
+                    });
+                    RoutePanic::preserve_first(&mut first_panic, claim, "smart zoom claim");
+                }
+                if let Some(panic) = first_panic {
                     panic.resume();
                 }
             }

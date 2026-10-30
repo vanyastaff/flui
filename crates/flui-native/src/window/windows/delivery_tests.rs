@@ -40,7 +40,7 @@ fn pump_until(done: impl Fn() -> bool) -> bool {
 
 #[test]
 fn a_delivery_raised_on_another_thread_reaches_the_handler_with_no_other_input() {
-    let platform = WindowsPlatform::new().expect("native platform");
+    let platform = WindowsPlatform::try_new().expect("native platform");
     let handler = RecordingWindowHandler::new();
     let window = platform
         .open_window(

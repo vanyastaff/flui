@@ -112,7 +112,7 @@ impl Scene {
     /// The alternatives the area mounts, as `assert_gesture_alternatives`
     /// reads them.
     fn alternatives() -> GestureAlternatives {
-        GestureAlternatives::new(Alternative::ContextMenu(
+        GestureAlternatives::try_new(Alternative::ContextMenu(
             MenuSpec::new(GestureCommand::new(DELETE, Delete), |_cx, _request| {})
                 .item(GestureCommand::new(ARCHIVE, Archive))
                 .item(GestureCommand::new(PIN, Pin)),
@@ -730,7 +730,7 @@ fn long_press_card(events: &Events, own_menu: bool) -> Draggable {
         }));
     }
     let started = Rc::clone(events);
-    Draggable::new(
+    Draggable::try_new(
         commands,
         || vec![DragItem::new().with_value("card")],
         SizedBox::new(ROW.0, ROW.1).child(ColoredBox::new(Color::RED)),

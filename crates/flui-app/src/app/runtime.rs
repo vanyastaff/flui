@@ -322,6 +322,13 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) main_controller: Option<super::runner::main_window::MainController>,
+    /// Where this loop's windows get their renderers.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) window_renderers: super::runner::window_renderer::WindowRenderers,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
     #[cfg(target_os = "ios")]
@@ -415,6 +422,14 @@ pub(crate) struct AppRuntime {
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
     pub(super) host_storage: Option<Arc<dyn flui_platform::Storage>>,
+    /// The flush registry over [`Self::host_storage`], kept outside every UI
+    /// runtime: what their documents publish, written on the loop's IO pool
+    /// and flushed when the application or the session ends.
+    pub(super) flush_host: Option<flui_view::__runtime::FlushHost>,
+    /// The loop's terminal failure (ADR-0258 §2): the first panic nothing is
+    /// left to continue after, as text, held until the exit order has
+    /// written what the application persisted and then resumed.
+    pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
@@ -479,6 +494,12 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_controller: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            window_renderers: super::runner::window_renderer::WindowRenderers::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,
             #[cfg(target_os = "ios")]
@@ -508,6 +529,8 @@ impl AppRuntime {
             platform_clipboard: Arc::new(Mutex::new(None)),
             platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
+            flush_host: None,
+            terminal: None,
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),
@@ -788,16 +811,16 @@ impl AppRuntime {
     }
 
     /// The staged service shutdown (issue #558): stop admission, cancel
-    /// every running service, then join each against `deadline` — run at
+    /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
     /// services get their cooperative flush window before the pools
     /// hard-drop whatever is left. Returns the per-service join evidence.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn shutdown_lifecycles(
         &mut self,
-        deadline: std::time::Duration,
+        join_by: std::time::Instant,
     ) -> ServiceShutdownReport {
-        self.service_registry.shutdown(deadline)
+        self.service_registry.shutdown(join_by)
     }
 
     /// The resolved execution services, if any. `None` before the first
@@ -820,8 +843,8 @@ impl AppRuntime {
     }
 
     /// Shut down the execution services and **reset the slot**: stop
-    /// admission, cancel outstanding work, join running work bounded by
-    /// `grace` per pool, then take the shut-down instance out of the
+    /// admission, cancel outstanding work, join running work until
+    /// `deadline`, then take the shut-down instance out of the
     /// `OnceCell` (dropping it — its pools are already closed, so the drop
     /// is a no-op) and discard any never-resolved host-executor stash. Runs
     /// at full loop-exit teardown (`teardown_platform_ui_runtime`), never at
@@ -849,13 +872,13 @@ impl AppRuntime {
                       the wasm backend has nothing to cancel or join"
         )
     )]
-    pub(super) fn shutdown_execution(&mut self, grace: std::time::Duration) {
+    pub(super) fn shutdown_execution(&mut self, deadline: std::time::Instant) {
         // A stash the exiting loop never resolved must not leak into the
         // next loop's resolution: injection is per-run configuration, and
         // the next `run_*` stashes its own config's bundle if it has one.
         self.pending_host_executors = None;
         if let Some(services) = self.execution.take() {
-            services.shutdown(grace);
+            services.shutdown(deadline);
         }
     }
 
@@ -1208,10 +1231,41 @@ impl AppRuntime {
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
     pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
-        self.host_storage = dirs.map(|dirs| {
-            let io = Arc::downgrade(self.ensure_execution());
-            super::storage_host::host_storage(dirs, io)
-        });
+        let Some(dirs) = dirs else {
+            self.host_storage = None;
+            self.flush_host = None;
+            return;
+        };
+        let io = Arc::downgrade(self.ensure_execution());
+        let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
+        let wake = self.frame_wake_callback();
+        self.flush_host = Some(flui_view::__runtime::FlushHost::new(
+            Arc::clone(&storage),
+            Box::new(move |write| {
+                // A write the pool refuses is dropped, which keeps its bytes
+                // owed for the flush at the end.
+                if let Some(services) = io.upgrade()
+                    && let Err(error) = services.spawn_io(write)
+                {
+                    tracing::debug!(%error, "the IO pool refused a document write");
+                }
+                Ok(())
+            }),
+            // The turn the wake brings settles the registry.
+            flui_view::__runtime::OwnerNotify::new(move |_| {
+                wake();
+                Ok(())
+            }),
+        ));
+        self.host_storage = Some(storage);
+    }
+
+    /// The publishing side of the host's flush registry, for the UI runtimes
+    /// the runners build; `None` without storage.
+    pub(super) fn flush_registry(&self) -> Option<flui_view::__runtime::FlushRegistry> {
+        self.flush_host
+            .as_ref()
+            .map(flui_view::__runtime::FlushHost::registry)
     }
 
     /// The host's byte storage, if the run configured one.

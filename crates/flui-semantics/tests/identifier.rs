@@ -70,7 +70,7 @@ fn wire_button(owner: &SemanticsOwner) -> flui_protocol::Node {
     let element =
         ElementId::from_u64(button_id().as_u64()).expect("an accessibility id is non-zero");
     let placement = Placement::new(
-        DevicePixelRatio::new(1.0).expect("1 is a ratio"),
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
     );
     owner
@@ -230,7 +230,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
             .expect("an accessibility id is non-zero")
     };
     let placement = Placement::new(
-        DevicePixelRatio::new(1.0).expect("1 is a ratio"),
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
     );
     let clash = vec![flui_protocol::TreeDiagnostic::DuplicateIdentifier {

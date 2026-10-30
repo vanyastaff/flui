@@ -19,7 +19,7 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
@@ -27,9 +27,12 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    GestureParts, ImeEvent, InvalidPreference, Locale, MemoryPressureLevel, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts, SessionEndPhase,
-    SystemNotice, SystemPreferences, TextWeightPreference, WheelParts, WheelStep,
+    Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts, DisplayId,
+    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, ImeEvent, InvalidPreference,
+    Locale, MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    PlatformInput, PreferenceParts, RefreshPeriod, SessionEndPhase, SizeConstraints, SystemNotice,
+    SystemPreferences, TextWeightPreference, WheelParts, WheelStep, WindowAppearance,
+    WindowExecutionState, WindowGeometry, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -277,8 +280,25 @@ pub enum Row {
         /// refuses the row.
         redacted: bool,
     },
+    /// The application read the displays (a `platform` stream).
+    Displays {
+        /// What the read returned.
+        read: DisplayRead,
+        /// Each display's name and persistent key were replaced before
+        /// writing (ADR-0215 §5): a key by a pseudonym numbered within the
+        /// recording, so equal keys stay equal and the row still replays.
+        redacted: bool,
+    },
     /// The application read the system preferences (a `platform` stream).
     Preferences(PreferenceRead),
+    /// A window published a new snapshot (a `window_state` stream).
+    State {
+        /// The snapshot.
+        state: RecordedWindowState,
+        /// Its title was replaced before writing (ADR-0215 §5): replay
+        /// refuses the row.
+        redacted: bool,
+    },
 }
 
 /// What one read of the system preferences returned.
@@ -289,6 +309,105 @@ pub enum PreferenceRead {
     Observed(SystemPreferences),
     /// The read failed; a failure is not an observation.
     Failed(ReadFailure),
+}
+
+/// What one read of the displays returned.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum DisplayRead {
+    /// The displays the system reported, at the platform's snapshot revision.
+    Observed {
+        /// The snapshot's revision, as the platform counted it.
+        revision: u64,
+        /// The displays, in the snapshot's order.
+        displays: Vec<RecordedDisplay>,
+    },
+    /// The read failed.
+    Failed(ReadFailure),
+}
+
+/// One display of a read: its fields, and the label its id is written as.
+///
+/// The label is the number the recording platform's registry issued; it names
+/// the display within the recording only, so a replay issues an id of its own
+/// for each label ([`DisplayParts::into_info`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDisplay {
+    /// The display within this recording.
+    pub label: u64,
+    /// Its fields.
+    pub parts: DisplayParts,
+}
+
+impl RecordedDisplay {
+    /// The display `info`, labelled with its id's number.
+    pub fn of(info: DisplayInfo) -> Self {
+        let (id, parts) = info.into_parts();
+        Self {
+            label: id.get(),
+            parts,
+        }
+    }
+}
+
+/// One snapshot a window published: its revision, its facts, and the label of
+/// the display it is on.
+///
+/// The label is the number the recording platform's registry issued the
+/// display, as a `platform` recording of the same session writes it; a replay
+/// issues an id of its own for each label, so the facts are handed out with
+/// the display the replay chose ([`Self::into_parts`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedWindowState {
+    revision: u64,
+    display: Option<u64>,
+    /// The facts, with no display: `display` names it.
+    parts: WindowStateParts,
+}
+
+impl RecordedWindowState {
+    /// The snapshot `state`, its display labelled with its id's number.
+    pub fn of(state: WindowState) -> Self {
+        let revision = state.revision.get();
+        let mut parts = state.into_parts();
+        let display = parts.display.take().map(DisplayId::get);
+        Self {
+            revision,
+            display,
+            parts,
+        }
+    }
+
+    /// The revision the window published it at.
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The label of the display the window was on, if the platform could tell.
+    pub const fn display(&self) -> Option<u64> {
+        self.display
+    }
+
+    /// The window's title.
+    pub fn title(&self) -> Option<&str> {
+        self.parts.title.as_deref()
+    }
+
+    /// The facts, on `display`: the id the replay issued for
+    /// [`Self::display`]'s label.
+    pub fn into_parts(self, display: Option<DisplayId>) -> WindowStateParts {
+        WindowStateParts {
+            display,
+            ..self.parts
+        }
+    }
+
+    /// The snapshot with its title replaced by `title`.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(crate) fn retitled(mut self, title: impl FnOnce(String) -> String) -> Self {
+        self.parts.title = self.parts.title.map(title);
+        self
+    }
 }
 
 /// Why a read of the system failed: which [`PlatformError`] it returned, and
@@ -341,6 +460,8 @@ impl Row {
             Self::Reopen => "reopen",
             Self::Ime { .. } => "ime",
             Self::Preferences(_) => "preferences",
+            Self::Displays { .. } => "displays",
+            Self::State { .. } => "state",
         }
     }
 }
@@ -409,6 +530,20 @@ pub trait ReplayTarget {
     /// the application's next read with it.
     fn preferences(&mut self, read: &PreferenceRead) -> Result<(), Unsupported> {
         let _ = read;
+        Err(Unsupported)
+    }
+
+    /// What a read of the displays returned: the target answers the
+    /// application's next read with it.
+    fn displays(&mut self, read: &DisplayRead) -> Result<(), Unsupported> {
+        let _ = read;
+        Err(Unsupported)
+    }
+
+    /// A snapshot a window published: the target publishes it for its
+    /// window, through the window's successor rules.
+    fn window_state(&mut self, state: &RecordedWindowState) -> Result<(), Unsupported> {
+        let _ = state;
         Err(Unsupported)
     }
 }
@@ -616,7 +751,7 @@ impl NativeRecording {
                 Row::Notice(notice) => target.notice(*notice).map_err(unsupported)?,
                 Row::SessionEnd(phase) => target.session_end(*phase).map_err(unsupported)?,
                 Row::Reopen => target.reopen().map_err(unsupported)?,
-                Row::Ime { redacted: true, .. } => {
+                Row::Ime { redacted: true, .. } | Row::State { redacted: true, .. } => {
                     return Err(ReplayError::Redacted {
                         line,
                         row: row.name(),
@@ -624,6 +759,8 @@ impl NativeRecording {
                 }
                 Row::Ime { event, .. } => target.ime(event).map_err(unsupported)?,
                 Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
+                Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
+                Row::State { state, .. } => target.window_state(state).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
@@ -659,7 +796,9 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::SessionEnd(_)
         | Row::Reopen
         | Row::Ime { .. }
-        | Row::Preferences(_) => Vec::new(),
+        | Row::Preferences(_)
+        | Row::Displays { .. }
+        | Row::State { .. } => Vec::new(),
     };
     readings
         .into_iter()
@@ -814,10 +953,12 @@ fn header_from_wire(header: wire::Header) -> DtoResult<Header> {
                     "a registry's recording without its epoch and uptime",
                 ));
             }
-            (Stream::App | Stream::Window | Stream::Platform, None, None) if counter.is_none() => {
+            (Stream::App | Stream::Window | Stream::Platform | Stream::WindowState, None, None)
+                if counter.is_none() =>
+            {
                 Header::for_stream(header.backend, header.stream)
             }
-            (Stream::App | Stream::Window | Stream::Platform, _, _) => {
+            (Stream::App | Stream::Window | Stream::Platform | Stream::WindowState, _, _) => {
                 return Err(invalid("a clock on a recording that is not a registry's"));
             }
             (other, _, _) => return Err(unread(other.name())),
@@ -1357,6 +1498,14 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
         Row::Preferences(read) => wire::Row::Preferences {
             read: read_to_wire(read)?,
         },
+        Row::Displays { read, redacted } => wire::Row::Displays {
+            read: display_read_to_wire(read)?,
+            redacted: *redacted,
+        },
+        Row::State { state, redacted } => wire::Row::State {
+            state: window_state_to_wire(state)?,
+            redacted: *redacted,
+        },
     })
 }
 
@@ -1508,18 +1657,24 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             redacted,
         },
         wire::Row::Preferences { read } => Row::Preferences(read_from_wire(read)?),
+        wire::Row::Displays { read, redacted } => Row::Displays {
+            read: display_read_from_wire(read)?,
+            redacted,
+        },
+        wire::Row::State { state, redacted } => Row::State {
+            state: window_state_from_wire(state)?,
+            redacted,
+        },
         _ => return Err(unread("Row")),
     })
 }
+
 fn read_to_wire(read: &PreferenceRead) -> DtoResult<wire::PreferenceRead> {
     Ok(match read {
         PreferenceRead::Observed(values) => {
             wire::PreferenceRead::Observed(preferences_to_wire(values.clone())?)
         }
-        PreferenceRead::Failed(failure) => wire::PreferenceRead::Failed(wire::Failure {
-            kind: failure.kind,
-            message: failure.message.clone(),
-        }),
+        PreferenceRead::Failed(failure) => wire::PreferenceRead::Failed(failure_to_wire(failure)),
     })
 }
 
@@ -1620,7 +1775,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
 }
 
 fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
-    DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods
@@ -1685,7 +1840,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
                 .map(|geometry| {
                     let [area_w, area_h] = geometry.double_click_area;
                     let [drag_w, drag_h] = geometry.drag_tolerance;
-                    NativeMouseGeometry::new(
+                    NativeMouseGeometry::try_new(
                         Size::new(area_w, area_h),
                         Size::new(drag_w, drag_h),
                         pixel_ratio(geometry.pixel_ratio)?,
@@ -1696,7 +1851,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
             native_touch_geometry: gestures
                 .native_touch_geometry
                 .map(|geometry| {
-                    NativeTouchGeometry::new(
+                    NativeTouchGeometry::try_new(
                         geometry.touch_slop,
                         geometry.double_tap_slop,
                         geometry.min_fling,
@@ -1722,4 +1877,526 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
     }
     .try_into_preferences()
     .map_err(rejected)
+}
+
+fn failure_to_wire(failure: &ReadFailure) -> wire::Failure {
+    wire::Failure {
+        kind: failure.kind,
+        message: failure.message.clone(),
+    }
+}
+
+fn display_read_to_wire(read: &DisplayRead) -> DtoResult<wire::DisplayRead> {
+    Ok(match read {
+        DisplayRead::Observed { revision, displays } => wire::DisplayRead::Observed {
+            revision: *revision,
+            displays: displays
+                .iter()
+                .map(display_to_wire)
+                .collect::<DtoResult<_>>()?,
+        },
+        DisplayRead::Failed(failure) => wire::DisplayRead::Failed(failure_to_wire(failure)),
+    })
+}
+
+fn display_read_from_wire(read: wire::DisplayRead) -> DtoResult<DisplayRead> {
+    Ok(match read {
+        wire::DisplayRead::Observed { revision, displays } => DisplayRead::Observed {
+            revision,
+            displays: displays
+                .into_iter()
+                .map(display_from_wire)
+                .collect::<DtoResult<_>>()?,
+        },
+        wire::DisplayRead::Failed(wire::Failure { kind, message }) => {
+            DisplayRead::Failed(ReadFailure { kind, message })
+        }
+        _ => return Err(unread("DisplayRead")),
+    })
+}
+
+const fn bounds_to_wire(bounds: Bounds<i32>) -> [i32; 4] {
+    [
+        bounds.origin.x,
+        bounds.origin.y,
+        bounds.size.width,
+        bounds.size.height,
+    ]
+}
+
+const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
+    Bounds::new(Point::new(x, y), Size::new(width, height))
+}
+
+fn absence_to_wire(absence: CapabilityAbsence) -> DtoResult<wire::Absence> {
+    Ok(match absence {
+        CapabilityAbsence::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
+        CapabilityAbsence::NotOnThisDevice => wire::Absence::NotOnThisDevice,
+        CapabilityAbsence::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
+        _ => return Err(DtoError::Unmirrored("CapabilityAbsence")),
+    })
+}
+
+fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
+    Ok(match absence {
+        wire::Absence::NotOnThisPlatform => CapabilityAbsence::NotOnThisPlatform,
+        wire::Absence::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
+        wire::Absence::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+        other => return Err(unread(other.name())),
+    })
+}
+
+/// `display` in the schema, through [`DisplayParts`] and [`ColorParts`]: a
+/// field added there fails to compile here until it is mirrored.
+fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
+    let DisplayParts {
+        name,
+        bounds,
+        usable_bounds,
+        scale_factor,
+        refresh_period,
+        is_primary,
+        persistent_key,
+        color,
+    } = display.parts.clone();
+    let color = match color {
+        Ok(ColorParts {
+            gamut,
+            dynamic_range,
+            headroom,
+        }) => wire::DisplayColor::Known(wire::Color {
+            gamut: match gamut {
+                ColorGamut::Srgb => wire::Gamut::Srgb,
+                ColorGamut::DisplayP3 => wire::Gamut::DisplayP3,
+                ColorGamut::Rec2020 => wire::Gamut::Rec2020,
+                _ => return Err(DtoError::Unmirrored("ColorGamut")),
+            },
+            dynamic_range: match dynamic_range {
+                DynamicRange::Standard => wire::DynamicRange::Standard,
+                DynamicRange::High => wire::DynamicRange::High,
+                _ => return Err(DtoError::Unmirrored("DynamicRange")),
+            },
+            headroom: match headroom {
+                Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
+                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)?),
+            },
+        }),
+        Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)?),
+    };
+    Ok(wire::Display {
+        label: display.label,
+        name,
+        bounds: bounds_to_wire(bounds),
+        usable_bounds: bounds_to_wire(usable_bounds),
+        scale_factor,
+        refresh_period_ns: refresh_period
+            .map(|period| duration_nanos(period.get()))
+            .transpose()?,
+        primary: is_primary,
+        persistent_key,
+        color,
+    })
+}
+
+/// The display `wire` describes, validated as its types validate it.
+fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
+    let wire::Display {
+        label,
+        name,
+        bounds,
+        usable_bounds,
+        scale_factor,
+        refresh_period_ns,
+        primary,
+        persistent_key,
+        color,
+    } = wire;
+    let color = match color {
+        wire::DisplayColor::Known(wire::Color {
+            gamut,
+            dynamic_range,
+            headroom,
+        }) => Ok(ColorParts {
+            gamut: match gamut {
+                wire::Gamut::Srgb => ColorGamut::Srgb,
+                wire::Gamut::DisplayP3 => ColorGamut::DisplayP3,
+                wire::Gamut::Rec2020 => ColorGamut::Rec2020,
+                other => return Err(unread(other.name())),
+            },
+            dynamic_range: match dynamic_range {
+                wire::DynamicRange::Standard => DynamicRange::Standard,
+                wire::DynamicRange::High => DynamicRange::High,
+                other => return Err(unread(other.name())),
+            },
+            headroom: match headroom {
+                wire::Headroom::Multiple(multiple) => Ok(Headroom::try_new(multiple)
+                    .map_err(|error| invalid(format!("headroom {multiple}: {error}")))?),
+                wire::Headroom::Absent(absence) => Err(absence_from_wire(absence)?),
+                _ => return Err(unread("Headroom")),
+            },
+        }),
+        wire::DisplayColor::Absent(absence) => Err(absence_from_wire(absence)?),
+        _ => return Err(unread("DisplayColor")),
+    };
+    let refresh_period = refresh_period_ns
+        .map(|nanos| {
+            RefreshPeriod::try_from(Duration::from_nanos(nanos))
+                .map_err(|error| invalid(format!("refresh period {nanos} ns: {error}")))
+        })
+        .transpose()?;
+    if !(scale_factor.is_finite() && scale_factor > 0.0) {
+        return Err(invalid(format!("scale factor {scale_factor}")));
+    }
+    Ok(RecordedDisplay {
+        label,
+        parts: DisplayParts {
+            name,
+            bounds: bounds_from_wire(bounds),
+            usable_bounds: bounds_from_wire(usable_bounds),
+            scale_factor,
+            refresh_period,
+            is_primary: primary,
+            persistent_key,
+            color,
+        },
+    })
+}
+
+const fn size_to_wire(size: Size<f64>) -> [f64; 2] {
+    [size.width, size.height]
+}
+
+/// The size `[width, height]` describes, refused when either is not finite.
+fn size_from_wire([width, height]: [f64; 2], what: &str) -> DtoResult<Size<f64>> {
+    if !(width.is_finite() && height.is_finite()) {
+        return Err(invalid(format!("{what} {width}x{height}")));
+    }
+    Ok(Size::new(width, height))
+}
+
+fn geometry_to_wire(geometry: WindowGeometry) -> wire::WindowGeometry {
+    wire::WindowGeometry {
+        position: geometry.position.map(|position| [position.x, position.y]),
+        size: size_to_wire(geometry.size),
+    }
+}
+
+fn geometry_from_wire(geometry: wire::WindowGeometry, what: &str) -> DtoResult<WindowGeometry> {
+    let position = match geometry.position {
+        Some([x, y]) if x.is_finite() && y.is_finite() => Some(Point::new(x, y)),
+        Some([x, y]) => return Err(invalid(format!("{what} position {x},{y}"))),
+        None => None,
+    };
+    Ok(WindowGeometry::new(
+        position,
+        size_from_wire(geometry.size, what)?,
+    ))
+}
+
+const fn availability_to_wire(availability: Availability) -> wire::Availability {
+    match availability {
+        Availability::Native => wire::Availability::Native,
+        Availability::Emulated => wire::Availability::Emulated,
+        Availability::Unavailable => wire::Availability::Unavailable,
+    }
+}
+
+fn availability_from_wire(availability: wire::Availability) -> DtoResult<Availability> {
+    Ok(match availability {
+        wire::Availability::Native => Availability::Native,
+        wire::Availability::Emulated => Availability::Emulated,
+        wire::Availability::Unavailable => Availability::Unavailable,
+        other => return Err(unread(other.name())),
+    })
+}
+
+fn capability_to_wire(
+    honoured: Result<Availability, CapabilityAbsence>,
+) -> DtoResult<wire::Capability> {
+    Ok(match honoured {
+        Ok(Availability::Native) => wire::Capability::Native,
+        Ok(Availability::Emulated) => wire::Capability::Emulated,
+        // `Unavailable` with no absence in force reads as the platform's
+        // (`CapabilityParts`), which is what a replay rebuilds.
+        Ok(Availability::Unavailable) => {
+            wire::Capability::Unavailable(wire::Absence::NotOnThisPlatform)
+        }
+        Err(absence) => wire::Capability::Unavailable(absence_to_wire(absence)?),
+    })
+}
+
+fn capability_from_wire(
+    capability: wire::Capability,
+) -> DtoResult<Result<Availability, CapabilityAbsence>> {
+    Ok(match capability {
+        wire::Capability::Native => Ok(Availability::Native),
+        wire::Capability::Emulated => Ok(Availability::Emulated),
+        wire::Capability::Unavailable(absence) => Err(absence_from_wire(absence)?),
+        _ => return Err(unread("Capability")),
+    })
+}
+
+/// `capabilities` in the schema, through [`CapabilityParts`]: a capability
+/// added there fails to compile here until it is mirrored.
+fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabilities> {
+    let CapabilityParts {
+        sets_title,
+        sets_position,
+        sets_size,
+        sets_constraints,
+        sets_resizable,
+        sets_decorated,
+        minimizes,
+        maximizes,
+        enters_fullscreen,
+        hides,
+        shows,
+        activates,
+        closes,
+        material,
+        reports_presentation,
+        observes_position,
+        observes_minimized,
+        places_at_open,
+        frame_rate_hint,
+    } = capabilities;
+    Ok(wire::Capabilities {
+        sets_title: capability_to_wire(sets_title)?,
+        sets_position: capability_to_wire(sets_position)?,
+        sets_size: capability_to_wire(sets_size)?,
+        sets_constraints: capability_to_wire(sets_constraints)?,
+        sets_resizable: capability_to_wire(sets_resizable)?,
+        sets_decorated: capability_to_wire(sets_decorated)?,
+        minimizes: capability_to_wire(minimizes)?,
+        maximizes: capability_to_wire(maximizes)?,
+        enters_fullscreen: capability_to_wire(enters_fullscreen)?,
+        hides: capability_to_wire(hides)?,
+        shows: capability_to_wire(shows)?,
+        activates: capability_to_wire(activates)?,
+        closes: capability_to_wire(closes)?,
+        material: capability_to_wire(material)?,
+        reports_presentation: capability_to_wire(reports_presentation)?,
+        observes_position: availability_to_wire(observes_position),
+        observes_minimized: availability_to_wire(observes_minimized),
+        places_at_open: availability_to_wire(places_at_open),
+        frame_rate_hint: availability_to_wire(frame_rate_hint),
+    })
+}
+
+fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<CapabilityParts> {
+    let wire::Capabilities {
+        sets_title,
+        sets_position,
+        sets_size,
+        sets_constraints,
+        sets_resizable,
+        sets_decorated,
+        minimizes,
+        maximizes,
+        enters_fullscreen,
+        hides,
+        shows,
+        activates,
+        closes,
+        material,
+        reports_presentation,
+        observes_position,
+        observes_minimized,
+        places_at_open,
+        frame_rate_hint,
+    } = capabilities;
+    Ok(CapabilityParts {
+        sets_title: capability_from_wire(sets_title)?,
+        sets_position: capability_from_wire(sets_position)?,
+        sets_size: capability_from_wire(sets_size)?,
+        sets_constraints: capability_from_wire(sets_constraints)?,
+        sets_resizable: capability_from_wire(sets_resizable)?,
+        sets_decorated: capability_from_wire(sets_decorated)?,
+        minimizes: capability_from_wire(minimizes)?,
+        maximizes: capability_from_wire(maximizes)?,
+        enters_fullscreen: capability_from_wire(enters_fullscreen)?,
+        hides: capability_from_wire(hides)?,
+        shows: capability_from_wire(shows)?,
+        activates: capability_from_wire(activates)?,
+        closes: capability_from_wire(closes)?,
+        material: capability_from_wire(material)?,
+        reports_presentation: capability_from_wire(reports_presentation)?,
+        observes_position: availability_from_wire(observes_position)?,
+        observes_minimized: availability_from_wire(observes_minimized)?,
+        places_at_open: availability_from_wire(places_at_open)?,
+        frame_rate_hint: availability_from_wire(frame_rate_hint)?,
+    })
+}
+
+/// `state` in the schema, through [`WindowStateParts`]: a fact the snapshot
+/// gains fails to compile here until it is mirrored.
+fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowState> {
+    let WindowStateParts {
+        outer,
+        content_size,
+        mode,
+        normal_geometry,
+        visible,
+        occluded,
+        focused,
+        title,
+        constraints: SizeConstraints { min, max },
+        resizable,
+        decorated,
+        display: _,
+        metrics,
+        appearance,
+        safe_area,
+        execution,
+        hovered,
+        active,
+        capabilities,
+    } = state.parts.clone();
+    Ok(wire::WindowState {
+        revision: state.revision,
+        outer: geometry_to_wire(outer),
+        content_size: size_to_wire(content_size),
+        mode: match mode {
+            WindowMode::Normal => wire::WindowMode::Normal,
+            WindowMode::Minimized => wire::WindowMode::Minimized,
+            WindowMode::Maximized => wire::WindowMode::Maximized,
+            WindowMode::Fullscreen => wire::WindowMode::Fullscreen,
+            _ => return Err(DtoError::Unmirrored("WindowMode")),
+        },
+        normal_geometry: normal_geometry.map(geometry_to_wire),
+        visible,
+        occluded,
+        focused,
+        title,
+        constraints: wire::SizeConstraints {
+            min: min.map(size_to_wire),
+            max: max.map(size_to_wire),
+        },
+        resizable,
+        decorated,
+        display: state.display,
+        metrics: metrics.map(|metrics| {
+            let physical = metrics.physical();
+            wire::WindowMetrics {
+                physical: [physical.width, physical.height],
+                scale: metrics.scale().get(),
+            }
+        }),
+        appearance: match appearance {
+            WindowAppearance::Light => wire::Appearance::Light,
+            WindowAppearance::Dark => wire::Appearance::Dark,
+            WindowAppearance::VibrantLight => wire::Appearance::VibrantLight,
+            WindowAppearance::VibrantDark => wire::Appearance::VibrantDark,
+            _ => return Err(DtoError::Unmirrored("WindowAppearance")),
+        },
+        safe_area: [
+            safe_area.top,
+            safe_area.right,
+            safe_area.bottom,
+            safe_area.left,
+        ],
+        execution: match execution {
+            WindowExecutionState::Running => wire::Execution::Running,
+            WindowExecutionState::Suspended => wire::Execution::Suspended,
+            WindowExecutionState::Detached => wire::Execution::Detached,
+            _ => return Err(DtoError::Unmirrored("WindowExecutionState")),
+        },
+        hovered,
+        active,
+        capabilities: capabilities_to_wire(capabilities)?,
+    })
+}
+
+/// The snapshot `wire` describes, validated as its types validate it.
+fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowState> {
+    let wire::WindowState {
+        revision,
+        outer,
+        content_size,
+        mode,
+        normal_geometry,
+        visible,
+        occluded,
+        focused,
+        title,
+        constraints,
+        resizable,
+        decorated,
+        display,
+        metrics,
+        appearance,
+        safe_area,
+        execution,
+        hovered,
+        active,
+        capabilities,
+    } = wire;
+    let metrics = metrics
+        .map(|wire::WindowMetrics { physical, scale }| {
+            let [width, height] = physical;
+            WindowMetrics::try_new(Size::new(width, height), scale)
+                .map_err(|error| invalid(format!("metrics {width}x{height} at {scale}: {error}")))
+        })
+        .transpose()?;
+    let [top, right, bottom, left] = safe_area;
+    if ![top, right, bottom, left]
+        .iter()
+        .all(|inset| inset.is_finite())
+    {
+        return Err(invalid(format!("safe area {top},{right},{bottom},{left}")));
+    }
+    let parts = WindowStateParts {
+        outer: geometry_from_wire(outer, "outer")?,
+        content_size: size_from_wire(content_size, "content size")?,
+        mode: match mode {
+            wire::WindowMode::Normal => WindowMode::Normal,
+            wire::WindowMode::Minimized => WindowMode::Minimized,
+            wire::WindowMode::Maximized => WindowMode::Maximized,
+            wire::WindowMode::Fullscreen => WindowMode::Fullscreen,
+            other => return Err(unread(other.name())),
+        },
+        normal_geometry: normal_geometry
+            .map(|geometry| geometry_from_wire(geometry, "normal geometry"))
+            .transpose()?,
+        visible,
+        occluded,
+        focused,
+        title,
+        constraints: SizeConstraints::new(
+            constraints
+                .min
+                .map(|min| size_from_wire(min, "minimum size"))
+                .transpose()?,
+            constraints
+                .max
+                .map(|max| size_from_wire(max, "maximum size"))
+                .transpose()?,
+        ),
+        resizable,
+        decorated,
+        display: None,
+        metrics,
+        appearance: match appearance {
+            wire::Appearance::Light => WindowAppearance::Light,
+            wire::Appearance::Dark => WindowAppearance::Dark,
+            wire::Appearance::VibrantLight => WindowAppearance::VibrantLight,
+            wire::Appearance::VibrantDark => WindowAppearance::VibrantDark,
+            other => return Err(unread(other.name())),
+        },
+        safe_area: EdgeInsets::new(top, right, bottom, left),
+        execution: match execution {
+            wire::Execution::Running => WindowExecutionState::Running,
+            wire::Execution::Suspended => WindowExecutionState::Suspended,
+            wire::Execution::Detached => WindowExecutionState::Detached,
+            other => return Err(unread(other.name())),
+        },
+        hovered,
+        active,
+        capabilities: capabilities_from_wire(capabilities)?,
+    };
+    Ok(RecordedWindowState {
+        revision,
+        display,
+        parts,
+    })
 }

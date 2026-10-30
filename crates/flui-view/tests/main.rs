@@ -356,6 +356,10 @@ fn close_guard_matrix() {
                 lifecycle_tests::discarding_a_recorded_close_makes_it_due as fn(),
             ),
             (
+                "lifecycle_tests::a_window_close_outranks_a_recorded_quit",
+                lifecycle_tests::a_window_close_outranks_a_recorded_quit as fn(),
+            ),
+            (
                 "lifecycle_tests::an_older_resolution_leaves_a_newer_record",
                 lifecycle_tests::an_older_resolution_leaves_a_newer_record as fn(),
             ),

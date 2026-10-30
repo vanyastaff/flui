@@ -102,7 +102,7 @@ mod browser {
     }
 
     impl WebPreferences {
-        pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+        pub(crate) fn try_new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
             let window = web_sys::window().ok_or_else(|| PlatformError::Preferences {
                 message: "browser preference observation requires a Window".into(),
             })?;

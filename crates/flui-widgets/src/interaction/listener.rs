@@ -9,7 +9,10 @@ use std::{
 
 use flui_foundation::geometry::Axis;
 use flui_interaction::events::ScrollEvent;
-use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
+use flui_interaction::pointer::{
+    EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget, SmartZoomDispatch,
+    SmartZoomTarget,
+};
 use flui_interaction::{
     GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
 };
@@ -57,6 +60,10 @@ struct ScrollAxis {
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
 type PanZoomClaimCallback = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation>;
+
+/// An arbitrated smart zoom handler: returns [`EventPropagation::Stop`] to
+/// claim the zoom, ending the leaf-first walk.
+type SmartZoomClaimCallback = Rc<dyn Fn(SmartZoomDispatch) -> EventPropagation>;
 
 #[derive(Clone, Copy, Default)]
 enum RecognizerInput {
@@ -125,6 +132,7 @@ pub struct Listener {
     scroll_axis: Option<ScrollAxis>,
     on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
     on_pointer_pan_zoom_claim: Option<PanZoomClaimCallback>,
+    on_smart_zoom_claim: Option<SmartZoomClaimCallback>,
     behavior: HitTestBehavior,
     child: Child,
 }
@@ -145,6 +153,7 @@ impl Default for Listener {
             scroll_axis: None,
             on_pointer_pan_zoom_update: None,
             on_pointer_pan_zoom_claim: None,
+            on_smart_zoom_claim: None,
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
         }
@@ -171,6 +180,7 @@ impl std::fmt::Debug for Listener {
                 "on_pointer_pan_zoom_claim",
                 &self.on_pointer_pan_zoom_claim.is_some(),
             )
+            .field("on_smart_zoom_claim", &self.on_smart_zoom_claim.is_some())
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
@@ -283,7 +293,9 @@ impl Listener {
 
     /// Called when a pointer signal occurs over the listener.
     ///
-    /// FLUI currently models pointer signals as [`PointerEvent::Scroll`].
+    /// Pointer signals are [`PointerEvent::Scroll`] and
+    /// [`PointerEvent::ScrollInertiaCancel`] (fingers that came to rest on a
+    /// trackpad, stopping a fling).
     ///
     /// This channel *observes*: every listener on the hit path sees the
     /// signal (this fires for the whole path). A widget that should *act* on the tick only when it is the
@@ -395,6 +407,22 @@ impl Listener {
         self
     }
 
+    /// Register this listener in the arbitrated smart zoom walk.
+    ///
+    /// The platform's smart zoom (a two-finger double-tap on a macOS
+    /// trackpad) is offered leaf-first to each registered handler, in this
+    /// listener's space, until one returns [`EventPropagation::Stop`]. Return
+    /// `Stop` only when this widget will zoom, so an image already at its
+    /// limit hands the zoom to the page around it.
+    #[must_use]
+    pub fn on_smart_zoom_claim(
+        mut self,
+        callback: impl Fn(SmartZoomDispatch) -> EventPropagation + 'static,
+    ) -> Self {
+        self.on_smart_zoom_claim = Some(Rc::new(callback));
+        self
+    }
+
     /// Set the child whose pointer events are observed.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
@@ -428,7 +456,7 @@ impl Listener {
                     PointerEvent::Move(update) if update.buttons.is_empty() => &on_hover,
                     PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &on_move,
                     PointerEvent::Cancel(_) => &on_cancel,
-                    PointerEvent::Scroll(_) => &on_signal,
+                    PointerEvent::Scroll(_) | PointerEvent::ScrollInertiaCancel(_) => &on_signal,
                     PointerEvent::Revise(_) => &on_revise,
                     PointerEvent::PanZoom(pan_zoom) => {
                         if let Some(callback) = &on_pan_zoom_update
@@ -620,6 +648,55 @@ impl Listener {
             (None, None) => {}
         }
     }
+
+    /// Register the smart zoom claim handler in the active owner lane,
+    /// returning its data-only identity for render storage — `None` when no
+    /// claim callback is configured or no owner lane is active.
+    fn register_smart_zoom_claim(&self, ctx: &RenderObjectContext<'_>) -> Option<SmartZoomTarget> {
+        let claim = self.on_smart_zoom_claim.clone()?;
+        match ctx.register_smart_zoom(move |event| claim(event)) {
+            Ok(target) => Some(target),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "Listener mounted without an active interaction lane; \
+                     smart zoom will not be arbitrated"
+                );
+                None
+            }
+        }
+    }
+
+    /// Reconcile the render object's smart zoom registration with this widget
+    /// configuration, the way
+    /// [`sync_pan_zoom_claim`](Self::sync_pan_zoom_claim) does for pan-zoom.
+    fn sync_smart_zoom_claim(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &mut RenderListener,
+    ) {
+        match (
+            render_object.claimed_smart_zoom_target(),
+            &self.on_smart_zoom_claim,
+        ) {
+            (Some(target), Some(claim)) => {
+                let claim = claim.clone();
+                if let Err(error) = ctx.replace_smart_zoom(target, move |event| claim(event)) {
+                    tracing::warn!(?error, "Listener smart-zoom-claim replacement failed");
+                }
+            }
+            (Some(target), None) => {
+                if let Err(error) = ctx.unregister_smart_zoom(target) {
+                    tracing::debug!(?error, "Listener smart-zoom-claim unregistration failed");
+                }
+                render_object.set_smart_zoom_target(None);
+            }
+            (None, Some(_)) => {
+                render_object.set_smart_zoom_target(self.register_smart_zoom_claim(ctx));
+            }
+            (None, None) => {}
+        }
+    }
 }
 
 impl RenderView for Listener {
@@ -630,6 +707,7 @@ impl RenderView for Listener {
         let mut render_object = RenderListener::new(self.register(ctx), self.behavior);
         render_object.set_scroll_target(self.register_scroll_claim(ctx));
         render_object.set_pan_zoom_target(self.register_pan_zoom_claim(ctx));
+        render_object.set_smart_zoom_target(self.register_smart_zoom_claim(ctx));
         render_object
     }
 
@@ -653,6 +731,7 @@ impl RenderView for Listener {
         }
         self.sync_scroll_claim(ctx, render_object);
         self.sync_pan_zoom_claim(ctx, render_object);
+        self.sync_smart_zoom_claim(ctx, render_object);
         render_object.set_behavior(self.behavior);
         flui_rendering::RenderUpdateImpact::NONE
     }
@@ -675,6 +754,12 @@ impl RenderView for Listener {
                 tracing::debug!(?error, "Listener pan-zoom-claim unregistration failed");
             }
             render_object.set_pan_zoom_target(None);
+        }
+        if let Some(target) = render_object.claimed_smart_zoom_target() {
+            if let Err(error) = ctx.unregister_smart_zoom(target) {
+                tracing::debug!(?error, "Listener smart-zoom-claim unregistration failed");
+            }
+            render_object.set_smart_zoom_target(None);
         }
         if let Some(target) = render_object.claimed_scroll_target() {
             if let Err(error) = ctx.unregister_scroll(target) {

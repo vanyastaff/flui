@@ -1,0 +1,315 @@
+//! A presentation gate governs every text-store grant, including queued work,
+//! and carries owner failures caught while a grant settles.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use flui_interaction::testing::InMemoryTextStore;
+use flui_interaction::text_input::LockArbiter;
+use flui_platform::text_store::{
+    CommitGate, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore, TextStoreError,
+};
+
+type Log = Rc<RefCell<Vec<&'static str>>>;
+
+fn recording(log: &Log, name: &'static str) -> LockGrant {
+    let log = Rc::clone(log);
+    LockGrant::read(move |session| {
+        assert_eq!(session.document_len().get(), 4);
+        log.borrow_mut().push(name);
+    })
+}
+
+fn queued_pair() -> (Rc<InMemoryTextStore>, CommitGate, Log) {
+    let store = InMemoryTextStore::new("text");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let first_log = Rc::clone(&log);
+    let first_gate = gate.clone();
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |_| {
+                first_log.borrow_mut().push("first");
+                first_gate.set_open(false);
+            }),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred)
+    );
+    assert_eq!(
+        store.request_lock(recording(&log, "second"), LockTiming::Async),
+        Ok(LockOutcome::Deferred)
+    );
+    gate.set_open(true);
+    (store, gate, log)
+}
+
+fn deferred_draining_stops_when_a_grant_closes_the_gate() {
+    let (store, gate, log) = queued_pair();
+    assert_eq!(store.run_deferred_grants(), 1);
+    assert_eq!(*log.borrow(), ["first"]);
+    assert_eq!(store.run_deferred_grants(), 0);
+    gate.set_open(true);
+    assert_eq!(store.run_deferred_grants(), 1);
+    assert_eq!(*log.borrow(), ["first", "second"]);
+    assert_eq!(store.run_deferred_grants(), 0);
+}
+
+fn a_sync_request_is_refused_after_an_older_grant_closes_the_gate() {
+    let (store, gate, log) = queued_pair();
+    assert_eq!(
+        store.request_lock(recording(&log, "current"), LockTiming::Sync),
+        Err(TextStoreError::SyncLockUnavailable)
+    );
+    assert_eq!(*log.borrow(), ["first"]);
+    gate.set_open(true);
+    assert_eq!(store.run_deferred_grants(), 1);
+    assert_eq!(*log.borrow(), ["first", "second"]);
+    assert_eq!(
+        store.request_lock(recording(&log, "next"), LockTiming::Sync),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(*log.borrow(), ["first", "second", "next"]);
+}
+
+fn an_async_request_queues_behind_work_left_by_a_closed_gate() {
+    let (store, gate, log) = queued_pair();
+    assert_eq!(
+        store.request_lock(recording(&log, "current"), LockTiming::Async),
+        Ok(LockOutcome::Deferred)
+    );
+    assert_eq!(*log.borrow(), ["first"]);
+    gate.set_open(true);
+    assert_eq!(store.run_deferred_grants(), 2);
+    assert_eq!(*log.borrow(), ["first", "second", "current"]);
+    assert_eq!(store.run_deferred_grants(), 0);
+}
+
+fn work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate() {
+    let store = InMemoryTextStore::new("text");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let nested_store = Rc::clone(&store);
+    let nested_log = Rc::clone(&log);
+    let nested_gate = gate.clone();
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |_| {
+                nested_log.borrow_mut().push("first");
+                assert_eq!(
+                    nested_store.request_lock(recording(&nested_log, "second"), LockTiming::Async),
+                    Ok(LockOutcome::Deferred)
+                );
+                nested_gate.set_open(false);
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(*log.borrow(), ["first"]);
+    gate.set_open(true);
+    assert_eq!(store.run_deferred_grants(), 1);
+    assert_eq!(*log.borrow(), ["first", "second"]);
+}
+
+/// An arbiter behind a gate the test holds, with `grants` queued while it
+/// was shut, then reopened.
+fn queued_behind_a_gate(grants: usize) -> (LockArbiter, CommitGate) {
+    let arbiter = LockArbiter::new();
+    let gate = CommitGate::new();
+    arbiter.set_gate(gate.clone());
+    gate.set_open(false);
+    for _ in 0..grants {
+        assert_eq!(
+            arbiter.request(
+                LockGrant::read(|_| {}),
+                LockTiming::Async,
+                &mut |_| {},
+                &mut |_: &mut OwnerCalls| {}
+            ),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+    gate.set_open(true);
+    (arbiter, gate)
+}
+
+fn settle_runs_after_each_grant_releases_its_lock() {
+    let (arbiter, _gate) = queued_behind_a_gate(2);
+    let arbiter = Rc::new(arbiter);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let (opened, settled, probe) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&arbiter));
+    let ran = arbiter.run_deferred(
+        &mut |_| opened.borrow_mut().push("grant"),
+        &mut |_: &mut OwnerCalls| {
+            settled.borrow_mut().push(if probe.is_locked() {
+                "settle under the lock"
+            } else {
+                "settle"
+            });
+        },
+    );
+    assert_eq!(ran, 2);
+    assert_eq!(*log.borrow(), ["grant", "settle", "grant", "settle"]);
+    log.borrow_mut().clear();
+    assert_eq!(
+        arbiter.request(
+            LockGrant::read(|_| {}),
+            LockTiming::Sync,
+            &mut |_| log.borrow_mut().push("grant"),
+            &mut |_: &mut OwnerCalls| log.borrow_mut().push("settle"),
+        ),
+        Ok(LockOutcome::Granted)
+    );
+    assert_eq!(*log.borrow(), ["grant", "settle"]);
+}
+
+fn a_panicking_settle_reaches_the_gate_and_the_queue_drains() {
+    let (arbiter, gate) = queued_behind_a_gate(3);
+    let settles = Rc::new(RefCell::new(0));
+    let counted = Rc::clone(&settles);
+    let ran = arbiter.run_deferred(&mut |_| {}, &mut |_: &mut OwnerCalls| {
+        *counted.borrow_mut() += 1;
+        let settled = *counted.borrow();
+        if settled < 3 {
+            std::panic::panic_any(format!("owner failure {settled}"));
+        }
+    });
+    assert_eq!(ran, 3, "every queued grant ran");
+    assert_eq!(*settles.borrow(), 3, "every grant was settled");
+    assert!(!arbiter.is_locked());
+    let first = gate
+        .take_failure()
+        .expect("the first failure waits at the gate");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*first),
+        Some("owner failure 1"),
+        "the first failure stays authoritative"
+    );
+    flui_foundation::panic::retain_opaque_payload(first);
+    assert!(gate.take_failure().is_none(), "a failure is reported once");
+}
+
+fn a_panicking_settle_with_no_owner_gate_resumes_after_release() {
+    let arbiter = LockArbiter::new();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        arbiter.request(
+            LockGrant::read(|_| {}),
+            LockTiming::Sync,
+            &mut |_| {},
+            &mut |_: &mut OwnerCalls| panic!("owner failure with no one to report to"),
+        )
+    }));
+    let payload = unwound.expect_err("the failure is not swallowed");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*payload),
+        Some("owner failure with no one to report to")
+    );
+    assert!(!arbiter.is_locked(), "the lock was released first");
+}
+
+#[test]
+fn settling_runs_owner_code_outside_the_lock() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "settle_runs_after_each_grant_releases_its_lock",
+            settle_runs_after_each_grant_releases_its_lock,
+        ),
+        (
+            "a_panicking_settle_reaches_the_gate_and_the_queue_drains",
+            a_panicking_settle_reaches_the_gate_and_the_queue_drains,
+        ),
+        (
+            "a_panicking_settle_with_no_owner_gate_resumes_after_release",
+            a_panicking_settle_with_no_owner_gate_resumes_after_release,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failures.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failures.is_empty(), "failed settle cases: {failures:?}");
+}
+
+/// While the gate's UI runtime is checked out, only the owner's own calls
+/// pass it: outside one a sync request is refused and an async one waits;
+/// inside one, nested or left by an unwind, the store is served, and the
+/// frame transaction's shut gate still wins (ADR-0142 item 6).
+fn a_checked_out_gate_admits_only_owner_calls() {
+    let store = InMemoryTextStore::new("text");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    let log: Log = Rc::new(RefCell::new(Vec::new()));
+    gate.set_checked_out(true);
+    assert_eq!(
+        store.request_lock(recording(&log, "platform sync"), LockTiming::Sync),
+        Err(TextStoreError::SyncLockUnavailable)
+    );
+    assert_eq!(
+        store.request_lock(recording(&log, "platform async"), LockTiming::Async),
+        Ok(LockOutcome::Deferred)
+    );
+    assert!(!gate.is_shut(), "a checkout is no frame transaction");
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        gate.owner_entry(|| gate.owner_entry(|| panic!("owner code panics")))
+    }));
+    assert!(unwound.is_err());
+    assert!(!gate.is_open(), "the unwound owner calls left the gate");
+    gate.owner_entry(|| {
+        assert_eq!(
+            store.request_lock(recording(&log, "owner"), LockTiming::Sync),
+            Ok(LockOutcome::Granted)
+        );
+        gate.set_open(false);
+        assert!(
+            !gate.is_open(),
+            "a shut gate stays shut inside an owner call"
+        );
+        gate.set_open(true);
+    });
+    assert_eq!(*log.borrow(), ["platform async", "owner"]);
+    gate.set_checked_out(false);
+    assert_eq!(
+        store.request_lock(recording(&log, "back in the slot"), LockTiming::Sync),
+        Ok(LockOutcome::Granted)
+    );
+}
+#[test]
+fn queued_text_store_grants_respect_gate_changes() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "deferred_draining_stops_when_a_grant_closes_the_gate",
+            deferred_draining_stops_when_a_grant_closes_the_gate,
+        ),
+        (
+            "a_sync_request_is_refused_after_an_older_grant_closes_the_gate",
+            a_sync_request_is_refused_after_an_older_grant_closes_the_gate,
+        ),
+        (
+            "an_async_request_queues_behind_work_left_by_a_closed_gate",
+            an_async_request_queues_behind_work_left_by_a_closed_gate,
+        ),
+        (
+            "work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate",
+            work_queued_inside_a_grant_waits_if_that_grant_closes_the_gate,
+        ),
+        (
+            "a_checked_out_gate_admits_only_owner_calls",
+            a_checked_out_gate_admits_only_owner_calls,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failures.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failures.is_empty(), "failed gate cases: {failures:?}");
+}

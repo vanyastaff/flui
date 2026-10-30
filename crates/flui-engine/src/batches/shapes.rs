@@ -20,7 +20,7 @@ fn affine_rect_instance(
     radii: [f32; 4],
 ) -> Option<crate::instancing::RectInstance> {
     let matrix = glam::DMat4::from_cols_array(&state.current_transform_matrix().m);
-    let admitted = crate::clip_geometry::ValidatedAffine::new(matrix)
+    let admitted = crate::clip_geometry::ValidatedAffine::try_new(matrix)
         .and_then(|affine| affine.map_bounds(bounds));
     match admitted {
         Ok(Some(_)) => {}
