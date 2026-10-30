@@ -76,7 +76,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
   registry's decoded-image cache; a second load of a decoded source is a hit, not a request.
 - `ImageCacheKey::Asset`, `ImageCacheKey::Network` and `NetworkImageKey` are gone; a custom
   provider that used `ImageCacheKey::Asset(label)` moves to `ImageCacheKey::custom(value)`.
-- `NetworkLoader::new` has connect, read and whole-request timeouts, and `load_url` refuses bodies
+- `NetworkLoader::try_new` has connect, read and whole-request timeouts, and `load_url` refuses bodies
   over 256 MiB. Every image decode refuses an image whose RGBA8 pixels would pass 256 MiB
   (128 MiB on Android, iOS and the web) before it allocates them.
 - An application that does not register its registry keeps its decoded images under pressure.

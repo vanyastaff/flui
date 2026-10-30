@@ -29,6 +29,10 @@
 - **`flui-app`**: a GPU device rebuild that keeps failing at the one-second retry ceiling is given
   up after ten such failures, about twelve seconds after the loss: the window reports
   `DeviceRecovery::Abandoned` once and attempts no more frames until the application asks again.
+- **`flui-log`, `flui-testing`, `flui-painting`, `flui-assets`**: constructors that can fail are named `try_new` (`cargo xtask try-new` lists the rest):
+  `flui_log::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
+  `RecordingWriter`, `flui_painting` `CornerRounding` and `RoundedPolygon`, and
+  `flui_assets::NetworkLoader`.
 
 ### Fixed
 

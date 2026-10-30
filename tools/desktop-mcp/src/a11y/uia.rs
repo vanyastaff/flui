@@ -223,7 +223,7 @@ impl Uia {
     /// Refused without call timeouts: a client that can wait on a hung
     /// provider forever would hold the one desktop thread, every queued tool
     /// and the shutdown release with it.
-    pub fn new() -> Result<Self, String> {
+    pub fn try_new() -> Result<Self, String> {
         // The first client joins the thread to COM; the one with timeouts is
         // created on top of it and is the one used.
         let _plain = UIAutomation::new().map_err(|e| e.to_string())?;

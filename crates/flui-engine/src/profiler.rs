@@ -191,7 +191,7 @@ impl GpuFrameProfiler {
     /// Propagates `wgpu_profiler::CreationError` when the settings are invalid.
     /// In practice only `InvalidMaxNumPendingFrames` (value < 1) can fire, which
     /// cannot happen with the `PENDING_FRAME_BUFFER_DEPTH` constant above.
-    pub(crate) fn new(device: &wgpu::Device) -> Result<Self, wgpu_profiler::CreationError> {
+    pub(crate) fn try_new(device: &wgpu::Device) -> Result<Self, wgpu_profiler::CreationError> {
         let settings = wgpu_profiler::GpuProfilerSettings {
             enable_timer_queries: true,
             enable_debug_groups: true,
@@ -293,8 +293,8 @@ impl<'a> ProfileFrame<'a> {
     pub(crate) fn begin(profiler: &'a mut Option<GpuFrameProfiler>, device: &wgpu::Device) -> Self {
         if let Some(previous) = profiler.as_mut().filter(|value| value.abandoned) {
             let latest = previous.latest_profile.take();
-            *previous =
-                GpuFrameProfiler::new(device).expect("BUG: fixed profiler settings remain valid");
+            *previous = GpuFrameProfiler::try_new(device)
+                .expect("BUG: fixed profiler settings remain valid");
             previous.latest_profile = latest;
         }
         Self {
@@ -386,7 +386,8 @@ pub(crate) mod tests {
             ..Default::default()
         }))
         .expect("profiler recovery device");
-        let mut profiler = Some(GpuFrameProfiler::new(&device).expect("valid profiler settings"));
+        let mut profiler =
+            Some(GpuFrameProfiler::try_new(&device).expect("valid profiler settings"));
         let mut failed = Vec::new();
         for (name, resolve, submit, unwind) in [
             ("unresolved content", false, false, false),

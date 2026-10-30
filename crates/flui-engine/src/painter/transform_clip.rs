@@ -10,7 +10,7 @@ use super::WgpuPainter;
 
 impl WgpuPainter {
     fn validate_current_transform(&mut self) {
-        if let Err(error) = crate::clip_geometry::ValidatedAffine::new(
+        if let Err(error) = crate::clip_geometry::ValidatedAffine::try_new(
             glam::DMat4::from_cols_array(&self.state.current_transform_matrix().m),
         ) {
             self.current_segment

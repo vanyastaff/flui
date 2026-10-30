@@ -264,7 +264,7 @@ fn reproduce(root: &Path) -> anyhow::Result<Vec<String>> {
             "fixture generation needs Python >= 3.10 for {GENERATOR}; none found on PATH"
         )]);
     };
-    let scratch = ScratchDir::new("font-assets")?;
+    let scratch = ScratchDir::try_new("font-assets")?;
     let result = Command::new(&python)
         .arg("-B")
         .arg(root.join(GENERATOR))
@@ -438,7 +438,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let scratch = ScratchDir::new("font-assets-test").expect("scratch dir");
+            let scratch = ScratchDir::try_new("font-assets-test").expect("scratch dir");
             let real = repo_root();
             for dir in [ASSETS, "tools/decoy-face"] {
                 copy_dir(&real.join(dir), &scratch.path().join(dir));

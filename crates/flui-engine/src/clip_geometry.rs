@@ -27,7 +27,7 @@ pub(crate) struct ValidatedAffine {
 }
 
 impl ValidatedAffine {
-    pub(crate) fn new(matrix: glam::DMat4) -> Result<Self, GeometryError> {
+    pub(crate) fn try_new(matrix: glam::DMat4) -> Result<Self, GeometryError> {
         if !matrix.is_finite() {
             return Err(GeometryError::NonFinite {
                 context: "transform",

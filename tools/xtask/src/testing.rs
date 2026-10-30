@@ -743,7 +743,7 @@ fn findings_for(
     features: &[(&str, &str)],
     allowlist: &str,
 ) -> Vec<(String, &'static str)> {
-    let dir = ScratchDir::new("testing").expect("scratch");
+    let dir = ScratchDir::try_new("testing").expect("scratch");
     let root = dir.path();
     std::fs::write(root.join("Cargo.toml"), "").expect("writes");
     for (path, text) in files {

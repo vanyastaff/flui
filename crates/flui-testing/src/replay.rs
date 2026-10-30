@@ -481,7 +481,7 @@ impl PointerScript {
         let mut header = RecordingHeader::new(RecordingClock::Virtual)
             .with_window(RecordedWindow::new(window, 1.0));
         header.privacy = crate::recording::Privacy::KeepText;
-        let mut writer = RecordingWriter::new(out, &header)?;
+        let mut writer = RecordingWriter::try_new(out, &header)?;
         for step in &self.steps {
             let t = EventTime::from_nanos(0) + step.at();
             writer.write(&InputRecord::Input(InputRow::new(
