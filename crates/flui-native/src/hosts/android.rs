@@ -9,6 +9,7 @@ use crate::accessibility::android::AndroidAccessibility;
 use crate::clipboard::android::AndroidClipboard;
 use crate::display::android::AndroidDisplays;
 use crate::drag::android::AndroidTransfer;
+use crate::error::PlatformError;
 use crate::haptics::android::AndroidHaptics;
 use crate::host::Host;
 use crate::host::SharedClipboard;
@@ -17,7 +18,7 @@ use crate::lifecycle::android::ActivityRule;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::android::activity_callbacks::ActivityCallbacks;
 use crate::owner::android::java_view::{InputMethod, JavaView, ViewTransfer};
-use crate::owner::android::ndk::SymbolSource;
+use crate::owner::android::ndk::{LoadedLibraries, SymbolSource};
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, AndroidHost, AndroidLoop, HostDisplays,
 };
@@ -103,7 +104,25 @@ impl AndroidHost for Android {
 impl HostPlatform<Android> {
     /// The Android platform over the Activity `android_main` was handed; the
     /// crate root's `android_platform` is its one caller.
-    pub(crate) fn new(app: AndroidApp) -> Self {
-        Self::from_parts(|positions| positions, |_| AndroidLoop::new::<Android>(app))
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::UnsupportedOs`] on an API level below FLUI's floor,
+    /// as a second line behind `minSdk` (ADR-0244 §3).
+    pub(crate) fn try_new(app: AndroidApp) -> Result<Self, PlatformError> {
+        // Opened once and kept for the platform's life by the loop.
+        let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
+        let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
+            tracing::warn!(
+                "Android: the API level could not be read; nothing above the floor is attempted"
+            );
+            AndroidApi::UNKNOWN
+        });
+        tracing::info!(api = %api, "Android API level");
+        crate::version::gate::refuse_below_floor(api)?;
+        Ok(Self::from_parts(
+            |positions| positions,
+            |_| AndroidLoop::new::<Android>(app, library, api),
+        ))
     }
 }

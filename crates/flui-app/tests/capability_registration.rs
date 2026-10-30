@@ -1,14 +1,16 @@
 //! An application's capability registrations are checked before anything
 //! starts (ADR-0152 §1): two plugins for one capability, or two capabilities
 //! sharing a name, fail `Application::run` before the platform is created,
-//! so no window opens.
+//! so no window opens; a launch with them fails `run_app` the same way.
 
 use flui_app::app::{AppRunError, Application};
+use flui_app::{AppCapabilities, AppLaunch, LaunchError};
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::capability::{
     Capability, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
 };
 use flui_runtime::capability::{CapabilityConflict, ProviderTier};
+use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 
 struct Inert;
@@ -101,4 +103,39 @@ pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
         ),
         "{two_overrides:?}"
     );
+}
+
+/// A root the conflicting launch never builds.
+#[derive(Clone, StatelessView)]
+struct Unbuilt;
+
+impl StatelessView for Unbuilt {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        never_built()
+    }
+}
+
+pub(crate) fn a_conflicting_launch_fails_run_app_before_the_platform_starts() {
+    let launch = AppLaunch::new().capabilities(
+        AppCapabilities::new()
+            .plugin(ClipboardPlugin)
+            .plugin(ClipboardPlugin),
+    );
+    let launched = flui_app::run_app(Unbuilt, launch);
+    assert!(
+        matches!(
+            launched,
+            Err(LaunchError::CapabilityConflict(
+                CapabilityConflict::Duplicate {
+                    name: "clipboard",
+                    tier: ProviderTier::Plugin,
+                }
+            ))
+        ),
+        "{launched:?}"
+    );
+}
+
+fn never_built() -> SizedBox {
+    unreachable!("a conflicting launch builds no window")
 }

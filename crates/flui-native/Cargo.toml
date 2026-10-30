@@ -233,6 +233,7 @@ core-graphics = { workspace = true }
 # whose drawables report when they reached the screen. Both the versions
 # `wgpu-hal` 30 already pins.
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    # `CACurrentMediaTime`, the clock the link stamps its ticks on.
     "CABase",
     "CALayer",
     "CAMetalLayer",
@@ -370,7 +371,7 @@ wayland-backend = { workspace = true, optional = true }
 # `time`: the monotonic clock the X server and a Wayland compositor stamp
 # their input on, and the clock a compositor stamps presentation times on;
 # `fs`: the memory file a Wayland window's own frame is drawn into.
-rustix = { workspace = true, optional = true, features = ["time", "fs"] }
+rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] }
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`. winit loads the same crate, so the tree gains none.
 wayland-cursor = { version = "0.31", optional = true }
@@ -469,6 +470,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "NSText",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    # `CACurrentMediaTime`, the clock the link stamps its ticks on.
+    "CABase",
     "CADisplayLink",
     # `CAFrameRateRange` is the type of `preferredFrameRateRange`; the
     # `objc2-core-foundation` feature gates the link's `timestamp` and
@@ -690,6 +693,14 @@ required-features = ["x11"]
 [[test]]
 name = "wayland_input"
 path = "tests/wayland_input.rs"
+harness = false
+required-features = ["wayland"]
+
+# The native Wayland host's clipboard between two clients of a Weston on an
+# X server of its own: its own harness, for the same reason.
+[[test]]
+name = "wayland_clipboard"
+path = "tests/wayland_clipboard.rs"
 harness = false
 required-features = ["wayland"]
 

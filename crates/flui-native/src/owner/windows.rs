@@ -1632,6 +1632,12 @@ impl host::Lifecycle<WindowsLoop> for WindowsLoop {
         }
     }
 
+    /// `WM_QUERYENDSESSION` answered `FALSE` with a `ShutdownBlockReason`
+    /// holds the session until the reason is destroyed.
+    fn session_end_support(_: &WindowsLoop) -> flui_platform::SessionEndSupport {
+        flui_platform::SessionEndSupport::Hold
+    }
+
     /// Windows has no application to bring forward, only its windows: a
     /// window comes forward through `WindowCommand::Activate`, under the
     /// foreground rules. Nothing here touches the foreground, least of all

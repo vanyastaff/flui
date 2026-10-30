@@ -5,9 +5,10 @@ use flui_painting::styling::Color;
 use flui_painting::typography::{FontVariation, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, IntoView, RenderView, impl_render_view};
+use flui_view::{BuildContext, IntoView, RenderView, ViewExt, impl_render_view};
 
-use crate::icon::{IconData, IconTheme, IconThemeData};
+use crate::icon::symbol_effect::{ContentKey, SymbolEffectHost};
+use crate::icon::{IconData, IconTheme, IconThemeData, SymbolEffect};
 use crate::{MediaQuery, Semantics};
 
 /// A graphical icon drawn from a glyph in an icon font, described by an
@@ -49,6 +50,7 @@ pub struct Icon {
     size: Option<f64>,
     color: Option<Color>,
     semantic_label: Option<String>,
+    effect: Option<SymbolEffect>,
 }
 
 impl Icon {
@@ -91,6 +93,16 @@ impl Icon {
     #[must_use]
     pub fn semantic_label(mut self, semantic_label: impl Into<String>) -> Self {
         self.semantic_label = Some(semantic_label.into());
+        self
+    }
+
+    /// Moves the icon with `effect`: a bounce, a pulse, a cross-fade when its glyph
+    /// changes; see [`SymbolEffect`]. A glyph has no paths to draw on, so an icon takes no
+    /// [`PathEffect`](super::PathEffect); [`AnimatedIcon`](super::AnimatedIcon) does.
+    /// It takes the place of the ambient [`IconThemeData::symbol_effect`].
+    #[must_use]
+    pub fn symbol_effect(mut self, effect: SymbolEffect) -> Self {
+        self.effect = Some(effect);
         self
     }
 
@@ -156,7 +168,14 @@ impl StatelessView for Icon {
                 .label(label.clone())
                 .role(crate::SemanticsRole::Image);
         }
-        semantics.child(icon)
+        let built = semantics.child(icon).boxed();
+        match self.effect.as_ref().or(theme.symbol_effect.as_ref()) {
+            Some(effect) => {
+                SymbolEffectHost::new(effect.clone(), ContentKey::Glyph(self.data.clone()), built)
+                    .boxed()
+            }
+            None => built,
+        }
     }
 }
 

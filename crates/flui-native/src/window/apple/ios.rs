@@ -118,6 +118,12 @@ pub struct FluiViewIvars {
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
+    /// The frames the window owes: the link runs only while one is asked for
+    /// (`owner::frame_demand`), and its requester asks from any thread.
+    frame_demand: Arc<crate::owner::frame_demand::FrameDemand>,
+    /// Whether the app's lifecycle holds the link paused (background, or no
+    /// published attachment): a request then waits for the resume.
+    tick_held: std::cell::Cell<bool>,
     /// The rate the window last asked for; the link asks for it whenever it
     /// starts, changes screens or the hint changes.
     frame_rate_hint: std::cell::Cell<flui_platform::FrameRateHint>,
@@ -355,7 +361,9 @@ define_class!(
             });
         }
 
-        /// The `CADisplayLink` target: one tick per refresh requests a frame.
+        /// The `CADisplayLink` target: a tick delivers the frame the window
+        /// was asked for, and a tick after which none is asked for pauses the
+        /// link until the next request resumes it.
         #[unsafe(method(onDisplayLink:))]
         fn on_display_link(&self, link: &CADisplayLink) {
             os_entry("onDisplayLink:", (), AfterPanic::Answer(|()| ()), || {
@@ -364,7 +372,19 @@ define_class!(
                     .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
                 if current && !link.isPaused() {
                     self.observe_link_cadence(link);
-                    self.delivery().dispatch_request_frame();
+                    let demand = &self.ivars().frame_demand;
+                    if demand.take() {
+                        let (age, until_present) = super::link_timing::tick(
+                            objc2_quartz_core::CACurrentMediaTime(),
+                            link.timestamp(),
+                            link.targetTimestamp(),
+                        );
+                        self.delivery()
+                            .dispatch_frame(crate::frame_request_timed(age, until_present));
+                    }
+                    if !demand.pending() {
+                        link.setPaused(true);
+                    }
                 }
             });
         }
@@ -436,6 +456,8 @@ impl FluiView {
             sampling_active: std::cell::Cell::new(false),
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
+            frame_demand: Arc::default(),
+            tick_held: std::cell::Cell::new(true),
             frame_rate_hint: std::cell::Cell::new(flui_platform::FrameRateHint::Default),
             displays: display.displays,
             screen: display.screen,
@@ -708,13 +730,30 @@ impl FluiView {
         }
     }
 
-    /// Pause or resume the tick — driven by the app's background/foreground
-    /// transitions so a suspended app does no work.
+    /// Hold or release the tick — driven by the app's background/foreground
+    /// transitions so a suspended app does no work. A release owes a frame
+    /// (the surface may be new), so the link runs until it is drawn.
     pub(super) fn set_display_link_paused(&self, paused: bool) {
+        self.ivars().tick_held.set(paused);
+        if !paused {
+            self.ivars().frame_demand.request();
+        }
+        self.run_link_if_wanted();
+    }
+
+    /// Run the link while a frame is asked for and the lifecycle does not hold
+    /// it; pause it otherwise.
+    fn run_link_if_wanted(&self) {
         let link = self.ivars().display_link.borrow().clone();
         if let Some(link) = link {
-            link.setPaused(paused);
+            let held = self.ivars().tick_held.get();
+            link.setPaused(held || !self.ivars().frame_demand.pending());
         }
+    }
+
+    /// The frame demand the window's requester shares.
+    fn frame_demand(&self) -> Arc<crate::owner::frame_demand::FrameDemand> {
+        Arc::clone(&self.ivars().frame_demand)
     }
 
     fn invalidate_display_link(&self) {
@@ -956,6 +995,8 @@ pub struct IOSWindow {
     /// The status-bar style its content asks for, reported by the root
     /// controller of each attachment.
     status_bar: Arc<status_bar::StatusBar>,
+    /// How any thread asks the window for a frame.
+    redraw: Arc<IOSRedraw>,
     delivery: Arc<WindowDelivery>,
     /// Set once the window closes for good, and by its [`Drop`] before the
     /// view is released; shared with its surface targets.
@@ -1034,6 +1075,10 @@ impl IOSWindow {
             delivery: Arc::downgrade(&delivery),
         };
         let facets = positions.for_window(&this);
+        let redraw = Arc::new(IOSRedraw {
+            demand: view.frame_demand(),
+            view: Arc::new(NativeOwner::new(objc2::rc::Weak::from_retained(&view), mtm)),
+        });
         let _ = view.ivars().text.set(Arc::clone(&facets.text));
         Self {
             facets,
@@ -1045,6 +1090,7 @@ impl IOSWindow {
                 mtm,
             ),
             status_bar,
+            redraw,
             delivery,
             metrics,
             dark,
@@ -1550,17 +1596,16 @@ impl PlatformWindow for IOSWindow {
     ///   layer directly; the view's display machinery is not part of this
     ///   path.
     ///
-    /// The `needs_redraw` flag the caller set before reaching here is what the
-    /// next tick's `wake_action` reads, so the request is not lost — it is
-    /// deferred to the display's own cadence, which is the pacing contract
-    /// this backend has. The window's `IOSRedraw` is the same request from
-    /// any thread.
+    /// The request marks the window's frame demand and resumes the link if it
+    /// paused on a still screen; the frame comes on the link's next tick, at
+    /// the display's cadence. The window's `IOSRedraw` is the same request
+    /// from any thread.
     fn request_redraw(&self) {
-        IOSRedraw.request_redraw();
+        self.redraw.request_redraw();
     }
 
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
-        Arc::new(IOSRedraw)
+        Arc::clone(&self.redraw) as _
     }
 
     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
@@ -1711,16 +1756,43 @@ impl Drop for IOSWindow {
 
 /// A UIKit window's redraw requester (ADR-0254 §5).
 ///
-/// A demand signal only, like `IOSWindow`'s `request_redraw`: the
-/// `needs_redraw` flag its caller set is what the view's `CADisplayLink` reads
-/// on its next tick (ADR-0071 §5), so a request from any thread records
-/// nothing more here, holds no window and reaches none.
-#[derive(Debug, Clone, Copy)]
-struct IOSRedraw;
+/// A demand signal, like `IOSWindow`'s `request_redraw`: it marks the window's
+/// frame demand, and the first request since the link paused resumes the link
+/// on the main thread, inline there or through the main queue from any other.
+/// The frame itself comes on the link's next tick. It holds the view weakly,
+/// so a request after the window is gone reaches nothing.
+struct IOSRedraw {
+    demand: Arc<crate::owner::frame_demand::FrameDemand>,
+    view: Arc<NativeOwner<objc2::rc::Weak<FluiView>>>,
+}
 
 impl RedrawRequester for IOSRedraw {
     fn request_redraw(&self) {
-        tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
+        if !self.demand.request() {
+            return;
+        }
+        let view = Arc::clone(&self.view);
+        let resume = move |marker: MainThreadMarker| {
+            if let Some(view) = view.get(marker).load() {
+                view.run_link_if_wanted();
+            }
+        };
+        match MainThreadMarker::new() {
+            Some(marker) => resume(marker),
+            None => dispatch2::DispatchQueue::main().exec_async(move || {
+                os_entry(
+                    "a frame request's link resume",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    move || {
+                        resume(
+                            MainThreadMarker::new()
+                                .expect("BUG: the main queue runs on the main thread"),
+                        );
+                    },
+                );
+            }),
+        }
     }
 }
 

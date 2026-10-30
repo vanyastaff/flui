@@ -48,6 +48,15 @@ use crate::{
 mod logind;
 mod pressure;
 
+/// What every Linux host does for the application when the session ends:
+/// logind cannot be refused, but its delay inhibitor waits for the owner up to
+/// the delivery budget.
+#[cfg(linux_host)]
+pub(crate) const SESSION_END_SUPPORT: flui_platform::SessionEndSupport =
+    flui_platform::SessionEndSupport::Delay {
+        max: logind::DELIVERY_BUDGET,
+    };
+
 /// The most events waiting for the owner. Sleep, lock and shutdown are rare
 /// and pressure is limited to one per window, so a full inbox means the owner
 /// has stopped; the newest event is then the one dropped.

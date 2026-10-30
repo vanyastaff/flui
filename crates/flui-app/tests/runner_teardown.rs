@@ -97,7 +97,8 @@ pub(crate) fn joining_a_running_loop_tears_it_down() {
 }
 
 /// A session end the application has no reason to hold up proceeds, and
-/// the loop is torn down after it as after any other end.
+/// the loop is asked to quit (ADR-0260 §6) and torn down as after any other
+/// end.
 pub(crate) fn a_session_end_with_nothing_to_save_proceeds() {
     let handle = Rc::new(RefCell::new(None));
     let run = HeadlessRun::start(one_window_app(Rc::clone(&handle)));
@@ -106,6 +107,8 @@ pub(crate) fn a_session_end_with_nothing_to_save_proceeds() {
         SessionEndAnswer::Proceed
     );
     run.end_session(SessionEndPhase::Ending);
+    run.run_owner_turn();
+    assert!(!run.is_running(), "the session's end quit the loop");
 
     let report = run.join().expect("teardown after a session end returns Ok");
     assert_eq!(report.teardown, TEARDOWN_ORDER);
@@ -179,6 +182,86 @@ fn runner_teardown() {
             (
                 "closing_during_composition_commits_before_detached",
                 closing_during_composition_commits_before_detached,
+            ),
+            (
+                "a_session_end_query_asks_each_window_guard",
+                a_session_end_query_asks_each_window_guard,
+            ),
+            (
+                "a_cancelled_logoff_withdraws_only_the_session_entry",
+                a_cancelled_logoff_withdraws_only_the_session_entry,
+            ),
+            (
+                "a_session_end_with_a_checked_out_runtime_calls_no_user_code",
+                a_session_end_with_a_checked_out_runtime_calls_no_user_code,
+            ),
+            (
+                "a_session_end_asks_the_handler_before_the_guard",
+                a_session_end_asks_the_handler_before_the_guard,
+            ),
+            (
+                "a_refused_session_end_is_released_when_its_window_closes",
+                a_refused_session_end_is_released_when_its_window_closes,
+            ),
+            (
+                "a_refused_session_end_is_released_when_an_earlier_close_carries_out",
+                a_refused_session_end_is_released_when_an_earlier_close_carries_out,
+            ),
+            (
+                "session_end_commits_composition_before_the_flush",
+                session_end_commits_composition_before_the_flush,
+            ),
+            (
+                "a_notify_only_session_end_leaves_the_application_running",
+                a_notify_only_session_end_leaves_the_application_running,
+            ),
+            (
+                "session_end_skips_detached_once_the_notice_spent_the_margin",
+                session_end_skips_detached_once_the_notice_spent_the_margin,
+            ),
+            (
+                "a_repeated_session_end_query_does_not_release_the_session",
+                a_repeated_session_end_query_does_not_release_the_session,
+            ),
+            (
+                "a_slow_observer_stops_the_session_end_delivery",
+                a_slow_observer_stops_the_session_end_delivery,
+            ),
+            (
+                "a_refused_session_end_is_released_by_an_explicit_close",
+                a_refused_session_end_is_released_by_an_explicit_close,
+            ),
+            (
+                "a_window_closed_during_the_query_does_not_hold_the_session",
+                a_window_closed_during_the_query_does_not_hold_the_session,
+            ),
+            (
+                "session_end_tears_down_only_with_time_left",
+                session_end_tears_down_only_with_time_left,
+            ),
+            (
+                "a_notice_subscriber_panic_never_leaves_the_handler",
+                a_notice_subscriber_panic_never_leaves_the_handler,
+            ),
+            (
+                "dispose_panic_on_last_window_close_resumes_after_flush",
+                dispose_panic_on_last_window_close_resumes_after_flush,
+            ),
+            (
+                "capture_drop_panic_keeps_the_first_failure_and_still_flushes",
+                capture_drop_panic_keeps_the_first_failure_and_still_flushes,
+            ),
+            (
+                "a_panicking_tap_handler_reports_once_and_the_next_tap_works",
+                a_panicking_tap_handler_reports_once_and_the_next_tap_works,
+            ),
+            (
+                "a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds",
+                a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds,
+            ),
+            (
+                "a_session_end_handler_panic_with_a_panicking_payload_refuses",
+                a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
         ],
     );
@@ -321,12 +404,21 @@ type SeenAtDetached = Rc<RefCell<Option<(bool, String)>>>;
 struct ComposingField {
     store: Rc<flui_interaction::testing::InMemoryTextStore>,
     seen: SeenAtDetached,
+    /// The loop of the run, when the test asks whether it still ran at
+    /// Detached; what it answered then.
+    loop_at_detached: Option<(
+        flui_native::HeadlessOwnerTurns,
+        Rc<std::cell::Cell<Option<bool>>>,
+    )>,
+    /// How long the field's session-end notice subscriber blocks.
+    notice_delay: Duration,
 }
 
 struct ComposingFieldState {
     field: ComposingField,
     token: Option<flui_interaction::ClientToken>,
     subscription: Option<flui_view::LifecycleSubscription>,
+    notices: Option<flui_view::HostNoticeSubscription>,
 }
 
 impl flui_view::StatefulView for ComposingField {
@@ -337,6 +429,7 @@ impl flui_view::StatefulView for ComposingField {
             field: self.clone(),
             token: None,
             subscription: None,
+            notices: None,
         }
     }
 }
@@ -351,16 +444,31 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
                 .expect("the field attaches"),
         );
         let (store, seen) = (Rc::clone(&self.field.store), Rc::clone(&self.field.seen));
+        let at_detached = self.field.loop_at_detached.clone();
         let (_, subscription) = ctx
             .lifecycle_handle()
             .expect("a bound lifecycle")
             .subscribe(move |state| {
                 if state == flui_view::AppLifecycleState::Detached {
                     seen.replace(Some((store.composition().is_some(), store.text())));
+                    if let Some((turns, running)) = &at_detached {
+                        running.set(Some(turns.is_running()));
+                    }
                 }
             })
             .expect("the lifecycle is open");
         self.subscription = Some(subscription);
+        let delay = self.field.notice_delay;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                        std::thread::sleep(delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
     }
 
     fn build(
@@ -394,6 +502,8 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     let field = ComposingField {
         store: Rc::clone(&store),
         seen: Rc::clone(&seen),
+        loop_at_detached: None,
+        notice_delay: Duration::ZERO,
     };
     let application = Application::new(move |_| field.clone())
         .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
@@ -430,4 +540,1281 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
         "Detached saw the composition committed, its text kept"
     );
     run.join().expect("the close returns Ok");
+}
+
+/// Which hold a [`GuardedView`] takes on its window's close.
+#[derive(Clone, Copy, Debug)]
+enum HoldOn {
+    Nothing,
+    /// [`flui_view::CloseGuard::hold`]: work that finishes by itself.
+    Work,
+    /// [`flui_view::CloseGuard::require_decision`]: a state only the user
+    /// resolves.
+    Decision,
+}
+
+/// What a [`GuardedView`] shares with its test.
+#[derive(Default)]
+struct Guarded {
+    guard: Option<flui_view::CloseGuard>,
+    hold: Option<flui_view::CloseHold>,
+    rebuild: Option<flui_view::RebuildHandle>,
+    /// Run once from the next `build`, while the window's UI runtime is
+    /// checked out to its frame.
+    during_build: Option<Box<dyn FnOnce()>>,
+}
+
+/// A window root that takes its close guard and the hold `hold_on` names.
+#[derive(Clone)]
+struct GuardedView {
+    hold_on: HoldOn,
+    shared: Rc<RefCell<Guarded>>,
+}
+
+struct GuardedViewState(GuardedView);
+
+impl flui_view::StatefulView for GuardedView {
+    type State = GuardedViewState;
+
+    fn create_state(&self) -> Self::State {
+        GuardedViewState(self.clone())
+    }
+}
+
+impl flui_view::ViewState<GuardedView> for GuardedViewState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let guard = ctx
+            .close_guard()
+            .expect("a runner window has a close guard");
+        let hold = match self.0.hold_on {
+            HoldOn::Nothing => None,
+            HoldOn::Work => Some(guard.hold()),
+            HoldOn::Decision => Some(guard.require_decision()),
+        };
+        let mut shared = self.0.shared.borrow_mut();
+        shared.guard = Some(guard);
+        shared.hold = hold;
+        shared.rebuild = Some(ctx.rebuild_handle());
+    }
+
+    fn build(
+        &self,
+        _view: &GuardedView,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let during = self.0.shared.borrow_mut().during_build.take();
+        if let Some(during) = during {
+            during();
+        }
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for GuardedView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A run whose main window is a [`GuardedView`] holding `hold_on`, mounted,
+/// with the platform's session-end reports.
+fn guarded_run(
+    hold_on: HoldOn,
+) -> (
+    flui_app::testing::HeadlessRunHandle,
+    flui_native::HeadlessHostEvents,
+    Rc<RefCell<Guarded>>,
+) {
+    guarded_run_with(hold_on, AppConfig::new())
+}
+
+/// [`guarded_run`] with `config`'s close-request handler.
+fn guarded_run_with(
+    hold_on: HoldOn,
+    config: AppConfig,
+) -> (
+    flui_app::testing::HeadlessRunHandle,
+    flui_native::HeadlessHostEvents,
+    Rc<RefCell<Guarded>>,
+) {
+    let shared = Rc::new(RefCell::new(Guarded::default()));
+    let view = GuardedView {
+        hold_on,
+        shared: Rc::clone(&shared),
+    };
+    let application = Application::new(move |_| view.clone())
+        .with_config(config.with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let platform = flui_native::HeadlessPlatform::new();
+    let events = platform.host_events();
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    assert!(shared.borrow().guard.is_some(), "the window is mounted");
+    (run, events, shared)
+}
+
+/// The reason of the close the window's guard has recorded first, if any.
+fn pending_reason(shared: &RefCell<Guarded>) -> Option<flui_view::CloseReason> {
+    shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .map(|pending| pending.reason())
+}
+
+/// A session-end query asks every window's guard with
+/// `CloseReason::SessionEnd` (ADR-0260 §1): a hold for work that finishes by
+/// itself lets the session end, since the flush writes what it protects; a
+/// hold that waits for the user's decision blocks it and records the close.
+///
+/// Red-check: answer the query from the notice alone — the decision hold's
+/// row proceeds and records nothing.
+pub(crate) fn a_session_end_query_asks_each_window_guard() {
+    for (hold_on, answer, recorded) in [
+        (HoldOn::Nothing, SessionEndAnswer::Proceed, None),
+        (HoldOn::Work, SessionEndAnswer::Proceed, None),
+        (
+            HoldOn::Decision,
+            SessionEndAnswer::Block,
+            Some(flui_view::CloseReason::SessionEnd),
+        ),
+    ] {
+        let (run, _events, shared) = guarded_run(hold_on);
+        assert_eq!(
+            run.end_session(SessionEndPhase::Query),
+            answer,
+            "{hold_on:?}"
+        );
+        assert_eq!(pending_reason(&shared), recorded, "{hold_on:?}");
+        run.end_session(SessionEndPhase::Cancelled);
+        let hold = shared.borrow_mut().hold.take();
+        drop(hold);
+        run.join().expect("the run returns Ok");
+    }
+}
+
+/// A cancelled log-off withdraws the session-end close the query recorded,
+/// and nothing else: a close the user asked for earlier stays pending
+/// (ADR-0260 §2).
+pub(crate) fn a_cancelled_logoff_withdraws_only_the_session_entry() {
+    let (run, _events, shared) = guarded_run(HoldOn::Decision);
+    let windows = run.open_windows();
+    assert!(!windows[0].simulate_close(), "the decision hold keeps it");
+    run.run_owner_turn();
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.run_owner_turn();
+
+    let pending = shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .expect("the user's close stays pending");
+    assert_eq!(pending.reason(), flui_view::CloseReason::User);
+    pending.stay_open().expect("the user's close is current");
+    assert_eq!(
+        pending_reason(&shared),
+        None,
+        "the session end's close was withdrawn"
+    );
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A session end that arrives while a window's UI runtime is checked out (a
+/// nested native loop inside its frame) asks none of its code: the runtime
+/// counts as letting the session end, and its guard records nothing
+/// (ADR-0260 §1). Asked again once the frame is over, the same hold blocks.
+///
+/// Red-check: ask a checked-out runtime as well — the query from inside the
+/// frame blocks and records the session end.
+pub(crate) fn a_session_end_with_a_checked_out_runtime_calls_no_user_code() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    let inside = Rc::new(RefCell::new(None));
+    let answered = Rc::clone(&inside);
+    let state = Rc::clone(&shared);
+    shared.borrow_mut().during_build = Some(Box::new(move || {
+        let answer = events.session_end(SessionEndPhase::Query);
+        answered.replace(Some((answer, pending_reason(&state))));
+    }));
+    let rebuild = shared.borrow().rebuild.clone().expect("mounted");
+    rebuild.schedule(flui_view::RebuildReason::StateChange);
+    run.run_owner_turn();
+    assert_eq!(
+        inside.take(),
+        Some((SessionEndAnswer::Proceed, None)),
+        "the checked-out runtime was not asked"
+    );
+
+    run.end_session(SessionEndPhase::Cancelled);
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "back in its slot, the runtime is asked"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A session-end query asks the window's close handler before its guard
+/// (ADR-0260 §1), so a handler can start the save or put up the decision even
+/// while a decision hold refuses.
+///
+/// Red-check: consult the guard first — a decision hold refuses before the
+/// handler is asked, and the handler hears nothing.
+pub(crate) fn a_session_end_asks_the_handler_before_the_guard() {
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&asked);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        assert_eq!(request.reason(), flui_view::CloseReason::SessionEnd);
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        flui_app::app::CloseResponse::Close
+    });
+    let (run, _events, shared) = guarded_run_with(
+        HoldOn::Decision,
+        AppConfig::new().with_close_request_handler(handler),
+    );
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the decision hold still refuses"
+    );
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window that refused a session end holds it until the window carries the
+/// close out: then, with nothing else holding it, the platform is released
+/// (ADR-0260 §1, §6).
+///
+/// Red-check: answer the refusal without a block on the session end's
+/// request — the platform is never released.
+pub(crate) fn a_refused_session_end_is_released_when_its_window_closes() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.run_owner_turn();
+    assert_eq!(events.session_end_releases(), 0, "the window still refuses");
+
+    let pending = shared
+        .borrow()
+        .guard
+        .as_ref()
+        .expect("mounted")
+        .pending()
+        .expect("the session end's close is pending");
+    assert_eq!(pending.reason(), flui_view::CloseReason::SessionEnd);
+    pending
+        .discard_and_close()
+        .expect("the session end's close is current");
+    run.run_owner_turn();
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the carried-out close released the session end"
+    );
+    run.end_session(SessionEndPhase::Ending);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window whose user close was already pending when it refused the
+/// session end releases the session when its decision carries that earlier
+/// close out: the window is gone, whichever record the guard reports
+/// (ADR-0260 §1).
+///
+/// Red-check: release a refusal only for a close reported as `SessionEnd` —
+/// the platform stays held after the window closed.
+pub(crate) fn a_refused_session_end_is_released_when_an_earlier_close_carries_out() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    let windows = run.open_windows();
+    assert!(
+        !windows[0].simulate_close(),
+        "the decision keeps the window"
+    );
+    assert_eq!(pending_reason(&shared), Some(flui_view::CloseReason::User));
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    run.run_owner_turn();
+    assert_eq!(events.session_end_releases(), 0, "the window still refuses");
+
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.run_owner_turn();
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the user's close carried out released the session end"
+    );
+    run.join().expect("the run returns Ok");
+}
+
+/// The session's end commits a field's composition and tells its Detached
+/// observers before the flush writes, so what they publish holds the
+/// preedit as text (ADR-0260 §3).
+///
+/// Red-check: skip the close delivery in the ending phase — the observer
+/// hears Detached only from the teardown its quit starts.
+pub(crate) fn session_end_commits_composition_before_the_flush() {
+    use flui_platform::text_store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    };
+
+    let store = flui_interaction::testing::InMemoryTextStore::new("ab");
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::RecordingTextStoreHost::new()
+            as Rc<dyn flui_platform::text_store::TextStoreHost>
+    });
+    let running = Rc::new(std::cell::Cell::new(None));
+    let field = ComposingField {
+        store: Rc::clone(&store),
+        seen: Rc::clone(&seen),
+        loop_at_detached: Some((platform.owner_turns(), Rc::clone(&running))),
+        notice_delay: Duration::ZERO,
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+    let composing = Composition {
+        range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),
+        hides_caret: false,
+    };
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read_write(move |session| {
+                session.insert_at_selection("東京").expect("in range");
+                session.set_composition(Some(composing)).expect("in range");
+            }),
+            LockTiming::Sync,
+        ),
+        Ok(LockOutcome::Granted)
+    );
+
+    run.end_session(SessionEndPhase::Ending);
+    assert_eq!(
+        *seen.borrow(),
+        Some((false, "ab東京".to_owned())),
+        "Detached saw the composition committed before the phase returned"
+    );
+    assert_eq!(
+        running.get(),
+        Some(true),
+        "Detached came from the session end's delivery, before its quit"
+    );
+    run.join().expect("the session end returns Ok");
+}
+
+/// On a platform that only tells (an Android stop, a web pagehide), the
+/// session's end writes what the documents published but leaves the
+/// application up: the user may come back to the same windows, so they hear
+/// no Detached and the loop does not quit (ADR-0260 §3).
+///
+/// Red-check: deliver the close and ask the loop to quit whatever the
+/// platform's support — the observer hears Detached and the loop ends.
+pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let field = ComposingField {
+        store: flui_interaction::testing::InMemoryTextStore::new("ab"),
+        seen: Rc::clone(&seen),
+        loop_at_detached: None,
+        notice_delay: Duration::ZERO,
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let platform = flui_native::HeadlessPlatform::new()
+        .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
+        .with_text_store_host(|| {
+            flui_testing::RecordingTextStoreHost::new()
+                as Rc<dyn flui_platform::text_store::TextStoreHost>
+        });
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+
+    assert_eq!(
+        run.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Proceed
+    );
+    run.run_owner_turn();
+    assert!(
+        run.is_running(),
+        "the application stays up for the user's return"
+    );
+    assert_eq!(*seen.borrow(), None, "no window heard Detached");
+
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 1, "the window is still open");
+    assert!(windows[0].simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    run.join()
+        .expect("closing the window afterwards returns Ok");
+}
+
+/// How long the session end's notice subscriber blocks in
+/// [`session_end_skips_detached_once_the_notice_spent_the_margin`]: past the
+/// moment less than one second of the budget remains.
+const SPENT_MARGIN: Duration = Duration::from_millis(2_500);
+
+/// A session-end notice subscriber that spends the margin for application code
+/// keeps the close delivery from starting: the flush still has the rest of
+/// the budget (ADR-0260 §3).
+///
+/// Red-check: check the margin only before the notice — the field's Detached
+/// observer runs while the loop still runs.
+pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
+    let seen: SeenAtDetached = Rc::new(RefCell::new(None));
+    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::RecordingTextStoreHost::new()
+            as Rc<dyn flui_platform::text_store::TextStoreHost>
+    });
+    let running = Rc::new(std::cell::Cell::new(None));
+    let field = ComposingField {
+        store: flui_interaction::testing::InMemoryTextStore::new("ab"),
+        seen: Rc::clone(&seen),
+        loop_at_detached: Some((platform.owner_turns(), Rc::clone(&running))),
+        notice_delay: SPENT_MARGIN,
+    };
+    let application = Application::new(move |_| field.clone())
+        .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start_on(application, platform);
+    run.run_owner_turn();
+
+    run.end_session(SessionEndPhase::Ending);
+    assert_eq!(
+        running.get(),
+        Some(false),
+        "Detached came only from the teardown the quit started, not from the \
+         session end's delivery"
+    );
+    run.join().expect("the session end returns Ok");
+}
+
+/// A second session-end query while a window still refuses the first one
+/// replaces it without telling the platform the session was released: the
+/// displaced request's blocks drop, but the platform waits on the new one
+/// (ADR-0260 §1).
+///
+/// Red-check: let the displaced request's release reach the platform — it
+/// counts one release while the window still refuses.
+pub(crate) fn a_repeated_session_end_query_does_not_release_the_session() {
+    let (run, events, shared) = guarded_run(HoldOn::Decision);
+    for _ in 0..2 {
+        assert_eq!(
+            run.end_session(SessionEndPhase::Query),
+            SessionEndAnswer::Block
+        );
+        run.run_owner_turn();
+    }
+    assert_eq!(
+        events.session_end_releases(),
+        0,
+        "the window still refuses the session end"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    let hold = shared.borrow_mut().hold.take();
+    drop(hold);
+    run.join().expect("the run returns Ok");
+}
+
+/// What a [`SlowDetached`] blocks on.
+#[derive(Clone, Copy, PartialEq)]
+enum SlowOn {
+    /// Its window's Detached observer.
+    Detached,
+    /// Its subscriber to `HostNotice::SessionEnded`.
+    SessionEnded,
+}
+
+/// A window root whose observer of `slow_on` records whether the loop still
+/// ran and then blocks for `delay`, as a slow save does.
+#[derive(Clone)]
+struct SlowDetached {
+    turns: flui_native::HeadlessOwnerTurns,
+    running: Rc<std::cell::Cell<Option<bool>>>,
+    delay: Duration,
+    slow_on: SlowOn,
+}
+
+struct SlowDetachedState {
+    root: SlowDetached,
+    subscription: Option<flui_view::LifecycleSubscription>,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl flui_view::StatefulView for SlowDetached {
+    type State = SlowDetachedState;
+
+    fn create_state(&self) -> Self::State {
+        SlowDetachedState {
+            root: self.clone(),
+            subscription: None,
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<SlowDetached> for SlowDetachedState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let root = self.root.clone();
+        let (_, subscription) = ctx
+            .lifecycle_handle()
+            .expect("a bound lifecycle")
+            .subscribe(move |state| {
+                if root.slow_on == SlowOn::Detached
+                    && state == flui_view::AppLifecycleState::Detached
+                    && root.running.get().is_none()
+                {
+                    root.running.set(Some(root.turns.is_running()));
+                    std::thread::sleep(root.delay);
+                }
+            })
+            .expect("the lifecycle is open");
+        self.subscription = Some(subscription);
+        let root = self.root.clone();
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if root.slow_on == SlowOn::SessionEnded
+                        && matches!(notice, flui_platform::HostNotice::SessionEnded)
+                        && root.running.get().is_none()
+                    {
+                        root.running.set(Some(root.turns.is_running()));
+                        std::thread::sleep(root.delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &SlowDetached,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for SlowDetached {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A slow observer in one UI runtime keeps the next runtime's code from
+/// starting once less than the margin is left, for the session-ended notice
+/// and for the Detached delivery alike: the flush keeps the rest of the
+/// budget (ADR-0260 §3).
+///
+/// Red-check: check the margin only once before each delivery — both
+/// windows' observers run while the loop still runs.
+pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
+    for slow_on in [SlowOn::SessionEnded, SlowOn::Detached] {
+        let platform = flui_native::HeadlessPlatform::new();
+        let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
+        let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
+            turns: platform.owner_turns(),
+            running: Rc::clone(running),
+            delay: SPENT_MARGIN,
+            slow_on,
+        };
+        let (first, second) = (root(&windows[0]), root(&windows[1]));
+        let application = Application::new(move |_| first.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed))
+            .on_ready(move |_| {
+                drop(
+                    flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, second)
+                        .expect("an isolated window opens on the headless platform"),
+                );
+            });
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+        assert_eq!(run.open_windows().len(), 2, "both windows are open");
+
+        run.end_session(SessionEndPhase::Ending);
+        let started = windows
+            .iter()
+            .filter(|running| running.get() == Some(true))
+            .count();
+        assert_eq!(
+            started,
+            1,
+            "only the first window's {} observer ran within the margin",
+            if slow_on == SlowOn::Detached {
+                "Detached"
+            } else {
+                "SessionEnded"
+            }
+        );
+        run.join().expect("the session end returns Ok");
+    }
+}
+
+/// A window whose handler refused the session end and that the application
+/// then closes itself, with `request_presentation_close` once its save is
+/// done, no longer holds the session (ADR-0260 §1).
+///
+/// Red-check: release a refusal only from the guard's settlement — the
+/// platform stays held after the window closed.
+pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = std::sync::Arc::clone(&refused);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        *seen.lock().expect("unpoisoned") = Some(request.address());
+        flui_app::app::CloseResponse::KeepOpen
+    });
+    let (run, events, _shared) = guarded_run_with(
+        HoldOn::Nothing,
+        AppConfig::new().with_close_request_handler(handler),
+    );
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block
+    );
+    assert_eq!(events.session_end_releases(), 0, "the handler refused");
+
+    let address = refused
+        .lock()
+        .expect("unpoisoned")
+        .expect("the handler was asked");
+    flui_app::request_presentation_close(address).expect("the window closes");
+    assert_eq!(
+        events.session_end_releases(),
+        1,
+        "the closed window released the session end"
+    );
+    run.run_owner_turn();
+    run.join().expect("the run returns Ok");
+}
+
+/// A close handler that panics on a session end refuses it, even when the
+/// panic's payload panics again as it is dropped: the payload is kept, so
+/// the answer stays `Block` (ADR-0260 §1).
+///
+/// Red-check: drop the payload where the panic is caught — the second panic
+/// escapes the query and no answer is given.
+pub(crate) fn a_session_end_handler_panic_with_a_panicking_payload_refuses() {
+    let handler = flui_app::app::CloseRequestHandler::new(|_| {
+        std::panic::panic_any(PanicsOnDrop("the handler's payload panicked on drop"))
+    });
+    let (run, _events, _shared) = guarded_run_with(
+        HoldOn::Nothing,
+        AppConfig::new().with_close_request_handler(handler),
+    );
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the panicking handler refused the session end"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.join().expect("the run returns Ok");
+}
+
+/// A window that refused the session end and that a later window's handler
+/// closes while the query still asks holds nothing: its refusal is recorded
+/// before the next window is asked, so the close releases it and the query
+/// proceeds (ADR-0260 §1).
+///
+/// Red-check: record the refusals only after every window was asked — the
+/// closed window's refusal is installed afterwards and the query blocks.
+pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = std::sync::Arc::clone(&refused);
+    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+        let mut first = seen.lock().expect("unpoisoned");
+        match *first {
+            // The first window asked waits for its save.
+            None => {
+                *first = Some(request.address());
+                flui_app::app::CloseResponse::KeepOpen
+            }
+            // The next one finishes that save and closes the first window.
+            Some(address) => {
+                drop(first);
+                flui_app::request_presentation_close(address).expect("the first window closes");
+                flui_app::app::CloseResponse::Close
+            }
+        }
+    });
+    let config = || {
+        AppConfig::new()
+            .with_close_request_handler(handler.clone())
+            .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+    };
+    let second = config();
+    let application = Application::new(|_| flui_widgets::SizedBox::square(10.0))
+        .with_config(config())
+        .on_ready(move |_| {
+            drop(
+                flui_app::open_window(
+                    second,
+                    WindowPolicy::Isolated,
+                    flui_widgets::SizedBox::square(10.0),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        });
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    assert_eq!(run.open_windows().len(), 2, "both windows are open");
+
+    assert_eq!(
+        run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed,
+        "the only refusing window closed"
+    );
+    run.end_session(SessionEndPhase::Cancelled);
+    run.run_owner_turn();
+    run.join().expect("the run returns Ok");
+}
+
+/// A window root whose state records, when it is dropped, whether the loop
+/// still ran, and whose session-ended subscriber blocks for `notice_delay`.
+#[derive(Clone)]
+struct TornDown {
+    turns: flui_native::HeadlessOwnerTurns,
+    dropped: Rc<std::cell::Cell<Option<bool>>>,
+    notice_delay: Duration,
+}
+
+struct TornDownState {
+    root: TornDown,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl Drop for TornDownState {
+    fn drop(&mut self) {
+        self.root.dropped.set(Some(self.root.turns.is_running()));
+    }
+}
+
+impl flui_view::StatefulView for TornDown {
+    type State = TornDownState;
+
+    fn create_state(&self) -> Self::State {
+        TornDownState {
+            root: self.clone(),
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<TornDown> for TornDownState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let delay = self.root.notice_delay;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                        std::thread::sleep(delay);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &TornDown,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for TornDown {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// The session's end tears the UI runtimes down before it returns while
+/// their destructors can start within the budget; once the margin is spent
+/// they are left for the system to end with the process (ADR-0260 §5).
+///
+/// Red-check: leave the teardown to the loop's exit — the window's state
+/// drops only after the loop stopped.
+pub(crate) fn session_end_tears_down_only_with_time_left() {
+    for (notice_delay, inline) in [(Duration::ZERO, true), (SPENT_MARGIN, false)] {
+        let platform = flui_native::HeadlessPlatform::new();
+        let dropped = Rc::new(std::cell::Cell::new(None));
+        let root = TornDown {
+            turns: platform.owner_turns(),
+            dropped: Rc::clone(&dropped),
+            notice_delay,
+        };
+        let application = Application::new(move |_| root.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+
+        run.end_session(SessionEndPhase::Ending);
+        assert_eq!(
+            dropped.get(),
+            Some(inline),
+            "the window's state dropped while the loop ran only when the session end tore \
+             it down itself (notice took {notice_delay:?})"
+        );
+        let report = run.join().expect("the session end returns Ok");
+        assert_eq!(report.teardown, TEARDOWN_ORDER, "the loop's exit still ran");
+        assert!(
+            dropped.get().is_some(),
+            "the window's state dropped by the exit"
+        );
+    }
+}
+
+/// A window root whose system-notice subscriber panics on the notices
+/// `panics_on` picks, as application code that fails does.
+#[derive(Clone)]
+struct PanickingSubscriber {
+    panics_on: fn(&flui_platform::HostNotice) -> bool,
+}
+
+struct PanickingSubscriberState {
+    panics_on: fn(&flui_platform::HostNotice) -> bool,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl flui_view::StatefulView for PanickingSubscriber {
+    type State = PanickingSubscriberState;
+
+    fn create_state(&self) -> Self::State {
+        PanickingSubscriberState {
+            panics_on: self.panics_on,
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<PanickingSubscriber> for PanickingSubscriberState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let panics_on = self.panics_on;
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    assert!(!panics_on(notice), "the notice subscriber fails");
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &PanickingSubscriber,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for PanickingSubscriber {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// How a notice reaches the application in
+/// [`a_notice_subscriber_panic_never_leaves_the_handler`].
+#[derive(Clone, Copy, Debug)]
+enum NoticeCase {
+    /// `AppHandler::session_end` with the query.
+    SessionQuery,
+    /// `AppHandler::session_end` with the ending.
+    SessionEnding,
+    /// `AppHandler::host_notice`.
+    HostNotice,
+}
+
+/// A system-notice subscriber that panics never unwinds out of the
+/// application handler's method: the session end still gets its answer and
+/// the run still returns (ADR-0258 §4, ADR-0260).
+///
+/// Characterization: the runtime's per-operation containment (ADR-0258 §1)
+/// catches the subscriber before the handler's own catch does, so removing
+/// either one alone keeps the row green.
+pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
+    for case in [
+        NoticeCase::SessionQuery,
+        NoticeCase::SessionEnding,
+        NoticeCase::HostNotice,
+    ] {
+        let panics_on: fn(&flui_platform::HostNotice) -> bool = match case {
+            NoticeCase::SessionQuery => {
+                |notice| matches!(notice, flui_platform::HostNotice::SessionEnding(_))
+            }
+            NoticeCase::SessionEnding => {
+                |notice| matches!(notice, flui_platform::HostNotice::SessionEnded)
+            }
+            NoticeCase::HostNotice => |notice| matches!(notice, flui_platform::HostNotice::Sleep),
+        };
+        let root = PanickingSubscriber { panics_on };
+        let application = Application::new(move |_| root.clone())
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+        let platform = flui_native::HeadlessPlatform::new();
+        let events = platform.host_events();
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+
+        let reached = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match case {
+            NoticeCase::SessionQuery => {
+                assert_eq!(
+                    run.end_session(SessionEndPhase::Query),
+                    SessionEndAnswer::Proceed,
+                    "a panicking subscriber holds no block"
+                );
+                run.end_session(SessionEndPhase::Cancelled);
+            }
+            NoticeCase::SessionEnding => {
+                assert_eq!(
+                    run.end_session(SessionEndPhase::Ending),
+                    SessionEndAnswer::Proceed
+                );
+            }
+            NoticeCase::HostNotice => events.notice(flui_platform::SystemNotice::Sleep),
+        }));
+        assert!(
+            reached.is_ok(),
+            "{case:?}: the subscriber's panic left the handler"
+        );
+        run.run_owner_turn();
+        let report = run.join().expect("the run returns");
+        assert_eq!(report.exit, RunExit::Returned, "{case:?}");
+    }
+}
+
+/// A note screen's state, which fails as the test asks when its window goes.
+#[derive(Clone)]
+struct FailingNote {
+    /// The text `dispose` panics with.
+    dispose_panic: Option<&'static str>,
+    /// The text a capture of the state's lifecycle callback panics with when
+    /// it is dropped.
+    capture_panic: Option<&'static str>,
+    /// How many of these states ran `dispose`.
+    disposed: Rc<std::cell::Cell<u32>>,
+}
+
+struct FailingNoteState {
+    note: FailingNote,
+    subscription: Option<flui_view::LifecycleSubscription>,
+}
+
+impl flui_view::StatefulView for FailingNote {
+    type State = FailingNoteState;
+
+    fn create_state(&self) -> Self::State {
+        FailingNoteState {
+            note: self.clone(),
+            subscription: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<FailingNote> for FailingNoteState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        if let Some(text) = self.note.capture_panic {
+            let capture = PanicsOnDrop(text);
+            let (_, subscription) = ctx
+                .lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe(move |_| {
+                    let _held = &capture;
+                })
+                .expect("the lifecycle is open");
+            self.subscription = Some(subscription);
+        }
+    }
+
+    fn build(
+        &self,
+        _view: &FailingNote,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+
+    fn dispose(&mut self) {
+        self.note.disposed.set(self.note.disposed.get() + 1);
+        if let Some(text) = self.note.dispose_panic {
+            panic!("{text}");
+        }
+    }
+}
+
+impl flui_view::View for FailingNote {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// Runs `first` and `second` as the main window's content, closes that last window the
+/// way the user does and joins the run.
+fn close_the_last_window_of(
+    first: FailingNote,
+    second: FailingNote,
+) -> flui_app::testing::ExitReport {
+    let application = Application::new(move |_| {
+        flui_widgets::Column::new(flui_widgets::column![first.clone(), second.clone()])
+    })
+    .with_config(AppConfig::new().with_exit_policy(ExitPolicy::OnLastWindowClosed));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 1, "the main window is open");
+    assert!(windows[0].simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    run.join().expect("a terminal panic is no run error")
+}
+
+/// R12: a `dispose` that panics as the last window closes on the real path
+/// (the window's close, its presentation's close) disposes the other states
+/// all the same, runs the whole exit and only then resumes the panic: 101
+/// with the panic's text, no abort.
+pub(crate) fn dispose_panic_on_last_window_close_resumes_after_flush() {
+    let disposed = Rc::new(std::cell::Cell::new(0));
+    let note = |dispose_panic| FailingNote {
+        dispose_panic,
+        capture_panic: None,
+        disposed: Rc::clone(&disposed),
+    };
+    let report = close_the_last_window_of(note(Some("the note's dispose failed")), note(None));
+    assert_eq!(
+        report.exit,
+        RunExit::Panicked {
+            message: "the note's dispose failed".to_owned()
+        }
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+    assert_eq!(disposed.get(), 2, "the other state was disposed too");
+    assert_eq!(
+        report.teardown, TEARDOWN_ORDER,
+        "every exit step ran before the panic resumed"
+    );
+}
+
+/// R13: a callback capture whose `Drop` panics as the last window closes (the
+/// window's lifecycle releases its observers before the tree is disposed)
+/// is the exit's failure; what the tree still owns is retained, so no more
+/// application code runs and a later `dispose` that would panic never does;
+/// the services, the pools and the loop's return still follow.
+pub(crate) fn capture_drop_panic_keeps_the_first_failure_and_still_flushes() {
+    let disposed = Rc::new(std::cell::Cell::new(0));
+    let report = close_the_last_window_of(
+        FailingNote {
+            dispose_panic: None,
+            capture_panic: Some("the callback's capture failed to drop"),
+            disposed: Rc::clone(&disposed),
+        },
+        FailingNote {
+            dispose_panic: Some("a later dispose failed"),
+            capture_panic: None,
+            disposed: Rc::clone(&disposed),
+        },
+    );
+    assert_eq!(
+        report.exit,
+        RunExit::Panicked {
+            message: "the callback's capture failed to drop".to_owned()
+        },
+        "the first failure is the exit's"
+    );
+    assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
+    assert_eq!(disposed.get(), 0, "the tree was retained, not disposed");
+    assert_eq!(
+        report.teardown, TEARDOWN_ORDER,
+        "the services, the pools and the loop's return followed the failure"
+    );
+}
+
+/// The contained callback panics an application's frame-failure handler
+/// was told of, by their text.
+type CallbackPanics = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// An application config whose frame-failure handler records each
+/// `CallbackPanic` into `panics`.
+fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
+    let panics = std::sync::Arc::clone(panics);
+    AppConfig::new()
+        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+        .with_frame_failure_handler(flui_app::app::FrameFailureHandler::new(move |report| {
+            if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
+                panics
+                    .lock()
+                    .expect("BUG: the frame-failure handler does not panic")
+                    .push(message.to_string());
+            }
+        }))
+}
+
+/// Presses and releases a finger at `at` in `window`, the application's turn
+/// running after each.
+fn tap(
+    run: &flui_app::testing::HeadlessRunHandle,
+    window: &flui_native::MockWindow,
+    at: flui_foundation::geometry::Offset<f64>,
+) {
+    use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
+    for event in [
+        make_down_event(at, PointerKind::Touch).expect("a finite position"),
+        make_up_event(at, PointerKind::Touch).expect("a finite position"),
+    ] {
+        window.inject_event(flui_platform::PlatformInput::Pointer(event));
+        run.run_owner_turn();
+    }
+}
+
+/// R9: an application's tap handler that panics is contained at its own
+/// boundary: one report with the panic's text, the window stays, and the
+/// next tap reaches the handler.
+pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
+    let panics = CallbackPanics::default();
+    let taps = Rc::new(std::cell::Cell::new(0_u32));
+    let counted = Rc::clone(&taps);
+    let application = Application::new(move |_| {
+        let counted = Rc::clone(&counted);
+        flui_widgets::GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .on_tap(move |_| {
+                counted.set(counted.get() + 1);
+                assert!(counted.get() > 1, "the first tap's handler failed");
+            })
+            .child(flui_widgets::SizedBox::square(100.0))
+    })
+    .with_config(reporting_callback_panics(&panics));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    let at = flui_foundation::geometry::Offset::new(10.0, 10.0);
+
+    tap(&run, &window, at);
+    run.run_owner_turn();
+    assert_eq!(taps.get(), 1, "the first tap reached the handler");
+    assert_eq!(
+        *panics.lock().expect("unpoisoned"),
+        ["the first tap's handler failed"],
+        "one report, with the panic's text"
+    );
+
+    tap(&run, &window, at);
+    run.run_owner_turn();
+    assert_eq!(taps.get(), 2, "the next tap reached the handler");
+    assert_eq!(
+        panics.lock().expect("unpoisoned").len(),
+        1,
+        "no second report"
+    );
+    assert!(run.is_running(), "the application still runs");
+    run.join().expect("the run returns Ok");
+}
+
+/// A state that schedules a post-frame callback which panics, and keeps its
+/// post-frame handle for the test.
+#[derive(Clone)]
+struct PostFramePanics {
+    handle: Rc<RefCell<Option<flui_view::PostFrameHandle>>>,
+}
+
+struct PostFramePanicsState {
+    view: PostFramePanics,
+}
+
+impl flui_view::StatefulView for PostFramePanics {
+    type State = PostFramePanicsState;
+
+    fn create_state(&self) -> Self::State {
+        PostFramePanicsState { view: self.clone() }
+    }
+}
+
+impl flui_view::ViewState<PostFramePanics> for PostFramePanicsState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let handle = ctx.post_frame_handle().expect("a frame scheduler");
+        handle
+            .schedule(|_| panic!("the post-frame callback failed"))
+            .expect("the scheduler takes the callback");
+        self.view.handle.replace(Some(handle));
+    }
+
+    fn build(
+        &self,
+        _view: &PostFramePanics,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for PostFramePanics {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// R9: a post-frame callback that panics is contained at its own boundary:
+/// one report with the panic's text, and the next frame still runs the
+/// callbacks scheduled for it.
+pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds() {
+    let panics = CallbackPanics::default();
+    let handle = Rc::new(RefCell::new(None));
+    let view = PostFramePanics {
+        handle: Rc::clone(&handle),
+    };
+    let application =
+        Application::new(move |_| view.clone()).with_config(reporting_callback_panics(&panics));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    assert_eq!(
+        *panics.lock().expect("unpoisoned"),
+        ["the post-frame callback failed"],
+        "one report, with the panic's text"
+    );
+
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    let ran = Rc::new(std::cell::Cell::new(false));
+    let marked = Rc::clone(&ran);
+    handle
+        .borrow()
+        .as_ref()
+        .expect("init_state kept the handle")
+        .schedule(move |_| marked.set(true))
+        .expect("the scheduler still takes callbacks");
+    flui_platform::PlatformWindow::request_redraw(&window);
+    run.run_owner_turn();
+    assert!(ran.get(), "the next frame ran its post-frame callback");
+    assert_eq!(
+        panics.lock().expect("unpoisoned").len(),
+        1,
+        "no second report"
+    );
+    run.join().expect("the run returns Ok");
 }

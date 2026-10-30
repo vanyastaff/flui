@@ -184,8 +184,9 @@ pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_painting::ImagePlacement;
 pub use flui_painting::paint::ImageRepeat;
 pub use icon::{
-    AnimatedIcon, AnimatedIconData, AnimatedIconState, Icon, IconCommand, IconCommandBuf, IconData,
-    IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
+    AnimatedIcon, AnimatedIconData, AnimatedIconState, DiscreteEffect, Icon, IconCommand,
+    IconCommandBuf, IconData, IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
+    IndefiniteEffect, PathEffect, RotateEffect, Speed, SymbolEffect,
 };
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
@@ -282,7 +283,8 @@ pub use scroll::{
     HeaderExtentsError, HeaderOrder, InvalidExtents, InvalidSliverCrossAxisExtent,
     InvalidViewportFraction, InvalidWheelScrollDistance, ListView, NestedScroll,
     NestedScrollConnection, NestedScrollState, OverScrollHeaderStretchConfiguration,
-    OverscrollBehavior, PageController, PageSnap, PageView, PageViewState, RefreshController,
+    OverscrollBehavior, PageController, PageIndicator, PageIndicatorState, PageIndicatorStyle,
+    PageIndicatorStyleError, PageSnap, PageView, PageViewState, RefreshController,
     RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle,
     RefreshIntent, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics,
     ScrollPhysics, ScrollStep, Scrollable, Scrollbar, SharedScrollPhysics, SharedSnapPolicy,

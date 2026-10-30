@@ -12,6 +12,8 @@
 //! [`ProxySendError`]: crate::ProxySendError
 //! [`WaitError`]: crate::WaitError
 
+use flui_platform::{Environment, OsRelease};
+
 /// The boxed error an embedder's bootstrap (`on_ready`) may return.
 ///
 /// Embedder bootstrap code is application-land and returns arbitrary error
@@ -31,6 +33,9 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// * [`Init`](Self::Init) — [`crate::current_platform`] and backend
 ///   constructors (`WindowsPlatform::try_new`, `MacOSPlatform::try_new`, …).
+/// * [`UnsupportedOs`](Self::UnsupportedOs) and
+///   [`MissingRequirement`](Self::MissingRequirement) — the same
+///   constructors, when the system is below FLUI's floor (ADR-0244 §3).
 /// * [`EventLoop`](Self::EventLoop) — `Platform::run` when the loop itself
 ///   fails to start or exits abnormally.
 /// * [`Bootstrap`](Self::Bootstrap) — `Platform::run` when the embedder's
@@ -73,6 +78,30 @@ pub enum PlatformError {
     Init {
         /// What failed, in the backend's own words.
         message: String,
+    },
+
+    /// The system runs a release below FLUI's floor for its environment
+    /// (ADR-0244 §3). The backend reads the release once, when it is built,
+    /// and refuses before anything else; a release it cannot read starts.
+    #[error("{environment} {found} is below FLUI's floor, {floor}")]
+    UnsupportedOs {
+        /// The environment whose floor this is.
+        environment: Environment,
+        /// The release the system reported.
+        found: OsRelease,
+        /// The lowest release FLUI runs on there.
+        floor: OsRelease,
+    },
+
+    /// Something the environment's floor is made of, rather than a release,
+    /// is missing (ADR-0244 §3): a Wayland global, an X11 extension, a
+    /// graphics API.
+    #[error("{environment} lacks {requirement}, which FLUI needs")]
+    MissingRequirement {
+        /// The environment whose floor this is.
+        environment: Environment,
+        /// What was looked for, as `platform-support.toml` names it.
+        requirement: &'static str,
     },
 
     /// The platform event loop failed to start, or terminated abnormally.

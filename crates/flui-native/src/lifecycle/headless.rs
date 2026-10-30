@@ -23,6 +23,18 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
         }
     }
 
+    /// Stand in for a platform whose session end works as `support` says: a
+    /// test of a phone or a browser tab passes
+    /// [`NotifyOnly`](flui_platform::SessionEndSupport::NotifyOnly). The
+    /// default is [`Hold`](flui_platform::SessionEndSupport::Hold), a
+    /// desktop that waits for a block.
+    #[must_use]
+    pub fn with_session_end_support(self, support: flui_platform::SessionEndSupport) -> Self {
+        self.owner()
+            .with_state(|state| state.session_end_support = support);
+        self
+    }
+
     /// Simulate one phase of the user's session ending; see
     /// [`HeadlessHostEvents::session_end`].
     pub fn simulate_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
@@ -38,6 +50,12 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
     fn release_session_end(owner: &HeadlessLoop) {
         owner.with_state(|state| state.session_end_releases += 1);
+    }
+
+    /// A desktop that waits for a block unless the test chose otherwise: a
+    /// test reads the answer and releases it as Windows does.
+    fn session_end_support(owner: &HeadlessLoop) -> flui_platform::SessionEndSupport {
+        owner.with_state(|state| state.session_end_support)
     }
 
     fn activate(_: &HeadlessLoop, _: bool) {

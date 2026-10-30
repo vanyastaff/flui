@@ -6,6 +6,8 @@
   sentence (an idle poll derived from the display period), and
   [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 5 (Android keeps its
   sleep). The rest of both decisions is unchanged; iOS keeps its sleep.
+- **Superseded-by:** [ADR-0268](ADR-0268-the-ios-display-link-paces-the-backgrounded-pump.md), the clause
+  "iOS keeps its sleep" only: the iOS display link paces its backgrounded pump.
 - **Related:** [ADR-0247](ADR-0247-android-java-view.md) (the Java view whose events wake the
   loop), [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) (the surface a resize reaches)
 

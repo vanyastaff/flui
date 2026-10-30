@@ -73,6 +73,8 @@ pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test))]
+pub(crate) mod frame_demand;
 pub mod handlers;
 pub(crate) mod headless;
 #[cfg(any(wayland_host, x11_host, test))]
@@ -207,6 +209,13 @@ impl OwnerPlatform {
     /// wait for. See [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known
@@ -401,6 +410,13 @@ impl SharedPlatform {
     /// wait for; see [`Platform::release_session_end`].
     pub fn release_session_end(&self) {
         self.platform.release_session_end();
+    }
+
+    /// What the platform does for the application when the user's session
+    /// ends. See [`Platform::session_end_support`].
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        self.platform.session_end_support()
     }
 
     /// The commands and observations every window of this platform has, known

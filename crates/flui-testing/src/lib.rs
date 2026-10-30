@@ -122,6 +122,7 @@ pub mod gesture_alternatives;
 pub mod host;
 pub mod log_capture;
 pub mod ownership;
+pub mod primary_selection;
 pub mod recording;
 pub mod replay;
 pub mod storage;
@@ -150,6 +151,7 @@ pub use host::{
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
+pub use primary_selection::ScriptedPrimarySelection;
 pub use replay::{
     MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
     ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,

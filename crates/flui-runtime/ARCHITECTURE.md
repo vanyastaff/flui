@@ -1184,7 +1184,9 @@ rather than queueing a capture only the drop glue would reach. Once a failure
 is held, or the thread is already unwinding, it retains them instead (ADR-0127). Every other field
 holds framework values, or values already contained where they run: the input tap's calls and
 retirement, and the presentations' trees, whose `dispose` and pending futures are contained per
-element. Tested by `a_queued_command_outliving_a_teardown_failure_does_not_abort`,
+element so the rest of the tree still disposes; the first of those is then the presentation's
+close failure, since no frame follows to report it (ADR-0258 §2). Tested by
+`a_queued_command_outliving_a_teardown_failure_does_not_abort`,
 `a_handler_capture_sending_on_drop_is_refused`, `a_failing_dispose_and_future_drop_do_not_abort`
 and `user_drop_panic_inside_an_unwind_is_retained`,
 each run in a child process because the broken shape aborts.

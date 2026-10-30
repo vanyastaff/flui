@@ -20,7 +20,7 @@ use super::owner_dispatch::{
     PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside,
 };
-use crate::app::AppConfig;
+use crate::app::{AppConfig, AppRunError, LaunchError};
 
 pub(super) struct RenderedMain {
     pub(super) window: Rc<dyn PlatformWindow>,
@@ -375,15 +375,27 @@ where
     })
 }
 
-pub(super) fn run_desktop<V>(root: V, config: AppConfig)
+pub(super) fn run_desktop<V>(root: V, launch: crate::app::AppLaunch) -> Result<(), LaunchError>
 where
     V: View + StatelessView + Clone + 'static,
 {
-    if let Err(error) = crate::app::Application::new(move |_| root.clone())
-        .with_config(config)
-        .run()
-    {
-        panic!("desktop bootstrap failed: {error}");
+    let crate::app::AppLaunch {
+        config,
+        capabilities,
+    } = launch;
+    let mut application = crate::app::Application::new(move |_| root.clone()).with_config(config);
+    application.capabilities = capabilities;
+    match application.run() {
+        Ok(()) => Ok(()),
+        Err(AppRunError::CapabilityConflict(conflict)) => {
+            Err(LaunchError::CapabilityConflict(conflict))
+        }
+        Err(AppRunError::UnsupportedSystem(unsupported)) => {
+            tracing::error!(%unsupported, "FLUI cannot run on this system");
+            Err(LaunchError::UnsupportedSystem(unsupported))
+        }
+        Err(AppRunError::Platform { source }) => Err(LaunchError::Platform { source }),
+        Err(error) => panic!("desktop bootstrap failed: {error}"),
     }
 }
 

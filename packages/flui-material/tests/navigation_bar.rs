@@ -288,3 +288,73 @@ pub fn reduced_motion_shows_a_selection_change_on_its_first_frame() {
         "reduced motion shows the second destination's full indicator at once, got {reduced:?}"
     );
 }
+
+/// The scale of every composited transform that scales, rounded to hundredths.
+fn scaled_layers(laid: &LaidOut) -> Vec<f64> {
+    laid.transform_layer_matrices()
+        .iter()
+        .map(|matrix| {
+            let (x0, y0) = matrix.transform_point(0.0, 0.0);
+            let (x1, y1) = matrix.transform_point(1.0, 0.0);
+            ((x1 - x0).hypot(y1 - y0) * 100.0).round() / 100.0
+        })
+        .filter(|scale| (scale - 1.0).abs() > 1e-9)
+        .collect()
+}
+
+/// A newly selected destination's icon bounces once, and the destination it leaves does
+/// not; under reduced motion nothing bounces.
+pub fn a_newly_selected_icon_bounces() {
+    let mut laid = second_selected(MotionOverride::Full);
+    assert_eq!(
+        scaled_layers(&laid),
+        [] as [f64; 0],
+        "the bounce starts at rest"
+    );
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scaled_layers(&laid),
+        [1.2],
+        "one icon, the newly selected one, at the bounce's peak"
+    );
+    laid.pump_for(Duration::from_secs(1));
+    assert_eq!(scaled_layers(&laid), [] as [f64; 0], "the bounce settles");
+
+    let mut reduced = second_selected(MotionOverride::Reduce);
+    reduced.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scaled_layers(&reduced),
+        [] as [f64; 0],
+        "no bounce under reduced motion"
+    );
+}
+
+/// A destination whose selected icon is built differently from its plain one still bounces
+/// on selection.
+pub fn a_distinct_selected_icon_bounces_too() {
+    let destinations = || {
+        vec![
+            NavigationDestination::new(icon(), "Home"),
+            NavigationDestination::new(icon(), "Profile").selected_icon(
+                flui_sdk::widgets::Padding::all(0.0).child(Icon::new(IconData::new(0xE7FD))),
+            ),
+        ]
+    };
+    let bar = |vsync: &Vsync, selected| {
+        VsyncScope::new(
+            vsync.clone(),
+            themed(NavigationBar::new(destinations()).selected_index(selected)),
+        )
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(bar(&vsync, 0), bar_constraints(300.0, 800.0), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+    laid.pump_widget(bar(&vsync, 1));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scaled_layers(&laid),
+        [1.2],
+        "the selected icon at the bounce's peak"
+    );
+}

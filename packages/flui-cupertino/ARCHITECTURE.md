@@ -99,3 +99,11 @@ progress, painted only while the page moves.
 `cupertino_route_casts_its_edge_shadow_only_while_moving` and
 `cupertino_route_does_not_slide_under_reduced_motion` pin the route through
 this package's public entry point.
+
+### The page control is the shared indicator in the iOS look
+
+`CupertinoPageControl` holds a `flui-widgets` `PageIndicator` and sets only its style: 7 pt dots
+9 pt apart, up to nine at once, the current page white and the others white at 30 %. Paging,
+the window, the announced value, right-to-left order and reduced motion are the indicator's, so
+the two cannot drift apart. `the_control_draws_ios_dots_and_turns_its_pager` pins the look and
+the paging through this package's public entry point.

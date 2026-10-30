@@ -416,7 +416,7 @@ const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
-use flui::app::{AppConfig, run_app_with_config};
+use flui::app::{AppConfig, AppLaunch, LaunchError, run_app};
 use flui::hot_reload::{WorkerReloadHook, engine::env};
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
@@ -442,7 +442,7 @@ fn default_worker_path() -> std::path::PathBuf {
     path
 }
 
-fn main() {
+fn main() -> Result<(), LaunchError> {
     let worker_path = std::env::var(env::WORKER_PLUGIN)
         .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);
 
@@ -464,11 +464,12 @@ fn main() {
         .with_size(480, 320)
         .with_dev_reload(WorkerReloadHook::new(worker_path));
 
-    run_app_with_config(root, config);
+    run_app(root, AppLaunch::new().config(config))?;
 
     tracing::info!(
         final_count = count.load(std::sync::atomic::Ordering::Relaxed),
         "Application exited"
     );
+    Ok(())
 }
 "#;

@@ -524,22 +524,93 @@ impl CloseRequestRouter {
                 "close-request handler panicked; vetoing the close (a panicking handler cannot \
                  be read as consent to discard unsaved work)"
             );
+            flui_foundation::panic::retain_opaque_payload(payload);
             CloseResponse::KeepOpen
         })
     }
 
+    /// Ask the application whether the session may end at the window at
+    /// `address` (ADR-0260 §1): its handler first, with
+    /// [`CloseReason::SessionEnd`], so a handler can still start the save or
+    /// put up the decision; then its guard. A handler's
+    /// [`CloseResponse::KeepOpen`] records the close on the guard; a hold for
+    /// work never refuses a session end, a hold for a decision does. A handler
+    /// that panics keeps the window open and records nothing.
+    pub(crate) fn consult_session_end(&self, address: PresentationAddress) -> CloseResponse {
+        let reason = CloseReason::SessionEnd;
+        // Cloned out from under the lock: the handler may re-enter.
+        let Some((handler, guard, owner_thread)) = ({
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.address == address)
+                .map(|e| (e.handler.clone(), e.guard.clone(), e.owner_thread))
+        }) else {
+            return CloseResponse::Close;
+        };
+        if std::thread::current().id() != owner_thread {
+            tracing::error!(
+                ?address,
+                "session-end query reached on a non-owner thread; refusing rather than \
+                 answering from the wrong thread"
+            );
+            return CloseResponse::KeepOpen;
+        }
+        if let Some(handler) = handler {
+            let request = CloseRequest { address, reason };
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)))
+            {
+                Ok(CloseResponse::KeepOpen) => {
+                    if let Some(guard) = &guard {
+                        guard.record(reason);
+                    }
+                    return CloseResponse::KeepOpen;
+                }
+                Ok(_) => {}
+                Err(payload) => {
+                    tracing::error!(
+                        ?address,
+                        panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
+                        "close-request handler panicked on a session end; refusing it"
+                    );
+                    // Kept, not dropped: a payload whose destructor panics
+                    // must not overturn the refusal on its way out.
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                    return CloseResponse::KeepOpen;
+                }
+            }
+        }
+        if guard.is_some_and(|guard| guard.refuses(reason)) {
+            CloseResponse::KeepOpen
+        } else {
+            CloseResponse::Close
+        }
+    }
+
     /// Every registered presentation, in registration order.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
     pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
         self.entries
             .lock()
             .iter()
             .map(|entry| entry.address)
             .collect()
+    }
+
+    /// Withdraw the close recorded for `reason` on the guard of the
+    /// presentation at `address`, if one is: the platform cancelled it, as a
+    /// cancelled log-off does. Closes recorded for other reasons stay.
+    pub(crate) fn withdraw(&self, address: PresentationAddress, reason: CloseReason) {
+        // Cloned out from under the lock: the withdrawal signals the owner.
+        let guard = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|entry| entry.address == address)
+                .and_then(|entry| entry.guard.clone())
+        };
+        if let Some(guard) = guard {
+            guard.withdraw(reason);
+        }
     }
 
     #[cfg(any(
