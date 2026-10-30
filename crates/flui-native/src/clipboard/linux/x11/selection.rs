@@ -184,31 +184,31 @@ impl Atoms {
     }
 }
 
-/// The text the application owns the selection with, since when, and the
-/// forms it was encoded in so far, which every transfer of a form shares.
+/// The text the application owns the selection with, and since when. Its
+/// UTF-8 forms are the text's own bytes, shared by every transfer; its ISO
+/// 8859-1 form is encoded once, the first time a requestor asks for it.
 struct Owned {
-    text: String,
+    text: Arc<str>,
     time: xproto::Timestamp,
-    encoded: Vec<(TextForm, Arc<[u8]>)>,
+    latin1: Option<Arc<[u8]>>,
 }
 
 impl Owned {
     fn new(text: String, time: xproto::Timestamp) -> Self {
         Self {
-            text,
+            text: text.into(),
             time,
-            encoded: Vec::new(),
+            latin1: None,
         }
     }
 
-    /// The text in `form`, encoded once for every request.
+    /// The text in `form`: at most one copy of it besides the text.
     fn encoded(&mut self, form: TextForm) -> Arc<[u8]> {
-        if let Some((_, bytes)) = self.encoded.iter().find(|(held, _)| *held == form) {
-            return Arc::clone(bytes);
+        if form.is_utf8() {
+            return Arc::<[u8]>::from(Arc::clone(&self.text));
         }
-        let bytes: Arc<[u8]> = form.encode(&self.text).into();
-        self.encoded.push((form, Arc::clone(&bytes)));
-        bytes
+        let text = &self.text;
+        Arc::clone(self.latin1.get_or_insert_with(|| form.encode(text).into()))
     }
 }
 
@@ -336,7 +336,7 @@ impl Selections {
             return Ok(());
         }
         if let Some(owned) = &self.owned {
-            let text = owned.text.clone();
+            let text = owned.text.to_string();
             if self.reading.is_some() {
                 self.retire_destination();
             }
@@ -842,8 +842,7 @@ fn contained(payload: Box<dyn std::any::Any + Send>) {
 /// `bytes` received in `form` as text, or `None` past [`MAX_TEXT`] bytes of
 /// it: ISO 8859-1 and ill-formed UTF-8 grow as they decode.
 fn decode(form: TextForm, bytes: Vec<u8>) -> Option<String> {
-    let text = form.decode(bytes);
-    (text.len() <= MAX_TEXT).then_some(text)
+    (form.decoded_len(&bytes) <= MAX_TEXT).then(|| form.decode(bytes))
 }
 
 fn steps(

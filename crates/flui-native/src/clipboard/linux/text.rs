@@ -78,6 +78,34 @@ impl TextForm {
         }
     }
 
+    /// How many bytes of text [`decode`](Self::decode) makes of `bytes`,
+    /// measured without making it: a reader refuses text past its limit
+    /// before ISO 8859-1 or ill-formed UTF-8 grows as it decodes.
+    pub(crate) fn decoded_len(self, bytes: &[u8]) -> usize {
+        let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+        match self {
+            Self::PlainUtf8 | Self::Utf8String | Self::Plain => bytes
+                .utf8_chunks()
+                .map(|chunk| {
+                    // Each ill-formed sequence becomes one U+FFFD.
+                    let replaced = if chunk.invalid().is_empty() {
+                        0
+                    } else {
+                        char::REPLACEMENT_CHARACTER.len_utf8()
+                    };
+                    chunk.valid().len() + replaced
+                })
+                .sum(),
+            Self::Latin1 => bytes.len() + bytes.iter().filter(|byte| **byte >= 0x80).count(),
+        }
+    }
+
+    /// Whether the form's bytes are UTF-8, the same bytes for each such
+    /// form.
+    pub(crate) const fn is_utf8(self) -> bool {
+        !matches!(self, Self::Latin1)
+    }
+
     /// `text` in this form: UTF-8 as it is, ISO 8859-1 with each character
     /// past it written `?`.
     pub(crate) fn encode(self, text: &str) -> Vec<u8> {
@@ -154,5 +182,28 @@ mod tests {
             "a\u{fffd}b"
         );
         assert_eq!(TextForm::Utf8String.decode(b"text\0".to_vec()), "text");
+    }
+
+    /// The decoded length is measured without decoding and matches what
+    /// decoding makes, ill-formed UTF-8 and ISO 8859-1's high half included.
+    #[test]
+    fn the_decoded_length_matches_the_decoded_text() {
+        let cases: [&[u8]; 6] = [
+            b"",
+            b"text\0",
+            b"a\xffb",
+            b"\xff\xfe\xfd",
+            b"\xe2\x82",
+            "\u{e9}t\u{e9}".as_bytes(),
+        ];
+        for bytes in cases {
+            for form in TextForm::OFFERED {
+                assert_eq!(
+                    form.decoded_len(bytes),
+                    form.decode(bytes.to_vec()).len(),
+                    "{form:?} {bytes:?}"
+                );
+            }
+        }
     }
 }
