@@ -58,6 +58,7 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::panic::PanicRecovery;
 
 use flui_rendering::{
+    RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -128,6 +129,16 @@ impl RenderAnimatedOpacity {
     #[must_use]
     pub fn always_include_semantics(&self) -> bool {
         self.always_include_semantics
+    }
+
+    /// Sets whether child semantics are included regardless of alpha; a change
+    /// republishes semantics.
+    pub fn set_always_include_semantics(&mut self, value: bool) -> RenderUpdateImpact {
+        if self.always_include_semantics == value {
+            return RenderUpdateImpact::NONE;
+        }
+        self.always_include_semantics = value;
+        RenderUpdateImpact::SEMANTICS
     }
 
     /// Publishes a changed alpha and admits its required phases together.

@@ -187,7 +187,14 @@ pub mod interaction {
     pub use flui_interaction::PointerId;
     pub use flui_interaction::PointerKind;
     pub use flui_interaction::PointerKindSet;
+    pub use flui_interaction::PrimaryClaim;
+    pub use flui_interaction::PrimaryClaimId;
+    pub use flui_interaction::PrimaryClaims;
     pub use flui_interaction::PrimaryContact;
+    pub use flui_interaction::PrimarySelectionBackend;
+    pub use flui_interaction::PrimarySelectionCapability;
+    pub use flui_interaction::PrimarySelectionHandle;
+    pub use flui_interaction::SelectionText;
     pub use flui_interaction::SwipeDetails;
     pub use flui_interaction::SwipeGestureRecognizer;
     pub use flui_interaction::SwipeStart;

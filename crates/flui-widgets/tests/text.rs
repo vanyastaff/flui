@@ -38,10 +38,11 @@ pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {
                 None => icon,
             };
             IconTheme::new(
-                IconThemeData {
-                    size: theme_size,
-                    apply_text_scaling: scaling,
-                    ..IconThemeData::default()
+                {
+                    let mut theme = IconThemeData::default();
+                    theme.size = theme_size;
+                    theme.apply_text_scaling = scaling;
+                    theme
                 },
                 crate::media_query_fields::StaticChild {
                     inner: icon.boxed(),

@@ -338,11 +338,9 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
         });
 
         let icon = IconTheme::new(
-            IconThemeData {
-                color: Some(foreground_color),
-                size: Some(FAB_ICON_SIZE),
-                ..IconThemeData::default()
-            },
+            IconThemeData::default()
+                .color(foreground_color)
+                .size(FAB_ICON_SIZE),
             view.child.clone(),
         );
 

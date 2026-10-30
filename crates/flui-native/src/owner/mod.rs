@@ -73,6 +73,8 @@ pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test))]
+pub(crate) mod frame_demand;
 pub mod handlers;
 pub(crate) mod headless;
 #[cfg(any(wayland_host, x11_host, test))]

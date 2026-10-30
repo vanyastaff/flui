@@ -1107,6 +1107,83 @@ impl ExitWatchdog {
     }
 }
 
+/// Shut down and drop every hosted UI runtime, leaving an empty host in the
+/// slot. The first panic, the runtimes' destructors included, is kept in
+/// `first_panic`.
+#[cfg(not(target_arch = "wasm32"))]
+fn retire_installed_host(first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+    let displaced = APP_RUNTIME.with(|slot| {
+        std::mem::replace(
+            &mut slot.borrow_mut().installed_host,
+            super::InstalledHost::new(),
+        )
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        displaced.shutdown();
+    }))
+    .err();
+    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
+    preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+}
+
+/// Whether a hosted UI runtime is checked out: its code is on the stack.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn any_runtime_checked_out() -> bool {
+    APP_RUNTIME.with(|slot| {
+        let Ok(state) = slot.try_borrow() else {
+            return true;
+        };
+        let logical = state.installed_host.logical();
+        logical.runtime_ids().is_ok_and(|ids| {
+            ids.into_iter().any(|id| {
+                logical
+                    .runtime_status(id)
+                    .is_ok_and(|status| status.checked_out)
+            })
+        })
+    })
+}
+
+/// The session end's teardown and release (ADR-0260 §5, §6): with
+/// `tear_down`, every UI runtime is shut down and dropped, which runs the
+/// application's destructors; then the services are cancelled and the pools
+/// shut down, neither waited for. A panic is held as the exit's terminal
+/// failure (ADR-0258 §2); the steps after it still run. The loop's exit then
+/// finds an empty host.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn end_session_teardown(tear_down: bool) {
+    let mut first_panic = None;
+    if tear_down {
+        retire_installed_host(&mut first_panic);
+    }
+    // Each step has its own containment, as at the loop's exit: a failed
+    // service shutdown still closes execution admission and the pools before
+    // the platform may end the process.
+    let now = std::time::Instant::now();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            if let Ok(mut state) = slot.try_borrow_mut() {
+                drop(state.shutdown_lifecycles(now));
+            }
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end service shutdown");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            if let Ok(mut state) = slot.try_borrow_mut() {
+                state.shutdown_execution(now);
+            }
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end execution shutdown");
+    if let Some(payload) = first_panic {
+        super::terminal::hold_terminal(payload, "session end");
+    }
+}
+
 /// One step of the loop's exit teardown, in the order it runs.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1161,17 +1238,9 @@ pub(super) fn teardown_platform_ui_runtime() {
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
-    let displaced = APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_thread = None;
-        std::mem::replace(&mut state.installed_host, super::InstalledHost::new())
-    });
-    let mut first_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        displaced.shutdown();
-    }))
-    .err();
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "installed host retirement");
+    APP_RUNTIME.with(|slot| slot.borrow_mut().owner_thread = None);
+    let mut first_panic = None;
+    retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);
 
     // The framework's part of the exit runs against one deadline taken

@@ -8,6 +8,7 @@ mod animated_icon_data;
 mod icon;
 mod icon_data;
 mod icon_theme_data;
+mod symbol_effect;
 
 pub use animated_icon::{AnimatedIcon, AnimatedIconState};
 pub use animated_icon_data::{
@@ -16,3 +17,6 @@ pub use animated_icon_data::{
 pub use icon::Icon;
 pub use icon_data::IconData;
 pub use icon_theme_data::{IconTheme, IconThemeData};
+pub use symbol_effect::{
+    DiscreteEffect, IndefiniteEffect, PathEffect, RotateEffect, Speed, SymbolEffect,
+};

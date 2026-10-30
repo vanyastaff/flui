@@ -33,9 +33,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
-use super::frame_pacing::{
-    BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
-};
+use super::frame_pacing::{FallbackGate, WakeAction, frame_is_dirty, wake_action};
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
     with_owner_platform,
@@ -571,9 +569,10 @@ impl IosFrameDriver {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
                 // Frames disabled: service owner commands, async tasks, and
-                // input deadlines, then pace a self-re-arming task.
+                // input deadlines. A task that asks for another wake is paced
+                // by the display link, which ticks at most once per refresh and
+                // not at all while backgrounded (ADR-0268).
                 ui_runtime.pump_background();
-                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
                 return;
             }
             WakeAction::Render => {}

@@ -123,9 +123,12 @@ mod measured {
         TranslationFraction as _,
     };
     // The capability seam a package declares, provides and acquires with
-    // (ADR-0152), and the clipboard, its first capability.
+    // (ADR-0152), the clipboard, its first capability, and the primary
+    // selection.
     use flui_sdk::interaction::{
-        ClipboardBackend as _, ClipboardCapability as _, ClipboardHandle as _,
+        ClipboardBackend as _, ClipboardCapability as _, ClipboardHandle as _, PrimaryClaim as _,
+        PrimaryClaimId as _, PrimaryClaims as _, PrimarySelectionBackend as _,
+        PrimarySelectionCapability as _, PrimarySelectionHandle as _, SelectionText as _,
     };
     use flui_sdk::platform::capability::{
         Abandoned as _, Capability as _, CapabilityProvider as _, CapabilityRegistrar as _,
@@ -257,12 +260,20 @@ mod measured {
         DropCommands as _, DropHover as _, DropTarget as _, PasteTextIntent as _,
     };
     use flui_sdk::widgets::{
+        DiscreteEffect as _, IndefiniteEffect as _, PathEffect as _, RotateEffect as _, Speed as _,
+        SymbolEffect as _,
+    };
+    use flui_sdk::widgets::{
         DismissDirection as _, DismissSide as _, DismissSideCallback as _, DismissThreshold as _,
         DismissThresholdError as _, DismissUpdateCallback as _, DismissUpdateDetails as _,
         Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,
         SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
     };
     use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
+    use flui_sdk::widgets::{
+        PageIndicator as _, PageIndicatorState as _, PageIndicatorStyle as _,
+        PageIndicatorStyleError as _,
+    };
     use flui_sdk::{
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
@@ -495,7 +506,14 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::PointerId;",
         "pub use flui_interaction::PointerKind;",
         "pub use flui_interaction::PointerKindSet;",
+        "pub use flui_interaction::PrimaryClaim;",
+        "pub use flui_interaction::PrimaryClaimId;",
+        "pub use flui_interaction::PrimaryClaims;",
         "pub use flui_interaction::PrimaryContact;",
+        "pub use flui_interaction::PrimarySelectionBackend;",
+        "pub use flui_interaction::PrimarySelectionCapability;",
+        "pub use flui_interaction::PrimarySelectionHandle;",
+        "pub use flui_interaction::SelectionText;",
         "pub use flui_interaction::SwipeDetails;",
         "pub use flui_interaction::SwipeGestureRecognizer;",
         "pub use flui_interaction::SwipeStart;",

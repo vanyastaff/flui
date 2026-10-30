@@ -248,11 +248,9 @@ impl StatelessView for IconButton {
         .unwrap_or(Color::TRANSPARENT);
 
         let themed_icon = IconTheme::new(
-            IconThemeData {
-                color: Some(icon_color),
-                size: Some(ICON_BUTTON_ICON_SIZE),
-                ..IconThemeData::default()
-            },
+            IconThemeData::default()
+                .color(icon_color)
+                .size(ICON_BUTTON_ICON_SIZE),
             self.icon.clone(),
         );
 

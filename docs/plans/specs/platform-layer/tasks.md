@@ -3608,6 +3608,36 @@ graph LR
   рисует пером с нажимом (`a_pen_plugged_in_mid_batch_draws_as_a_pen`), одно изменение — по запросу
   на каждое названное устройство (`a_hierarchy_change_asks_only_for_what_it_names`);
   `XIDeviceChanged` берёт классы из события без запроса (`a_device_change_brings_its_own_classes`).
+- [ ] **LY80** (не закрыта: из трёх PR — clipboard, IME через `text-input-v3`, drag and drop —
+  этот — первый; primary selection — отдельная возможность `PrimarySelection` на шве, решение
+  координатора 2026-10-30, после него) — ветка `platform/wayland-clipboard` от `main` @
+  `4c78404`. **Clipboard.** Позиция clipboard таблицы `Wayland` — `WaylandLoop`; цикл держит
+  clipboard через хук `owner::linux::wayland::WaylandClipboard`, который заполняет таблица
+  (`WaylandHost::clipboard` → `clipboard::linux::wayland::SeatClipboard`). Цикл предлагает
+  каждый глобал и вводу, и clipboard (`WaylandState::offer_global`); clipboard связывает
+  `wl_data_device_manager` (до v3) и держит data device на каждом сидении, которое держит ввод:
+  `WaylandInput::seats` отдаёт прокси сидений, цикл передаёт их `WaylandClipboard::seats` в
+  `try_new` (первое окно открывается до первого хода, а выделение сидения приходит только
+  устройству, которое существует к входу клавиатуры) и на каждом ходу. Выделение сидения —
+  последний offer из `selection`; offer перетаскивания (`enter`) отпускается на `leave`/`drop`,
+  DnD у хоста пока нет. **Чтение:** пока выделением владеет приложение, ответ — его текст сразу
+  (спросить композитор значило бы владельцу и писать, и ждать в один pipe); иначе offer сидения
+  последнего ввода (или первого сидения с выделением) получает `receive` в форме
+  `TextForm::preferred`, pipe читает своя нить с пределом 5 с и 64 МиБ и отвечает resolver'у.
+  **Запись:** data source предлагает все формы `TextForm::OFFERED` и ставится выделением
+  сидения последнего ввода под его serial; каждый `send` пишет своя нить (неблокирующий pipe,
+  тот же предел), `cancelled` снимает владение. Без пользовательского ввода текст держится в
+  процессе и отвечает чтению, пока не придёт чужое выделение. Формы текста —
+  `clipboard::linux::text` (чистый, общий с будущим X11: `text/plain;charset=utf-8`,
+  `UTF8_STRING`, `text/plain`, `STRING` как ISO 8859-1). `rustix` получает фичу `pipe`.
+  **Тесты** (откат проверен): `the_selection_crosses_between_clients` (`tests/wayland_clipboard.rs`,
+  своя обвязка: Xvfb, Weston 13 на X11-бэкенде с kiosk-shell, два клиента на двух нитях —
+  первый пишет и читает своё, второй при фокусе читает текст первого через композитор и пишет
+  свой, первый после возврата фокуса читает текст второго; с чтением, не спрашивающим offer,
+  падает), `a_reader_asks_for_utf8_first`, `text_round_trips_through_each_form`,
+  `a_selection_crosses_the_pipe_whole`, `a_transfer_ends_at_its_deadline_or_its_peer`.
+  `docs/platform-parity.md` (заметка, колонка Wayland остаётся winit) и `docs/gaps.md`
+  (записи 5 и 6) обновлены.
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук

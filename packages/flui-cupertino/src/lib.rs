@@ -10,7 +10,7 @@
 //! [`CupertinoButton`],
 //! [`cupertino_page_route`] (the iOS slide-in page transition with
 //! edge-swipe-back), [`CupertinoNavigationBar`], [`CupertinoPageScaffold`],
-//! and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
+//! [`CupertinoPageControl`], and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
 //! state-retaining tabbed root layout).
 //!
 //! ## Design spec
@@ -85,6 +85,7 @@ pub mod bottom_tab_bar;
 pub mod button;
 pub mod colors;
 pub mod nav_bar;
+pub mod page_control;
 pub mod page_scaffold;
 pub mod route;
 pub mod tab_scaffold;
@@ -97,6 +98,7 @@ pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 pub use nav_bar::CupertinoNavigationBar;
+pub use page_control::CupertinoPageControl;
 pub use page_scaffold::CupertinoPageScaffold;
 pub use route::cupertino_page_route;
 pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
