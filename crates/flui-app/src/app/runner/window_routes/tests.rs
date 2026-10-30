@@ -108,7 +108,9 @@ fn a_close_heard_early_runs_its_route() {
 }
 
 /// A route that sets its successor from inside its call is replaced; one that
-/// panics stays, so the next call still reaches the presentation.
+/// panics stays, so the next call still reaches the presentation. The panic
+/// does not leave the method: the first is held as the loop's terminal
+/// failure.
 fn a_route_survives_its_panic_and_yields_to_its_successor() {
     let routes = WindowRoutes::new();
     let calls = Rc::new(Cell::new(0));
@@ -117,14 +119,14 @@ fn a_route_survives_its_panic_and_yields_to_its_successor() {
         count.set(count.get() + 1);
         panic!("the route fails");
     });
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        routes.surface_changed(SurfaceChange::Release);
-    }));
-    assert!(failed.is_err());
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        routes.surface_changed(SurfaceChange::Rebuild);
-    }));
+    routes.surface_changed(SurfaceChange::Release);
+    routes.surface_changed(SurfaceChange::Rebuild);
     assert_eq!(calls.get(), 2, "the panicking route was lost");
+    let held = super::super::terminal::take_terminal().expect("the route's panic is held");
+    assert_eq!(
+        flui_foundation::panic::payload_text(held.as_ref()),
+        Some("the route fails")
+    );
 
     let successor = Rc::new(Cell::new(false));
     let reached = Rc::clone(&successor);
@@ -182,6 +184,21 @@ fn a_close_request_before_its_route_is_asked_once() {
     }
 }
 
+/// A frame route that panics answers `Failed`, so the platform keeps what
+/// waited on the frame owed; the panic is not the loop's terminal failure.
+fn a_failed_frame_is_answered_and_not_terminal() {
+    let routes = WindowRoutes::new();
+    routes.route_frame_requested(|_| panic!("the frame fails"));
+    assert_eq!(
+        routes.frame_requested(FrameRequest::new(EventTime::from_nanos(1))),
+        FrameOutcome::Failed
+    );
+    assert!(
+        super::super::terminal::take_terminal().is_none(),
+        "a failed frame ended the loop"
+    );
+}
+
 #[test]
 fn window_routes_contract() {
     let rows: &[(&str, fn())] = &[
@@ -204,6 +221,10 @@ fn window_routes_contract() {
         (
             "a route survives its panic and yields to its successor",
             a_route_survives_its_panic_and_yields_to_its_successor,
+        ),
+        (
+            "a failed frame is answered and not terminal",
+            a_failed_frame_is_answered_and_not_terminal,
         ),
     ];
     let failed: Vec<_> = rows

@@ -524,10 +524,19 @@ mod tests {
             }));
         }));
 
-        assert!(unwind.is_err(), "on_ready's panic must propagate");
+        assert!(
+            unwind.is_ok(),
+            "on_ready's panic left the platform handler instead of being held"
+        );
+        let held =
+            super::terminal::take_terminal().expect("on_ready's panic is the terminal failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(held.as_ref()),
+            Some("exercise on_ready panic cleanup")
+        );
         assert!(
             with_owner_platform(|_| ()).is_none(),
-            "a panic inside on_ready must still unwind through the clear guard \
+            "a panic inside on_ready must still leave the run through the clear guard \
              (armed before Platform::run, not inside on_ready) rather than \
              leaking the host onto this thread"
         );

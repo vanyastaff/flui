@@ -54,3 +54,28 @@ pub(super) fn contain_terminal(during: &'static str, body: impl FnOnce()) {
         hold_terminal(payload, during);
     }
 }
+
+/// Run `body`, a platform handler's whole method (ADR-0258 §4): a panic that
+/// leaves it is held as the loop's terminal failure, the loop is asked to
+/// quit, and the method answers `failed` instead of unwinding into the
+/// platform.
+pub(super) fn contained<R>(failed: R, during: &'static str, body: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(answer) => answer,
+        Err(payload) => {
+            hold_terminal(payload, during);
+            request_terminal_quit();
+            failed
+        }
+    }
+}
+
+/// Ask the loop to end after a terminal failure, as a program quit does.
+fn request_terminal_quit() {
+    let quit = std::panic::catch_unwind(|| {
+        let _ = super::host::with_owner_platform(flui_native::OwnerPlatform::quit);
+    });
+    if let Err(payload) = quit {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}

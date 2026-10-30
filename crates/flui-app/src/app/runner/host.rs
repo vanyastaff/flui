@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use super::terminal::contained;
 use crate::app::runtime::{AppRuntime, ExitPolicy};
 
 /// A fresh clone of the loop-scoped platform wake capability — see
@@ -789,32 +790,42 @@ impl RunnerHandler {
     }
 }
 
+// Every method's whole body runs under one catch, as `WindowRoutes`' do
+// (ADR-0258 §4).
 impl flui_native::AppHandler for RunnerHandler {
     fn ready(&self, owner: flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError> {
-        let bootstrap = self
-            .bootstrap
-            .borrow_mut()
-            .take()
-            .expect("BUG: a platform runs its bootstrap once");
-        // From here the `route_*` functions reach this run's routes.
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .run_routes
-                .push(Rc::downgrade(&self.routes));
-        });
-        bootstrap(owner)
+        // A bootstrap that panicked quits the loop it started; the exit
+        // resumes the panic.
+        contained(Ok(()), "application bootstrap", || {
+            let bootstrap = self
+                .bootstrap
+                .borrow_mut()
+                .take()
+                .expect("BUG: a platform runs its bootstrap once");
+            // From here the `route_*` functions reach this run's routes.
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut()
+                    .run_routes
+                    .push(Rc::downgrade(&self.routes));
+            });
+            bootstrap(owner)
+        })
     }
 
     fn quit_requested(&self, _: &flui_native::OwnerPlatform) {
-        if let Some(quit) = self.route(|routes| routes.quit.clone()) {
-            quit();
-        }
+        contained((), "application quit", || {
+            if let Some(quit) = self.route(|routes| routes.quit.clone()) {
+                quit();
+            }
+        });
     }
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {
-        if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
-            reopen();
-        }
+        contained((), "application reopen", || {
+            if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
+                reopen();
+            }
+        });
     }
 
     fn session_end(
@@ -822,26 +833,37 @@ impl flui_native::AppHandler for RunnerHandler {
         _: &flui_native::OwnerPlatform,
         phase: flui_platform::SessionEndPhase,
     ) -> flui_platform::SessionEndAnswer {
-        answer_session_end(phase)
+        contained(
+            flui_platform::SessionEndAnswer::Proceed,
+            "session end",
+            || answer_session_end(phase),
+        )
     }
 
     fn host_notice(&self, _: &flui_native::OwnerPlatform, notice: flui_platform::SystemNotice) {
         // System notices (ADR-0237): every UI runtime's subscribers receive
         // them from the owner thread.
-        super::owner_dispatch::deliver_host_notice(&notice.into());
+        contained((), "host notice", || {
+            super::owner_dispatch::deliver_host_notice(&notice.into());
+        });
     }
 
     fn exit_policy(&self, _: &flui_native::OwnerPlatform) -> flui_native::ExitAnswer {
-        match self.route(|routes| routes.exit_policy.clone()) {
-            Some(exit) if exit() => flui_native::ExitAnswer::End,
-            Some(_) => flui_native::ExitAnswer::KeepRunning,
-            None => flui_native::ExitAnswer::HostDecides,
-        }
+        // A failure here quits the loop anyway.
+        contained(flui_native::ExitAnswer::End, "exit policy", || {
+            match self.route(|routes| routes.exit_policy.clone()) {
+                Some(exit) if exit() => flui_native::ExitAnswer::End,
+                Some(_) => flui_native::ExitAnswer::KeepRunning,
+                None => flui_native::ExitAnswer::HostDecides,
+            }
+        })
     }
 
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
-        self.route(|routes| routes.wake_deadline.clone())
-            .and_then(|deadline| deadline())
+        contained(None, "wake deadline", || {
+            self.route(|routes| routes.wake_deadline.clone())
+                .and_then(|deadline| deadline())
+        })
     }
 }
 
