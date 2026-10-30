@@ -221,7 +221,7 @@ pub struct ElementOwner<'a> {
     pub(crate) lifecycle_panic_handoff: &'a Cell<LifecyclePanicHandoff>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
-    /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
+    /// (the [`Self::frame_wake`] field above carries the `&dyn Fn` view used
     /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a
     /// listener tick can request a frame from outside the build.
     pub(crate) external_request_frame: Option<&'a Arc<dyn Fn() + Send + Sync>>,
