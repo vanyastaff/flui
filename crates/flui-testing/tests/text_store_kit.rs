@@ -7,10 +7,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
+use flui_interaction::testing::InMemoryTextStore;
 use flui_platform::text_store::{
-    CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
-    RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,

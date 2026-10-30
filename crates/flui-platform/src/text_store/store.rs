@@ -14,7 +14,7 @@ use super::session::{TextChange, TextStoreStatus};
 /// grant receives. Owner-thread only: stores are shared as
 /// `Rc<dyn TextStore>` and are not `Send`.
 ///
-/// An implementation embeds a [`LockArbiter`](super::LockArbiter) so every
+/// An implementation embeds a `flui_interaction::text_input::LockArbiter` so every
 /// store follows the same lock rules, hands it the gate
 /// [`Self::set_commit_gate`] receives, and passes the conformance kit in
 /// `flui_testing::text_store_kit`.
@@ -23,7 +23,7 @@ pub trait TextStore {
     fn status(&self) -> TextStoreStatus;
 
     /// Run `grant` now, queue it, or refuse it — see
-    /// [`LockArbiter`](super::LockArbiter) for the rules.
+    /// `flui_interaction::text_input::LockArbiter` for the rules.
     ///
     /// # Errors
     ///
@@ -47,7 +47,7 @@ pub trait TextStore {
     /// The owner that attaches the store installs its presentation's gate
     /// here, so a store has no transaction flag of its own; an
     /// implementation passes `gate` to its arbiter's
-    /// [`LockArbiter::set_gate`](super::LockArbiter::set_gate). One that
+    /// `LockArbiter::set_gate`. One that
     /// ignores it commits mid-frame, and fails the conformance kit's
     /// transaction cases.
     fn set_commit_gate(&self, gate: CommitGate);
