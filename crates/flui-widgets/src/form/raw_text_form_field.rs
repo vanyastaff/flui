@@ -99,6 +99,14 @@ impl RawTextFormField {
         self
     }
 
+    /// Whether the input takes the focus when it mounts (default `false`);
+    /// see [`EditableText::autofocus`](crate::EditableText::autofocus).
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.config.autofocus = autofocus;
+        self
+    }
+
     /// When the field validates on its own.
     #[must_use]
     pub fn autovalidate_mode(mut self, mode: AutovalidateMode) -> Self {
@@ -190,6 +198,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
                 .obscure_text(input.obscure_text)
                 .input_purpose(input.input_purpose)
                 .enabled(input.enabled)
+                .autofocus(input.autofocus)
                 .invalid(error.is_some())
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {

@@ -369,6 +369,10 @@ fn text_input_contracts() {
             text_field::replacing_and_unmounting_the_field_withdraws_its_node_subscription,
         ),
         (
+            "text_field::an autofocus field takes the focus on mount",
+            text_field::an_autofocus_field_takes_the_focus_on_mount,
+        ),
+        (
             "text_form_field::validator error reaches the input decorator error line",
             text_form_field::validator_error_reaches_the_input_decorator_error_line,
         ),

@@ -386,6 +386,8 @@ pub struct EditableText {
     /// [`enabled`](Self::enabled)'s doc comment for exactly what it
     /// withholds.
     pub(super) enabled: bool,
+    /// Take the focus on mount; see [`autofocus`](Self::autofocus).
+    pub(super) autofocus: bool,
     /// Style applied to the field's [`TextSpan`], flowing through
     /// [`TextSpan::with_style`]. `None` renders with the span's own default.
     pub(super) text_style: Option<TextStyle>,
@@ -449,6 +451,7 @@ impl EditableText {
             // until a caller (a decorated `TextField`, a theme) chooses one.
             selection_color: Color::TRANSPARENT,
             enabled: true,
+            autofocus: false,
             text_style: None,
             obscure_text: false,
             input_purpose: TextInputPurpose::Text,
@@ -598,6 +601,17 @@ impl EditableText {
         self
     }
 
+    /// Take the focus when the field mounts, or when this turns `true`
+    /// later, as [`Focus::autofocus`](crate::Focus::autofocus) does: once,
+    /// and only while its scope has nothing focused yet or holds only the
+    /// route's provisional first focus. A focus restored on pop is not
+    /// replaced.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
+        self
+    }
+
     /// Apply `style` to the field's rendered [`TextSpan`] via
     /// [`TextSpan::with_style`].
     #[must_use]
@@ -674,6 +688,7 @@ impl std::fmt::Debug for EditableText {
             .field("caret_color", &self.caret_color)
             .field("selection_color", &self.selection_color)
             .field("enabled", &self.enabled)
+            .field("autofocus", &self.autofocus)
             .field("text_style", &self.text_style)
             .field("obscure_text", &self.obscure_text)
             .field("input_purpose", &self.input_purpose)
@@ -839,6 +854,10 @@ pub struct EditableTextState {
     action_chain: Option<ActionChain>,
     /// Generation-checked ownership of that record on the node.
     action_chain_registration: Option<FocusNodeRegistration>,
+    /// The latest view's `autofocus`.
+    autofocus: bool,
+    /// Whether the one autofocus request was made; it is never repeated.
+    did_autofocus: bool,
     /// Acquired first in `init_state`: `on_changed` and `on_submitted` run
     /// inside a write it opens (ADR-0086). `None` only before `init_state`.
     writer: Option<WriterSource>,
@@ -894,6 +913,8 @@ impl StatefulView for EditableText {
             enclosing_action_chain: None,
             action_chain: None,
             action_chain_registration: None,
+            autofocus: self.autofocus,
+            did_autofocus: false,
         }
     }
 }
@@ -1148,6 +1169,21 @@ impl EditableTextState {
         self.focus_manager.as_ref().expect(
             "BUG: EditableText lifecycle used before init_state installed its focus manager",
         )
+    }
+
+    /// The one autofocus request, made the first time `autofocus` is (or
+    /// becomes) `true` once the node is attached; the latch is set before
+    /// the request runs, so a panicking focus listener does not repeat it.
+    fn try_autofocus(&mut self) {
+        if self.did_autofocus || !self.autofocus {
+            return;
+        }
+        self.did_autofocus = true;
+        crate::interaction::focus::request_autofocus(
+            self.parent.as_ref(),
+            self.manager(),
+            &self.focus_node,
+        );
     }
 
     /// The writer source `on_changed` and `on_submitted` run inside.
@@ -1804,6 +1840,7 @@ impl ViewState<EditableText> for EditableTextState {
             .expect("BUG: EditableText could not attach its explicit focus node");
         let previous = self.focus_attachment.replace(Some(Rc::new(attachment)));
         drop(previous);
+        self.try_autofocus();
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
@@ -1985,6 +2022,9 @@ impl ViewState<EditableText> for EditableTextState {
         // call alone covers the unfocus — no separate `has_primary_focus` check needed.
         //
         calls.run(|| self.focus_node.set_can_request_focus(new_view.enabled));
+        // Last, behind every other change: the request runs focus listeners.
+        self.autofocus = new_view.autofocus;
+        calls.run(|| self.try_autofocus());
         calls.resume();
     }
 
@@ -2386,10 +2426,13 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// # DEFERRED
 ///
 /// Alt+Left/Right/Backspace as a line-boundary intent on non-Apple
-/// platforms (extend-selection-to-line-break and delete-to-line-break). Left unhandled (falls through to a plain
-/// per-character move) rather than silently reinterpreted as word-jump,
-/// so a later line-boundary implementation is not fighting an existing,
-/// wrong meaning for the chord.
+/// platforms (extend-selection-to-line-break and delete-to-line-break). Not
+/// reinterpreted as word-jump, so a later line-boundary implementation is not
+/// fighting an existing, wrong meaning for the chord. Meanwhile Alt+Left and
+/// Alt+Right without Shift are returned unhandled ([`is_reserved_alt_arrow`]),
+/// so Alt+Left reaches the route's Back binding; with Shift they extend by a
+/// character, and Alt+Backspace deletes one. The line-boundary change decides
+/// on which platforms it takes the chord back from Back.
 ///
 /// This receives the same command projection as character handling, so explicit
 /// AltGraph's Control/Alt aliases cannot request word movement or deletion.
@@ -2413,6 +2456,17 @@ fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool
     [Modifiers::CONTROL, Modifiers::ALT, Modifiers::META]
         .into_iter()
         .all(|modifier| modifiers.contains(modifier) == required.contains(modifier))
+}
+
+/// Whether an arrow chord is left to the enclosing route: exactly Alt, no
+/// Shift, outside Apple. See [`is_word_jump_modifier`]'s `# DEFERRED`.
+#[inline]
+fn is_reserved_alt_arrow(modifiers: Modifiers, platform: TargetPlatform) -> bool {
+    !matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS)
+        && modifiers.contains(Modifiers::ALT)
+        && [Modifiers::SHIFT, Modifiers::CONTROL, Modifiers::META]
+            .into_iter()
+            .all(|modifier| !modifiers.contains(modifier))
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -2502,6 +2556,14 @@ fn build_key_handler(
                     controller.delete_forward();
                 }
                 KeyEventResult::Handled
+            }
+            // Outside Apple, Alt+Left and Alt+Right are no field motion while
+            // the line-boundary intent they are reserved for is absent: the
+            // key goes on, and Alt+Left reaches the route's `BackIntent`.
+            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight)
+                if is_reserved_alt_arrow(modifiers, platform) =>
+            {
+                KeyEventResult::Ignored
             }
             // Shift is the difference between MOVING the caret and EXTENDING
             // the selection, and the two are not the same operation with a

@@ -40,6 +40,8 @@ pub struct TextFormFieldConfig {
     pub on_reset: Option<EventCallback>,
     /// Whether the field accepts input and autovalidates.
     pub enabled: bool,
+    /// Whether the input takes the focus when it mounts.
+    pub autofocus: bool,
     /// When the field validates on its own.
     pub autovalidate_mode: AutovalidateMode,
     /// Shown as the error, whatever the validator says.
@@ -88,6 +90,7 @@ impl TextFormFieldConfig {
             on_saved: None,
             on_reset: None,
             enabled: true,
+            autofocus: false,
             autovalidate_mode: AutovalidateMode::Disabled,
             force_error_text: None,
             obscure_text: false,
@@ -109,6 +112,8 @@ pub struct TextFormFieldInput {
     pub field: FormFieldHandle<String>,
     /// Whether the input accepts input.
     pub enabled: bool,
+    /// Whether the input takes the focus when it mounts.
+    pub autofocus: bool,
     /// Whether every character shows as a bullet.
     pub obscure_text: bool,
     /// What the field is for.
@@ -205,6 +210,7 @@ impl TextFormFieldCore {
     ) -> FormField<String> {
         let controller = self.controller.clone();
         let enabled = config.enabled;
+        let autofocus = config.autofocus;
         let obscure_text = config.obscure_text;
         let input_purpose = config.input_purpose;
         let focus_node = config.focus_node.clone();
@@ -216,6 +222,7 @@ impl TextFormFieldCore {
                 controller: controller.clone(),
                 field: field.clone(),
                 enabled,
+                autofocus,
                 obscure_text,
                 input_purpose,
                 focus_node: focus_node.clone(),
