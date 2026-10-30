@@ -1,0 +1,8 @@
+{"flui_native_recording":1,"backend":"headless","stream":"app","provenance":"hand-written: each app row once, a memory pressure and a cancelled session end among them","devices":[]}
+{"row":"notice","notice":"sleep"}
+{"row":"notice","notice":"wake"}
+{"row":"notice","notice":{"memory_pressure":"critical"}}
+{"row":"session_end","phase":"query"}
+{"row":"session_end","phase":"cancelled"}
+{"row":"reopen"}
+{"row":"notice","notice":"session_locked"}

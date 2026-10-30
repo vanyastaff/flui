@@ -581,6 +581,9 @@ impl LifecycleContext for ElementBuildContext {
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.reads.graph().clone())
     }
+    fn build_phase(&self) -> flui_foundation::BuildPhase {
+        self.reads.graph().build_phase()
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.owner.read().async_driver().cloned()
     }
@@ -1029,6 +1032,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.capabilities.reads.graph().clone())
+    }
+    fn build_phase(&self) -> flui_foundation::BuildPhase {
+        self.capabilities.reads.graph().build_phase()
     }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.capabilities.async_driver.clone()

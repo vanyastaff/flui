@@ -360,7 +360,10 @@ impl HeaderModel {
     fn coast(&self, velocity: f64) {
         let snap = self.snap.borrow().clone();
         if let Some(snap) = snap {
-            let target = snap_target(snap.as_ref(), &self.metrics(), velocity);
+            let target = {
+                let metrics = self.metrics();
+                snap_target(snap.as_ref(), &metrics, velocity, metrics.pixels)
+            };
             self.settle_to(target, velocity);
             return;
         }
@@ -377,7 +380,7 @@ impl HeaderModel {
     }
 
     fn run(&self, simulation: impl flui_animation::Simulation + 'static) {
-        self.settle.set_value(self.offset.get());
+        let _ = self.settle.set_value(self.offset.get());
         if self.settle.animate_with(simulation).is_err() {
             tracing::warn!("CollapsingHeader could not start its settle");
         }
@@ -405,7 +408,10 @@ impl HeaderModel {
             .get()
             .filter(|(id, _)| *id == sequence)
             .map_or(0.0, |(_, velocity)| velocity);
-        let target = snap_target(snap.as_ref(), &self.metrics(), velocity);
+        let target = {
+            let metrics = self.metrics();
+            snap_target(snap.as_ref(), &metrics, velocity, metrics.pixels)
+        };
         self.settle_to(target, velocity);
     }
 }

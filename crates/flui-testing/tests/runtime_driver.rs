@@ -366,7 +366,8 @@ fn the_harness_makes_progress_after_a_contained_failure() {
     let painted = laid.painted_frame_count();
 
     armed.store(false, Ordering::SeqCst);
-    laid.tick();
+    // The host wakes for the retry when the dropped frame's backoff ends.
+    laid.pump_for(flui_runtime::frame_failure::FAILURE_RETRY_CAP);
 
     assert!(laid.did_paint_last_frame(), "the retried frame paints");
     assert_eq!(laid.painted_frame_count(), painted + 1);
@@ -404,7 +405,7 @@ fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic()
     );
     let painted = laid.painted_frame_count();
     armed.store(false, Ordering::SeqCst);
-    laid.tick();
+    laid.pump_for(flui_runtime::frame_failure::FAILURE_RETRY_CAP);
     assert!(
         laid.did_paint_last_frame(),
         "repair presents after both failures"

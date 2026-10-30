@@ -870,7 +870,9 @@ fn build_tab_cell(
             // A panicking position observer must not skip the caller's
             // callback: both run, then the first failure resumes.
             let mut recovery = PanicRecovery::new();
-            recovery.run(|| tap_controller.animate_to(index));
+            recovery.run(|| {
+                let _ = tap_controller.animate_to(index);
+            });
             if let Some(callback) = &tap_callback {
                 recovery.run(|| callback(cx, index));
             }

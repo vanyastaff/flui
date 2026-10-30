@@ -605,7 +605,7 @@ impl DrawerControllerCore {
             return;
         }
         let new_value = self.controller.value() + primary_delta / width * self.direction_factor();
-        self.controller.set_value(new_value);
+        let _ = self.controller.set_value(new_value);
 
         let opened = self.controller.value() > 0.5;
         if opened != self.previously_opened.get() {
@@ -706,7 +706,7 @@ impl StatefulView for DrawerController {
             .debug_label("Drawer.settle")
             .build_on(None);
         if self.is_open {
-            controller.controller().set_value(1.0);
+            let _ = controller.controller().set_value(1.0);
         }
         DrawerControllerState {
             writer: None,
@@ -758,7 +758,8 @@ impl ViewState<DrawerController> for DrawerControllerState {
             return;
         }
         if new_view.is_open != old_view.is_open {
-            self.core
+            let _ = self
+                .core
                 .controller
                 .set_value(if new_view.is_open { 1.0 } else { 0.0 });
         }

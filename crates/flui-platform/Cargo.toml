@@ -67,6 +67,8 @@ ignored-paths = ["tests/compile_fail/*.rs"]
 [features]
 default = []
 serde = ["dep:serde"]
+# The doubles of the contracts this crate owns, in `testing` (ADR-0243).
+testing = []
 
 # A browser page's entropy for `ProcessNonce::mint`: wasm32-unknown-unknown's
 # std has none, so `RandomState` alone mints the same nonce on every page.

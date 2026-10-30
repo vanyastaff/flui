@@ -228,7 +228,7 @@ mod tests {
         wakes.store(0, Ordering::SeqCst);
 
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
-        controller.set_value(0.9);
+        controller.set_value(0.9).expect("no build is running");
         let proxy = ProxyAnimation::new(Rc::new(controller) as Rc<dyn Animation<f64>>);
         let cell = SampleCell {
             generation: Cell::new(u64::MAX),

@@ -49,6 +49,8 @@ thiserror = { workspace = true }
 slab = { workspace = true }
 
 [dev-dependencies]
+# `flui_platform::testing::FakeHaptics`, the actuator the haptics tests record.
+flui-platform = { workspace = true, features = ["testing"] }
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate

@@ -75,7 +75,7 @@ impl Springing {
             list_at_the_top_of_a_springing_list(&outer, &inner, &middle, &top, handoff, &vsync),
             vsync,
         );
-        inner.jump_to(inner_at);
+        inner.jump_to(inner_at).expect("no build is running");
         laid.tick();
         Self {
             laid,
@@ -292,7 +292,7 @@ pub(crate) fn a_caught_ancestor_settles_at_release_with_the_latched_velocity() {
                 list_on_the_first_page_of_a_pager(&pager, &inner, &top, &vsync),
                 vsync,
             );
-            inner.jump_to(700.0);
+            inner.jump_to(700.0).expect("no build is running");
             laid.tick();
             top.take();
             let script = if flung {
@@ -348,7 +348,7 @@ pub(crate) fn a_caught_ancestor_settles_at_release_with_the_latched_velocity() {
             pager_over(&pager, &Probe::new(), pages.boxed(), &vsync),
             vsync,
         );
-        inner.jump_to(700.0);
+        inner.jump_to(700.0).expect("no build is running");
         laid.tick();
         let mut points = line(at(150.0, 250.0), at(150.0, 150.0), 10);
         points.extend(
@@ -422,7 +422,7 @@ pub(crate) fn a_caught_ancestor_settles_when_the_sequence_ends_without_release()
             list_on_the_first_page_of_a_pager(&pager, &inner, &top, &vsync),
             vsync.clone(),
         );
-        inner.jump_to(700.0);
+        inner.jump_to(700.0).expect("no build is running");
         laid.tick();
         top.take();
         let mut script = TouchScript::new("pull").down(1, at(150.0, 250.0));
@@ -547,7 +547,7 @@ pub(crate) fn a_caught_ancestor_retired_mid_drag_is_settled_by_its_successor() {
             list_on_the_first_page_of_a_pager(&pager, &inner, &Probe::new(), &vsync),
             vsync.clone(),
         );
-        inner.jump_to(700.0);
+        inner.jump_to(700.0).expect("no build is running");
         laid.tick();
         let script = slow(device, at(150.0, 280.0), at(150.0, 120.0));
         let (rebuilt_at, before, after) = (5, Cell::new(0.0), Cell::new(0.0));
@@ -595,7 +595,7 @@ pub(crate) fn a_panic_above_a_caught_ancestor_keeps_its_settle(device: Device) {
         list_on_the_first_page_of_a_pager(&pager, &inner, &top, &vsync),
         vsync,
     );
-    inner.jump_to(700.0);
+    inner.jump_to(700.0).expect("no build is running");
     laid.tick();
     let (steps, moved) = (Cell::new(0), pager.clone());
     top.set_pre(move |step| {
@@ -635,7 +635,7 @@ pub(crate) fn a_panic_above_a_caught_ancestor_keeps_its_settle(device: Device) {
         list_on_the_first_page_of_a_pager(&pager, &inner, &top, &vsync),
         vsync,
     );
-    inner.jump_to(700.0);
+    inner.jump_to(700.0).expect("no build is running");
     laid.tick();
     let (armed, moved) = (Rc::new(Cell::new(true)), pager.clone());
     let trigger = Rc::clone(&armed);

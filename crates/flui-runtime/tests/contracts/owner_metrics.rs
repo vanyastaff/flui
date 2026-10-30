@@ -3338,7 +3338,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
                 12.0,
             ),
         ] {
-            scroll.jump_to(0.0);
+            scroll.jump_to(0.0).expect("no build is running");
             owner
                 .update_preferences(
                     SystemPreferences::default()
@@ -3353,7 +3353,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
                 "{label}; authored gestures={authored_gestures}"
             );
         }
-        scroll.jump_to(0.0);
+        scroll.jump_to(0.0).expect("no build is running");
         owner
             .update_preferences(SystemPreferences::default(), &effects)
             .expect("unknown observation");

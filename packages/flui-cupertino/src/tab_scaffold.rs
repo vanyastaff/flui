@@ -49,7 +49,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_sdk::foundation::{
+    BuildPhase, ChangeNotifier, Listenable, ListenerCallback, ListenerId, MutatedDuringBuild,
+};
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
@@ -77,13 +79,16 @@ use crate::theme::CupertinoTheme;
 ///
 /// let controller = CupertinoTabController::new(0);
 /// assert_eq!(controller.index(), 0);
-/// controller.set_index(1);
+/// controller.set_index(1).expect("no build is running");
 /// assert_eq!(controller.index(), 1);
 /// ```
 #[derive(Clone)]
 pub struct CupertinoTabController {
     index: Rc<Cell<usize>>,
     notifier: ChangeNotifier,
+    /// The build phase of the scaffold that uses this controller, bound in
+    /// its `init_state` (ADR-0086 §7).
+    build_phase: Rc<RefCell<Option<BuildPhase>>>,
 }
 
 impl CupertinoTabController {
@@ -93,6 +98,7 @@ impl CupertinoTabController {
         Self {
             index: Rc::new(Cell::new(initial_index)),
             notifier: ChangeNotifier::new(),
+            build_phase: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -103,11 +109,27 @@ impl CupertinoTabController {
     }
 
     /// Selects `index`, notifying listeners if it actually changed.
-    pub fn set_index(&self, index: usize) {
+    ///
+    /// # Errors
+    ///
+    /// [`MutatedDuringBuild`] while the scaffold using this controller is
+    /// building: the index is unchanged and no listener is notified.
+    pub fn set_index(&self, index: usize) -> Result<(), MutatedDuringBuild> {
+        let building = self
+            .build_phase
+            .borrow()
+            .as_ref()
+            .is_some_and(BuildPhase::is_building);
+        MutatedDuringBuild::check(building, "CupertinoTabController")?;
         let previous = self.index.replace(index);
         if previous != index {
             self.notifier.notify_listeners();
         }
+        Ok(())
+    }
+
+    fn bind_build_phase(&self, phase: BuildPhase) {
+        self.build_phase.replace(Some(phase));
     }
 }
 
@@ -228,6 +250,8 @@ impl StatefulView for CupertinoTabScaffold {
     fn create_state(&self) -> Self::State {
         CupertinoTabScaffoldState {
             should_build_tab: RefCell::new(Vec::new()),
+            controller: self.controller.clone(),
+            build_phase: None,
         }
     }
 }
@@ -238,6 +262,9 @@ impl StatefulView for CupertinoTabScaffold {
 /// built once.
 pub struct CupertinoTabScaffoldState {
     should_build_tab: RefCell<Vec<bool>>,
+    /// The controller bound to `build_phase`, rebound when the view swaps it.
+    controller: CupertinoTabController,
+    build_phase: Option<BuildPhase>,
 }
 
 impl std::fmt::Debug for CupertinoTabScaffoldState {
@@ -248,6 +275,23 @@ impl std::fmt::Debug for CupertinoTabScaffoldState {
 }
 
 impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let phase = ctx.build_phase();
+        self.controller.bind_build_phase(phase.clone());
+        self.build_phase = Some(phase);
+    }
+
+    fn did_update_view(
+        &mut self,
+        _old_view: &CupertinoTabScaffold,
+        new_view: &CupertinoTabScaffold,
+    ) {
+        self.controller = new_view.controller.clone();
+        if let Some(phase) = &self.build_phase {
+            self.controller.bind_build_phase(phase.clone());
+        }
+    }
+
     fn build(&self, view: &CupertinoTabScaffold, ctx: &dyn BuildContext) -> impl IntoView {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
@@ -337,7 +381,9 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
             .clone()
             .current_index(current_index)
             .on_tap(move |cx, index| {
-                controller.set_index(index);
+                // A refusal is reported by the controller; the tap still
+                // reaches the bar's own handler.
+                let _ = controller.set_index(index);
                 if let Some(original) = &original_on_tap {
                     original(cx, index);
                 }
