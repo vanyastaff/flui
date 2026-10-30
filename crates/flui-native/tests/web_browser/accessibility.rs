@@ -51,16 +51,22 @@ export function clickNode(id) { document.querySelector(`[data-flui-id="${id}"]`)
 export function clickText(text) {
     [...host().querySelectorAll('flui-node')].find(element => element.textContent === text).click();
 }
-// The host's box and the canvas's in the viewport, each [left, top, width, height].
+// The host's box, the canvas's and the increment button's in the viewport, each [left, top,
+// width, height].
 export function hostAndCanvas() {
     const box = element => {
         const rect = element.getBoundingClientRect();
         return [rect.left, rect.top, rect.width, rect.height];
     };
-    return [...box(host()), ...box(document.getElementById('flui-canvas'))];
+    return [
+        ...box(host()),
+        ...box(document.getElementById('flui-canvas')),
+        ...box(document.querySelector('[data-flui-id="increment"]')),
+    ];
 }
-// The canvas inside a scrolling container styled `style`, below the page's own content.
-export function scrolledCanvas(style) {
+// The canvas, styled `canvasStyle`, inside a scrolling container styled `style`, below the
+// page's own content.
+export function scrolledCanvas(style, canvasStyle) {
     document.getElementById('flui-canvas')?.remove();
     document.getElementById('scroller')?.remove();
     const scroller = document.createElement('div');
@@ -70,7 +76,7 @@ export function scrolledCanvas(style) {
     above.style.height = '50px';
     const canvas = document.createElement('canvas');
     canvas.id = 'flui-canvas';
-    canvas.style.cssText = 'display: block; width: 300px; height: 200px';
+    canvas.style.cssText = `display: block; width: 300px; height: 200px; ${canvasStyle}`;
     scroller.append(above, canvas);
     document.body.append(scroller);
 }
@@ -100,7 +106,7 @@ extern "C" {
     #[wasm_bindgen(js_name = hostAndCanvas)]
     fn host_and_canvas() -> Vec<f64>;
     #[wasm_bindgen(js_name = scrolledCanvas)]
-    fn scrolled_canvas(style: &str);
+    fn scrolled_canvas(style: &str, canvas_style: &str);
     #[wasm_bindgen(js_name = scrollContainer)]
     fn scroll_container(top: f64);
     #[wasm_bindgen(js_name = removeScroller)]
@@ -318,18 +324,30 @@ fn removing_the_focused_element_keeps_focus_in_the_window() {
 
 /// The host covers the canvas in the viewport, and follows it when a
 /// container the canvas is in scrolls, also when that container is
-/// transformed, which makes it the host's containing block: a screen
-/// reader's highlight is drawn where the element is.
+/// transformed, which makes it the host's containing block, and when the
+/// canvas alone is scaled: a screen reader's highlight is drawn where the
+/// element is.
 #[wasm_bindgen_test]
 fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
-    for (container, style) in [
-        ("a scrolling container", ""),
+    for (container, style, canvas_style) in [
+        ("a scrolling container", "", ""),
         (
             "a transformed scrolling container",
             "transform: translate(15px, 25px) scale(1.5)",
+            "",
+        ),
+        (
+            "a scrolling container, the canvas scaled",
+            "",
+            "transform: scale(2)",
+        ),
+        (
+            "a transformed scrolling container, the canvas scaled",
+            "transform: scale(1.5)",
+            "transform: scale(0.5, 2)",
         ),
     ] {
-        scrolled_canvas(style);
+        scrolled_canvas(style, canvas_style);
         let (_platform, window, accessibility) = open_on_page(RecordingWindowHandler::new());
         accessibility.publish(counter(0));
         activate_placeholder();
@@ -337,15 +355,26 @@ fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
         for scrolled in [0.0, 30.0] {
             scroll_container(scrolled);
             let boxes = host_and_canvas();
-            let (host, canvas) = boxes.split_at(4);
-            let apart = host
-                .iter()
-                .zip(canvas)
-                .map(|(host, canvas)| (host - canvas).abs())
-                .fold(0.0, f64::max);
+            let [host, canvas, button] = [&boxes[..4], &boxes[4..8], &boxes[8..]];
+            // The button's bounds are (20, 20)-(120, 60) in the canvas's 300 by 200.
+            let (x, y) = (canvas[2] / 300.0, canvas[3] / 200.0);
+            let expected = [
+                canvas[0] + 20.0 * x,
+                canvas[1] + 20.0 * y,
+                100.0 * x,
+                40.0 * y,
+            ];
+            let apart = |placed: &[f64], expected: &[f64]| {
+                placed
+                    .iter()
+                    .zip(expected)
+                    .map(|(placed, expected)| (placed - expected).abs())
+                    .fold(0.0, f64::max)
+            };
             assert!(
-                apart < 0.5,
-                "in {container} scrolled by {scrolled}: the host at {host:?}, the canvas at {canvas:?}"
+                apart(host, canvas) < 0.5 && apart(button, &expected) < 0.5,
+                "in {container} scrolled by {scrolled}: the host at {host:?}, the canvas at \
+                 {canvas:?}, the button at {button:?} where {expected:?} is"
             );
         }
         window.close_now();

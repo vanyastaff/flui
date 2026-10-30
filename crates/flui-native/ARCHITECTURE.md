@@ -1702,8 +1702,11 @@ element per AccessKit node, nested as the tree is, inside a
 `flui-semantics-host` beside the canvas. The pure part runs on the Linux
 host: `aria::describe` maps a node to its element (`role`, the name as
 `aria-label` or as the element's text for a role named by its content,
-states, ranges, `data-flui-id` from `author_id`, the box in its parent's
-element) and `mirror::Mirror::apply` turns each `TreeUpdate` into DOM
+states, ranges, `data-flui-id` from `author_id`, relations such as
+`aria-labelledby` and `aria-controls` as lists of the targets' element `id`s
+(a random scope per host, then the node's identifier; a node named directly
+emits no `aria-labelledby`, which would override its name), the box in its
+parent's element) and `mirror::Mirror::apply` turns each `TreeUpdate` into DOM
 operations, refusing one that names a node it never received, after which the
 composition root is asked for the whole tree once. `dom` runs the operations
 and writes only what changed between two specs.
@@ -1720,9 +1723,10 @@ and writes only what changed between two specs.
   window), window resize and visual-viewport changes, the listeners the text
   input's editor uses (`owner::web::listener::viewport_listeners`). A
   transformed ancestor makes it the host's containing block, so the host is
-  measured after placing and moved by the difference in its own scale; a
-  rotated ancestor is not followed. The root's device-pixel-ratio transform is
-  dropped, since CSS pixels are already logical.
+  measured after placing and moved by the difference in its own scale. A
+  scale on the canvas alone becomes the host's own `transform` from its top
+  left corner; a rotation is not followed. The root's device-pixel-ratio
+  transform is dropped, since CSS pixels are already logical.
 - **Work is queued.** A publish, an activation, a DOM event's action and a
   re-placement run in order from one queue. A listener that publishes from
   inside its call, or an event fired synchronously by a change (a removed

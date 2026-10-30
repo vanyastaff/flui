@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use accesskit::{Node, NodeId, TreeId, TreeUpdate};
 
-use super::aria::{self, ElementSpec, ParentFrame};
+use super::aria::{self, ElementIds, ElementSpec, ParentFrame};
 
 /// One change the DOM must make, in the order given.
 #[derive(Debug, PartialEq)]
@@ -54,14 +54,24 @@ struct Entry {
 }
 
 /// The mirrored tree.
-#[derive(Default)]
 pub(crate) struct Mirror {
     nodes: HashMap<NodeId, Entry>,
     root: Option<NodeId>,
     focus: Option<NodeId>,
+    ids: ElementIds,
 }
 
 impl Mirror {
+    /// An empty mirror whose elements take their `id`s from `ids`.
+    pub(crate) fn new(ids: ElementIds) -> Self {
+        Self {
+            nodes: HashMap::new(),
+            root: None,
+            focus: None,
+            ids,
+        }
+    }
+
     /// Whether a tree has been mirrored yet.
     pub(crate) fn is_empty(&self) -> bool {
         self.root.is_none()
@@ -242,7 +252,7 @@ impl Mirror {
             .parent
             .and_then(|parent| self.nodes.get(&parent))
             .map_or_else(ParentFrame::default, |parent| ParentFrame::of(&parent.node));
-        let spec = aria::describe(&entry.node, frame, id == root);
+        let spec = aria::describe(id, &entry.node, frame, id == root, &self.ids);
         let entry = self
             .nodes
             .get_mut(&id)
@@ -259,7 +269,7 @@ impl Mirror {
 mod tests {
     use accesskit::{Action, Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
 
-    use super::{Mirror, Op, Refused};
+    use super::{ElementIds, Mirror, Op, Refused};
 
     const ROOT: NodeId = NodeId(1);
     const BUTTON: NodeId = NodeId(2);
@@ -325,7 +335,7 @@ mod tests {
     /// A sequence of updates against the DOM operations each one asks for.
     #[test]
     fn each_update_becomes_the_dom_operations_it_needs() {
-        let mut mirror = Mirror::default();
+        let mut mirror = Mirror::new(ElementIds::new("t"));
         let steps: Vec<(&str, TreeUpdate, Vec<&str>)> = vec![
             (
                 "the first tree creates every element, places them, then roots it",
@@ -385,7 +395,7 @@ mod tests {
 
     #[test]
     fn a_parent_s_box_moving_replaces_its_children() {
-        let mut mirror = Mirror::default();
+        let mut mirror = Mirror::new(ElementIds::new("t"));
         mirror
             .apply(full(
                 vec![(ROOT, root(&[BUTTON])), (BUTTON, button())],
@@ -411,7 +421,7 @@ mod tests {
 
     #[test]
     fn an_update_that_cannot_stand_is_refused_and_changes_nothing() {
-        let mut mirror = Mirror::default();
+        let mut mirror = Mirror::new(ElementIds::new("t"));
         assert_eq!(
             mirror.apply(partial(vec![(ROOT, root(&[]))], ROOT)),
             Err(Refused::NoTree)
@@ -436,7 +446,7 @@ mod tests {
         field.set_value("hi");
         field.set_children(vec![NodeId(9)]);
         let run = Node::new(Role::TextRun);
-        let mut mirror = Mirror::default();
+        let mut mirror = Mirror::new(ElementIds::new("t"));
         let ops = mirror
             .apply(full(
                 vec![(ROOT, root(&[BUTTON])), (BUTTON, field), (NodeId(9), run)],

@@ -34,7 +34,7 @@ use flui_semantics::platform::{
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement};
 
-use super::aria::{self, ElementSpec, Placement};
+use super::aria::{self, ElementIds, ElementSpec, Placement};
 use super::mirror::{Mirror, Op, Refused};
 use crate::accessibility::bridge::BridgeShared;
 use crate::owner::slot::OwnerSlot;
@@ -43,6 +43,9 @@ use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
 
 /// The attribute that names the node an element mirrors.
 const NODE_ATTRIBUTE: &str = "data-flui-node";
+/// How far from 1 the canvas's own scale may be before the host takes it:
+/// layout rounds a box to a fraction of a pixel.
+const SCALE_TOLERANCE: f64 = 1e-3;
 
 /// The Web's accessibility for one canvas window.
 pub struct WebAccessibility {
@@ -155,7 +158,6 @@ enum Stage {
     Retired,
 }
 
-#[derive(Default)]
 struct Tree {
     mirror: Mirror,
     elements: HashMap<NodeId, HtmlElement>,
@@ -197,7 +199,10 @@ impl Page {
             keys: Rc::clone(&window.keys),
             editor: Rc::clone(&window.editor),
             stage: RefCell::new(Stage::Retired),
-            tree: RefCell::default(),
+            tree: RefCell::new(Tree {
+                mirror: Mirror::new(ElementIds::new(scope())),
+                elements: HashMap::new(),
+            }),
             work: RefCell::default(),
             running: Cell::new(false),
             claim_focus: Cell::new(false),
@@ -535,7 +540,9 @@ impl Page {
     /// A transformed ancestor of the canvas (the host's too, as its sibling)
     /// makes the host's `fixed` box relative to that ancestor and scales it
     /// with the canvas: the host is measured where it landed and moved by
-    /// the difference, in its own scale. A rotated ancestor is not followed.
+    /// the difference, in its own scale. A scale on the canvas alone is the
+    /// host's own `transform`, from its top left corner. A rotation is not
+    /// followed.
     fn place(&self) {
         let Some(host) = self.host_element() else {
             return;
@@ -555,24 +562,45 @@ impl Page {
             }
             Ok::<(), JsValue>(())
         };
-        if let Err(error) = set(canvas.left(), canvas.top()) {
+        let placed = style
+            .remove_property("transform")
+            .and_then(|_| set(canvas.left(), canvas.top()));
+        if let Err(error) = placed {
             warn_failure("the semantics host could not be placed", &error);
             return;
         }
         let placed = host.get_bounding_client_rect();
-        let scale = |landed: f64, laid_out: f64| {
-            let scale = landed / laid_out;
-            if scale.is_finite() && scale > 0.0 {
-                scale
+        let ratio = |landed: f64, laid_out: f64| {
+            let ratio = landed / laid_out;
+            if ratio.is_finite() && ratio > 0.0 {
+                ratio
             } else {
                 1.0
             }
         };
-        let left = canvas.left() + (canvas.left() - placed.left()) / scale(placed.width(), width);
-        let top = canvas.top() + (canvas.top() - placed.top()) / scale(placed.height(), height);
+        // The ancestors' scale, which the host shares, and the canvas's own.
+        let shared = (ratio(placed.width(), width), ratio(placed.height(), height));
+        let own = (
+            ratio(canvas.width(), placed.width()),
+            ratio(canvas.height(), placed.height()),
+        );
+        let left = canvas.left() + (canvas.left() - placed.left()) / shared.0;
+        let top = canvas.top() + (canvas.top() - placed.top()) / shared.1;
         let moved = (left - canvas.left()).abs() > f64::EPSILON
             || (top - canvas.top()).abs() > f64::EPSILON;
-        if moved && let Err(error) = set(left, top) {
+        let scaled = (own.0 - 1.0).abs() > SCALE_TOLERANCE || (own.1 - 1.0).abs() > SCALE_TOLERANCE;
+        let mut placed = Ok(());
+        if moved {
+            placed = set(left, top);
+        }
+        if scaled {
+            placed = placed
+                .and_then(|()| style.set_property("transform-origin", "0 0"))
+                .and_then(|()| {
+                    style.set_property("transform", &format!("scale({}, {})", own.0, own.1))
+                });
+        }
+        if let Err(error) = placed {
             warn_failure("the semantics host could not be placed", &error);
         }
     }
@@ -748,6 +776,14 @@ fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValu
         extra.remove();
     }
     Ok(())
+}
+
+/// A scope for one host's element `id`s that no other host on the page
+/// shares: random, as two canvases' hosts never learn of each other.
+fn scope() -> String {
+    // 53 random bits, the most a JS number holds exactly.
+    let bits = (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64;
+    format!("flui-a11y-{bits:x}")
 }
 
 /// Focus that leaves the page where it is scrolled.

@@ -5,7 +5,9 @@
 //! host; the DOM side (`dom`) only writes the difference between two
 //! [`ElementSpec`]s.
 
-use accesskit::{Action, AriaCurrent, HasPopup, Live, Node, Orientation, Rect, Role, Toggled};
+use accesskit::{
+    Action, AriaCurrent, HasPopup, Live, Node, NodeId, Orientation, Rect, Role, Toggled,
+};
 
 /// The element a node is mirrored as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,18 +66,51 @@ impl ParentFrame {
     }
 }
 
+/// The DOM `id` each mirrored element gets, unique on the page: a scope per
+/// semantics host, then the node's identifier. A relation between nodes
+/// (`aria-labelledby`, `aria-controls`, …) names its targets by these.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ElementIds {
+    scope: String,
+}
+
+impl ElementIds {
+    pub(crate) fn new(scope: impl Into<String>) -> Self {
+        Self {
+            scope: scope.into(),
+        }
+    }
+
+    /// The `id` of `node`'s element.
+    pub(crate) fn of(&self, node: NodeId) -> String {
+        format!("{}-{}", self.scope, node.0)
+    }
+
+    /// An IDREF list: the `id`s of `nodes`' elements, space-separated.
+    fn list(&self, nodes: &[NodeId]) -> String {
+        let ids: Vec<String> = nodes.iter().map(|&node| self.of(node)).collect();
+        ids.join(" ")
+    }
+}
+
 /// Whether a node is mirrored at all. A `TextRun` is the text of its parent's
 /// element, never an element of its own.
 pub(crate) fn is_mirrored(node: &Node) -> bool {
     node.role() != Role::TextRun
 }
 
-/// The element for `node` placed in `parent`. `root` drops the node's own
+/// The element for node `id` placed in `parent`. `root` drops the node's own
 /// transform: the root carries the device pixel ratio (`Affine::scale`),
 /// and CSS pixels are already logical.
-pub(crate) fn describe(node: &Node, parent: ParentFrame, root: bool) -> ElementSpec {
+pub(crate) fn describe(
+    id: NodeId,
+    node: &Node,
+    parent: ParentFrame,
+    root: bool,
+    ids: &ElementIds,
+) -> ElementSpec {
     let role = aria_role(node.role());
-    let mut attributes = Vec::new();
+    let mut attributes = vec![("id", ids.of(id))];
     if let Some(role) = role {
         attributes.push(("role", role.to_owned()));
     }
@@ -110,6 +145,7 @@ pub(crate) fn describe(node: &Node, parent: ParentFrame, root: bool) -> ElementS
         attributes.push(("data-flui-id", author_id.to_owned()));
     }
     states(node, role, &mut attributes);
+    relations(node, ids, &mut attributes);
     range(node, &mut attributes);
     live(node, &mut attributes);
     if node.supports_action(Action::Focus) {
@@ -123,6 +159,28 @@ pub(crate) fn describe(node: &Node, parent: ParentFrame, root: bool) -> ElementS
         attributes,
         text,
         placement: placement(node, parent, root),
+    }
+}
+
+/// The node's relations, as IDREF lists of the targets' elements.
+fn relations(node: &Node, ids: &ElementIds, attributes: &mut Vec<(&'static str, String)>) {
+    // A node named directly is named by that, as AccessKit's own name reads
+    // it: `aria-labelledby` would win over `aria-label` in the browser.
+    let labelled_by = if node.label().is_none() {
+        node.labelled_by()
+    } else {
+        &[]
+    };
+    for (name, targets) in [
+        ("aria-labelledby", labelled_by),
+        ("aria-describedby", node.described_by()),
+        ("aria-controls", node.controls()),
+        ("aria-details", node.details()),
+        ("aria-flowto", node.flow_to()),
+    ] {
+        if !targets.is_empty() {
+            attributes.push((name, ids.list(targets)));
+        }
     }
 }
 
@@ -427,9 +485,9 @@ pub(crate) const fn aria_role(role: Role) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Action, Affine, Node, Rect, Role, Toggled};
+    use accesskit::{Action, Affine, Node, NodeId, Rect, Role, Toggled};
 
-    use super::{ParentFrame, describe};
+    use super::{ElementIds, ParentFrame, describe};
 
     fn attribute<'a>(spec: &'a super::ElementSpec, name: &str) -> Option<&'a str> {
         spec.attributes
@@ -521,6 +579,19 @@ mod tests {
             node.push_child(accesskit::NodeId(9));
             node
         };
+        let labelled_check_box = {
+            let mut node = Node::new(Role::CheckBox);
+            node.set_labelled_by(vec![NodeId(3), NodeId(4)]);
+            node.set_described_by(vec![NodeId(5)]);
+            node.set_controls(vec![NodeId(6)]);
+            node
+        };
+        let named_and_labelled = {
+            let mut node = Node::new(Role::CheckBox);
+            node.set_label("Remember me");
+            node.set_labelled_by(vec![NodeId(3)]);
+            node
+        };
         let cases = [
             Case {
                 name: "a button is named by its text and found by its identifier",
@@ -608,14 +679,42 @@ mod tests {
                 expect: &[("role", Some("group")), ("aria-label", Some("Options"))],
                 text: None,
             },
+            Case {
+                name: "a node labelled by others names its targets' elements",
+                node: labelled_check_box,
+                expect: &[
+                    ("role", Some("checkbox")),
+                    ("aria-label", None),
+                    ("aria-labelledby", Some("t-3 t-4")),
+                    ("aria-describedby", Some("t-5")),
+                    ("aria-controls", Some("t-6")),
+                ],
+                text: None,
+            },
+            Case {
+                name: "a node named directly keeps that name over its labelling nodes",
+                node: named_and_labelled,
+                expect: &[
+                    ("aria-label", Some("Remember me")),
+                    ("aria-labelledby", None),
+                ],
+                text: None,
+            },
         ];
         for case in cases {
-            let spec = describe(&case.node, ParentFrame::default(), false);
+            let spec = describe(
+                NodeId(7),
+                &case.node,
+                ParentFrame::default(),
+                false,
+                &ElementIds::new("t"),
+            );
             for &(name, value) in case.expect {
                 assert_eq!(attribute(&spec, name), value, "{}: {name}", case.name);
             }
             assert_eq!(spec.text.as_deref(), case.text, "{}: text", case.name);
             assert_eq!(spec.tag.name(), "flui-node", "{}: tag", case.name);
+            assert_eq!(attribute(&spec, "id"), Some("t-7"), "{}: id", case.name);
             assert!(
                 spec.attributes.windows(2).all(|pair| pair[0].0 < pair[1].0),
                 "{}: attributes are sorted and unique: {:?}",
@@ -686,11 +785,13 @@ mod tests {
                 node.set_transform(transform);
             }
             let spec = describe(
+                NodeId(7),
                 &node,
                 ParentFrame {
                     origin: case.parent,
                 },
                 case.root,
+                &ElementIds::new("t"),
             );
             let placement = spec.placement;
             assert_eq!(
