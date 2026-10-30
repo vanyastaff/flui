@@ -346,7 +346,7 @@ flui devices --json | jq -r 'select(.event=="device" and .platform=="ios") | .id
 [app]
 name = "my_app"
 version = "0.1.0"
-organization = "com.example"
+id = "com.example.my_app"
 
 [build]
 target_platforms = ["macos", "ios", "web"]
@@ -360,12 +360,15 @@ logic_watch = "logic/src"
 types_watch = "types/src"
 ```
 
-`[app].name` and `[app].organization` become the macOS bundle name and
-identifier. They also make the application's identifier (`com.example.my_app`),
-which names its data directory: `flui create` writes it into the project's
-`.cargo/config.toml` as `[env] FLUI_APP_ID`, so every cargo invocation builds
-the application with it, and `flui build` and `flui run` rewrite that one key
-when `flui.toml` changes, leaving the rest of the file alone. Unknown keys are
+`[app].id` is the application's one identifier; `flui create` makes it from
+`--org` and the name (`-` becomes `_`). Every platform name comes from it:
+it is the Android package as written, the Apple bundle identifier with `_` as
+`-` (`com.example.my-app`), and it names the application's data directory.
+`flui create` writes it into the project's `.cargo/config.toml` as
+`[env] FLUI_APP_ID`, so every cargo invocation builds the application with it,
+and `flui build` and `flui run` rewrite that one key when `flui.toml` changes,
+leaving the rest of the file alone. A `flui.toml` that still names
+`organization` is refused with the `id` line to write instead. Unknown keys are
 ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends
 nothing anywhere.

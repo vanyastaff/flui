@@ -46,7 +46,7 @@ fn android_run_builds_the_selected_device_native_abi() {
     );
     std::fs::write(
         app.join("flui.toml"),
-        "[app]\nname = \"app\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n",
+        "[app]\nname = \"app\"\nversion = \"0.1.0\"\nid = \"com.example.app\"\n",
     )
     .expect("application config");
     let tools = root.join("tools");

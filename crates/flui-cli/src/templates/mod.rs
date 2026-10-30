@@ -15,9 +15,10 @@ pub use plan::{PlannedFile, ProjectPlan};
 pub use source::DependencySource;
 
 use crate::Template;
+use crate::app_id::AppId;
 use crate::build::scaffold::{ScaffoldParams, scaffold_platform_plan};
 use crate::error::CliResult;
-use crate::types::{OrganizationId, ProjectName};
+use crate::types::ProjectName;
 use std::path::Path;
 
 /// `src/main.rs` of a single-crate template: the desktop entry point,
@@ -88,7 +89,7 @@ Cargo.lock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateBuilder {
     name: ProjectName,
-    org: OrganizationId,
+    app_id: AppId,
     template: Template,
     init_git: bool,
     run_cargo_check: bool,
@@ -103,11 +104,11 @@ impl TemplateBuilder {
     /// # Arguments
     ///
     /// * `name` - Validated project name
-    /// * `org` - Validated organization ID
-    pub fn new(name: ProjectName, org: OrganizationId) -> Self {
+    /// * `app_id` - The application identifier (`flui.toml` `[app] id`)
+    pub fn new(name: ProjectName, app_id: AppId) -> Self {
         Self {
             name,
-            org,
+            app_id,
             template: Template::Counter,
             init_git: true,
             run_cargo_check: true,
@@ -180,22 +181,18 @@ impl TemplateBuilder {
     /// `scaffold_platform_plan` never actually sees an unknown name here.
     pub fn plan(&self) -> ProjectPlan {
         let name_str = self.name.as_str();
-        let org_str = self.org.as_str();
+        let id_str = self.app_id.as_str();
 
         let plan = if self.hot_reload {
-            hot_reload::generate(name_str, org_str, &self.source)
+            hot_reload::generate(name_str, id_str, &self.source)
         } else {
             match self.template {
                 Template::Counter => {
-                    counter::generate(name_str, org_str, &self.source, &self.platforms)
+                    counter::generate(name_str, id_str, &self.source, &self.platforms)
                 }
-                Template::Basic => {
-                    basic::generate(name_str, org_str, &self.source, &self.platforms)
-                }
-                Template::Empty => {
-                    empty::generate(name_str, org_str, &self.source, &self.platforms)
-                }
-                Template::Widget => widget::generate(name_str, org_str, &self.source),
+                Template::Basic => basic::generate(name_str, id_str, &self.source, &self.platforms),
+                Template::Empty => empty::generate(name_str, id_str, &self.source, &self.platforms),
+                Template::Widget => widget::generate(name_str, id_str, &self.source),
             }
         };
 
@@ -208,13 +205,7 @@ impl TemplateBuilder {
         // Every cargo invocation in the project, an editor's included, builds
         // the application with its identifier; `flui build` and `flui run`
         // keep the key in line with `flui.toml`.
-        let app_id = crate::config::AppConfig {
-            name: name_str.to_owned(),
-            version: String::new(),
-            organization: org_str.to_owned(),
-        }
-        .app_id();
-        let cargo_config = crate::config::cargo_config_with_app_id(None, &app_id)
+        let cargo_config = crate::config::cargo_config_with_app_id(None, id_str)
             .expect("BUG: a new cargo configuration is valid TOML")
             .expect("BUG: a new cargo configuration has no identifier yet");
         let plan = plan.file(crate::config::CARGO_CONFIG, cargo_config);
@@ -237,11 +228,11 @@ impl TemplateBuilder {
         }
 
         let lib_name = self.name.as_str().replace('-', "_");
-        let package_name = format!("{}.{lib_name}", self.org.as_str());
+
         let params = ScaffoldParams {
             app: self.name.as_str(),
             lib: &lib_name,
-            package: &package_name,
+            package: self.app_id.android_package(),
         };
 
         for platform in &self.platforms {
@@ -280,7 +271,7 @@ impl TemplateBuilder {
 
         Ok(GeneratedProject {
             name: self.name,
-            org: self.org,
+            app_id: self.app_id,
             template: self.template,
             path: dir.to_path_buf(),
             git_initialized: self.init_git,
@@ -297,8 +288,8 @@ impl TemplateBuilder {
 pub struct GeneratedProject {
     /// The project name.
     pub name: ProjectName,
-    /// The organization ID.
-    pub org: OrganizationId,
+    /// The application identifier.
+    pub app_id: AppId,
     /// The template used.
     pub template: Template,
     /// Path where the project was created.
@@ -331,7 +322,7 @@ mod tests {
             let build = || {
                 TemplateBuilder::new(
                     ProjectName::new("determinism-check").expect("valid name"),
-                    OrganizationId::new("com.example").expect("valid org"),
+                    AppId::try_new("com.example.determinism_check").expect("valid id"),
                 )
                 .template(template)
                 .platforms(vec!["linux".to_string(), "web".to_string()])

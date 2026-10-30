@@ -43,6 +43,7 @@ const STYLES: Styles = Styles::styled()
     .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
 mod agent;
+mod app_id;
 mod build;
 mod commands;
 mod config;

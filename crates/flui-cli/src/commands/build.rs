@@ -309,7 +309,10 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
     match std::fs::symlink_metadata(&manifest) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&manifest)?;
-            Ok(AppBundle::new(&config.app.name, &config.app.organization))
+            Ok(AppBundle::new(
+                &config.app.name,
+                config.app.id.apple_bundle_id(),
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let name = root
@@ -320,7 +323,10 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
                         "Application directory has no usable bundle name".into(),
                     )
                 })?;
-            Ok(AppBundle::new(name, "dev.flui"))
+            Ok(AppBundle::new(
+                name,
+                crate::app_id::AppId::unconfigured(name).apple_bundle_id(),
+            ))
         }
         Err(error) => Err(crate::error::CliError::context(
             error,

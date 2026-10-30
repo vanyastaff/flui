@@ -1400,7 +1400,7 @@ impl AndroidSession {
             release,
             hot_reload,
             adb,
-            package: config.app.app_id(),
+            package: config.app.id.android_package().to_owned(),
             runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
         })
     }

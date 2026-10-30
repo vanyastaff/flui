@@ -2,7 +2,7 @@ use super::{DependencySource, ProjectPlan};
 
 pub fn generate(
     name: &str,
-    org: &str,
+    app_id: &str,
     source: &DependencySource,
     platforms: &[String],
 ) -> ProjectPlan {
@@ -11,7 +11,7 @@ pub fn generate(
         .file("Cargo.toml", cargo_toml(name, source))
         .file("src/lib.rs", LIB)
         .file("src/main.rs", super::main_rs(&lib_name, "HelloView"))
-        .file("flui.toml", flui_toml(name, org, platforms))
+        .file("flui.toml", flui_toml(name, app_id, platforms))
         .file("README.md", readme(name))
         .dir("assets")
 }
@@ -81,7 +81,7 @@ impl StatelessView for HelloView {
 }
 "#;
 
-fn flui_toml(name: &str, org: &str, platforms: &[String]) -> String {
+fn flui_toml(name: &str, app_id: &str, platforms: &[String]) -> String {
     let platform_list = if platforms.is_empty() {
         r#"["windows", "linux", "macos"]"#.to_string()
     } else {
@@ -93,7 +93,7 @@ fn flui_toml(name: &str, org: &str, platforms: &[String]) -> String {
         r#"[app]
 name = "{name}"
 version = "0.1.0"
-organization = "{org}"
+id = "{app_id}"
 
 [build]
 target_platforms = {platform_list}

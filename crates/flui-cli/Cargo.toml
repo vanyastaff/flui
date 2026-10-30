@@ -127,6 +127,9 @@ tokio = { workspace = true, features = ["macros"] }
 # `cargo install` graph. No `version`: a path-only dev-dependency is dropped
 # from the published manifest, so the CLI publishes without the framework.
 flui-hot-reload = { path = "../flui-hot-reload" }
+# Only for the test holding `app_id::AppId` to `flui_log::AppId`'s grammar; path-only, so
+# dropped from the published manifest like the line above.
+flui-log = { path = "../flui-log" }
 
 # Consolidated integration-test binary (see `autotests = false` above).
 # All five suites drive the built `flui` binary in subprocesses via

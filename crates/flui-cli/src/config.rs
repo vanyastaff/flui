@@ -7,7 +7,7 @@
 //! [app]
 //! name = "my_app"
 //! version = "0.1.0"
-//! organization = "com.example"
+//! id = "com.example.my_app"
 //!
 //! [build]
 //! target_platforms = ["macos", "ios", "web"]
@@ -24,6 +24,7 @@
 //! parses. There is deliberately no global (per-user) configuration file:
 //! the CLI keeps no state about the user and has no telemetry to configure.
 
+use crate::app_id::AppId;
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -59,6 +60,15 @@ impl FluiConfig {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
 
+        if let Some(id) = legacy_organization_id(&content) {
+            return Err(CliError::InvalidConfig {
+                file: path.display().to_string(),
+                reason: format!(
+                    "`[app] organization` is replaced by the application identifier; write \
+                     `id = \"{id}\"` in its place"
+                ),
+            });
+        }
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
@@ -91,6 +101,20 @@ pub(crate) struct HotReloadConfig {
     pub(crate) types_watch: Option<String>,
 }
 
+/// The identifier a `flui.toml` written before `[app] id` existed would have
+/// had (`organization`, then `name` with `-` as `_`); `None` for any other
+/// file.
+fn legacy_organization_id(content: &str) -> Option<String> {
+    let table = content.parse::<toml::Table>().ok()?;
+    let app = table.get("app")?.as_table()?;
+    if app.contains_key("id") {
+        return None;
+    }
+    let organization = app.get("organization")?.as_str()?;
+    let name = app.get("name")?.as_str()?;
+    Some(format!("{organization}.{}", name.replace('-', "_")))
+}
+
 /// Application metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
@@ -98,17 +122,9 @@ pub(crate) struct AppConfig {
     pub(crate) name: String,
     /// Application version (semver).
     pub(crate) version: String,
-    /// Organization identifier (reverse domain notation).
-    pub(crate) organization: String,
-}
-
-impl AppConfig {
-    /// The organization and name combined into the identifier mobile
-    /// platforms use (Android package name, iOS bundle identifier).
-    pub(crate) fn app_id(&self) -> String {
-        let sanitized_name = self.name.replace('-', "_");
-        format!("{}.{}", self.organization, sanitized_name)
-    }
+    /// The application identifier (reverse-DNS, `com.example.my_app`), from
+    /// which every platform name is derived ([`AppId`]).
+    pub(crate) id: AppId,
 }
 
 /// Build configuration.
@@ -193,7 +209,8 @@ pub(crate) fn sync_app_id_env(root: &Path, config: &FluiConfig) -> CliResult<()>
             ));
         }
     };
-    let Some(updated) = cargo_config_with_app_id(existing.as_deref(), &config.app.app_id())? else {
+    let Some(updated) = cargo_config_with_app_id(existing.as_deref(), config.app.id.as_str())?
+    else {
         return Ok(());
     };
     if let Some(dir) = path.parent() {
@@ -246,7 +263,7 @@ mod tests {
             app: AppConfig {
                 name: "my-app".into(),
                 version: "0.1.0".into(),
-                organization: "com.example".into(),
+                id: AppId::try_new("com.example.my_app").expect("an identifier"),
             },
             build: BuildConfig {
                 target_platforms: vec!["macos".into()],
@@ -317,5 +334,40 @@ mod tests {
                 "{existing:?}: {refused:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_flui_toml_from_before_the_identifier_names_the_line_to_write() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("flui.toml");
+        std::fs::write(
+            &path,
+            "[app]\nname = \"my-app\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n",
+        )
+        .expect("write flui.toml");
+        let refused = FluiConfig::load_from(&path).expect_err("no `[app] id`");
+        assert!(
+            matches!(&refused, CliError::InvalidConfig { reason, .. }
+                if reason.contains("id = \"com.example.my_app\"")),
+            "{refused:?}"
+        );
+
+        std::fs::write(
+            &path,
+            "[app]\nname = \"my-app\"\nversion = \"0.1.0\"\nid = \"com.example.my_app\"\n",
+        )
+        .expect("write flui.toml");
+        let loaded = FluiConfig::load_from(&path).expect("an identifier");
+        assert_eq!(loaded.app.id.as_str(), "com.example.my_app");
+
+        std::fs::write(
+            &path,
+            "[app]\nname = \"my-app\"\nversion = \"0.1.0\"\nid = \"com.my-company.app\"\n",
+        )
+        .expect("write flui.toml");
+        assert!(
+            FluiConfig::load_from(&path).is_err(),
+            "a refused identifier"
+        );
     }
 }

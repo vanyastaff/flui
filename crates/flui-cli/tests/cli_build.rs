@@ -296,7 +296,7 @@ fn build_brings_the_cargo_env_in_line_with_the_app_identifier() {
     let root = tmp.path();
     std::fs::write(
         root.join("flui.toml"),
-        "[app]\nname = \"sync-check\"\nversion = \"0.1.0\"\norganization = \"com.test\"\n",
+        "[app]\nname = \"sync-check\"\nversion = \"0.1.0\"\nid = \"com.test.sync_check\"\n",
     )
     .expect("write flui.toml");
     // Not a manifest cargo accepts, so the build stops at cargo.

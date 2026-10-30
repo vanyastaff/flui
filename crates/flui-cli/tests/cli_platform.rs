@@ -23,7 +23,7 @@ fn project_with_android_configured() -> TempDir {
     let tmp = TempDir::new().expect("temp dir");
     std::fs::write(
         tmp.path().join("flui.toml"),
-        "[app]\nname = \"test-app\"\nversion = \"0.1.0\"\norganization = \"com.example\"\n\
+        "[app]\nname = \"test-app\"\nversion = \"0.1.0\"\nid = \"com.example.test_app\"\n\
          [build]\ntarget_platforms = [\"android\"]\n",
     )
     .expect("write flui.toml");
