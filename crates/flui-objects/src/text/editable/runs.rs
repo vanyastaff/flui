@@ -1,5 +1,5 @@
 //! The field's text as runs for assistive technology, built by the shared
-//! [`text_runs`](crate::text::runs::text_runs), with the selection.
+//! [`text_runs`], with the selection.
 
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::typography::TextDirection;
