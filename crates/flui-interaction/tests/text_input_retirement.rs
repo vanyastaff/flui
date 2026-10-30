@@ -28,6 +28,7 @@ impl PlatformTextInput for Platform {
     }
 
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 struct OnDrop(Box<dyn Fn()>);
@@ -504,6 +505,7 @@ struct UnwindProbePlatform(Arc<parking_lot::Mutex<Option<bool>>>);
 impl PlatformTextInput for UnwindProbePlatform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
 }
 
 impl Drop for UnwindProbePlatform {

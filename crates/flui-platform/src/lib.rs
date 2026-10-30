@@ -70,6 +70,8 @@
 //!     }
 //!
 //!     fn set_ime_cursor_area(&self, _area: Bounds) {}
+//!
+//!     fn discard_composition(&self) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {

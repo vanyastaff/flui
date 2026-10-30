@@ -439,6 +439,9 @@ impl PlatformTextInput for RecordingTextInput {
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.cursor_areas.lock().push(area);
     }
+
+    /// No input method composes in a headless window.
+    fn discard_composition(&self) {}
 }
 
 /// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
