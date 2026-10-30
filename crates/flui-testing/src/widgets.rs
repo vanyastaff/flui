@@ -479,6 +479,12 @@ impl LaidOut {
         self.host.ui_runtime().clipboard()
     }
 
+    /// The primary selection this tree's widgets acquire through
+    /// `cx.capability::<PrimarySelectionCapability>()`.
+    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+        self.host.ui_runtime().primary_selection()
+    }
+
     /// The UI runtime's own scheduler, for a probe that must observe frame
     /// ordering directly (e.g. whether a callback fired from inside
     /// [`LaidOut::pump_widget`]'s postframe recheck lands in the SAME

@@ -16,7 +16,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::ops::Range;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use flui_foundation::panic::FirstPanic;
 use flui_objects::{RenderParagraph, SubtreeAnchor};
@@ -35,6 +35,7 @@ use flui_view::{
     RebuildReason, StatefulView, View, ViewExt, ViewState, impl_inherited_view,
 };
 
+use super::primary_selection::PrimarySelectionOwner;
 use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::Semantics;
@@ -160,12 +161,14 @@ impl StatefulView for SelectionArea {
 
     fn create_state(&self) -> Self::State {
         SelectionAreaState {
-            model: Rc::new(SelectionModel {
+            model: Rc::new_cyclic(|this| SelectionModel {
+                this: Weak::clone(this),
                 registry: Rc::new(SelectionRegistry::default()),
                 selection: RefCell::new(None),
                 on_selection_changed: RefCell::new(self.on_selection_changed.clone()),
                 rebuild: RefCell::new(None),
                 pipeline: RefCell::new(None),
+                primary: RefCell::default(),
             }),
         }
     }
@@ -191,6 +194,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.model.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         *self.model.pipeline.borrow_mut() = ctx.pipeline_owner();
+        *self.model.primary.borrow_mut() = Rc::new(PrimarySelectionOwner::acquire(ctx));
     }
 
     fn did_update_view(&mut self, _old_view: &SelectionArea, new_view: &SelectionArea) {
@@ -231,15 +235,21 @@ impl ViewState<SelectionArea> for SelectionAreaState {
     fn dispose(&mut self) {
         // A handler a frame already captured finds no area to rebuild.
         self.model.rebuild.borrow_mut().take();
+        // A selection that is gone is no longer offered to other clients.
+        let primary = self.model.primary.borrow().clone();
+        primary.release();
     }
 }
 
 struct SelectionModel {
+    this: Weak<SelectionModel>,
     registry: Rc<SelectionRegistry>,
     selection: RefCell<Option<DocumentSelection>>,
     on_selection_changed: RefCell<Option<SelectionCallback>>,
     rebuild: RefCell<Option<RebuildHandle>>,
     pipeline: RefCell<Option<PipelineCell>>,
+    /// The area's hold on the primary selection, acquired in `init_state`.
+    primary: RefCell<Rc<PrimarySelectionOwner>>,
 }
 
 impl SelectionModel {
@@ -261,6 +271,7 @@ impl SelectionModel {
         *self.selection.borrow_mut() = Some(selection);
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
+        let primary = self.primary.borrow().clone();
         let mut failure = FirstPanic::new();
         failure.contain(|| {
             if let Some(rebuild) = rebuild {
@@ -268,6 +279,14 @@ impl SelectionModel {
             }
         });
         self.highlight(covered.as_deref().unwrap_or_default(), &mut failure);
+        // The claim reads the selection when another client asks, so it
+        // answers with what the area holds selected then.
+        failure.contain(|| {
+            primary.selection_changed(selected.is_some(), || {
+                let this = Weak::clone(&self.this);
+                move || this.upgrade()?.selected_text()
+            });
+        });
         failure.contain(|| {
             if let Some(listener) = listener {
                 listener(cx, selected.as_ref());
@@ -316,6 +335,13 @@ impl SelectionModel {
                 })
                 .collect(),
         )
+    }
+
+    /// The text the area holds selected now; `None` when it covers none.
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection.borrow().clone()?;
+        let covered = self.covered(&selection)?;
+        Some(self.joined(&covered).text)
     }
 
     /// The covered parts' text, joined by `'\n'`.

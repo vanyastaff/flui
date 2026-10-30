@@ -26,8 +26,8 @@ use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
-    make_up_event_for_id,
+    PointerButton, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
+    make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_painting::Alignment;
 use flui_platform::PlatformInput;
@@ -126,6 +126,12 @@ impl Harness {
         self.host.ui_runtime().clipboard()
     }
 
+    /// The primary selection this tree's widgets acquire through
+    /// `cx.capability::<PrimarySelectionCapability>()`.
+    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+        self.host.ui_runtime().primary_selection()
+    }
+
     /// Run an owner-side test action inside the UI runtime's owner scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.host.ui_runtime().enter(|_| callback())
@@ -197,6 +203,19 @@ impl Harness {
         let event =
             make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerKind::Mouse)
                 .expect("headless pointer positions must be finite");
+        dispatch_synthetic_pointer(&self.host, event);
+    }
+
+    /// Begin a new mouse contact at logical `(x, y)` with `button` pressed,
+    /// hit-testing the mounted render tree.
+    pub fn dispatch_pointer_down_with_button(&self, x: f64, y: f64, button: PointerButton) {
+        let event = make_down_event_for_id_with_button(
+            self.contacts.begin(),
+            Offset::new(x, y),
+            PointerKind::Mouse,
+            button,
+        )
+        .expect("headless pointer positions must be finite");
         dispatch_synthetic_pointer(&self.host, event);
     }
 

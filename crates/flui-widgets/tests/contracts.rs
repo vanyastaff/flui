@@ -202,6 +202,8 @@ fn text_editing() {
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
             ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),
+            ("editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection", crate::editable_text_clipboard::a_field_selection_is_offered_lazily_as_the_primary_selection),
+            ("editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands", crate::editable_text_clipboard::a_middle_press_pastes_the_primary_selection_where_it_lands),
             ("editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit", crate::editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit),
             ("editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed", crate::editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed),
             ("editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit", crate::editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit),
@@ -554,6 +556,7 @@ fn selection_area_text_runs() {
         &[
             ("selection_area::selection_area_text_publishes_runs", crate::selection_area::selection_area_text_publishes_runs as fn()),
             ("selection_area::selection_area_accepts_assistive_selection", crate::selection_area::selection_area_accepts_assistive_selection),
+            ("selection_area::selection_area_offers_its_selection_as_the_primary_selection", crate::selection_area::selection_area_offers_its_selection_as_the_primary_selection),
             ("selection_area::selection_area_refuses_stale_or_foreign_positions", crate::selection_area::selection_area_refuses_stale_or_foreign_positions),
             ("selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::selectable_text_under_a_merging_ancestor_keeps_its_runs),
             ("selection_area::static_text_outside_selection_area_publishes_no_runs", crate::selection_area::static_text_outside_selection_area_publishes_no_runs),

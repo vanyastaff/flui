@@ -269,3 +269,77 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
         "the composition committed, but an unfocused field cannot paste"
     );
 }
+
+/// A field's selection is offered as the primary selection and read only
+/// when asked, so a growing selection keeps one claim that answers with what
+/// is selected then; an empty selection lets go, and an obscured field never
+/// offers its text.
+///
+/// Fails without the change: nothing claimed the primary selection.
+pub(crate) fn a_field_selection_is_offered_lazily_as_the_primary_selection() {
+    let controller = TextEditingController::with_text("hello world");
+    let (harness, _node) = mount_field(&controller, |field| field);
+    let primary = harness.primary_selection();
+    assert!(!primary.is_claimed(), "a caret selects nothing");
+    controller.set_selection(0, 5);
+    assert!(primary.is_claimed());
+    controller.set_selection(0, 11);
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("hello world"),
+        "the claim reads the selection when asked"
+    );
+
+    primary.select("elsewhere");
+    assert!(!primary.is_claimed(), "another application selected");
+    controller.set_selection(6, 11);
+    assert_eq!(
+        primary.text().as_deref(),
+        Some("world"),
+        "a changed selection claims again"
+    );
+
+    controller.set_caret_byte_offset(3);
+    assert!(!primary.is_claimed(), "an empty selection lets go");
+
+    let secret = TextEditingController::with_text("secret");
+    let (harness, _node) = mount_field(&secret, |field| field.obscure_text(true));
+    secret.set_selection(0, 6);
+    assert!(
+        !harness.primary_selection().is_claimed(),
+        "an obscured field offers nothing"
+    );
+}
+
+/// A middle press pastes the primary selection where it lands, once the
+/// read settles, and starts no selection drag.
+///
+/// Fails without the change: the press moved the caret and pasted nothing.
+pub(crate) fn a_middle_press_pastes_the_primary_selection_where_it_lands() {
+    use flui_interaction::events::PointerButton;
+
+    let controller = TextEditingController::with_text("abc");
+    let focus_node = FocusNode::with_debug_label("middle-pressed field");
+    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
+        controller.clone(),
+        Rc::clone(&focus_node),
+    ));
+    harness.primary_selection().select("XY\n");
+
+    harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
+    assert!(
+        focus_node.has_primary_focus(),
+        "the press focuses the field"
+    );
+    assert_eq!(controller.text(), "abc", "the read settles at a later turn");
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "XYabc",
+        "pasted at the press, line break dropped"
+    );
+    assert_eq!(controller.caret_byte_offset(), 2);
+
+    harness.dispatch_pointer_move(40.0, 5.0);
+    assert!(!controller.has_selection(), "the press started no drag");
+}
