@@ -209,6 +209,35 @@ impl CarouselLayout {
             },
         })
     }
+
+    /// Which of the layouts this is.
+    #[must_use]
+    pub fn kind(&self) -> CarouselLayoutKind {
+        match self.kind {
+            LayoutKind::MultiBrowse { .. } => CarouselLayoutKind::MultiBrowse,
+            LayoutKind::Uncontained { .. } => CarouselLayoutKind::Uncontained,
+            LayoutKind::Hero { .. } => CarouselLayoutKind::Hero,
+            LayoutKind::FullScreen => CarouselLayoutKind::FullScreen,
+            LayoutKind::Weighted { .. } => CarouselLayoutKind::Weighted,
+        }
+    }
+}
+
+/// The layout a [`CarouselLayout`] was made as, for code that picks a default by it (a snap,
+/// a style).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CarouselLayoutKind {
+    /// [`CarouselLayout::multi_browse`].
+    MultiBrowse,
+    /// [`CarouselLayout::uncontained`]: the one layout whose items do not all rest whole.
+    Uncontained,
+    /// [`CarouselLayout::hero`].
+    Hero,
+    /// [`CarouselLayout::full_screen`].
+    FullScreen,
+    /// [`CarouselLayout::weighted`].
+    Weighted,
 }
 
 impl Default for CarouselLayout {

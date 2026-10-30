@@ -21,7 +21,7 @@ mod virtualized_band;
 
 pub use carousel::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselItemPlacement, CarouselLayout,
-    CarouselLayoutError, MAX_ITEM_EXTENT, RenderSliverCarousel,
+    CarouselLayoutError, CarouselLayoutKind, MAX_ITEM_EXTENT, RenderSliverCarousel,
 };
 pub use placement::{Placement, PlacementSlot};
 pub use sliver_animated_opacity::*;
