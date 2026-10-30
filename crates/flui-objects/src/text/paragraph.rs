@@ -245,19 +245,20 @@ impl RenderParagraph {
         let Some(range) = self.selection.as_ref() else {
             return;
         };
-        let length = self
+        // The ends sit where the highlight ends: on the grapheme boundaries
+        // of the current text.
+        let text = self
             .painter
             .text()
-            .map_or(0, |span| span.to_plain_text().len());
+            .map(InlineSpan::to_plain_text)
+            .unwrap_or_default();
+        let floor = |byte: usize| text_boundaries::grapheme_floor(&text, byte);
         let ends = [
             (
                 self.start_handle,
-                TextPosition::downstream(range.start.min(length)),
+                TextPosition::downstream(floor(range.start)),
             ),
-            (
-                self.end_handle,
-                TextPosition::upstream(range.end.min(length)),
-            ),
+            (self.end_handle, TextPosition::upstream(floor(range.end))),
         ];
         let lines = self.painter.get_line_metrics();
         for (link, position) in ends {
@@ -285,15 +286,10 @@ impl RenderParagraph {
             return;
         };
         let text = span.to_plain_text();
-        let snap = |byte: usize| {
-            let byte = byte.min(text.len());
-            if text_boundaries::is_grapheme_boundary(&text, byte) {
-                byte
-            } else {
-                text_boundaries::previous_grapheme_boundary(&text, byte)
-            }
-        };
-        let (start, end) = (snap(range.start), snap(range.end));
+        let (start, end) = (
+            text_boundaries::grapheme_floor(&text, range.start),
+            text_boundaries::grapheme_floor(&text, range.end),
+        );
         if start >= end {
             return;
         }

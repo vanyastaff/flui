@@ -2,7 +2,7 @@
 //! (`flui_painting::text_boundaries`, ADR-0092 §6).
 
 use flui_painting::text_boundaries::{
-    graphemes, is_grapheme_boundary, next_grapheme_boundary, next_word_start,
+    grapheme_floor, graphemes, is_grapheme_boundary, next_grapheme_boundary, next_word_start,
     previous_grapheme_boundary, previous_word_start, word_segments, word_segments_from,
     word_starts,
 };
@@ -54,6 +54,13 @@ fn a_query_from_its_line_answers_as_the_whole_text_does() {
                 boundaries.contains(&offset),
                 "{text:?} {offset}"
             );
+            let floor = boundaries
+                .iter()
+                .copied()
+                .take_while(|&b| b <= clamped)
+                .last()
+                .unwrap_or(0);
+            assert_eq!(grapheme_floor(text, offset), floor, "{text:?} {offset}");
         }
         let whole: Vec<_> = word_segments(text).collect();
         for at in 0..=text.len() {

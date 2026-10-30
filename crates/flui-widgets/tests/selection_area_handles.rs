@@ -20,8 +20,8 @@ use flui_platform::pointer::{
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Column, DefaultSelectionHandles, Directionality, HandleInfo, HandleSide, SelectionArea,
-    SelectionHandles, SizedBox, Text, WidgetsApp,
+    Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, HandleInfo, HandleSide,
+    SelectionArea, SelectionHandles, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -653,4 +653,86 @@ pub(crate) fn shown_handles_follow_their_text_laid_out_anew() {
     scene.settle();
     let last = second.0.borrow().last().expect("built").line_height;
     assert!((last - before).abs() < 0.5, "{last} after {before}");
+}
+
+/// An end kept from an older text sits on the current text's grapheme
+/// boundary, where the highlight ends: its handle is published there, and
+/// a drag of it grips from there.
+///
+/// Red-check: publish the end at its stored byte (a leader sits inside
+/// the accented cluster), or grip it there (the drag lands a cluster on).
+pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
+    const NEW: &str = "ae\u{301} cd";
+    let heard: Heard = Rc::default();
+    let area = |text: &'static str, heard: &Heard| {
+        let recorded = Rc::clone(heard);
+        SelectionArea::new(Column::new((Text::new(text),)))
+            .on_selection_changed(move |_cx, selected| {
+                recorded
+                    .borrow_mut()
+                    .push(selected.map(|selected| selected.text.clone()));
+            })
+            .handles(Marked::default())
+    };
+    let mut scene = Scene::laid_out(WidgetsApp::new(area("ab cd", &heard)), Rc::clone(&heard));
+    scene.long_press(scene.along(width_of("a")));
+    assert_eq!(scene.selected().as_deref(), Some("ab"));
+
+    // The same bytes now end inside "e\u{301}", which the highlight drops.
+    scene.laid.pump_widget(WidgetsApp::new(area(NEW, &heard)));
+    scene.settle();
+    let (floor, cluster) = (width_of("a"), width_of("ae\u{301}"));
+    let leaders: Vec<f64> = scene
+        .laid
+        .transform_layer_matrices()
+        .iter()
+        .map(|matrix| matrix.m[12])
+        .collect();
+    assert!(
+        leaders.iter().any(|x| (x - floor).abs() < 0.5)
+            && !leaders
+                .iter()
+                .any(|x| *x > floor + 0.5 && *x < cluster - 0.5),
+        "{leaders:?}, the end at {floor}"
+    );
+
+    // Released just before the middle of "d", the end stays before it.
+    let between = f64::midpoint(width_of("ae\u{301} c"), width_of(NEW)) - 1.0;
+    let from = scene.handle_at(floor);
+    scene.touch(Touch::Down, 0, from);
+    scene.touch(Touch::Move, 16, from + Offset::new(20.0, 0.0));
+    scene.touch(Touch::Up, 32, scene.handle_at(between));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("ae\u{301} c"));
+}
+
+/// Shown handles follow a text laid out anew by a style it inherits,
+/// with the same handles.
+///
+/// Red-check: leave the check after the frame to the handles' own builds
+/// (the handles keep the old line).
+pub(crate) fn shown_handles_follow_an_inherited_style() {
+    let marked = Marked::default();
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),))).handles(marked.clone());
+    let styled = |size: f64| {
+        WidgetsApp::new(DefaultTextStyle::new(
+            TextStyle::new().with_font_size(size),
+            area.clone(),
+        ))
+    };
+    let mut scene = Scene::laid_out(styled(14.0), Rc::default());
+    scene.long_press(scene.along(width_of("al")));
+    assert_eq!(scene.handles(), 2);
+    let before = marked.0.borrow().last().expect("built").line_height;
+    let builds = marked.0.borrow().len();
+
+    scene.laid.pump_widget(styled(28.0));
+    scene.settle();
+    let built = marked.0.borrow().clone();
+    let last = built.last().expect("built").line_height;
+    assert!(
+        last > before * 1.5,
+        "{last} after {before}, {} builds after {builds}",
+        built.len()
+    );
 }

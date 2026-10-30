@@ -187,14 +187,21 @@ impl SelectionModel {
         let (index, at) = self.end(&ordered, side)?;
         self.with_paragraph(&ordered[index].entry, |paragraph, to_root| {
             let painter = paragraph.painter();
+            // The end sits where the highlight ends, on the current text's
+            // grapheme boundaries.
+            let text = painter
+                .text()
+                .map(flui_painting::typography::InlineSpan::to_plain_text)
+                .unwrap_or_default();
+            let byte = text_boundaries::grapheme_floor(&text, at.byte());
             let upstream = side == HandleSide::End;
             let position = if upstream {
-                TextPosition::upstream(at.byte())
+                TextPosition::upstream(byte)
             } else {
-                TextPosition::downstream(at.byte())
+                TextPosition::downstream(byte)
             };
             let caret = painter.get_offset_for_caret(position);
-            let height = line_of(&painter.get_line_metrics(), at.byte(), upstream)?.height;
+            let height = line_of(&painter.get_line_metrics(), byte, upstream)?.height;
             let (x, y) = to_root.transform_point(caret.dx, caret.dy + height / 2.0);
             Some((Offset::new(x, y), height))
         })
