@@ -156,24 +156,27 @@ impl SelectionModel {
             .flatten()
     }
 
-    /// The selection's `side` end in reading order, with its text.
+    /// The selection's `side` end in reading order, with its text: where
+    /// the first (or last) text with selected bytes starts (or stops)
+    /// them, the end the paragraph publishes for its handle. An end at a
+    /// text's edge that selects nothing of it is the next text's.
     fn end(&self, ordered: &[Ordered], side: HandleSide) -> Option<(usize, DocumentPosition)> {
         let selection = self.selection.borrow().clone()?;
-        let (anchor, focus) = (selection.anchor().clone(), selection.focus().clone());
-        let backward = Self::compare(ordered, &anchor, &focus) == Ordering::Greater;
-        let (start, end) = if backward {
-            (focus, anchor)
-        } else {
-            (anchor, focus)
+        let (covered, _) = self.covered(&selection)?;
+        let mut parts = covered.iter().filter(|part| !part.range.is_empty());
+        let part = match side {
+            HandleSide::End => parts.next_back(),
+            _ => parts.next(),
+        }?;
+        let byte = match side {
+            HandleSide::End => part.range.end,
+            _ => part.range.start,
         };
-        let at = match side {
-            HandleSide::End => end,
-            _ => start,
-        };
+        let entry = Rc::clone(self.registry.entries.borrow().get(part.index)?);
         let index = ordered
             .iter()
-            .position(|text| text.entry.anchor == *at.text())?;
-        Some((index, at))
+            .position(|text| Rc::ptr_eq(&text.entry, &entry))?;
+        Some((index, DocumentPosition::new(entry.anchor.clone(), byte)))
     }
 
     /// Where `side`'s end sits: the middle of its line, in render-root
@@ -251,10 +254,18 @@ impl SelectionModel {
         };
         let (start, end) = self.unit_at(&ordered, &hit.at, Unit::Word);
         let caret = CaretMemory::after_hit(&end, &hit);
-        self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
+        // A listener that panics still leaves the word selected, so its
+        // handles are shown before the first failure is resumed.
+        let mut failure = FirstPanic::new();
+        self.select_contained(
+            Some(DocumentSelection::new(start, end)),
+            caret,
+            &mut failure,
+        );
         if self.selection.borrow().is_some() {
             self.show_handles();
         }
+        failure.resume();
     }
 
     /// The position nearest `global` (render-root coordinates): in the text
@@ -343,11 +354,23 @@ impl SelectionModel {
     /// the change through the area's writer. `caret` is what the keys keep
     /// about the new moving end.
     fn select_from_input(&self, selection: Option<DocumentSelection>, caret: CaretMemory) {
+        let mut failure = FirstPanic::new();
+        self.select_contained(selection, caret, &mut failure);
+        failure.resume();
+    }
+
+    /// [`Self::select_from_input`], holding a listener's panic in `failure`
+    /// for the caller to resume once it has finished its own work.
+    fn select_contained(
+        &self,
+        selection: Option<DocumentSelection>,
+        caret: CaretMemory,
+        failure: &mut FirstPanic,
+    ) {
         // A click that selects nothing still makes this area the target of
         // the keys, so select all and copy act on the area last clicked. A
         // blur listener that panics still lets the selection commit and be
-        // reported; the first failure is resumed afterwards.
-        let mut failure = FirstPanic::new();
+        // reported.
         if !self.focus.has_primary_focus() {
             failure.contain(|| {
                 let _outcome = self.focus.request_focus();
@@ -359,7 +382,6 @@ impl SelectionModel {
                 writer.write(|cx| self.commit(cx, selection.as_ref(), true, caret));
             });
         }
-        failure.resume();
     }
 
     /// A press at `global` began a drag by `unit`: select that unit and

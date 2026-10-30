@@ -332,3 +332,112 @@ pub(crate) fn handles_come_from_the_area_then_the_default_and_need_an_overlay() 
     assert_eq!(scene.selected().as_deref(), Some("beta"));
     assert_eq!(scene.handles(), 0, "no overlay, no handles");
 }
+
+/// A listener that panics while a long press selects still leaves the word
+/// selected with its handles shown.
+///
+/// Red-check: show the handles after the selection's failure is resumed
+/// (no handle is in the overlay).
+pub(crate) fn a_panicking_listener_still_shows_the_handles() {
+    let heard: Heard = Rc::default();
+    let recorded = Rc::clone(&heard);
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .on_selection_changed(move |_cx, selected| {
+            recorded
+                .borrow_mut()
+                .push(selected.map(|selected| selected.text.clone()));
+            assert!(recorded.borrow().is_empty(), "the listener fails");
+        })
+        .handles(Marked::default());
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    let at = scene.along(width_of("alpha be"));
+    // Wherever the gesture layer contains the panic, the area has done its
+    // own work first.
+    let _contained =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.long_press(at)));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert_eq!(scene.handles(), 2);
+}
+
+/// Shown handles rebuild when the area is given other handles.
+///
+/// Red-check: store the new look without rebuilding the shown handles (the
+/// second handles never build).
+pub(crate) fn shown_handles_rebuild_with_new_handles() {
+    let (first, second) = (Marked::default(), Marked::default());
+    let heard: Heard = Rc::default();
+    let mut scene = Scene::laid_out(
+        WidgetsApp::new(Scene::area(&heard, Some(first))),
+        Rc::clone(&heard),
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    assert!(second.0.borrow().is_empty());
+
+    scene
+        .laid
+        .pump_widget(WidgetsApp::new(Scene::area(&heard, Some(second.clone()))));
+    scene.settle();
+    assert_eq!(scene.handles(), 2);
+    assert_eq!(second.0.borrow().len(), 2, "both handles rebuilt");
+}
+
+/// A start dragged to the end of the text before it selects nothing
+/// there: its handle is published at the next text's start, and a drag
+/// from that handle moves the end from there.
+///
+/// Red-check: resolve the dragged end where the selection keeps it (the
+/// second drag, gripped against the first text's end, lands past "beta").
+pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
+    const NEXT: &str = "delta epsilon";
+    let heard: Heard = Rc::default();
+    let recorded = Rc::clone(&heard);
+    let area = SelectionArea::new(Column::new((Text::new(WORDS), Text::new(NEXT))))
+        .on_selection_changed(move |_cx, selected| {
+            recorded
+                .borrow_mut()
+                .push(selected.map(|selected| selected.text.clone()));
+        })
+        .handles(Marked::default());
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    // Each text's line origin and height, which no drag below changes.
+    let lines: Vec<(Offset<f64>, f64)> = scene
+        .laid
+        .find_all_by_render_type("RenderParagraph")
+        .into_iter()
+        .map(|paragraph| {
+            (
+                scene.laid.absolute_offset(paragraph),
+                scene.laid.size(paragraph).height,
+            )
+        })
+        .collect();
+    let middle = |index: usize, width: f64| {
+        let (origin, height) = lines[index];
+        origin + Offset::new(width, height / 2.0)
+    };
+    // The middle of the handle under the second text's start.
+    let (origin, height) = lines[1];
+    let second_start = origin + Offset::new(0.0, height + Scene::HANDLE / 2.0);
+
+    scene.long_press(middle(1, width_of("del")));
+    assert_eq!(scene.selected().as_deref(), Some("delta"));
+
+    // Past the first text's end, on its line: the start selects nothing
+    // of it.
+    scene.touch_drag(second_start, middle(0, width_of(WORDS) + 4.0));
+    let selected = scene.selected().expect("still selected");
+    assert!(selected.trim_start().starts_with("delta"), "{selected:?}");
+
+    // The handle is painted at the second text's start; dragged from
+    // there by as much as "alpha beta"'s start lies from it, it lands
+    // before "beta".
+    let to = second_start + (middle(0, width_of("alpha ")) - middle(1, 0.0));
+    scene.touch_drag(second_start, to);
+    let selected = scene.selected().expect("still selected");
+    assert!(
+        selected.trim_start().starts_with("beta gamma"),
+        "{selected:?}"
+    );
+}

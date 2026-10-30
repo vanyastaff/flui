@@ -146,6 +146,35 @@ impl InheritedView for DefaultSelectionHandles {
 
 impl_inherited_view!(DefaultSelectionHandles);
 
+/// What an area's handles look like: handles it was given, its own or a
+/// default's, else dots in its active colour.
+#[derive(Clone)]
+pub(super) enum Look {
+    /// Handles given to the area or to a `DefaultSelectionHandles` above it.
+    Given(Rc<dyn SelectionHandles>),
+    /// The dots an area without given handles draws.
+    Dots(DotHandles),
+}
+
+impl Look {
+    fn handles(&self) -> &dyn SelectionHandles {
+        match self {
+            Self::Given(handles) => handles.as_ref(),
+            Self::Dots(dots) => dots,
+        }
+    }
+
+    /// Whether both build the same handles: the same given handles, or
+    /// dots in one colour.
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Given(a), Self::Given(b)) => Rc::ptr_eq(a, b),
+            (Self::Dots(a), Self::Dots(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 /// The area's handles: whether they are shown, the links each end is
 /// published under, and the overlay entry that holds them while shown.
 pub(super) struct HandleState {
@@ -159,7 +188,7 @@ pub(super) struct HandleState {
     /// The entry holding the handles while they are shown.
     entry: RefCell<Option<OverlayEntry>>,
     /// What the handles look like, resolved at the area's last build.
-    pub(super) look: RefCell<Option<Rc<dyn SelectionHandles>>>,
+    look: RefCell<Option<Look>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
     /// Whether the missing overlay was already reported.
@@ -224,6 +253,15 @@ impl HandleState {
             entry.remove();
         }
         self.shown.replace(false)
+    }
+
+    /// Sets what the handles look like, rebuilding shown handles when it
+    /// changed.
+    pub(super) fn set_look(&self, look: Look) {
+        let old = self.look.borrow_mut().replace(look.clone());
+        if !old.is_some_and(|old| old.same(&look)) {
+            self.refresh();
+        }
     }
 
     /// Rebuilds the handles, whose line height may have changed.
@@ -308,7 +346,7 @@ fn handle(
                     }
                 }),
         )
-        .child(look.build(&info, ctx));
+        .child(look.handles().build(&info, ctx));
     Some(
         Positioned::new(LinkFollower::new(model.handles.link(side), dragged))
             .left(0.0)

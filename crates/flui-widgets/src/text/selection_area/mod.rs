@@ -43,10 +43,10 @@ use flui_view::{
     impl_inherited_view,
 };
 
-use self::handles::HandleState;
 pub use self::handles::{
     DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectionHandles,
 };
+use self::handles::{HandleState, Look};
 use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
 use super::primary_selection::PrimarySelectionOwner;
 use super::rich_text::ResolvedParagraph;
@@ -300,8 +300,11 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .handles
             .clone()
             .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
-            .unwrap_or_else(|| Rc::new(DotHandles::new(style.active.with_alpha(255))));
-        *self.model.handles.look.borrow_mut() = Some(look);
+            .map_or_else(
+                || Look::Dots(DotHandles::new(style.active.with_alpha(255))),
+                Look::Given,
+            );
+        self.model.handles.set_look(look);
         // The document reads its lines in the ambient direction.
         let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
