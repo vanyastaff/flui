@@ -752,7 +752,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
             );
         }
         sheet.jump_to(Stop::Closed).expect("an anchor");
-        list.jump_to(300.0);
+        list.jump_to(300.0).expect("no build is running");
         laid.replay(&slow(device, at(150.0, 20.0), at(150.0, 150.0)));
         settle(&mut laid);
         let scrolled = list.pixels();
@@ -777,7 +777,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         Scrollable::new().controller(outer.clone()).child(content),
         &vsync,
     );
-    outer.jump_to(100.0);
+    outer.jump_to(100.0).expect("no build is running");
     laid.tick();
     // A notch up over the sheet: room for the list to go back, and for the
     // sheet to move down, were it a scroll view.

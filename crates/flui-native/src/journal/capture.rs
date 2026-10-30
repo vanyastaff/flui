@@ -7,7 +7,10 @@
 //! call that shapes its output: its clock and setup, each reading or
 //! coalesced batch, device hot-plug and cancellation. That journal is a
 //! native recording: replaying it through the same calls reproduces the
-//! input the backend delivered. A sink receives it: [`recorder`](super::recorder)
+//! input the backend delivered. A loop's application delivery, a window's
+//! delivery and a platform created there journal the same way: what they
+//! handed the application, and what the platform answered its reads of the
+//! system with. A sink receives it: [`recorder`](super::recorder)
 //! folds it into recordings, which [`codec`](super::codec) writes; a build
 //! without the feature links neither.
 //!
@@ -25,8 +28,11 @@ use std::time::Duration;
 
 use flui_platform::EventTime;
 use flui_platform::pointer::PointerKind;
+use flui_platform::{ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences};
+use flui_protocol::native_recording::Stream;
 use parking_lot::{Mutex, ReentrantMutex};
 
+use crate::error::PlatformError;
 use crate::input::assembly::{
     ClickSettings, ContactScroll, CounterAnchor, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, WheelReading,
@@ -34,7 +40,7 @@ use crate::input::assembly::{
 use crate::input::assembly::{TouchpadFrame, ViewportReading};
 
 /// One registry call, as a native recording holds it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Captured<'a> {
     /// The registry was created on a clock with these anchors.
@@ -126,6 +132,20 @@ pub enum Captured<'a> {
     ///
     /// [`ContactRegistry::scroll`]: crate::input::assembly::ContactRegistry::scroll
     Scroll(&'a ContactScroll),
+    /// A stream other than a registry's was opened: a loop's application
+    /// delivery, or a window's delivery.
+    Opened(Stream),
+    /// The host reported a system notice to the application.
+    Notice(SystemNotice),
+    /// The host asked the application about a phase of the session ending.
+    SessionEnd(SessionEndPhase),
+    /// The user reopened the application.
+    Reopen,
+    /// The window's input method delivered an event.
+    Ime(&'a ImeEvent),
+    /// The application read the system preferences, and this is what the
+    /// platform answered.
+    Preferences(Result<&'a SystemPreferences, &'a PlatformError>),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in
@@ -201,16 +221,7 @@ impl Journal {
     /// when none is installed or the capture has numbered every source it
     /// can.
     pub(crate) fn open(clock: NativeClock) -> Self {
-        let session = INSTALLED.with(|installed| installed.borrow().clone());
-        let source = session.upgrade().and_then(|live| {
-            let mut next = live.next_source.lock();
-            let source = (*next)?;
-            *next = source.checked_add(1);
-            Some(CaptureSource(source))
-        });
-        let journal = Self {
-            session: source.map(|source| (session, source)),
-        };
+        let journal = Self::numbered();
         let (epoch, uptime, counter) = clock.anchors();
         journal.record(Captured::Started {
             epoch,
@@ -218,6 +229,29 @@ impl Journal {
             counter,
         });
         journal
+    }
+
+    /// The journal of a `stream` other than a registry's opened now, which it
+    /// reports first; numbered and reporting as [`Self::open`]'s.
+    pub(crate) fn open_stream(stream: Stream) -> Self {
+        let journal = Self::numbered();
+        journal.record(Captured::Opened(stream));
+        journal
+    }
+
+    /// A journal numbered within the installed capture, or reporting nowhere
+    /// when none is installed or the capture has numbered every source it can.
+    fn numbered() -> Self {
+        let session = INSTALLED.with(|installed| installed.borrow().clone());
+        let source = session.upgrade().and_then(|live| {
+            let mut next = live.next_source.lock();
+            let source = (*next)?;
+            *next = source.checked_add(1);
+            Some(CaptureSource(source))
+        });
+        Self {
+            session: source.map(|source| (session, source)),
+        }
     }
 
     /// Report `call` to the capture, if it is still installed. The sink is

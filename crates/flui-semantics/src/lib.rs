@@ -78,7 +78,7 @@ pub use numeric_range::{NumericRange, NumericRangeError};
 // ============================================================================
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
-pub use agent::{Placement, WireActionError, WireLocateError, WireReadError};
+pub use agent::{Placement, TreeSnapshot, WireActionError, WireLocateError, WireReadError};
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because

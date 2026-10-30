@@ -236,6 +236,9 @@ impl UiRuntime {
                             | flui_rendering::RenderError::TextPreparationPending(_)
                     );
                     self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
+                    if !waits_for_input {
+                        Self::arm_failure_retry(presentation);
+                    }
                     FramePaintOutcome::Errored {
                         retry: !waits_for_input || presentation.has_pending_work_snapshot(),
                     }
@@ -264,6 +267,7 @@ impl UiRuntime {
                             internal_invariant,
                         },
                     );
+                    Self::arm_failure_retry(presentation);
                     FramePaintOutcome::Errored { retry: true }
                 }
             };
@@ -304,7 +308,11 @@ impl UiRuntime {
             if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored { .. }) {
                 presentation.clock().mark_first_frame_sent();
             }
-            if matches!(result, FramePaintOutcome::Errored { retry: true }) {
+            // A dropped frame that backs off is woken by its retry deadline,
+            // not by a frame asked for now.
+            if matches!(result, FramePaintOutcome::Errored { retry: true })
+                && presentation.failure_retry_at().is_none()
+            {
                 any_retry_needed = true;
             }
             last_outcome = result;
@@ -404,6 +412,9 @@ impl UiRuntime {
         let mut first = None;
         let mut paid = true;
         for presentation in self.presentations.iter() {
+            // A frame has passed since the actions an agent ran: the
+            // readings they owe are taken from the tree it left.
+            Self::complete_agent_reads(presentation);
             if presentation.text_input().is_transaction_open() {
                 // Its commits are still closed (a frame, a native text
                 // preparation): its anchor comes when they reopen.
@@ -1254,15 +1265,18 @@ impl UiRuntime {
     /// would otherwise clear; and a visual update the scheduler declined
     /// because the frame was still in its pipeline slot (a hover callback's
     /// state change, a paint-time mark), which leaves the tree dirty with no
-    /// frame scheduled. A frame that already armed its retry needs neither.
+    /// frame scheduled. A frame that already armed its retry needs neither,
+    /// and a presentation waiting out a dropped frame's backoff is woken by
+    /// its retry deadline instead.
     fn wake_for_late_demand(&self, retry_needed: bool) {
         let late_visual_update = self.scheduler.take_late_visual_update();
         if retry_needed {
             return;
         }
         let late = self.presentations.iter().any(|presentation| {
-            presentation.redraw_requested_since_watch()
-                || (late_visual_update && presentation.has_pending_work_snapshot())
+            presentation.failure_retry_at().is_none()
+                && (presentation.redraw_requested_since_watch()
+                    || (late_visual_update && presentation.has_pending_work_snapshot()))
         });
         if late {
             self.wake_frame();

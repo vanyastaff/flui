@@ -15,7 +15,7 @@ use crate::haptics::degradation::{
     ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
     web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
-use crate::haptics::headless::FakeHaptics;
+use crate::haptics::headless::HeadlessHaptics;
 use crate::{HeadlessPlatform, OwnerPlatform, Platform as _};
 use flui_platform::WindowOptions;
 use flui_platform::haptics::{
@@ -717,10 +717,10 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         .try_ready()
         .expect("ready");
     let haptics: Arc<dyn PlatformHaptics> = window.haptics().expect("headless has an actuator");
-    let fake = haptics
-        .as_any()
-        .downcast_ref::<FakeHaptics>()
-        .expect("the headless actuator records");
+    assert!(
+        haptics.as_any().is::<HeadlessHaptics>(),
+        "the window's own actuator, which knows no device"
+    );
     let unplugged = DeviceId::new(std::num::NonZeroU64::new(42).expect("nonzero"));
     let request = HapticRequest::new(HapticTiming::Immediate).with_source(unplugged);
     assert_eq!(
@@ -729,9 +729,9 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         "a stale source is not an error"
     );
     assert_eq!(
-        fake.calls()[0].actuator,
-        None,
-        "it played on the window's actuator"
+        haptics.capabilities(Some(unplugged)),
+        haptics.capabilities(None),
+        "it plays on the window's actuator"
     );
 }
 

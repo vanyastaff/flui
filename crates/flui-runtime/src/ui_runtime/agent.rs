@@ -26,13 +26,13 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySen
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
-    ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, ElementId, ErrorCode, LocateParams, Matches, ReadQuery, Retry, Tree,
-    WindowId,
+    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
+    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, InputPath,
+    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
-    Placement, SemanticsActionError, WireActionError, WireLocateError, WireReadError,
+    Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
 use flui_view::__runtime::{AgentPort, PendingAnswer};
 use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
@@ -179,7 +179,7 @@ impl AgentError {
         }
     }
 
-    fn from_actionability(error: WireReadError) -> Self {
+    fn from_unscoped_read(error: WireReadError) -> Self {
         match error {
             WireReadError::NoTree => Self::NoTreeYet,
             _ => Self::Malformed,
@@ -338,6 +338,23 @@ fn record_issued(tree: &Tree, issued: &Mutex<IssuedHandles>) {
         }
     }
     walk(&tree.roots, &mut issued.lock());
+}
+
+/// Records the element handles an action's reading reported, as a read does.
+fn record_issued_outcome(outcome: &ActOutcome, issued: &Mutex<IssuedHandles>) {
+    match &outcome.snapshot {
+        Some(SnapshotReading::Full(tree)) => record_issued(tree, issued),
+        Some(SnapshotReading::Delta(delta)) => {
+            let mut issued = issued.lock();
+            for node in &delta.appeared {
+                issued.record(node.id);
+            }
+            for change in &delta.changed {
+                issued.record(change.node.id);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Records the element handles a locate reported, as a read does.
@@ -520,6 +537,53 @@ impl SemanticsAgent {
         )
     }
 
+    /// As [`Self::act`], and read the tree back once the action's effect has
+    /// settled, as `snapshot` asks: the frame the action ran in, or the next
+    /// one when it ran between frames.
+    ///
+    /// The outcome names the `semantic` path and the effect `ran` (the action
+    /// reached the element's handler), the element, and the reading: with
+    /// [`Snapshot::Delta`], what appeared, went and changed since the tree
+    /// the action started on; with [`Snapshot::Full`], the whole tree; with
+    /// [`Snapshot::None`] nothing, and the reply comes at the drain. A tree
+    /// that cannot be read back afterwards (the window closed first, or the
+    /// tree is malformed) is `readback_failed` on an outcome that still says
+    /// the action ran.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
+    /// request cannot be enqueued; the reply carries the rest, as for
+    /// [`Self::act`].
+    pub fn act_and_read(
+        &self,
+        request: ActionRequest,
+        snapshot: Snapshot,
+    ) -> Result<AgentReply<ActOutcome>, AgentError> {
+        let (command, answer) = self.action_read_command(request, snapshot);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn action_read_command(
+        &self,
+        request: ActionRequest,
+        snapshot: Snapshot,
+    ) -> (UiCommand, AgentReply<ActOutcome>) {
+        let issued = self.issued.lock().was_issued(request.element);
+        let (reply, answer) = self.reply(record_issued_outcome);
+        (
+            UiCommand::SemanticsAgentActionRead {
+                presentation_id: self.sender.presentation_id,
+                request,
+                snapshot,
+                issued,
+                reply,
+            },
+            answer,
+        )
+    }
+
     /// Resolve `params.locator` over the last committed tree: every match, or
     /// the ones `pick` and `max_matches` leave. No match is an empty list.
     ///
@@ -694,6 +758,14 @@ impl AgentPort for DevAgentPort {
         self.admit(|agent| agent.action_command(request))
     }
 
+    fn act_and_read(
+        &self,
+        request: ActionRequest,
+        snapshot: Snapshot,
+    ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
+        self.admit(|agent| agent.action_read_command(request, snapshot))
+    }
+
     fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
         self.admit(|agent| agent.locate_command(params))
     }
@@ -750,6 +822,52 @@ pub(super) fn send_reply<T>(
             code = code.map(ErrorCode::name),
             "dropping a semantics agent reply nobody waits for"
         );
+    }
+}
+
+/// The most entries one action's delta reports across appeared, gone and
+/// changed nodes; past it the delta says `truncated` and the caller reads the
+/// tree.
+const DELTA_CAP: usize = 256;
+
+/// The most nodes a full reading after an action reports.
+const READBACK_NODES: usize = 4096;
+
+/// The most readings one presentation owes at once: past it the oldest is
+/// answered as failed rather than kept for a frame that may never come (a
+/// hidden window runs none).
+const MAX_OWED_READINGS: usize = 256;
+
+/// What serving an action that owes a reading came to.
+pub(super) enum Served {
+    /// The action ran and nothing is owed.
+    Answered(ActOutcome),
+    /// The action ran; the reading is owed once its effect has settled.
+    Reading(ReadingOwed),
+}
+
+/// The reading an action owes, with what the action itself answers.
+pub(super) struct ReadingOwed {
+    outcome: ActOutcome,
+    snapshot: Snapshot,
+    /// The tree the action started on, for a delta.
+    before: Option<TreeSnapshot>,
+}
+
+/// An action's reply, parked on its presentation until a frame has passed.
+/// Owner thread only.
+pub(crate) struct PendingActRead {
+    owed: ReadingOwed,
+    reply: ReplySender<ActOutcome>,
+}
+
+impl PendingActRead {
+    /// The window or the frame is gone before the reading could be taken: the
+    /// action still ran, and the outcome says the tree could not be read back.
+    pub(crate) fn abandon(mut self) {
+        self.owed.outcome.readback_failed = true;
+        let element = self.owed.outcome.element.map(|element| element.element);
+        send_reply(&self.reply, element, Ok(self.owed.outcome));
     }
 }
 
@@ -899,7 +1017,7 @@ impl UiRuntime {
                 .semantics_owner()
                 .ok_or(AgentError::NoTreeYet)?
                 .actionability_point(params.element, params.point, placement)
-                .map_err(AgentError::from_actionability)?;
+                .map_err(AgentError::from_unscoped_read)?;
             Ok::<_, AgentError>((placement, point))
         })?;
 
@@ -934,7 +1052,7 @@ impl UiRuntime {
                     .semantics_owner()
                     .ok_or(AgentError::NoTreeYet)?
                     .actionability_wire(params.element, point, previous, &hit, placement)
-                    .map_err(AgentError::from_actionability)
+                    .map_err(AgentError::from_unscoped_read)
             })
         };
         let facts = read(None)?;
@@ -947,6 +1065,126 @@ impl UiRuntime {
         match previous {
             Some(_) => read(previous),
             None => Ok(facts),
+        }
+    }
+
+    /// The owner half of [`SemanticsAgent::act_and_read`]: the tree the
+    /// action starts on is read first (for a delta), then the action is
+    /// served as [`SemanticsAgent::act`] is. A caller contains a panic as it
+    /// does for an action.
+    pub(super) fn serve_semantics_act_read(
+        &self,
+        presentation: PresentationId,
+        request: &ActionRequest,
+        snapshot: Snapshot,
+        issued: bool,
+        reached_handler: &Cell<bool>,
+    ) -> Result<Served, AgentError> {
+        let state = self
+            .presentations
+            .get(presentation)
+            .ok_or(AgentError::PresentationGone)?;
+        let window = WindowId::from_u64(presentation.as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        let before = if snapshot == Snapshot::Delta {
+            Some(state.pipeline().with(|pipeline| {
+                let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                    .unwrap_or(DevicePixelRatio::ONE);
+                pipeline
+                    .semantics_owner()
+                    .ok_or(AgentError::NoTreeYet)?
+                    .snapshot_wire(Placement::new(ratio, window))
+                    .map_err(AgentError::from_unscoped_read)
+            })?)
+        } else {
+            None
+        };
+        self.serve_semantics_act(presentation, request, issued, reached_handler)?;
+        let mut outcome = ActOutcome::new(InputPath::Semantic, Effect::new(EffectKind::Ran));
+        outcome.element = Some(ElementRef::new(window, request.element));
+        Ok(match snapshot {
+            Snapshot::Delta | Snapshot::Full => Served::Reading(ReadingOwed {
+                outcome,
+                snapshot,
+                before,
+            }),
+            _ => Served::Answered(outcome),
+        })
+    }
+
+    /// Holds an action's reply until a frame has passed, and asks for one, so
+    /// the reading comes even when the action dirtied nothing.
+    pub(super) fn park_act_read(
+        &self,
+        presentation: PresentationId,
+        owed: ReadingOwed,
+        reply: ReplySender<ActOutcome>,
+    ) {
+        let pending = PendingActRead { owed, reply };
+        let Some(state) = self.presentations.get(presentation) else {
+            pending.abandon();
+            return;
+        };
+        let displaced = {
+            let mut parked = state.agent_reads.borrow_mut();
+            parked.push(pending);
+            (parked.len() > MAX_OWED_READINGS).then(|| parked.remove(0))
+        };
+        if let Some(oldest) = displaced {
+            oldest.abandon();
+        }
+        self.request_redraw_for(state);
+    }
+
+    /// Takes the readings the presentation owes, now that a frame has passed
+    /// since the actions that owe them ran: the committed tree, as the frame
+    /// left it, against the tree each action started on.
+    pub(super) fn complete_agent_reads(state: &crate::presentation::PresentationState) {
+        let owed = std::mem::take(&mut *state.agent_reads.borrow_mut());
+        if owed.is_empty() {
+            return;
+        }
+        let window = WindowId::from_u64(state.id().as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        let placement = state.pipeline().with(|pipeline| {
+            let ratio = DevicePixelRatio::new(pipeline.device_pixel_ratio())
+                .unwrap_or(DevicePixelRatio::ONE);
+            Placement::new(ratio, window)
+        });
+        let now = state.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(|owner| owner.snapshot_wire(placement))
+        });
+        for PendingActRead { owed, reply } in owed {
+            let ReadingOwed {
+                mut outcome,
+                snapshot,
+                before,
+            } = owed;
+            let reading = match (snapshot, before, &now) {
+                (Snapshot::Delta, Some(before), Some(Ok(now))) => Some(SnapshotReading::Delta(
+                    before.delta_to(now, false, DELTA_CAP),
+                )),
+                (Snapshot::Full, ..) => {
+                    let mut query = ReadQuery::new();
+                    query.max_nodes = Some(READBACK_NODES);
+                    state
+                        .pipeline()
+                        .with(|pipeline| {
+                            pipeline
+                                .semantics_owner()
+                                .map(|owner| owner.read_wire(&query, placement))
+                        })
+                        .and_then(Result::ok)
+                        .map(SnapshotReading::Full)
+                }
+                _ => None,
+            };
+            outcome.readback_failed = reading.is_none();
+            outcome.snapshot = reading;
+            let element = outcome.element.map(|element| element.element);
+            send_reply(&reply, element, Ok(outcome));
         }
     }
 

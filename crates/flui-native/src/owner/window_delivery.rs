@@ -282,6 +282,9 @@ pub struct WindowDelivery {
     /// What the window's platform reported about frames that reached the
     /// screen, which the window's next frame request carries.
     presented: PresentationReports,
+    /// The native capture this delivery reports to, in builds that have one.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    journal: crate::journal::capture::Journal,
 }
 
 impl WindowDelivery {
@@ -330,6 +333,10 @@ impl WindowDelivery {
             closed: AtomicBool::new(false),
             retiring: Retirement::default(),
             presented: PresentationReports::default(),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: crate::journal::capture::Journal::open_stream(
+                flui_protocol::native_recording::Stream::Window,
+            ),
         }
     }
 
@@ -697,6 +704,11 @@ impl WindowDelivery {
     /// [`PlatformInput::Capabilities`] is a capability change
     /// ([`Self::set_input_capabilities`]).
     pub(crate) fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        if let PlatformInput::Ime(ime) = &event {
+            self.journal
+                .record(crate::journal::capture::Captured::Ime(ime));
+        }
         if let PlatformInput::Capabilities(capabilities) = event {
             self.set_input_capabilities(capabilities);
             return DispatchEventResult::DEFERRED;

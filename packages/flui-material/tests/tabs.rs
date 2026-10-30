@@ -69,7 +69,7 @@ pub fn a_nested_change_beside_a_panicking_observer_does_not_outlive_it() {
         let reentered = Rc::clone(&reentered);
         move || {
             if !reentered.replace(true) {
-                controller.set_index(2);
+                controller.set_index(2).expect("no build is running");
             }
         }
     };
@@ -85,7 +85,7 @@ pub fn a_nested_change_beside_a_panicking_observer_does_not_outlive_it() {
         "and the position followed it"
     );
 
-    controller.set_index(3);
+    controller.set_index(3).expect("no build is running");
     assert_eq!(controller.index(), 3);
     assert_eq!(
         controller.position().value(),
@@ -237,7 +237,7 @@ pub fn a_refused_motion_still_lands_on_the_committed_index() {
     );
     laid.pump_for(Duration::ZERO);
 
-    controller.animate_to(2);
+    controller.animate_to(2).expect("no build is running");
     laid.pump_for(Duration::ZERO);
 
     assert_eq!(controller.index(), 2);
@@ -293,7 +293,7 @@ pub fn the_position_follows_the_surviving_bars_clock() {
 
     laid.pump_widget(tree(false));
     laid.pump_for(Duration::ZERO);
-    controller.animate_to(1);
+    controller.animate_to(1).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(150));
 
@@ -332,7 +332,7 @@ pub fn a_controller_left_by_its_last_bar_settles_without_a_clock() {
 
     laid.pump_widget(tree(false));
     laid.pump_for(Duration::ZERO);
-    controller.animate_to(2);
+    controller.animate_to(2).expect("no build is running");
 
     assert_eq!(controller.position().value(), 2.0, "settles with no clock");
 }
@@ -570,7 +570,7 @@ pub fn the_elastic_indicator_stretches_mid_way_between_tabs() {
     let (left, right) = painted_indicator(&laid);
     let at_start = right - left;
 
-    controller.animate_to(1);
+    controller.animate_to(1).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(150));
     let position = controller.position().value();
@@ -606,7 +606,7 @@ pub fn the_indicator_mirrors_in_a_right_to_left_row() {
     laid.pump_for(Duration::ZERO);
     assert_eq!(painted_indicator(&laid), (BAR_WIDTH - TAB_WIDTH, BAR_WIDTH));
 
-    controller.animate_to(1);
+    controller.animate_to(1).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(150));
     let position = controller.position().value();
@@ -641,7 +641,7 @@ pub fn reduced_motion_settles_the_owned_position_on_the_first_frame() {
         laid.set_motion_override(preference);
         laid.pump_for(Duration::ZERO);
 
-        controller.animate_to(1);
+        controller.animate_to(1).expect("no build is running");
         laid.pump_for(Duration::ZERO);
         assert_eq!(
             controller.position().value(),
@@ -654,4 +654,173 @@ pub fn reduced_motion_settles_the_owned_position_on_the_first_frame() {
             "indicator under {preference:?}"
         );
     }
+}
+
+/// A widget whose `build` drives a tab controller, recording what the
+/// controller answered.
+#[derive(Clone, flui_sdk::view::prelude::StatefulView)]
+struct TabsInBuild {
+    controller: TabController,
+    drive: bool,
+    outcome: Rc<std::cell::RefCell<Vec<Result<(), flui_sdk::foundation::MutatedDuringBuild>>>>,
+}
+
+struct TabsInBuildState;
+
+impl flui_sdk::view::StatefulView for TabsInBuild {
+    type State = TabsInBuildState;
+    fn create_state(&self) -> Self::State {
+        TabsInBuildState
+    }
+}
+
+impl flui_sdk::view::ViewState<TabsInBuild> for TabsInBuildState {
+    fn build(
+        &self,
+        view: &TabsInBuild,
+        _ctx: &dyn flui_sdk::view::BuildContext,
+    ) -> impl flui_sdk::view::prelude::IntoView {
+        if view.drive {
+            let mut outcome = view.outcome.borrow_mut();
+            outcome.push(view.controller.set_index(2));
+            outcome.push(view.controller.animate_to(3));
+        }
+        SizedBox::square(1.0)
+    }
+}
+
+/// `set_index` and `animate_to` called from `build` are refused with a typed
+/// error: the index stays and no listener hears of it (ADR-0086 §7).
+pub(crate) fn controller_mutation_during_build_is_refused() {
+    let controller = linear_controller();
+    let vsync = Vsync::new();
+    let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let notified = Rc::new(Cell::new(0));
+    let heard = Rc::clone(&notified);
+    let _listener = controller.add_listener(move || heard.set(heard.get() + 1));
+    let tree = |drive: bool| {
+        VsyncScope::new(
+            vsync.clone(),
+            Directionality::new(
+                TextDirection::Ltr,
+                themed(
+                    ThemeData::light(),
+                    Column::new((
+                        TabBar::secondary(four_tabs()).controller(controller.clone()),
+                        TabsInBuild {
+                            controller: controller.clone(),
+                            drive,
+                            outcome: Rc::clone(&outcome),
+                        },
+                    )),
+                ),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(BAR_WIDTH, 100.0), vsync.clone());
+    controller
+        .set_index(1)
+        .expect("a change outside build is accepted");
+    assert_eq!((controller.index(), notified.get()), (1, 1));
+
+    laid.pump_widget(tree(true));
+
+    let refused = flui_sdk::foundation::MutatedDuringBuild {
+        controller: "TabController",
+    };
+    assert_eq!(*outcome.borrow(), vec![Err(refused), Err(refused)]);
+    assert_eq!(
+        (controller.index(), notified.get()),
+        (1, 1),
+        "a refused change neither moves the index nor notifies"
+    );
+}
+
+/// Rebuilds the bar from a signal its controller listener writes, reading the
+/// controller in the same build: the shape an app writes.
+#[derive(Clone, flui_sdk::view::prelude::StatefulView)]
+struct SelectionReader {
+    controller: TabController,
+    seen: Rc<Cell<Option<(usize, usize)>>>,
+}
+
+struct SelectionReaderState {
+    selected: Option<flui_sdk::view::Signal<usize>>,
+    controller: TabController,
+    listener: Option<flui_sdk::foundation::ListenerId>,
+}
+
+impl flui_sdk::view::StatefulView for SelectionReader {
+    type State = SelectionReaderState;
+    fn create_state(&self) -> Self::State {
+        SelectionReaderState {
+            selected: None,
+            controller: self.controller.clone(),
+            listener: None,
+        }
+    }
+}
+
+impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
+    fn init_state(&mut self, ctx: &dyn flui_sdk::view::LifecycleContext) {
+        use flui_sdk::view::{BuildContextExt as _, SignalWriteExt as _};
+
+        let selected = ctx.signal(self.controller.index());
+        let writer = ctx.writer_source();
+        let heard = self.controller.clone();
+        self.listener = Some(self.controller.add_listener(move || {
+            let index = heard.index();
+            // An indicator reads the position too.
+            let _ = heard.position().value();
+            writer
+                .write(|cx| selected.set(cx, index))
+                .expect("the listener's write lands");
+        }));
+        self.selected = Some(selected);
+    }
+
+    fn dispose(&mut self) {
+        if let Some(id) = self.listener.take() {
+            self.controller.remove_listener(id);
+        }
+    }
+
+    fn build(
+        &self,
+        view: &SelectionReader,
+        ctx: &dyn flui_sdk::view::BuildContext,
+    ) -> impl flui_sdk::view::prelude::IntoView {
+        let selected = self.selected.expect("init_state ran");
+        view.seen
+            .set(Some((selected.get(ctx), view.controller.index())));
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(view.controller.clone()),
+        )
+    }
+}
+
+/// A tap's event callback changes the tab; the controller notifies with no
+/// borrow held, so its listener reads the controller and writes a signal
+/// through a captured writer source, and the reader rebuilds reading both.
+pub(crate) fn tab_controller_listener_writes_from_an_event_callback() {
+    let seen = Rc::new(Cell::new(None));
+    let mut laid = lay_out(
+        SelectionReader {
+            controller: TabController::new(2, 0),
+            seen: Rc::clone(&seen),
+        },
+        tight(200.0, 48.0),
+    );
+    assert_eq!(seen.get(), Some((0, 0)));
+
+    laid.dispatch_pointer_down(150.0, 24.0);
+    laid.dispatch_pointer_up(150.0, 24.0);
+    laid.tick();
+
+    assert_eq!(
+        seen.get(),
+        Some((1, 1)),
+        "the reader rebuilt with the listener's write and the new index"
+    );
 }

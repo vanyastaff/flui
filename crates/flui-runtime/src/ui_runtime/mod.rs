@@ -119,8 +119,8 @@ mod recording;
 mod sampling;
 
 pub use crate::runtime_services::RuntimeHostServices;
-pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
+pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_stability::AgentStability;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;

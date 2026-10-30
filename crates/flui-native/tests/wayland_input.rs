@@ -299,7 +299,13 @@ mod cases {
     /// blessed.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     fn hold_recording(recorder: flui_native::journal::recorder::Recorder, heard: &[PointerEvent]) {
-        let recordings = recorder.finish();
+        let recordings: Vec<_> = recorder
+            .finish()
+            .into_iter()
+            .filter(|recording| {
+                recording.header.stream == flui_native::journal::codec::Stream::Registry
+            })
+            .collect();
         let [recording] = recordings.as_slice() else {
             panic!("one registry, the seats': {}", recordings.len());
         };
@@ -312,7 +318,7 @@ mod cases {
                 })
                 .collect()
         };
-        let replayed = pointers(recording.replay());
+        let replayed = pointers(recording.replay().expect("a registry's recording replays"));
         assert_eq!(
             replayed.as_slice(),
             heard,
@@ -323,7 +329,7 @@ mod cases {
         let read = flui_native::journal::codec::NativeRecording::read(out.as_slice())
             .expect("it reads back");
         assert_eq!(
-            pointers(read.replay()),
+            pointers(read.replay().expect("a registry's recording replays")),
             replayed,
             "the written recording replays alike"
         );

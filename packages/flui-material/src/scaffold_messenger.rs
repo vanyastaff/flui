@@ -44,11 +44,10 @@
 //!
 //! ## Why status edges are polled, not pushed, from the controller
 //!
-//! Animation callbacks and `MessengerCore` both belong to the UI owner. Status
-//! listeners installed in `ScaffoldMessengerHandle::attach` and
-//! `MessengerCore::start_display_timer` schedule a rebuild. Queue mutation is
-//! reconciled at the public operation or build boundary below, where completion
-//! callbacks can observe the operation's committed queue state.
+//! Animation callbacks and `MessengerCore` both belong to the UI owner. The
+//! status listeners installed in `ScaffoldMessengerHandle::attach` and
+//! `MessengerCore::start_display_timer` carry no state of their own: they
+//! call `MessengerCore::reconcile`, which polls both controllers.
 //!
 //! The actual state-machine translation — "did a controller's status change
 //! since we last looked, and if so what does that mean for the queue" —
@@ -56,10 +55,13 @@
 //! synchronously**, at the end of every queue-mutating method
 //! (`show_snack_bar`/`hide_current`/`remove_current`/`clear`) so an explicit
 //! call observes its own effect immediately (no frame boundary needed — the
-//! "remove twice rapidly" test below asserts on this), and from
-//! [`ScaffoldMessengerState::build`] (scheduled by the status listeners)
-//! for the natural case where a controller settles purely from ticking, with
-//! no explicit API call in between. `reconcile` loops until a full pass
+//! "remove twice rapidly" test below asserts on this), and from the status
+//! listeners, in the animation tick that settled a controller with no
+//! explicit API call in between. Never from `build`: reconciling drives the
+//! controllers, which refuse mutation while the tree builds (ADR-0086 §7).
+//! A listener fired by a reconcile's own command returns at once
+//! (`MessengerCore::reconciling`); the running loop polls that change.
+//! `reconcile` loops until a full pass
 //! detects no further change, so it correctly drains a multi-step cascade
 //! (e.g. `ReverseSettled` → pop → `forward()` → `Forward`) within one call.
 //! `reconcile` never holds the `queue` `RefCell` borrowed across a call back
@@ -89,7 +91,7 @@
 //! `MessengerCore::advancing` guards `pop_and_advance` itself against
 //! double-entry from that same re-entrant path.
 //!
-//! ## Deferring `on_closed` out of the build phase
+//! ## Deferring `on_closed` out of the frame
 //!
 //! `MessengerCore::reconcile` runs from two kinds of call site with
 //! different obligations, captured in `ReconcileOrigin`:
@@ -99,29 +101,22 @@
 //!   `hide_current_snack_bar`/`remove_current_snack_bar`/`clear_snack_bars`),
 //!   which only ever run from event-handler call stacks. `on_closed` fires
 //!   immediately here — removal completes synchronously, in the same call.
-//! - **`ReconcileOrigin::Build`** — from [`ScaffoldMessengerState::build`],
-//!   reached when the controller listeners scheduled a rebuild for
-//!   a PURELY tick-driven status settle (no explicit API call in between —
+//! - **`ReconcileOrigin::Tick`** — from a controller status listener, for a
+//!   PURELY tick-driven status settle (no explicit API call in between —
 //!   e.g. the entrance animation finishing, or the display timer expiring
-//!   and starting the exit reverse, which later settles on its own). Firing
-//!   arbitrary caller-supplied `on_closed` code inline, mid-`build`, is the
-//!   same hazard that keeps `rebuild_handle`/`post_frame_handle` out of
-//!   `build`: an `on_closed` that calls `show_snack_bar` would mutate the
-//!   queue and schedule further rebuilds *after* this build's siblings have
-//!   already built against the pre-mutation tree, silently.
-//!   `MessengerCore::pop_and_advance` instead defers the fire through the
-//!   [`flui_sdk::view::PostFrameHandle`] acquired in
+//!   and starting the exit reverse, which later settles on its own). The
+//!   listener runs inside a frame, and an `on_closed` that calls
+//!   `show_snack_bar` there would mutate the queue in the middle of the
+//!   frame's animation pass. `MessengerCore::pop_and_advance` instead defers
+//!   the fire through the [`flui_sdk::view::PostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
 //!   event-handler-shaped window. If the owner-local lane is unavailable or
 //!   closed, completion is cancelled with a diagnostic; it never falls back
-//!   to executing arbitrary user code during build. Disposing the messenger
-//!   also cancels unfired callbacks, including ones already scheduled.
-//!
-//! State BOOKKEEPING (which entry is at the front, the recorded reason,
-//! whether the display timer is running) is safe to mutate from `build` —
-//! only the arbitrary-code DISPATCH of `on_closed` needs to leave it.
+//!   to executing arbitrary user code inside the frame. Disposing the
+//!   messenger also cancels unfired callbacks, including ones already
+//!   scheduled.
 //!
 //! ## Multi-scaffold fan-out
 //!
@@ -379,15 +374,15 @@ impl QueuedEntry {
 }
 
 /// Where a [`MessengerCore::reconcile`] call originated — see the module
-/// docs' "Deferring `on_closed` out of the build phase" section.
+/// docs' "Deferring `on_closed` out of the frame" section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReconcileOrigin {
     /// A public [`ScaffoldMessengerHandle`] method, called synchronously
     /// from an event-handler call stack — `on_closed` fires immediately.
     Direct,
-    /// [`ScaffoldMessengerState::build`], reached from a purely tick-driven
-    /// status settle — `on_closed` is deferred past this frame.
-    Build,
+    /// A controller status listener, reached from a purely tick-driven
+    /// settle inside a frame — `on_closed` is deferred past this frame.
+    Tick,
 }
 
 /// The messenger's interior-mutable state, `Rc`-shared between
@@ -400,12 +395,15 @@ struct MessengerCore {
     vsync: RefCell<Option<Vsync>>,
     entry_owner: RefCell<Option<DrivenController>>,
     attached: Cell<bool>,
-    /// [`ScaffoldMessenger`]'s own rebuild handle — cloned into both
-    /// controllers' status listeners, so a purely
-    /// tick-driven status settle (no explicit API call in between) still
-    /// reaches [`Self::reconcile`] via [`ScaffoldMessengerState::build`].
-    /// `None` until [`ScaffoldMessengerHandle::attach`] runs.
-    rebuild: RefCell<Option<RebuildHandle>>,
+    /// This core, for the controllers' status listeners: a purely
+    /// tick-driven settle (no explicit API call in between) reaches
+    /// [`Self::reconcile`] from the tick that settled it, never from `build`,
+    /// where the controllers refuse mutation (ADR-0086 §7).
+    this: Weak<MessengerCore>,
+    /// Set while [`Self::reconcile`] runs: a status listener a reconcile's
+    /// own command fires returns at once, and the running loop polls the
+    /// change it reported.
+    reconciling: Cell<bool>,
     /// Acquired in [`ScaffoldMessengerHandle::attach`] (`init_state`, per
     /// ADR-0021). `None` until then, or if no binding installed
     /// one — see the module docs' "Deferring `on_closed` out of the build
@@ -430,6 +428,16 @@ fn remember_completion_failure(first: &mut CompletionFailure, result: std::threa
         } else {
             flui_sdk::foundation::panic::retain_opaque_payload(payload);
         }
+    }
+}
+
+/// Restores `MessengerCore::reconciling` when a reconcile step ends, on
+/// unwind too.
+struct Reconciling<'a>(&'a Cell<bool>, bool);
+
+impl Drop for Reconciling<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.1);
     }
 }
 
@@ -463,6 +471,38 @@ impl MessengerCore {
     /// full pass detects no further change. See the module docs' "Why
     /// status edges are polled, not pushed, from the controller" section.
     fn reconcile(&self, origin: ReconcileOrigin) {
+        let _reconciling = self.enter_reconcile();
+        self.reconcile_until_settled(origin);
+    }
+
+    /// Run a public operation and the reconcile that ends it as one
+    /// `ReconcileOrigin::Direct` step: a status listener its controller
+    /// commands fire leaves the change to that reconcile, so `on_closed`
+    /// fires synchronously in the caller's stack.
+    fn direct(&self, operation: impl FnOnce(&Self)) {
+        let _reconciling = self.enter_reconcile();
+        operation(self);
+        self.reconcile_until_settled(ReconcileOrigin::Direct);
+    }
+
+    fn enter_reconcile(&self) -> Reconciling<'_> {
+        Reconciling(&self.reconciling, self.reconciling.replace(true))
+    }
+
+    /// A controller status listener: reconcile a purely tick-driven settle
+    /// now, unless this messenger is already reconciling or advancing on
+    /// this stack (its own command fired the listener, and that step polls
+    /// the change).
+    fn reconcile_from_tick(core: &Weak<Self>) {
+        let Some(core) = core.upgrade() else {
+            return;
+        };
+        if !core.reconciling.get() && !core.advancing.get() {
+            core.reconcile(ReconcileOrigin::Tick);
+        }
+    }
+
+    fn reconcile_until_settled(&self, origin: ReconcileOrigin) {
         loop {
             let mut changed = false;
 
@@ -514,7 +554,7 @@ impl MessengerCore {
     }
 
     /// Pops the just-exited front entry (if any), fires (or, for
-    /// [`ReconcileOrigin::Build`], defers) its `on_closed`, then begins the
+    /// [`ReconcileOrigin::Tick`], defers) its `on_closed`, then begins the
     /// next entry's entrance if the queue is still non-empty. The single
     /// place that ever pops the queue.
     fn pop_and_advance(&self, origin: ReconcileOrigin) {
@@ -574,9 +614,9 @@ impl MessengerCore {
 
     /// Fires `entry`'s `on_closed` per `origin` — immediately for
     /// [`ReconcileOrigin::Direct`], or deferred through [`Self::post_frame`]
-    /// for [`ReconcileOrigin::Build`]. Without a live post-frame lane the
-    /// callback is cancelled, never executed during build. See "Deferring
-    /// `on_closed` out of the build phase" section.
+    /// for [`ReconcileOrigin::Tick`]. Without a live post-frame lane the
+    /// callback is cancelled, never executed inside the frame. See "Deferring
+    /// `on_closed` out of the frame" section.
     fn complete_entry(&self, entry: Rc<QueuedEntry>, origin: ReconcileOrigin) {
         if origin == ReconcileOrigin::Direct {
             entry.complete();
@@ -611,10 +651,11 @@ impl MessengerCore {
         if front.hovered_presenters.get() != 0 {
             controller.set_playback_rate(PlaybackRate::PAUSED);
         }
-        if let Some(rebuild) = self.rebuild.borrow().clone() {
+        if self.attached.get() {
+            let core = self.this.clone();
             controller
-                .subscribe_status(std::rc::Rc::new(move |_status| {
-                    rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+                .subscribe_status(Rc::new(move |_status| {
+                    MessengerCore::reconcile_from_tick(&core);
                 }))
                 .detach();
         }
@@ -672,7 +713,7 @@ impl MessengerCore {
         if self.entry_controller.status() == AnimationStatus::ReverseSettled {
             self.pop_and_advance(ReconcileOrigin::Direct);
         } else {
-            self.entry_controller.set_value(0.0);
+            let _ = self.entry_controller.set_value(0.0);
         }
     }
 
@@ -726,13 +767,14 @@ impl ScaffoldMessengerHandle {
         let entry_controller = AnimationController::builder(ENTRY_TRANSITION_DURATION)
             .debug_label("SnackBar.entry")
             .build_on(None);
-        let shared = Rc::new(MessengerCore {
+        let shared = Rc::new_cyclic(|this| MessengerCore {
+            this: this.clone(),
             entry_controller: entry_controller.controller().clone(),
             duration_controller: RefCell::new(None),
             vsync: RefCell::new(None),
             entry_owner: RefCell::new(Some(entry_controller)),
             attached: Cell::new(false),
-            rebuild: RefCell::new(None),
+            reconciling: Cell::new(false),
             post_frame: RefCell::new(None),
             writer: RefCell::new(None),
             queue: RefCell::new(VecDeque::new()),
@@ -745,23 +787,21 @@ impl ScaffoldMessengerHandle {
     }
 
     /// Wires the ambient `Vsync`, installs the entrance controller's
-    /// listener scheduling [`ScaffoldMessenger`]'s rebuild, and
+    /// status listener that reconciles a tick-driven settle, and
     /// acquires the binding's post-frame capability (ADR-0021) — see
     /// [`Self::new`]'s doc for why this is deferred out of construction, and
-    /// the module docs' "Deferring `on_closed` out of the build phase"
+    /// the module docs' "Deferring `on_closed` out of the frame"
     /// section for what the post-frame handle is for.
     pub(crate) fn attach(&self, ctx: &dyn LifecycleContext) {
         self.shared.attached.set(true);
         *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
-        let rebuild = ctx.rebuild_handle();
-        let rebuild_for_listener = rebuild.clone();
+        let core = Rc::downgrade(&self.shared);
         self.shared
             .entry_controller
-            .subscribe_status(std::rc::Rc::new(move |_status| {
-                rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+            .subscribe_status(Rc::new(move |_status| {
+                MessengerCore::reconcile_from_tick(&core);
             }))
             .detach();
-        let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
         *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
 
         self.rebind(ctx);
@@ -810,15 +850,6 @@ impl ScaffoldMessengerHandle {
         self.shared.vsync.borrow_mut().take();
         let outgoing = self.shared.entry_owner.borrow_mut().take();
         drop(outgoing);
-    }
-
-    /// Re-runs the state-machine reconciliation for a purely tick-driven
-    /// settle — called from [`ScaffoldMessengerState::build`] whenever the
-    /// Status listeners scheduled a rebuild. Any `on_closed` this
-    /// reaches is deferred, never fired inline mid-`build` — see the module
-    /// docs' "Deferring `on_closed` out of the build phase" section.
-    pub(crate) fn reconcile_after_tick_driven_settle(&self) {
-        self.shared.reconcile(ReconcileOrigin::Build);
     }
 
     /// Registers a [`crate::Scaffold`] so it receives `schedule_rebuild`
@@ -898,16 +929,17 @@ impl ScaffoldMessengerHandle {
             on_closed: Rc::clone(&on_closed),
         });
 
-        let should_enter = {
-            let mut queue = self.shared.queue.borrow_mut();
-            queue.push_back(entry);
-            queue.len() == 1
-        };
-        if should_enter {
-            let _ = self.shared.entry_controller.forward();
-            self.shared.schedule_rebuild_on_scaffolds();
-        }
-        self.shared.reconcile(ReconcileOrigin::Direct);
+        self.shared.direct(|core| {
+            let should_enter = {
+                let mut queue = core.queue.borrow_mut();
+                queue.push_back(entry);
+                queue.len() == 1
+            };
+            if should_enter {
+                let _ = core.entry_controller.forward();
+                core.schedule_rebuild_on_scaffolds();
+            }
+        });
 
         SnackBarController {
             on_closed,
@@ -919,32 +951,30 @@ impl ScaffoldMessengerHandle {
     /// animation, with [`SnackBarClosedReason::Hide`]. A no-op if nothing is
     /// currently showing.
     pub fn hide_current_snack_bar(&self) {
-        self.shared.hide_current(SnackBarClosedReason::Hide);
-        self.shared.reconcile(ReconcileOrigin::Direct);
+        self.shared
+            .direct(|core| core.hide_current(SnackBarClosedReason::Hide));
     }
 
     /// Reason-carrying counterpart of [`Self::hide_current_snack_bar`], for
     /// callers inside this crate that close with a specific reason (e.g.
     /// [`crate::snack_bar::SnackBarAction`]'s single-fire press).
     pub(crate) fn hide_current_snack_bar_because(&self, reason: SnackBarClosedReason) {
-        self.shared.hide_current(reason);
-        self.shared.reconcile(ReconcileOrigin::Direct);
+        self.shared.direct(|core| core.hide_current(reason));
     }
 
     /// Removes the current snack bar (if any) immediately, with no exit
     /// animation, with [`SnackBarClosedReason::Remove`]. If any snack bars
     /// are queued, the next begins its entrance immediately.
     pub fn remove_current_snack_bar(&self) {
-        self.shared.remove_current(SnackBarClosedReason::Remove);
-        self.shared.reconcile(ReconcileOrigin::Direct);
+        self.shared
+            .direct(|core| core.remove_current(SnackBarClosedReason::Remove));
     }
 
     /// Drops every queued (not-yet-shown) snack bar silently (their
     /// `on_closed` never fires) and hides the current one with its normal
     /// exit animation. See the module docs' "`clearSnackBars`" section.
     pub fn clear_snack_bars(&self) {
-        self.shared.clear();
-        self.shared.reconcile(ReconcileOrigin::Direct);
+        self.shared.direct(MessengerCore::clear);
     }
 }
 
@@ -1077,11 +1107,6 @@ impl ViewState<ScaffoldMessenger> for ScaffoldMessengerState {
     }
 
     fn build(&self, view: &ScaffoldMessenger, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Absorbs any tick-driven status settle the status listeners
-        // scheduled this rebuild for — see the module docs' "Deferring
-        // `on_closed` out of the build phase" section for why any
-        // `on_closed` this reaches is deferred, not fired inline here.
-        self.handle.reconcile_after_tick_driven_settle();
         ScaffoldMessengerScope {
             handle: self.handle.clone(),
             child: view.child.clone(),

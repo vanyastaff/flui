@@ -529,6 +529,14 @@ fn navigation_and_layout_contracts() {
             tabs::default_tab_controller_survives_a_length_shrink_past_the_selected_index,
         ),
         (
+            "tabs::controller mutation during build is refused",
+            tabs::controller_mutation_during_build_is_refused,
+        ),
+        (
+            "tabs::tab controller listener writes from an event callback",
+            tabs::tab_controller_listener_writes_from_an_event_callback,
+        ),
+        (
             "tabs::tap sets the controller index through real pointer dispatch",
             tabs::tap_sets_the_controller_index_through_real_pointer_dispatch,
         ),

@@ -876,6 +876,16 @@ has no work pending that could still move the element. The first call for an ele
 made in the frame of the call before it with work pending, answer unstable. Pinned by
 `src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
 
+**Act and read.** `act_and_read` (`UiCommand::SemanticsAgentActionRead`) takes the committed tree
+as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as `act` does, parks
+the reply on the presentation (`agent_reads`, at most 256) and requests a redraw. The reply
+completes in `drive_frame`'s commit-anchor loop, after the frame the effect landed in, by diffing
+the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
+(name, value, description, state, actions; bounds only when asked), a role change counting as
+appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
+owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
+`src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first
@@ -1015,6 +1025,20 @@ one segment report, no partial submission and the next automatic retry presentin
 The existing private segment probe injects a failure that consumers cannot place
 at this exact outer boundary; the registered report handler and real frame driver
 are the production paths.
+
+A dropped frame that retries backs off (ADR-0258 §6). After the `k`-th consecutive
+drop the presentation waits `T · 2^min(k − 1, 10)`, `T` its display's refresh period,
+capped at `FAILURE_RETRY_CAP` (1 s); the exponent is bounded before the shift. The
+wait is a deadline on the presentation that `UiRuntime::next_wake` reports, not a
+frame asked for: until it ends the presentation's segment is not admitted, its
+frame work does not count as pending, and a late redraw request does not wake the
+host, so a host that sleeps until `next_wake` makes one attempt per deadline. A key
+press or a pointer button press ends the wait once per interval; motion, signal
+writes, tickers and the frame's own invalidations keep their demand for the
+attempt. A text failure that waits for input arms nothing. A clean segment clears
+the streak and the wait. `headless_frame_driver_matrix` in `flui-testing` pins the
+cadence at 60, 120 and 240 Hz, the single-failure redraw, the press bypass and a
+streak of forty.
 
 Sampling diagnostics run after every presentation has sampled and established
 recovery, before the build walk. Their mutations are reconciled before any

@@ -212,7 +212,7 @@ struct ReentrantCapture {
 impl Drop for ReentrantCapture {
     fn drop(&mut self) {
         self.drops.set(self.drops.get() + 1);
-        self.controller.set_value(0.5);
+        let _ = self.controller.set_value(0.5);
     }
 }
 
@@ -509,15 +509,15 @@ fn proxy_subscription_survives_parent_replacement() {
 fn switch_subscription_survives_the_active_parent_hop() {
     let first = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
     let next = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
-    first.set_value(0.8);
-    next.set_value(0.3);
+    first.set_value(0.8).expect("no build is running");
+    next.set_value(0.3).expect("no build is running");
     let switch = AnimationSwitch::new(first.clone(), Some(next.clone()));
     let statuses = Rc::new(RefCell::new(Vec::new()));
     let subscription = switch.subscribe_status({
         let statuses = Rc::clone(&statuses);
         Rc::new(move |status| statuses.borrow_mut().push(status))
     });
-    next.set_value(1.0);
+    next.set_value(1.0).expect("no build is running");
     assert!(Rc::ptr_eq(
         &switch.current(),
         &(next.clone() as Rc<dyn Animation<f64>>)
@@ -530,7 +530,7 @@ fn switch_subscription_survives_the_active_parent_hop() {
     );
     drop(subscription);
     let _run = next.forward().unwrap();
-    first.set_value(0.0);
+    first.set_value(0.0).expect("no build is running");
     assert_eq!(statuses.borrow().len(), 2);
 }
 
