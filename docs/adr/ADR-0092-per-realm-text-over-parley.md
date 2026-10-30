@@ -3,6 +3,9 @@
 - **Superseded-by:** [ADR-0183](ADR-0183-explicit-numeric-text-sizing.md) for
   raw query capability boundaries and fallible text-loan acquisition (§10, 3a).
   Runtime ownership of reusable shaping resources remains in force.
+  [ADR-0270](ADR-0270-the-emoji-generic-starts-with-the-platforms-colour-face.md) for §7's
+  clause "The common list is the emoji generic": the emoji generic starts with the platform's
+  colour emoji faces.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
@@ -428,7 +431,7 @@ Measurement and paint read one layout, so one set of rules picks a face:
   sans-serif generic names (`FallbackChain`, over `fallback_tables`: per-platform lists FLUI
   owns, ported from cosmic-text 0.19 and keyed by ISO 15924 code; the host locale's language,
   script and region subtags pick the Han list, where cosmic-text matched the tag whole and gave
-  `ja-JP` the Simplified Chinese faces). The common list is the emoji generic. fontique has no walk over every other face, so a
+  `ja-JP` the Simplified Chinese faces). The emoji generic is the platform's colour emoji faces, then the common list (ADR-0270). fontique has no walk over every other face, so a
   character no listed family covers is `.notdef`;
 - **one set of generics**: with `bundled-fonts` the collection binds every generic to Roboto and
   a host feed rebinds none; without it an unbound generic takes the scan's pick, a carried family
@@ -949,7 +952,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `crates/flui-painting/src/text_layout/fallback_chain.rs`,
   `fontique_fallbacks_follow_the_chain_in_order`,
   `the_sans_serif_family_ends_every_script_fallback` and
-  `the_emoji_generic_is_the_common_list`; in `crates/flui-painting/src/parley_text/shape.rs`,
+  `the_emoji_generic_starts_with_the_colour_faces`; in `crates/flui-painting/src/parley_text/shape.rs`,
   `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
   `a_style_resolves_by_the_family_rule` of `family_resolution` (`context.rs`);
   `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in

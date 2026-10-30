@@ -770,10 +770,12 @@ fontdb matches names exactly, so the rule narrows fontique's
 case-insensitive lookup (`holds_exactly`), and `"segoe ui"` degrades to the
 sans-serif generic. Past that family the collection walks one fallback order,
 `FallbackChain`: each script's list for the host platform, then the
-platform's common list, then the sans-serif generic's family, and the common
-list is the emoji generic. The lists are FLUI's (`fallback_tables`, per
-platform, keyed by ISO 15924 code, ported from cosmic-text 0.19 and checked
-against lists recorded from it); the host locale (`sys-locale`) picks the Han
+platform's common list, then the sans-serif generic's family. The emoji
+generic is the platform's colour emoji faces (`fallback_tables::emoji`),
+then the common list (ADR-0270): the common lists reach a text face that maps
+emoji in monochrome first (unix's DejaVu Sans). The lists are FLUI's
+(`fallback_tables`, per platform, keyed by ISO 15924 code, ported from
+cosmic-text 0.19 and checked against lists recorded from it); the host locale (`sys-locale`) picks the Han
 list. `FontCollection::new()` stays bundled-only, for standalone contexts,
 tests and the hot-reload plugin, and falls back to Roboto for every script.
 
@@ -834,7 +836,7 @@ family covers is skipped, the Latin rows, a mis-cased family and a family the
 host names exactly among them, never are),
 `fontique_fallbacks_follow_the_chain_in_order`,
 `the_sans_serif_family_ends_every_script_fallback`,
-`the_emoji_generic_is_the_common_list`,
+`the_emoji_generic_starts_with_the_colour_faces`,
 `platform_tables_match_the_recorded_lists` and
 `a_platform_chain_picks_han_by_locale` (`src/text_layout/fallback_chain.rs`),
 `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`

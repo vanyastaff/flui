@@ -7,19 +7,21 @@
 //! [`FallbackChain`] holds FLUI's lists for the host (`fallback_tables`) and
 //! [`install_into`] writes them into a fontique collection: per script, the
 //! script's list, then the common list, then the family the collection's
-//! sans-serif generic names. There is no walk over every other face, so a
-//! character no listed family covers shapes as `.notdef` (flui-painting
-//! `ARCHITECTURE.md`, mapping decision 17).
+//! sans-serif generic names; the emoji generic is the platform's colour
+//! emoji faces, then the common list. There is no walk over every other
+//! face, so a character no listed family covers shapes as `.notdef`
+//! (flui-painting `ARCHITECTURE.md`, mapping decision 17).
 
 use parley::fontique::Script;
 
 use super::fallback_tables::{self, Platform};
 
-/// The fallback lists a host feed installs: a common list, and a list per
-/// script, chosen for one locale.
+/// The fallback lists a host feed installs: a common list, the colour emoji
+/// faces, and a list per script, chosen for one locale.
 #[derive(Clone, Debug)]
 pub(crate) struct FallbackChain {
     common: Vec<&'static str>,
+    emoji: Vec<&'static str>,
     scripts: Vec<(Script, &'static [&'static str])>,
 }
 
@@ -34,6 +36,7 @@ impl FallbackChain {
     fn of(platform: Platform, locale: &str) -> Self {
         Self {
             common: fallback_tables::common(platform).to_vec(),
+            emoji: fallback_tables::emoji(platform).to_vec(),
             scripts: fontique_scripts()
                 .filter_map(|script| {
                     let list = fallback_tables::script(platform, script.as_str(), locale);
@@ -43,7 +46,7 @@ impl FallbackChain {
         }
     }
 
-    /// A chain over the given lists, for a test.
+    /// A chain over the given lists and no emoji faces, for a test.
     #[cfg(test)]
     pub(crate) fn from_lists(
         common: &[&'static str],
@@ -51,13 +54,26 @@ impl FallbackChain {
     ) -> Self {
         Self {
             common: common.to_vec(),
+            emoji: Vec::new(),
             scripts: scripts.to_vec(),
         }
+    }
+
+    /// This chain with `emoji` as its colour emoji faces, for a test.
+    #[cfg(test)]
+    pub(crate) fn with_emoji(mut self, emoji: &[&'static str]) -> Self {
+        self.emoji = emoji.to_vec();
+        self
     }
 
     /// The families tried after a script's own list, in order.
     pub(crate) fn common(&self) -> &[&'static str] {
         &self.common
+    }
+
+    /// The colour emoji faces an emoji cluster tries before the common list.
+    pub(crate) fn emoji(&self) -> &[&'static str] {
+        &self.emoji
     }
 
     /// The families tried first for `script`, in order.
@@ -83,7 +99,7 @@ pub(crate) fn fontique_scripts() -> impl Iterator<Item = Script> {
 /// Writes `chain` into `collection`: for every script fontique names, its
 /// fallback families are the chain's list for that script, then the common
 /// list, then the family the collection's sans-serif generic names; the
-/// emoji generic is the common list.
+/// emoji generic is the chain's colour emoji faces, then the common list.
 ///
 /// Only families the collection holds are written, in the chain's order,
 /// each once. The trailing sans-serif family is fontique's last resort, so
@@ -124,12 +140,14 @@ pub(crate) fn install_into(
             changed = true;
         }
     }
-    if !common.is_empty()
+    let emoji_faces = held(collection, chain.emoji(), Vec::new());
+    let emoji = held(collection, chain.common(), emoji_faces);
+    if !emoji.is_empty()
         && !collection
             .generic_families(GenericFamily::Emoji)
-            .eq(common.iter().copied())
+            .eq(emoji.iter().copied())
     {
-        collection.set_generic_families(GenericFamily::Emoji, common.into_iter());
+        collection.set_generic_families(GenericFamily::Emoji, emoji.into_iter());
         changed = true;
     }
     changed
@@ -259,14 +277,53 @@ mod tests {
     }
 
     /// An emoji cluster walks the style's family, then the emoji generic:
-    /// the whole common list, in order.
+    /// the chain's colour emoji faces the collection holds, then the common
+    /// list, each once, in order. A chain with no emoji faces leaves the
+    /// common list alone.
     #[test]
-    fn the_emoji_generic_is_the_common_list() {
-        let mut collection = fixture_collection();
-        install_into(&fixture(), &mut collection);
+    fn the_emoji_generic_starts_with_the_colour_faces() {
+        let cases: [(&str, &[&'static str], &[&str]); 3] = [
+            ("no emoji faces", &[], &["Roboto", "CupertinoIcons"]),
+            (
+                "a held emoji face leads",
+                &["Nothing Carries This", "CupertinoIcons"],
+                &["CupertinoIcons", "Roboto"],
+            ),
+            (
+                "no emoji face held",
+                &["Nothing Carries This"],
+                &["Roboto", "CupertinoIcons"],
+            ),
+        ];
+        for (name, emoji_faces, expected) in cases {
+            let mut collection = fixture_collection();
+            install_into(&fixture().with_emoji(emoji_faces), &mut collection);
 
-        let emoji: Vec<_> = collection.generic_families(GenericFamily::Emoji).collect();
-        assert_eq!(emoji, ids(&mut collection, &["Roboto", "CupertinoIcons"]));
+            let emoji: Vec<_> = collection.generic_families(GenericFamily::Emoji).collect();
+            assert_eq!(emoji, ids(&mut collection, expected), "{name}");
+        }
+    }
+
+    /// Each platform's emoji generic starts with its own colour face: a
+    /// common list that reaches a monochrome text face first (unix's DejaVu
+    /// Sans) would otherwise set emoji in black and white.
+    #[test]
+    fn each_platform_names_its_colour_emoji_face_first() {
+        for (platform, face) in [
+            (Platform::Unix, Some("Noto Color Emoji")),
+            (Platform::Windows, Some("Segoe UI Emoji")),
+            (Platform::MacOs, Some("Apple Color Emoji")),
+            (Platform::Other, None),
+        ] {
+            assert_eq!(
+                FallbackChain::of(platform, "en-US")
+                    .emoji()
+                    .first()
+                    .copied(),
+                face,
+                "{platform:?}"
+            );
+        }
     }
 
     /// Every platform's tables hold what cosmic-text 0.19's did
