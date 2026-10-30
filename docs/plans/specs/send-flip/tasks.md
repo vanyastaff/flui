@@ -202,3 +202,15 @@ T3 и T10 не делят файлов и идут параллельно. T9 ж
   своими features `material/tab_controller_`, `cupertino/cupertino_tab_controller_`
   `stays_on_its_thread`; каждая диагностика называет публичный тип; `thread_boundary_ui` с
   `material,cupertino,native` проходит локально.
+  T7b: consumer R4 `cross_thread_handles_stay_sendable` и R6
+  `event_setters_infer_cx_through_the_facade` (по сеттеру на семейство) проходят; ошибка в
+  фикстуре R6 роняет тест. R7 строки listener, status, post-frame в `owner_local_write_paths`.
+  R11 `listener_panic_reaches_the_realm_report` в контракте `owner_delivery`; откат (паника
+  слушателя поймана и только залогирована в `ChangeNotifier::notify_listeners`) роняет тест.
+  R15 `tests/wasm_consumer.rs`: clippy для wasm32 — шаг `cargo xtask wasm-check`, на хосте
+  тест проходит.
+  T7c: ADR-0086 Accepted с поправкой §5; ADR-0091 Accepted для §2–§6, §1 остаётся Proposed
+  (flip сделан; ADR модели UI runtime, который заменит §1, ещё не написан, `Superseded-by`
+  ставится вместе с ним); ADR-0136: ledger и `IndependentLayout` записаны отброшенными;
+  ADR-0027 §9 называет cross-thread handles и gate; устаревшие строки ADR-0091 и
+  `crates/flui-rendering/ARCHITECTURE.md` исправлены; `changelog.d/send-flip-thread-boundary.md`.

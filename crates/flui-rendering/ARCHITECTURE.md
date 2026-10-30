@@ -1090,7 +1090,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-native`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 
-**Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `Option<T>` fields for geometry/constraints; `NodeLinks` is POD.
+**Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). `RenderTree` is now `!Send + !Sync` by auto-derivation: `RenderEntry<P>` holds `Box<dyn RenderObject<P>>`, and `RenderObject` carries no `Send` or `Sync` supertrait (ADR-0027 §9), so a tree stays on its presentation's thread. `assert_not_impl_any!(RenderTree: Send, Sync)` in `src/storage/tree.rs` pins it.
 
 **Alternatives:** keep the unsafe impl as defensive cruft — rejected, the safety justification was load-bearing only because of `RwLock`'s interior mutability; with that gone, no unsafe carve-out is needed.
 
