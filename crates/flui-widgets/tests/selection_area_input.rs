@@ -563,3 +563,38 @@ pub(crate) fn a_click_targets_the_keys_which_cross_at_the_shown_end() {
     ));
     assert_eq!(scene.selected().as_deref(), Some("Shown"));
 }
+
+/// A blur listener elsewhere that panics while the area takes the focus
+/// back still lets the click's selection commit and be reported, and the
+/// panic reaches the caller.
+///
+/// Red-check: request the focus outside the panic containment (the
+/// Shift+click leaves the selection at the word).
+pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
+    use flui_interaction::focus::FocusNode;
+    use flui_widgets::Focus;
+
+    let armed = Rc::new(std::cell::Cell::new(false));
+    let node = FocusNode::with_debug_label("elsewhere");
+    let failing = Rc::clone(&armed);
+    let elsewhere = Focus::new(SizedBox::new(10.0, 10.0))
+        .focus_node(Rc::clone(&node))
+        .on_focus_change(move |_cx, focused| {
+            assert!(focused || !failing.get(), "the blur listener fails");
+        });
+    let mut scene = Scene::over(Column::new((elsewhere, Text::new(FIRST))).boxed());
+    let paragraph = scene.index_of(FIRST);
+    scene.clicks(scene.at(paragraph, 0.2), 2);
+    assert_eq!(scene.selected().as_deref(), Some("Hello"));
+
+    let _outcome = node.request_focus();
+    scene.settle();
+    armed.set(true);
+    let end = scene.at(paragraph, 1.0) + Offset::new(4.0, 0.0);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.shift_click(end)));
+    assert!(
+        caught.is_err(),
+        "the blur listener's panic reaches the caller"
+    );
+    assert_eq!(scene.selected().as_deref(), Some(FIRST));
+}

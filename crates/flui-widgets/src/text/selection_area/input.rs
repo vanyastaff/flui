@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Matrix4, Offset};
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
     GestureRecognizer, KeyEventResult, PointerKindSet, TapAndDragGestureRecognizer,
     TapGestureRecognizer,
@@ -193,14 +194,20 @@ impl SelectionModel {
     /// the change through the area's writer.
     fn select_from_input(&self, selection: Option<DocumentSelection>) {
         // A click that selects nothing still makes this area the target of
-        // the keys, so select all and copy act on the area last clicked.
+        // the keys, so select all and copy act on the area last clicked. A
+        // blur listener that panics still lets the selection commit and be
+        // reported; the first failure is resumed afterwards.
+        let mut failure = FirstPanic::new();
         if !self.focus.has_primary_focus() {
-            let _outcome = self.focus.request_focus();
+            failure.contain(|| {
+                let _outcome = self.focus.request_focus();
+            });
         }
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
-            writer.write(|cx| self.select(cx, selection.as_ref()));
+            failure.contain(|| writer.write(|cx| self.select(cx, selection.as_ref())));
         }
+        failure.resume();
     }
 
     /// A press at `global` began a drag by `unit`: select that unit and
