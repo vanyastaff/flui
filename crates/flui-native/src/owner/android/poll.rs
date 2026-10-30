@@ -14,6 +14,9 @@ pub(crate) struct LoopTurn {
     /// The turn has a frame to deliver: a redraw request or a due deadline,
     /// while resumed.
     pub(crate) should_render: bool,
+    /// The turn has a frame to deliver at the choreographer's next frame,
+    /// whose callback is posted and wakes the looper (ADR-0269).
+    pub(crate) awaiting_vsync: bool,
     /// The Activity is resumed, so a frame can be delivered at all.
     pub(crate) resumed: bool,
     /// The earliest wall-clock deadline the wake hook reported.
@@ -35,6 +38,9 @@ const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
 /// the loop wakes on no timer of its own:
 ///
 /// - a turn with a frame to deliver does not block;
+/// - a turn waiting for the choreographer's next frame blocks until it is
+///   woken, or until a deadline or preference sample still ahead: a deadline
+///   already behind is the frame it waits for;
 /// - a resumed turn blocks until the next deadline or preference sample, and
 ///   with neither until it is woken;
 /// - a paused turn blocks until a deadline that is still ahead, and with none
@@ -46,17 +52,13 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         return Some(Duration::ZERO);
     }
     let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
-    if turn.resumed {
-        [turn.wake_deadline, turn.next_preference_sample]
-            .into_iter()
-            .flatten()
-            .min()
-            .map(until)
-    } else {
+    let deadline = if turn.resumed && !turn.awaiting_vsync {
         turn.wake_deadline
-            .filter(|deadline| *deadline > now)
-            .map(until)
-    }
+    } else {
+        turn.wake_deadline.filter(|deadline| *deadline > now)
+    };
+    let sample = turn.next_preference_sample.filter(|_| turn.resumed);
+    [deadline, sample].into_iter().flatten().min().map(until)
 }
 
 #[cfg(test)]
@@ -66,18 +68,26 @@ mod tests {
     /// A paused Activity cannot deliver a frame, so the loop blocks: no timer
     /// of its own, no past deadline turning the poll into a busy loop, and only
     /// a deadline still ahead (a timer the owner serves without a frame) bounds
-    /// the wait. A resumed loop whose changes are reported blocks the same way.
+    /// the wait. A resumed loop whose changes are reported blocks the same way,
+    /// and so does one waiting for the choreographer's next frame, whose
+    /// callback wakes it.
     #[test]
     fn a_paused_loop_blocks_until_it_is_woken() {
         let now = Instant::now();
         let ms = Duration::from_millis;
         let turn = |should_render, resumed, wake_deadline| LoopTurn {
+            awaiting_vsync: false,
             should_render,
             resumed,
             wake_deadline,
             next_preference_sample: Some(now + ms(500)),
         };
+        let awaiting = |wake_deadline| LoopTurn {
+            awaiting_vsync: true,
+            ..turn(false, true, wake_deadline)
+        };
         let reported = |wake_deadline| LoopTurn {
+            awaiting_vsync: false,
             should_render: false,
             resumed: true,
             wake_deadline,
@@ -90,6 +100,16 @@ mod tests {
                 Some(Duration::ZERO),
             ),
             ("resumed and idle", turn(false, true, None), Some(ms(500))),
+            (
+                "waiting for the next frame, its deadline behind",
+                awaiting(now.checked_sub(ms(40))),
+                Some(ms(500)),
+            ),
+            (
+                "waiting for the next frame, a timer ahead",
+                awaiting(Some(now + ms(3))),
+                Some(ms(3)),
+            ),
             (
                 "resumed and idle, with changes reported",
                 reported(None),
