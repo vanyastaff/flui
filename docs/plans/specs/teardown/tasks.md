@@ -258,7 +258,13 @@ graph LR
     неактивен) и не держит дерево. R3 `a_close_that_holds_a_failure_never_detaches`: закрытие с
     удержанным сбоем не роняет владельца, `detached()` не вызван, наблюдатель жив; паника `dispose`
     сдерживается на месте и такого закрытия не даёт.
-- [ ] T13 — IME-шаг закрытия
+- [x] T13 — IME-шаг закрытия. Подтверждение стоит в общем пути к Detached
+  (`reconcile_lifecycle_after_failure` в `flui-runtime`): перед наблюдателями Detached
+  сфокусированное поле подтверждает композицию, текст остаётся. Так покрыт любой путь —
+  принятое закрытие, окно, уничтоженное платформой (на headless-runner Detached приходит из
+  наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
+  `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
+  `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
 - [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
 - [ ] T17 — README, Win32-строка R5, закрытие
