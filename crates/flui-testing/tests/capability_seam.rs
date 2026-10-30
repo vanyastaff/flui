@@ -377,7 +377,7 @@ impl CapabilityProvider<ClipboardCapability> for ExplodingProvider {
 pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
     let scripted = ScriptedClipboard::new();
     scripted.hold_reads();
-    let provider = ExplodingProvider(scripted.clone());
+    let provider = ExplodingProvider(scripted);
     let mut host = HeadlessHost::with_capabilities(
         window(),
         registry_of(move |registrar| registrar.provide::<ClipboardCapability>(provider)),
