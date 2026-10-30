@@ -1157,17 +1157,28 @@ pub(super) fn end_session_teardown(tear_down: bool) {
     if tear_down {
         retire_installed_host(&mut first_panic);
     }
+    // Each step has its own containment, as at the loop's exit: a failed
+    // service shutdown still closes execution admission and the pools before
+    // the platform may end the process.
     let now = std::time::Instant::now();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
             if let Ok(mut state) = slot.try_borrow_mut() {
                 drop(state.shutdown_lifecycles(now));
+            }
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end service shutdown");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            if let Ok(mut state) = slot.try_borrow_mut() {
                 state.shutdown_execution(now);
             }
         });
     }))
     .err();
-    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end release");
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end execution shutdown");
     if let Some(payload) = first_panic {
         super::terminal::hold_terminal(payload, "session end");
     }
