@@ -2,8 +2,9 @@
 //! the host outside every UI runtime and written to storage from there.
 //!
 //! A document publishes its encoded bytes here on the owner thread, through
-//! its own [`FlushPublisher`]; the host writes them through its [`Storage`]
-//! on the IO pool, one write in flight per name, the latest bytes winning.
+//! its own [`FlushPublisher`], made for the [`Storage`] the document acquired;
+//! the host writes them to that storage on the IO pool, one write in flight
+//! per value (a name in a storage), the latest bytes winning.
 //! Because the registry lives outside the UI runtime, the host can still write
 //! what was published when the UI runtime is gone or busy: at the end of the
 //! application and when the session ends, without running any application
@@ -13,7 +14,7 @@
 //! it on the owner's turn. Documents get only the publishing side, a
 //! [`FlushRegistry`].
 //!
-//! Per name the registry keeps at most one write in flight and the latest
+//! Per value the registry keeps at most one write in flight and the latest
 //! bytes owed after it. Bytes published while a write is in flight replace
 //! the owed bytes and are written once that write finishes. A failed write
 //! keeps its bytes owed, with the failure, until newer bytes replace them or
@@ -46,12 +47,12 @@ pub enum FlushState {
     Pending,
     /// The last write failed. The bytes stay in the registry until newer
     /// bytes replace them or the host's flush writes them. A write based on
-    /// a version another publisher replaced fails with
+    /// a version the storage no longer holds fails with
     /// [`StorageError::Conflict`].
     Failed(StorageError),
 }
 
-/// Who published a name's bytes: one [`FlushPublisher`] and its clones.
+/// Who published a value's bytes: one [`FlushPublisher`] and its clones.
 ///
 /// Compared by `Arc` address. Both the owed bytes and the committed record
 /// hold the publisher's `Arc` itself — never a raw address or a `Weak` — so
@@ -60,30 +61,59 @@ pub enum FlushState {
 /// the one that committed.
 struct PublisherIdentity;
 
-/// Bytes published under one name.
+/// One stored value: the storage that keeps it and its name there.
+///
+/// The storage is compared by its `Arc`'s address, never by its type, so two
+/// stores of one type are two keys. Every record under a key (the owed
+/// bytes, the committed write) holds that `Arc`, so its address cannot be
+/// reused by another storage while the key is in the registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ValueKey {
+    store: usize,
+    name: StorageName,
+}
+
+impl ValueKey {
+    fn of(storage: &Arc<dyn Storage>, name: StorageName) -> Self {
+        Self {
+            store: Arc::as_ptr(storage).cast::<()>().addr(),
+            name,
+        }
+    }
+}
+
+/// Bytes published under one value.
 struct Slot {
     bytes: Arc<[u8]>,
     mode: WriteMode,
     revision: Revision,
     publisher: Arc<PublisherIdentity>,
+    /// The storage the bytes are written to: the one the publishing document
+    /// acquired.
+    storage: Arc<dyn Storage>,
 }
 
-/// The last write the storage confirmed for one name.
+/// The last write the storage confirmed for one value.
 struct CommittedWrite {
     revision: Revision,
     version: StoredVersion,
-    /// The publisher whose line the next edit must continue to be rebased
-    /// rather than conflict; kept as its `Arc` (see [`PublisherIdentity`]).
+    /// The version that write was based on as published, before any
+    /// rebase; `None` for a write that replaced whatever was stored.
+    based_on: Option<StoredVersion>,
+    /// The publisher whose line continues from this write; kept as its
+    /// `Arc` (see [`PublisherIdentity`]).
     publisher: Arc<PublisherIdentity>,
+    /// Keeps the key's storage address taken (see [`ValueKey`]).
+    _storage: Arc<dyn Storage>,
 }
 
-/// One name's bytes that are not stored yet.
+/// One value's bytes that are not stored yet.
 #[derive(Default)]
 struct Entry {
     /// The latest bytes not being written: published since the write in
     /// flight started, or kept after a write that did not store them.
     owed: Option<Slot>,
-    /// Whether a write of this name is in flight.
+    /// Whether a write of this value is in flight.
     writing: bool,
     /// Why the owed bytes' last write failed; `None` once newer bytes
     /// replace them.
@@ -105,24 +135,21 @@ impl Entry {
     }
 }
 
-/// What [`Slots::begin`] decided for one name.
+/// What [`Slots::begin`] decided for one value.
 enum Begin {
     /// Nothing to start: nothing owed, a write already in flight, or failed
     /// bytes left for the flush.
     Nothing,
     /// Write these bytes under this mode.
     Write(Slot, WriteMode),
-    /// The write would conflict; the failure is recorded and the bytes stay
-    /// owed.
-    Refused,
 }
 
 /// The registry's state.
 #[derive(Default)]
 struct Slots {
-    entries: HashMap<StorageName, Entry>,
-    committed: HashMap<StorageName, CommittedWrite>,
-    /// How many finished or refused writes were recorded.
+    entries: HashMap<ValueKey, Entry>,
+    committed: HashMap<ValueKey, CommittedWrite>,
+    /// How many finished writes were recorded.
     changes: u64,
     /// How many of them the owner has settled: waiters taken before this
     /// count are resolved.
@@ -139,15 +166,15 @@ fn count_change(changes: &mut u64) {
 }
 
 impl Slots {
-    /// Start writing the bytes owed under `name`, unless a write of it is
+    /// Start writing the bytes owed under `key`, unless a write of it is
     /// in flight. Failed bytes are written again only when `retry_failed`.
     ///
-    /// An edit based on a version is checked against the last write the
-    /// storage confirmed: from the publisher that made that write it is
-    /// rebased onto it, from another publisher it conflicts unless it was
-    /// based on exactly that version.
-    fn begin(&mut self, name: StorageName, retry_failed: bool) -> Begin {
-        let Some(entry) = self.entries.get_mut(&name) else {
+    /// An edit based on the same version as the last confirmed write of its
+    /// own publisher continues that publisher's line: it is rebased onto
+    /// that write, whose bytes it replaces. Every other edit is written as
+    /// published, and the storage's own comparison decides it.
+    fn begin(&mut self, key: ValueKey, retry_failed: bool) -> Begin {
+        let Some(entry) = self.entries.get_mut(&key) else {
             return Begin::Nothing;
         };
         if entry.writing || (entry.failure.is_some() && !retry_failed) {
@@ -156,17 +183,11 @@ impl Slots {
         let Some(slot) = entry.owed.take() else {
             return Begin::Nothing;
         };
-        let mode = match (slot.mode, self.committed.get(&name)) {
-            (WriteMode::IfUnchanged(_), Some(last))
-                if Arc::ptr_eq(&last.publisher, &slot.publisher) =>
+        let mode = match (slot.mode, self.committed.get(&key)) {
+            (WriteMode::IfUnchanged(base), Some(last))
+                if Arc::ptr_eq(&last.publisher, &slot.publisher) && last.based_on == Some(base) =>
             {
                 WriteMode::IfUnchanged(last.version)
-            }
-            (WriteMode::IfUnchanged(base), Some(last)) if base != last.version => {
-                entry.owed = Some(slot);
-                entry.failure = Some(StorageError::Conflict);
-                count_change(&mut self.changes);
-                return Begin::Refused;
             }
             (mode, _) => mode,
         };
@@ -175,31 +196,36 @@ impl Slots {
         Begin::Write(slot, mode)
     }
 
-    /// Record how the write of `slot` under `name` ended, and start the
+    /// Record how the write of `slot` under `key` ended, and start the
     /// write of bytes published meanwhile. `None` is a write dropped before
     /// it finished.
     fn finish(
         &mut self,
-        name: StorageName,
+        key: ValueKey,
         slot: Slot,
         result: Option<Result<StoredVersion, StorageError>>,
     ) -> Begin {
         // A write in flight keeps its entry; the default only keeps a drop
         // from panicking if that ever breaks.
-        let entry = self.entries.entry(name).or_default();
+        let entry = self.entries.entry(key).or_default();
         entry.writing = false;
         let next = match result {
             Some(Ok(version)) => {
                 self.committed.insert(
-                    name,
+                    key,
                     CommittedWrite {
                         revision: slot.revision,
                         version,
+                        based_on: match slot.mode {
+                            WriteMode::IfUnchanged(base) => Some(base),
+                            _ => None,
+                        },
                         publisher: slot.publisher,
+                        _storage: slot.storage,
                     },
                 );
                 count_change(&mut self.changes);
-                self.begin(name, false)
+                self.begin(key, false)
             }
             // Not written, and nothing wrong with the bytes: they stay owed
             // for the flush. Not restarted here, since a pool or storage
@@ -214,21 +240,20 @@ impl Slots {
                     entry.failure = Some(error);
                 }
                 count_change(&mut self.changes);
-                self.begin(name, false)
+                self.begin(key, false)
             }
         };
-        if self.entries.get(&name).is_some_and(Entry::is_clean) {
-            self.entries.remove(&name);
+        if self.entries.get(&key).is_some_and(Entry::is_clean) {
+            self.entries.remove(&key);
         }
         next
     }
 }
 
-/// What the host gave the registry to write with: the storage, the IO pool
-/// that runs the writes, and the channel that tells the owner a write
-/// finished.
+/// What the host gave the registry to write with: the IO pool that runs the
+/// writes, and the channel that tells the owner a write finished. Each write
+/// goes to the storage its bytes were published for.
 struct RegistryHost {
-    storage: Arc<dyn Storage>,
     writer: FlushWriter,
     notify: OwnerNotify,
 }
@@ -247,18 +272,18 @@ impl Shared {
     /// around everything but the record.
     fn finish(
         self: &Arc<Self>,
-        name: StorageName,
+        key: ValueKey,
         slot: Slot,
         result: Option<Result<StoredVersion, StorageError>>,
     ) {
         let (next, changed) = {
             let mut slots = self.slots.lock();
             let before = slots.changes;
-            let next = slots.finish(name, slot, result);
+            let next = slots.finish(key, slot, result);
             (next, slots.changes != before)
         };
         self.write_ended.notify_all();
-        self.start(name, next);
+        self.start(key, next);
         if changed {
             self.signal();
         }
@@ -266,9 +291,9 @@ impl Shared {
 
     /// Hand a write [`Slots::begin`] started to the IO pool. A write the
     /// pool refuses is dropped here, which keeps its bytes owed.
-    fn start(self: &Arc<Self>, name: StorageName, begin: Begin) {
+    fn start(self: &Arc<Self>, key: ValueKey, begin: Begin) {
         if let Begin::Write(slot, mode) = begin {
-            self.hand_to_pool(PendingWrite::new(Arc::clone(self), name, slot, mode));
+            self.hand_to_pool(PendingWrite::new(Arc::clone(self), key, slot, mode));
         }
     }
 
@@ -287,13 +312,14 @@ impl Shared {
     }
 }
 
-/// One write of one name: asks the storage on its first poll and records
-/// the answer. Dropped before the answer, it keeps its bytes owed — unless
-/// newer bytes were published meanwhile, which then win. Bytes the storage
-/// had already accepted may still land; the flush then writes them again.
+/// One write of one value, to the storage its bytes were published for: asks
+/// it on its first poll and records the answer. Dropped before the answer, it
+/// keeps its bytes owed — unless newer bytes were published meanwhile, which
+/// then win. Bytes the storage had already accepted may still land; the flush
+/// then writes them again.
 struct PendingWrite {
     shared: Arc<Shared>,
-    name: StorageName,
+    key: ValueKey,
     /// The bytes being written; `None` once the answer is recorded.
     slot: Option<Slot>,
     mode: WriteMode,
@@ -301,10 +327,10 @@ struct PendingWrite {
 }
 
 impl PendingWrite {
-    fn new(shared: Arc<Shared>, name: StorageName, slot: Slot, mode: WriteMode) -> Self {
+    fn new(shared: Arc<Shared>, key: ValueKey, slot: Slot, mode: WriteMode) -> Self {
         Self {
             shared,
-            name,
+            key,
             slot: Some(slot),
             mode,
             answer: None,
@@ -321,10 +347,8 @@ impl Future for PendingWrite {
             return Poll::Ready(());
         };
         let answer = this.answer.get_or_insert_with(|| {
-            this.shared
-                .host
-                .storage
-                .publish(&this.name, slot.bytes.to_vec(), this.mode)
+            slot.storage
+                .publish(&this.key.name, slot.bytes.to_vec(), this.mode)
         });
         let Poll::Ready(result) = answer.as_mut().poll(cx) else {
             return Poll::Pending;
@@ -334,7 +358,7 @@ impl Future for PendingWrite {
             .slot
             .take()
             .expect("BUG: an unfinished write holds its bytes");
-        this.shared.finish(this.name, slot, Some(result));
+        this.shared.finish(this.key, slot, Some(result));
         Poll::Ready(())
     }
 }
@@ -342,7 +366,7 @@ impl Future for PendingWrite {
 impl Drop for PendingWrite {
     fn drop(&mut self) {
         if let Some(slot) = self.slot.take() {
-            self.shared.finish(self.name, slot, None);
+            self.shared.finish(self.key, slot, None);
         }
     }
 }
@@ -395,52 +419,32 @@ impl fmt::Debug for FlushRegistry {
 }
 
 impl FlushRegistry {
-    /// A new publisher of `name`. Each call is a different publisher; its
-    /// clones are the same one.
+    /// A new publisher of `name` in `storage`: the storage the publishing
+    /// document acquired, which its bytes are written to. Each call is a
+    /// different publisher; its clones are the same one.
     ///
-    /// A publisher's own edits are one line: an edit based on the version its
-    /// own previous write replaced is rebased onto that write instead of
-    /// conflicting. An edit based on a version another publisher replaced
-    /// fails with [`StorageError::Conflict`].
+    /// A publisher's own edits are one line: an edit based on the same
+    /// version as its last confirmed write is rebased onto that write, whose
+    /// bytes it replaces. Every other edit is written as published, and the
+    /// storage decides it: an edit based on a version the storage no longer
+    /// holds fails with [`StorageError::Conflict`]. The same name in two
+    /// storages is two values.
     #[must_use]
-    pub fn publisher(&self, name: StorageName) -> FlushPublisher {
+    pub fn publisher(&self, name: StorageName, storage: Arc<dyn Storage>) -> FlushPublisher {
         FlushPublisher {
             shared: Arc::clone(&self.shared),
-            name,
+            key: ValueKey::of(&storage, name),
+            storage,
             identity: Arc::new(PublisherIdentity),
         }
     }
 
-    /// The document's revision last written for `name`, as it was
-    /// published, with the stored version the storage confirmed for it;
-    /// `None` before the first confirmed write.
-    #[must_use]
-    pub fn committed(&self, name: StorageName) -> Option<(Revision, StoredVersion)> {
-        self.shared
-            .slots
-            .lock()
-            .committed
-            .get(&name)
-            .map(|write| (write.revision, write.version))
-    }
-
-    /// Where the bytes published under `name` stand.
-    #[must_use]
-    pub fn state(&self, name: StorageName) -> FlushState {
-        self.shared
-            .slots
-            .lock()
-            .entries
-            .get(&name)
-            .map_or(FlushState::Clean, Entry::state)
-    }
-
-    /// A future that resolves at the first write that finishes, fails or is
-    /// refused, for any name, after it was taken: what changes
-    /// [`state`](Self::state) or [`committed`](Self::committed) other than
-    /// the publisher's own publication. It wakes on the owner's turn, never
-    /// on the IO thread that finished the write. Take it before reading the
-    /// state.
+    /// A future that resolves at the first write that finishes or fails,
+    /// for any value, after it was taken: what changes a publisher's
+    /// [`state`](FlushPublisher::state) or
+    /// [`committed`](FlushPublisher::committed) other than its own
+    /// publication. It wakes on the owner's turn, never on the IO thread
+    /// that finished the write. Take it before reading the state.
     pub fn changed(&self) -> FlushChanged {
         let taken_at = self.shared.slots.lock().changes;
         FlushChanged {
@@ -450,19 +454,20 @@ impl FlushRegistry {
     }
 }
 
-/// One document's right to publish under one name; see
+/// One document's right to publish one value: a name in a storage; see
 /// [`FlushRegistry::publisher`].
 #[derive(Clone)]
 pub struct FlushPublisher {
     shared: Arc<Shared>,
-    name: StorageName,
+    key: ValueKey,
+    storage: Arc<dyn Storage>,
     identity: Arc<PublisherIdentity>,
 }
 
 impl fmt::Debug for FlushPublisher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FlushPublisher")
-            .field("name", &self.name.as_str())
+            .field("name", &self.key.name.as_str())
             .finish_non_exhaustive()
     }
 }
@@ -471,36 +476,56 @@ impl FlushPublisher {
     /// The name this publisher writes.
     #[must_use]
     pub fn name(&self) -> StorageName {
-        self.name
+        self.key.name
     }
 
-    /// Make `bytes` the latest value of the name, to be written under
-    /// `mode`, replacing bytes published earlier that are not written yet.
-    /// `revision` is the document's own revision of these bytes, the one
-    /// written in their header; the registry records it and never mints one.
-    /// Owner thread; never waits for the storage.
+    /// The document's revision last written for this value, by any
+    /// publisher, as it was published, with the stored version the storage
+    /// confirmed for it; `None` before the first confirmed write.
+    #[must_use]
+    pub fn committed(&self) -> Option<(Revision, StoredVersion)> {
+        self.shared
+            .slots
+            .lock()
+            .committed
+            .get(&self.key)
+            .map(|write| (write.revision, write.version))
+    }
+
+    /// Where the bytes published for this value stand.
+    #[must_use]
+    pub fn state(&self) -> FlushState {
+        self.shared
+            .slots
+            .lock()
+            .entries
+            .get(&self.key)
+            .map_or(FlushState::Clean, Entry::state)
+    }
+
+    /// Make `bytes` the latest value, to be written under `mode`, replacing
+    /// bytes published earlier that are not written yet. `revision` is the
+    /// document's own revision of these bytes, the one written in their
+    /// header; the registry records it and never mints one. Owner thread;
+    /// never waits for the storage.
     ///
-    /// When no write of the name is in flight, the write starts on the IO
+    /// When no write of the value is in flight, the write starts on the IO
     /// pool now; otherwise it starts when the one in flight finishes.
     pub fn publish(&self, bytes: Arc<[u8]>, mode: WriteMode, revision: Revision) {
-        let (begin, changed) = {
+        let begin = {
             let mut slots = self.shared.slots.lock();
-            let entry = slots.entries.entry(self.name).or_default();
+            let entry = slots.entries.entry(self.key).or_default();
             entry.owed = Some(Slot {
                 bytes,
                 mode,
                 revision,
                 publisher: Arc::clone(&self.identity),
+                storage: Arc::clone(&self.storage),
             });
             entry.failure = None;
-            let before = slots.changes;
-            let begin = slots.begin(self.name, false);
-            (begin, slots.changes != before)
+            slots.begin(self.key, false)
         };
-        self.shared.start(self.name, begin);
-        if changed {
-            self.shared.signal();
-        }
+        self.shared.start(self.key, begin);
     }
 }
 
@@ -588,20 +613,16 @@ impl fmt::Debug for FlushHost {
 }
 
 impl FlushHost {
-    /// A registry writing through `storage`, starting each write on the IO
-    /// pool through `writer`, and signalling the owner through `notify` when
-    /// a write finishes.
+    /// A registry starting each write on the IO pool through `writer`, and
+    /// signalling the owner through `notify` when a write finishes. Each
+    /// write goes to the storage its publisher was made for.
     #[must_use]
-    pub fn new(storage: Arc<dyn Storage>, writer: FlushWriter, notify: OwnerNotify) -> Self {
+    pub fn new(writer: FlushWriter, notify: OwnerNotify) -> Self {
         Self {
             shared: Arc::new(Shared {
                 slots: Mutex::new(Slots::default()),
                 write_ended: Condvar::new(),
-                host: RegistryHost {
-                    storage,
-                    writer,
-                    notify,
-                },
+                host: RegistryHost { writer, notify },
             }),
         }
     }
@@ -634,19 +655,18 @@ impl FlushHost {
         wake.into_iter().map(|(_, waker)| waker).collect()
     }
 
-    /// Write the latest unconfirmed bytes of every name before `deadline`,
+    /// Write the latest unconfirmed bytes of every value before `deadline`,
     /// waiting for a write already in flight first. Synchronous, on the owner
     /// thread; runs no application code. Failed bytes are written again,
-    /// each name at most once per flush.
+    /// each value at most once per flush.
     ///
     /// A write still unanswered at the deadline is handed to the IO pool to
     /// finish, and its name is reported unfinished.
     #[must_use]
     pub fn flush_within(&self, deadline: Instant) -> FlushReport {
         let shared = &self.shared;
-        let owed: HashSet<StorageName> = shared.slots.lock().entries.keys().copied().collect();
+        let owed: HashSet<ValueKey> = shared.slots.lock().entries.keys().copied().collect();
         let mut attempted = HashSet::new();
-        let mut refused = false;
         loop {
             let mut slots = shared.slots.lock();
             if slots.entries.values().any(|entry| entry.writing) {
@@ -659,40 +679,35 @@ impl FlushHost {
                 }
                 continue;
             }
-            let Some(name) = slots
+            let Some(key) = slots
                 .entries
                 .iter()
-                .find(|(name, entry)| entry.owed.is_some() && !attempted.contains(*name))
-                .map(|(name, _)| *name)
+                .find(|(key, entry)| entry.owed.is_some() && !attempted.contains(*key))
+                .map(|(key, _)| *key)
             else {
                 break;
             };
-            attempted.insert(name);
-            let before = slots.changes;
-            let begin = slots.begin(name, true);
-            refused |= slots.changes != before;
+            attempted.insert(key);
+            let begin = slots.begin(key, true);
             drop(slots);
             let Begin::Write(slot, mode) = begin else {
                 continue;
             };
-            let mut write = PendingWrite::new(Arc::clone(shared), name, slot, mode);
+            let mut write = PendingWrite::new(Arc::clone(shared), key, slot, mode);
             if !poll_until(Pin::new(&mut write), deadline) {
                 shared.hand_to_pool(write);
                 break;
             }
         }
-        if refused {
-            shared.signal();
-        }
         let slots = shared.slots.lock();
         let mut report = FlushReport::default();
         let mut touched = owed;
         touched.extend(attempted);
-        for name in touched {
-            match slots.entries.get(&name).map(Entry::state) {
-                None | Some(FlushState::Clean) => report.written.push(name),
-                Some(FlushState::Failed(error)) => report.failed.push((name, error)),
-                Some(FlushState::Pending) => report.unfinished.push(name),
+        for key in touched {
+            match slots.entries.get(&key).map(Entry::state) {
+                None | Some(FlushState::Clean) => report.written.push(key.name),
+                Some(FlushState::Failed(error)) => report.failed.push((key.name, error)),
+                Some(FlushState::Pending) => report.unfinished.push(key.name),
             }
         }
         report
@@ -709,7 +724,7 @@ mod tests {
     use std::task::{Context, Waker};
     use std::time::{Duration, Instant};
 
-    use flui_platform::{StorageError, StorageName, StoredVersion, WriteMode};
+    use flui_platform::{Storage, StorageError, StorageName, StoredVersion, WriteMode};
     use flui_scheduler::AppLifecycleState;
     use flui_testing::storage::MemoryStorage;
     use parking_lot::Mutex;
@@ -722,13 +737,12 @@ mod tests {
     const SESSION: StorageName = StorageName::machine_local("session");
     const NOTES: StorageName = StorageName::from_static("notes");
 
-    /// A host over `storage` with no IO pool, so every write is left to the
+    /// A host with no IO pool, so every write is left to the
     /// flush, recording the events it signals its owner with.
-    fn host(storage: &MemoryStorage) -> (FlushHost, Arc<Mutex<Vec<LifecycleEvent>>>) {
+    fn host() -> (FlushHost, Arc<Mutex<Vec<LifecycleEvent>>>) {
         let signals = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&signals);
         let host = FlushHost::new(
-            Arc::new(storage.clone()),
             Box::new(Err),
             OwnerNotify::new(move |event| {
                 log.lock().push(event);
@@ -741,13 +755,12 @@ mod tests {
     /// The writes a host handed its IO pool, which the test runs by hand.
     type Pool = Arc<Mutex<Vec<FlushWrite>>>;
 
-    /// A host over `storage` whose IO pool accepts every write and runs it
+    /// A host whose IO pool accepts every write and runs it
     /// only when the test calls [`run_next`].
-    fn host_with_pool(storage: &MemoryStorage) -> (FlushHost, Pool) {
+    fn host_with_pool() -> (FlushHost, Pool) {
         let pool = Pool::default();
         let queue = Arc::clone(&pool);
         let host = FlushHost::new(
-            Arc::new(storage.clone()),
             Box::new(move |write| {
                 queue.lock().push(write);
                 Ok(())
@@ -771,6 +784,12 @@ mod tests {
         finished
     }
 
+    /// `storage` as a document acquires it: one `Arc`, the identity its
+    /// publishers write to.
+    fn shared(storage: &MemoryStorage) -> Arc<dyn Storage> {
+        Arc::new(storage.clone())
+    }
+
     fn flush(host: &FlushHost) -> super::FlushReport {
         host.flush_within(Instant::now() + Duration::from_secs(5))
     }
@@ -783,8 +802,10 @@ mod tests {
         // publications would not report it.
         const CLOSING: Revision = Revision::new(7);
         let storage = MemoryStorage::new();
-        let (host, _signals) = host(&storage);
-        let publisher = host.registry().publisher(SESSION);
+        let (host, _signals) = host();
+        let store = shared(&storage);
+        let publisher = host.registry().publisher(SESSION, Arc::clone(&store));
+        let reader = publisher.clone();
         let lifecycle = LifecycleSource::new();
         let (_, _observation) = lifecycle
             .handle()
@@ -812,9 +833,7 @@ mod tests {
             "nothing is left unwritten: {report:?}"
         );
         assert_eq!(
-            host.registry()
-                .committed(SESSION)
-                .map(|(revision, _)| revision),
+            reader.committed().map(|(revision, _)| revision),
             Some(CLOSING),
             "the committed revision is the document's, as published"
         );
@@ -825,9 +844,10 @@ mod tests {
     /// publisher conflicts and leaves the stored value alone.
     fn a_publishers_own_line_rebases_and_another_conflicts() {
         let storage = MemoryStorage::new();
-        let (host, _signals) = host(&storage);
+        let (host, _signals) = host();
+        let store = shared(&storage);
         let registry = host.registry();
-        let ours = registry.publisher(NOTES);
+        let ours = registry.publisher(NOTES, Arc::clone(&store));
         let base = WriteMode::IfUnchanged(StoredVersion::ABSENT);
 
         ours.publish(Arc::from(&b"one"[..]), base, Revision::new(1));
@@ -835,11 +855,10 @@ mod tests {
         ours.publish(Arc::from(&b"two"[..]), base, Revision::new(2));
         let _ = flush(&host);
         let ours_written = storage.contents(&NOTES);
-        let ours_state = registry.state(NOTES);
+        let ours_state = ours.state();
 
-        registry
-            .publisher(NOTES)
-            .publish(Arc::from(&b"theirs"[..]), base, Revision::new(3));
+        let theirs = registry.publisher(NOTES, Arc::clone(&store));
+        theirs.publish(Arc::from(&b"theirs"[..]), base, Revision::new(3));
         let _ = flush(&host);
 
         assert_eq!(
@@ -849,7 +868,7 @@ mod tests {
         );
         assert_eq!(ours_state, FlushState::Clean);
         assert_eq!(
-            registry.state(NOTES),
+            theirs.state(),
             FlushState::Failed(StorageError::Conflict),
             "another publisher's stale base conflicts"
         );
@@ -860,7 +879,8 @@ mod tests {
     /// the owner settles the registry on its turn.
     fn a_finished_write_wakes_changed_on_the_owner_turn() {
         let storage = MemoryStorage::new();
-        let (host, signals) = host(&storage);
+        let (host, signals) = host();
+        let store = shared(&storage);
         let registry = host.registry();
         let counter = Arc::new(CountingWaker::default());
         let waker = Waker::from(Arc::clone(&counter));
@@ -868,7 +888,7 @@ mod tests {
         let mut changed = std::pin::pin!(registry.changed());
         let _ = changed.as_mut().poll(&mut cx);
 
-        registry.publisher(SESSION).publish(
+        registry.publisher(SESSION, Arc::clone(&store)).publish(
             Arc::from(&b"open"[..]),
             WriteMode::Replace,
             Revision::new(1),
@@ -901,14 +921,15 @@ mod tests {
     /// newer bytes published after the failure replace them.
     fn a_failed_write_keeps_its_bytes_until_replaced_or_flushed() {
         let storage = MemoryStorage::new();
-        let (host, _signals) = host(&storage);
+        let (host, _signals) = host();
+        let store = shared(&storage);
         let registry = host.registry();
-        let notes = registry.publisher(NOTES);
+        let notes = registry.publisher(NOTES, Arc::clone(&store));
         storage.fail_next(StorageError::Full);
         notes.publish(Arc::from(&b"one"[..]), WriteMode::Replace, Revision::new(1));
 
         let failed = flush(&host);
-        let failed_state = registry.state(NOTES);
+        let failed_state = notes.state();
         let flushed = flush(&host);
         let flushed_contents = storage.contents(&NOTES);
 
@@ -920,7 +941,7 @@ mod tests {
             WriteMode::Replace,
             Revision::new(3),
         );
-        let replaced_state = registry.state(NOTES);
+        let replaced_state = notes.state();
         let _ = flush(&host);
 
         assert_eq!(failed.failed, [(NOTES, StorageError::Full)]);
@@ -937,7 +958,7 @@ mod tests {
         );
         assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"three"[..]));
         assert_eq!(
-            registry.committed(NOTES).map(|(revision, _)| revision),
+            notes.committed().map(|(revision, _)| revision),
             Some(Revision::new(3))
         );
     }
@@ -947,9 +968,10 @@ mod tests {
     /// a conflict.
     fn same_writer_edits_rebase_instead_of_conflicting() {
         let storage = MemoryStorage::new();
-        let (host, pool) = host_with_pool(&storage);
+        let (host, pool) = host_with_pool();
+        let store = shared(&storage);
         let registry = host.registry();
-        let notes = registry.publisher(NOTES);
+        let notes = registry.publisher(NOTES, Arc::clone(&store));
         let loaded = WriteMode::IfUnchanged(StoredVersion::ABSENT);
         let barrier = storage.hold_commits();
 
@@ -969,11 +991,73 @@ mod tests {
             pool.lock().is_empty(),
             "the latest edit is the only next one"
         );
-        assert_eq!(registry.state(NOTES), FlushState::Clean);
+        assert_eq!(notes.state(), FlushState::Clean);
         assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"three"[..]));
         assert_eq!(
-            registry.committed(NOTES).map(|(revision, _)| revision),
+            notes.committed().map(|(revision, _)| revision),
             Some(Revision::new(3))
+        );
+    }
+
+    /// An edit based on a version another writer stored, which the document
+    /// reloaded, is written as published rather than rebased onto the
+    /// publisher's older write; the edits after it continue its line.
+    fn a_reloaded_base_is_written_as_published() {
+        let storage = MemoryStorage::new();
+        let (host, _signals) = host();
+        let store = shared(&storage);
+        let notes = host.registry().publisher(NOTES, Arc::clone(&store));
+        let absent = WriteMode::IfUnchanged(StoredVersion::ABSENT);
+        notes.publish(Arc::from(&b"one"[..]), absent, Revision::new(1));
+        let _ = flush(&host);
+
+        storage.put(&NOTES, &b"external"[..]);
+        let reloaded = WriteMode::IfUnchanged(StoredVersion::of_bytes(b"external"));
+        notes.publish(Arc::from(&b"two"[..]), reloaded, Revision::new(5));
+        let _ = flush(&host);
+        let after_reload = (notes.state(), storage.contents(&NOTES));
+        notes.publish(Arc::from(&b"three"[..]), reloaded, Revision::new(6));
+        let _ = flush(&host);
+
+        assert_eq!(
+            after_reload,
+            (FlushState::Clean, Some(b"two".to_vec())),
+            "the edit on the reloaded version is written"
+        );
+        assert_eq!(notes.state(), FlushState::Clean);
+        assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"three"[..]));
+        assert_eq!(
+            notes.committed().map(|(revision, _)| revision),
+            Some(Revision::new(6))
+        );
+    }
+
+    /// The same name in two storages of one type is two values: each
+    /// publisher's bytes go to its own storage, and one storage's failure
+    /// is not the other's.
+    fn two_storages_of_one_type_keep_a_name_apart() {
+        let (first, second) = (MemoryStorage::new(), MemoryStorage::new());
+        let (host, _signals) = host();
+        let registry = host.registry();
+        let ours = registry.publisher(NOTES, shared(&first));
+        let theirs = registry.publisher(NOTES, shared(&second));
+        first.fail_next(StorageError::Full);
+        let absent = WriteMode::IfUnchanged(StoredVersion::ABSENT);
+
+        ours.publish(Arc::from(&b"ours"[..]), absent, Revision::new(1));
+        theirs.publish(Arc::from(&b"theirs"[..]), absent, Revision::new(1));
+        let report = flush(&host);
+
+        assert_eq!(report.failed, [(NOTES, StorageError::Full)]);
+        assert_eq!(report.written, [NOTES]);
+        assert_eq!(ours.state(), FlushState::Failed(StorageError::Full));
+        assert_eq!(theirs.state(), FlushState::Clean);
+        assert_eq!(first.contents(&NOTES), None);
+        assert_eq!(second.contents(&NOTES).as_deref(), Some(&b"theirs"[..]));
+        assert_eq!(ours.committed(), None);
+        assert_eq!(
+            theirs.committed().map(|(revision, _)| revision),
+            Some(Revision::new(1))
         );
     }
 
@@ -1001,6 +1085,14 @@ mod tests {
                 (
                     "same_writer_edits_rebase_instead_of_conflicting",
                     same_writer_edits_rebase_instead_of_conflicting,
+                ),
+                (
+                    "a_reloaded_base_is_written_as_published",
+                    a_reloaded_base_is_written_as_published,
+                ),
+                (
+                    "two_storages_of_one_type_keep_a_name_apart",
+                    two_storages_of_one_type_keep_a_name_apart,
                 ),
             ],
         );

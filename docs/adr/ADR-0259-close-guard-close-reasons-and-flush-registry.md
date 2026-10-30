@@ -9,6 +9,9 @@
   guard, no hold refuses a close, the registry keeps published bytes without writing them, and
   `FlushHost` is not yet `Clone`.
 - **Date:** 2026-10-28
+- **Superseded-by:** [ADR-0274](ADR-0274-a-flush-publisher-writes-to-the-storage-its-document-acquired.md)
+  for §5 only (the registry's storage, `publisher`, `committed`, `state`, `FlushHost::new`, and
+  the "edits are one line" clause)
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the exit order
   that flushes the registry; what a panic on a close path does),
   [ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md) (a session end consults the guard
