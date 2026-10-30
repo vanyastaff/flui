@@ -499,8 +499,14 @@ version = "0.27.1"
 # UIAccessibility (ADR-0255 decision 12): the low-level adapter, which the
 # window's own view forwards to. Same 0.25 accesskit cohort; it is built on
 # objc2 0.5 beside FLUI's 0.6, and the two meet only through raw pointers.
+# VoiceOver's cursor reaches FLUI through a hook the published adapter does not
+# have yet (gap 36), so the build takes the vendored copy listed in
+# third_party/README.md. A path dependency, not a root `[patch]`: a patch binds
+# only this workspace, and an app depending on FLUI by path or git would build
+# the published crate, which lacks the hook.
 [target.'cfg(target_os = "ios")'.dependencies.accesskit_ios]
 version = "0.2.2"
+path = "../../third_party/accesskit_ios"
 
 [features]
 default = ["desktop"]
