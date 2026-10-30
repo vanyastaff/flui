@@ -121,8 +121,8 @@ pub(crate) fn list_keyboard_navigation() {
     assert!(key(&mut app, NamedKey::ArrowUp));
     assert_eq!(
         outer.get(),
-        1,
-        "the first row's up arrow goes to the list's parent"
+        0,
+        "the first row keeps its up arrow: focus does not leave the list by direction"
     );
     assert_eq!(focused(&app).as_deref(), Some("row0"));
 
@@ -185,11 +185,7 @@ pub(crate) fn list_keyboard_navigation() {
         "End builds and focuses the last row"
     );
     assert!(key(&mut app, NamedKey::ArrowDown));
-    assert_eq!(
-        outer.get(),
-        2,
-        "the last row's down arrow goes to the list's parent"
-    );
+    assert_eq!(outer.get(), 0, "the last row keeps its down arrow");
     assert!(key(&mut app, NamedKey::Home));
     assert_eq!(focused(&app).as_deref(), Some("row0"));
 
