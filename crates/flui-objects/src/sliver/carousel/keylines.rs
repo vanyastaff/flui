@@ -477,7 +477,7 @@ fn multi_browse(
         &[1]
     };
     let min_available = viewport - medium - max_small * small_counts[0] as f64;
-    let larges = large_counts(viewport, large, min_available);
+    let large_options = large_counts(viewport, large, min_available);
     let targets = Targets {
         available: viewport,
         spacing,
@@ -487,7 +487,7 @@ fn multi_browse(
         medium,
         large,
     };
-    let mut arrangement = Arrangement::search(targets, small_counts, &[1, 0], &larges)?;
+    let mut arrangement = Arrangement::search(targets, small_counts, &[1, 0], &large_options)?;
     if arrangement.count() > count {
         let (mut small_count, mut medium_count) =
             (arrangement.small_count, arrangement.medium_count);
@@ -498,7 +498,7 @@ fn multi_browse(
                 medium_count -= 1;
             }
         }
-        arrangement = Arrangement::search(targets, &[small_count], &[medium_count], &larges)?;
+        arrangement = Arrangement::search(targets, &[small_count], &[medium_count], &large_options)?;
     }
     Some(arrangement.start_aligned(viewport, spacing))
 }
