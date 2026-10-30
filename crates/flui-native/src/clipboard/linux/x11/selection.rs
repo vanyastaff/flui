@@ -854,7 +854,7 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            report(|| tracing::error!("the X11 clipboard's connection failed: {error}"))
+            report(|| tracing::error!("the X11 clipboard's connection failed: {error}"));
         }
         Err(payload) => contained(payload),
     }
