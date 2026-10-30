@@ -87,6 +87,7 @@
 //! | `RenderSliverFillRemainingAndOverscroll` | `harness_sliver_fill_remaining_and_overscroll_*` | yes | — | — | yes | — |
 //! | `RenderSliverFillRemainingWithScrollable` | `harness_sliver_fill_remaining_with_scrollable_*` | yes | — | — | yes | — |
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderSliverSubtreeAnchor` | `harness_sliver_subtree_anchor_*` | yes | yes | — | — | attach identity |
 //! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverMainAxisGroup` | `harness_sliver_main_axis_group_*` | yes | — | — | yes | — |
 //! | `RenderSliverCrossAxisGroup` | `harness_sliver_cross_axis_group_*` | yes | yes | yes | — | axes, tracks |
@@ -253,6 +254,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverFillRemainingAndOverscroll",
     "RenderSliverFillRemainingWithScrollable",
     "RenderSliverIgnorePointer",
+    "RenderSliverSubtreeAnchor",
     "RenderSliverList",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
@@ -8290,6 +8292,32 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     );
 }
 
+/// The sliver anchor publishes its own id while mounted and is transparent:
+/// it commits its child's geometry whole and passes hits through to it.
+fn harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry() {
+    let anchor = SubtreeAnchor::new();
+    let run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverSubtreeAnchor::new(anchor.clone()))
+            .label("anchor")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .label("adapter")
+                    .child(box_node(RenderColoredBox::red(300.0, 60.0)).label("item")),
+            ),
+    ))
+    .with_size(Size::new(300.0, 100.0))
+    .run_frame();
+
+    assert_eq!(anchor.get(), Some(run.id("anchor")));
+    assert_eq!(
+        run.sliver_geometry(run.id("anchor")),
+        run.sliver_geometry(run.id("adapter"))
+    );
+    assert_eq!(run.sliver_geometry(run.id("anchor")).paint_extent, 60.0);
+    assert!(run.hit(20.0, 20.0).contains(&run.id("item")));
+    assert!(!run.hit(20.0, 80.0).contains(&run.id("item")));
+}
+
 // ─── RenderSliverList (request seam — INERT without a child manager) ─────────
 
 fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
@@ -13506,6 +13534,7 @@ fn family_sliver_wrappers() {
         ("sliver_fill_remaining_and_overscroll_fills_viewport", harness_sliver_fill_remaining_and_overscroll_fills_viewport),
         ("sliver_fill_remaining_with_scrollable_reports_full_scroll_extent", harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent),
         ("sliver_ignore_pointer_blocks_hits_when_active", harness_sliver_ignore_pointer_blocks_hits_when_active),
+        ("sliver_subtree_anchor_publishes_its_id_and_the_child_geometry", harness_sliver_subtree_anchor_publishes_its_id_and_the_child_geometry),
         ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
         ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
         ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),

@@ -420,6 +420,8 @@ impl StatelessView for ListView {
             },
             extent_estimate: self.item_extent_estimate,
             empty_list_label: self.collection_label(),
+            sliver: false,
+            grid: false,
         };
         FocusableList::new(config, viewport).boxed()
     }

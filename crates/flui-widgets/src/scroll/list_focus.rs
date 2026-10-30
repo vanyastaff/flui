@@ -1,11 +1,14 @@
 //! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
 //!
-//! [`FocusableList`] wraps whatever hosts the rows (today a `ListView`'s
-//! viewport) in the **list node**: an ordinary focusable [`Focus`] registered
-//! as a traversal unit (ADR-0026), so Tab stops at the list once and lands on
-//! the row it remembers. Each built row is wrapped in a [`ListItemFocus`]
-//! marker, found through [`ListFocusScope`] rather than through the viewport,
-//! so the same pair can later serve a single sliver.
+//! [`FocusableList`] wraps whatever hosts the rows (a `ListView`'s or
+//! `GridView`'s viewport, or one sliver under `FocusableSliver`) in the **list
+//! node**: an ordinary focusable [`Focus`] registered as a traversal unit
+//! (ADR-0026), so Tab stops at the list once and lands on the row it
+//! remembers. Each built row is wrapped in a [`ListItemFocus`] marker, found
+//! through [`ListFocusScope`] rather than through the viewport, so the same
+//! pair serves a box viewport and a single sliver among others. Over a sliver
+//! the list node is a sliver-protocol `Focus`, and the keys read the axis from
+//! the sliver's committed constraints.
 //!
 //! The list node's key handler moves focus between rows: arrows, Page Up/Down,
 //! Home/End. A target that is built takes focus at once; one that is not is
@@ -19,21 +22,25 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{Axis, Rect};
+use flui_foundation::geometry::{Axis, Rect, Vec2};
 use flui_foundation::{SaltedKey, ViewKey};
 use flui_interaction::focus::{
     EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, FocusSubscription, KeyEventResult,
 };
 use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use flui_rendering::view::ScrollPosition;
+use flui_rendering::constraints::AxisDirection;
+use flui_rendering::view::{ScrollPosition, ViewportOffset as _};
 use flui_view::element::ElementKind;
 use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, impl_inherited_view};
 
+use crate::anchored_box::AnchoredSliver;
 use crate::interaction::focus::Focus;
-use crate::semantics::{ExcludeSemantics, Semantics};
-use flui_rendering::semantics::SemanticsRole;
+use crate::interaction::focus_reveal::{FocusRevealScope, SharedRevealTarget};
+use crate::semantics::{ExcludeSemantics, Semantics, SliverSemantics};
+use flui_objects::SubtreeAnchor;
+use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRole};
 
 // ============================================================================
 // The controller
@@ -52,6 +59,10 @@ struct Reach {
     position: ScrollPosition,
     extent_estimate: f64,
 }
+
+/// Reads a sliver's committed main axis and whether it runs against the
+/// index order on screen.
+type AxisSource = Rc<dyn Fn() -> Option<(Axis, bool)>>;
 
 struct Inner {
     /// The list node: the traversal unit Tab stops at.
@@ -72,6 +83,16 @@ struct Inner {
     /// horizontal list under right-to-left text).
     reversed: Cell<bool>,
     reach: RefCell<Option<Reach>>,
+    /// Reads the axis and direction a list over a sliver was laid out with;
+    /// `None` for a list over a box viewport, which takes them from its
+    /// config.
+    sliver_axis: RefCell<Option<AxisSource>>,
+    /// The scope that scrolls an unbuilt row into the band when the list has
+    /// no scroll position of its own to set.
+    reveal: RefCell<Option<SharedRevealTarget>>,
+    /// Whether the rows are tiles of a grid: the cross-axis arrows move
+    /// along a row of tiles.
+    grid: Cell<bool>,
 }
 
 /// The state one focusable list shares with its rows' markers.
@@ -102,6 +123,9 @@ impl ListFocusController {
                 axis: Cell::new(Axis::Vertical),
                 reversed: Cell::new(false),
                 reach: RefCell::new(None),
+                sliver_axis: RefCell::new(None),
+                reveal: RefCell::new(None),
+                grid: Cell::new(false),
             }),
         }
     }
@@ -179,7 +203,7 @@ impl ListFocusController {
         let list = self.inner.node.rect();
         let rows: Vec<(usize, Rc<FocusNode>)> = self.live_rows();
         rows.iter()
-            .find(|(_, node)| contains(list, node.rect(), self.inner.axis.get()))
+            .find(|(_, node)| contains(list, node.rect(), self.axis().0))
             .or_else(|| rows.first())
             .map(|(index, _)| *index)
     }
@@ -224,17 +248,150 @@ impl ListFocusController {
         true
     }
 
-    /// Scroll so an unbuilt row gets built, and record it as pending.
+    /// Scroll so an unbuilt row gets built, and record it as pending: to the
+    /// row's estimated offset when the list owns a scroll position, otherwise
+    /// by revealing the row's estimated box through the enclosing scope.
     fn reach_row(&self, index: usize) -> bool {
-        let Some(reach) = self.inner.reach.borrow().clone() else {
+        if let Some(reach) = self.inner.reach.borrow().clone() {
+            let estimate = if self.inner.grid.get() {
+                // Tiles share rows, so the offset comes from the built
+                // tiles: the estimated row brought to the leading edge.
+                let Some(rect) = self.estimated_rect(index) else {
+                    return false;
+                };
+                let list = self.inner.node.rect();
+                let distance = match self.axis() {
+                    (Axis::Vertical, false) => rect.top() - list.top(),
+                    (Axis::Vertical, true) => list.bottom() - rect.bottom(),
+                    (Axis::Horizontal, false) => rect.left() - list.left(),
+                    (Axis::Horizontal, true) => list.right() - rect.right(),
+                };
+                reach.position.pixels() + distance
+            } else {
+                reach.extent_estimate * index as f64
+            };
+            if !estimate.is_finite() {
+                return false;
+            }
+            let min = reach.position.min_scroll_extent();
+            let max = reach.position.max_scroll_extent().max(min);
+            reach.position.set_pixels(estimate.clamp(min, max));
+            self.inner.pending.set(Some(index));
+            return true;
+        }
+        let Some(rect) = self.estimated_rect(index) else {
             return false;
         };
-        let estimate = reach.extent_estimate * index as f64;
-        let min = reach.position.min_scroll_extent();
-        let max = reach.position.max_scroll_extent().max(min);
-        reach.position.set_pixels(estimate.clamp(min, max));
+        let Some(reveal) = self.inner.reveal.borrow().clone() else {
+            return false;
+        };
         self.inner.pending.set(Some(index));
+        reveal.reveal(rect);
         true
+    }
+
+    /// Where an unbuilt row would sit: the nearest built row's box, moved
+    /// along the main axis by the rows of tiles between them, each as long
+    /// as that row.
+    fn estimated_rect(&self, index: usize) -> Option<Rect<f64>> {
+        let stride = self.stride();
+        let (near, node) = self
+            .live_rows()
+            .into_iter()
+            .min_by_key(|(row, _)| row.abs_diff(index))?;
+        let rect = node.rect();
+        let (axis, reversed) = self.axis();
+        let rows = (index / stride) as f64 - (near / stride) as f64;
+        let extent = match axis {
+            Axis::Vertical => rect.height(),
+            Axis::Horizontal => rect.width(),
+        };
+        let shift = if reversed {
+            -rows * extent
+        } else {
+            rows * extent
+        };
+        if !shift.is_finite() {
+            return None;
+        }
+        Some(rect.translate(match axis {
+            Axis::Vertical => Vec2::new(0.0, shift),
+            Axis::Horizontal => Vec2::new(shift, 0.0),
+        }))
+    }
+
+    /// The main axis and whether it runs against the index order on screen:
+    /// a sliver's as last laid out, else the configured ones.
+    fn axis(&self) -> (Axis, bool) {
+        let source = self.inner.sliver_axis.borrow().clone();
+        source
+            .and_then(|source| source())
+            .unwrap_or_else(|| (self.inner.axis.get(), self.inner.reversed.get()))
+    }
+
+    /// The tiles in one row across the main axis: the largest group of built
+    /// rows that start at the same main-axis offset (one for a list). The
+    /// built band holds whole rows, so a ragged last row does not decide it.
+    fn stride(&self) -> usize {
+        if !self.inner.grid.get() {
+            return 1;
+        }
+        let (axis, _) = self.axis();
+        let mut starts: Vec<f64> = self
+            .live_rows()
+            .into_iter()
+            .map(|(_, node)| {
+                let rect = node.rect();
+                match axis {
+                    Axis::Vertical => rect.top(),
+                    Axis::Horizontal => rect.left(),
+                }
+            })
+            .collect();
+        starts.sort_by(f64::total_cmp);
+        let mut best = 1;
+        let mut run = 0;
+        let mut previous = f64::NAN;
+        for start in starts {
+            run = if (start - previous).abs() <= 0.5 {
+                run + 1
+            } else {
+                1
+            };
+            previous = start;
+            best = best.max(run);
+        }
+        best
+    }
+
+    /// The tile beside `current` in its row in the on-screen direction of
+    /// `toward_end` (right, or down for a horizontal grid), `None` at the
+    /// row's edge. Read from the built tiles, so a right-to-left grid moves
+    /// the way the arrow points.
+    fn beside(
+        &self,
+        current: usize,
+        toward_end: bool,
+        stride: usize,
+        last: usize,
+    ) -> Option<usize> {
+        let current_rect = self.row_node(current)?.rect();
+        let (axis, _) = self.axis();
+        let column = current % stride;
+        let neighbours = [
+            (column > 0).then(|| current - 1),
+            (column + 1 < stride && current < last).then(|| current + 1),
+        ];
+        neighbours.into_iter().flatten().find(|neighbour| {
+            self.row_node(*neighbour).is_some_and(|node| {
+                let rect = node.rect();
+                let ahead = match axis {
+                    Axis::Vertical => rect.left() > current_rect.left(),
+                    Axis::Horizontal => rect.top() > current_rect.top(),
+                };
+                ahead == toward_end
+            })
+        })
     }
 
     /// A marker for `index` mounted: if it is the pending row, focus it.
@@ -274,23 +431,38 @@ impl ListFocusController {
         let Key::Named(named) = &event.key else {
             return KeyEventResult::Ignored;
         };
-        let (previous, next) = match (self.inner.axis.get(), self.inner.reversed.get()) {
-            (Axis::Vertical, _) => (NamedKey::ArrowUp, NamedKey::ArrowDown),
+        let (axis, reversed) = self.axis();
+        let (previous, next) = match (axis, reversed) {
+            (Axis::Vertical, false) => (NamedKey::ArrowUp, NamedKey::ArrowDown),
+            (Axis::Vertical, true) => (NamedKey::ArrowDown, NamedKey::ArrowUp),
             (Axis::Horizontal, false) => (NamedKey::ArrowLeft, NamedKey::ArrowRight),
             (Axis::Horizontal, true) => (NamedKey::ArrowRight, NamedKey::ArrowLeft),
         };
+        let (cross_back, cross_ahead) = match axis {
+            Axis::Vertical => (NamedKey::ArrowLeft, NamedKey::ArrowRight),
+            Axis::Horizontal => (NamedKey::ArrowUp, NamedKey::ArrowDown),
+        };
+        let grid = self.inner.grid.get();
+        let stride = self.stride();
         let current = self.current_row();
         let last = count - 1;
         let target = match named {
             key if *key == previous => match current {
-                Some(0) => None,
-                Some(index) => Some(index.min(last + 1) - 1),
+                Some(index) if index < stride => None,
+                Some(index) => Some(index.min(last + stride) - stride),
                 None => Some(0),
             },
+            // A column past the ragged last row lands on the last tile.
             key if *key == next => match current {
-                Some(index) if index >= last => None,
-                Some(index) => Some(index + 1),
+                Some(index) if index / stride >= last / stride => None,
+                Some(index) => Some((index + stride).min(last)),
                 None => Some(0),
+            },
+            key if grid && (*key == cross_back || *key == cross_ahead) => match current {
+                Some(index) if index <= last => {
+                    self.beside(index, *key == cross_ahead, stride, last)
+                }
+                _ => Some(0),
             },
             NamedKey::Home => (current != Some(0)).then_some(0),
             NamedKey::End => (current != Some(last)).then_some(last),
@@ -309,38 +481,49 @@ impl ListFocusController {
         }
     }
 
-    /// Page Down (or Up): first to the last (first) fully visible row, then a
-    /// page of rows past it. `None` at the edge.
+    /// Page Down (or Up): first to the last (first) fully visible row of
+    /// tiles, then a page of rows past it, in the same column. `None` at the
+    /// edge.
     fn page(&self, current: Option<usize>, forward: bool) -> Option<usize> {
         let count = self.inner.item_count.get();
         let last = count.checked_sub(1)?;
+        let stride = self.stride();
         let list = self.inner.node.rect();
-        let axis = self.inner.axis.get();
-        let visible: Vec<usize> = self
+        let (axis, _) = self.axis();
+        let mut visible: Vec<usize> = self
             .live_rows()
             .into_iter()
             .filter(|(_, node)| contains(list, node.rect(), axis))
-            .map(|(index, _)| index)
+            .map(|(index, _)| index / stride)
             .collect();
+        visible.dedup();
         let page = visible.len().max(1);
-        let current = current.unwrap_or(0);
-        if forward {
-            if current >= last {
+        let current = current.unwrap_or(0).min(last);
+        let (row, column) = (current / stride, current % stride);
+        let last_row = last / stride;
+        let target_row = if forward {
+            if row >= last_row {
                 return None;
             }
             match visible.last() {
-                Some(&edge) if edge > current => Some(edge),
-                _ => Some(current.saturating_add(page - 1).max(current + 1).min(last)),
+                Some(&edge) if edge > row => edge,
+                _ => row.saturating_add(page - 1).max(row + 1).min(last_row),
             }
         } else {
-            if current == 0 {
+            if row == 0 {
                 return None;
             }
             match visible.first() {
-                Some(&edge) if edge < current => Some(edge),
-                _ => Some(current.saturating_sub(page - 1).min(current - 1)),
+                Some(&edge) if edge < row => edge,
+                _ => row.saturating_sub(page - 1).min(row - 1),
             }
-        }
+        };
+        Some(
+            target_row
+                .saturating_mul(stride)
+                .saturating_add(column)
+                .min(last),
+        )
     }
 }
 
@@ -413,6 +596,11 @@ pub(crate) struct ListFocusConfig {
     pub(crate) extent_estimate: f64,
     /// The name an empty list announces.
     pub(crate) empty_list_label: Option<std::sync::Arc<str>>,
+    /// The rows are a sliver's children, not a box viewport's; read once,
+    /// when the list mounts.
+    pub(crate) sliver: bool,
+    /// The rows are grid tiles: the cross-axis arrows move along a row.
+    pub(crate) grid: bool,
 }
 
 /// The list node around a list's rows: one Tab stop, the arrow keys, and the
@@ -450,6 +638,11 @@ pub(crate) struct FocusableListState {
     controller: ListFocusController,
     /// Keeps the traversal entry registered while the list is mounted.
     _entry: FocusNodeRegistration,
+    /// Whether the rows sit in a sliver rather than a box viewport; fixed
+    /// for the state's life, as the protocol of the child is.
+    sliver: bool,
+    /// Publishes the sliver's render node, so the keys read its axis.
+    anchor: SubtreeAnchor,
 }
 
 impl StatefulView for FocusableList {
@@ -470,6 +663,8 @@ impl StatefulView for FocusableList {
         FocusableListState {
             controller,
             _entry: entry,
+            sliver: self.config.sliver,
+            anchor: SubtreeAnchor::new(),
         }
     }
 }
@@ -479,6 +674,7 @@ fn apply_config(controller: &ListFocusController, config: &ListFocusConfig) {
     inner.item_count.set(config.item_count);
     inner.axis.set(config.axis);
     inner.reversed.set(config.reversed);
+    inner.grid.set(config.grid);
     *inner.reach.borrow_mut() = config.position.clone().map(|position| Reach {
         position,
         extent_estimate: config.extent_estimate,
@@ -494,8 +690,33 @@ fn apply_config(controller: &ListFocusController, config: &ListFocusConfig) {
 
 impl ViewState<FocusableList> for FocusableListState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let inner = &self.controller.inner;
         let nested = ctx.get::<ListFocusScope, _>(|_| ()).is_some();
-        self.controller.inner.nested.set(nested);
+        inner.nested.set(nested);
+        *inner.reveal.borrow_mut() = FocusRevealScope::of(ctx);
+        if self.sliver {
+            let anchor = self.anchor.clone();
+            let owner = ctx.pipeline_owner();
+            let source: AxisSource = Rc::new(move || {
+                let render_id = anchor.get()?;
+                owner
+                    .as_ref()?
+                    .try_with_layout(|owner| owner.sliver_layout(render_id))
+                    .flatten()
+                    .map(|(constraints, _)| {
+                        let reversed = matches!(
+                            constraints.axis_direction,
+                            AxisDirection::BottomToTop | AxisDirection::RightToLeft
+                        );
+                        (constraints.axis(), reversed)
+                    })
+            });
+            *inner.sliver_axis.borrow_mut() = Some(source);
+        }
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        *self.controller.inner.reveal.borrow_mut() = FocusRevealScope::of(ctx);
     }
 
     fn did_update_view(&mut self, _old: &FocusableList, view: &FocusableList) {
@@ -511,6 +732,39 @@ impl ViewState<FocusableList> for FocusableListState {
         // structure is the same either way, so a list that empties or fills
         // keeps its viewport.
         let empty = view.config.item_count == 0;
+        let keys = self.controller.clone();
+        let scope = |child: BoxedView| ListFocusScope {
+            controller: self.controller.clone(),
+            child,
+        };
+        if self.sliver {
+            // The same structure over a sliver, with the sliver protocol's
+            // annotation and an anchor the arrow keys read the axis from.
+            let mut configuration = SemanticsConfiguration::default();
+            if empty {
+                configuration.set_semantics_boundary(true);
+                configuration.set_role(SemanticsRole::List);
+                if let Some(label) = &view.config.empty_list_label {
+                    configuration.set_label(label.to_string());
+                }
+            }
+            let child = AnchoredSliver::new(
+                self.anchor.clone(),
+                SliverSemantics::new()
+                    .exclude_semantics(empty)
+                    .child(view.child.clone()),
+            );
+            return SliverSemantics::from_configuration(configuration)
+                .child(
+                    Focus::new(scope(BoxedView::new(child.into_view())))
+                        .sliver()
+                        .focus_node(Rc::clone(&self.controller.inner.node))
+                        .include_semantics(empty)
+                        .debug_label("list")
+                        .on_key_event(move |_cx, event| keys.handle_key(event)),
+                )
+                .boxed();
+        }
         let mut list = Semantics::new();
         if empty {
             list = list.container(true).role(SemanticsRole::List);
@@ -518,22 +772,19 @@ impl ViewState<FocusableList> for FocusableListState {
                 list = list.label(label.to_string());
             }
         }
-        let keys = self.controller.clone();
         list.child(
-            Focus::new(ListFocusScope {
-                controller: self.controller.clone(),
-                child: BoxedView::new(
-                    ExcludeSemantics::new()
-                        .excluding(empty)
-                        .child(view.child.clone())
-                        .into_view(),
-                ),
-            })
+            Focus::new(scope(BoxedView::new(
+                ExcludeSemantics::new()
+                    .excluding(empty)
+                    .child(view.child.clone())
+                    .into_view(),
+            )))
             .focus_node(Rc::clone(&self.controller.inner.node))
             .include_semantics(empty)
             .debug_label("list")
             .on_key_event(move |_cx, event| keys.handle_key(event)),
         )
+        .boxed()
     }
 }
 

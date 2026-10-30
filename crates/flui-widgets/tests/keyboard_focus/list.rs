@@ -7,9 +7,11 @@ use std::rc::Rc;
 
 use flui_interaction::KeyEventResult;
 use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
+use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::{
-    Column, Expanded, Focus, ListView, RawButton, ScrollController, Scrollable, SizedBox, Text,
+    Column, CustomScrollView, Expanded, Focus, FocusableSliver, GridView, ListView, RawButton,
+    ScrollController, Scrollable, SizedBox, SliverList, SliverToBoxAdapter, Text,
 };
 
 use super::{press, tab};
@@ -314,4 +316,216 @@ pub(crate) fn the_list_node_carries_the_list_name() {
         tree.describe()
     );
     assert_eq!(tree.find_all(Role::List).len(), 1, "{}", tree.describe());
+}
+
+/// `before`, a 200 px scrollable `CustomScrollView` of a `header` button, a
+/// focusable sliver list of `count` buttons, then `after`; and how many
+/// arrow keys the scroll view's parent received.
+fn sliver_app(count: usize, scroll: &ScrollController) -> (LaidOut, Rc<Cell<usize>>) {
+    let outer = Rc::new(Cell::new(0));
+    let arrows = Rc::clone(&outer);
+    let view = Scrollable::new()
+        .controller(scroll.clone())
+        .viewport_builder(Rc::new(move |position| {
+            let rows = SliverList::new(
+                count,
+                ROW,
+                Rc::new(move |index| (index < count).then(|| button(format!("row{index}")))),
+            );
+            CustomScrollView::new((
+                SliverToBoxAdapter::new().child(button("header".to_owned())),
+                FocusableSliver::new(rows),
+            ))
+            .position(position)
+            .boxed()
+        }));
+    let parent = Focus::new(view)
+        .can_request_focus(false)
+        .on_key_event(move |_cx, event| {
+            let arrow = matches!(
+                event.key,
+                Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
+            );
+            if arrow && event.state() == KeyState::Down {
+                arrows.set(arrows.get() + 1);
+                return KeyEventResult::Handled;
+            }
+            KeyEventResult::Ignored
+        });
+    let mut app = lay_out(
+        Column::new(vec![
+            button("before".to_owned()),
+            SizedBox::new(300.0, 200.0).child(parent).boxed(),
+            button("after".to_owned()),
+            Expanded::new(SizedBox::new(300.0, 0.0)).boxed(),
+        ]),
+        tight(300.0, 400.0),
+    );
+    app.enable_semantics();
+    settle(&mut app);
+    (app, outer)
+}
+
+/// A focusable sliver after a header sliver in a `CustomScrollView` is one
+/// Tab stop after the header, and its rows move by the arrows, Page Down,
+/// End and Home, the unbuilt ones scrolled into the band through the scroll
+/// view.
+pub(crate) fn sliver_keyboard_navigation() {
+    let scroll = ScrollController::new();
+    let (mut app, outer) = sliver_app(1_000, &scroll);
+
+    tab_once(&mut app);
+    tab_once(&mut app);
+    assert_eq!(focused(&app).as_deref(), Some("header"));
+    tab_once(&mut app);
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("row0"),
+        "Tab enters the sliver on its first row"
+    );
+
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    assert_eq!(focused(&app).as_deref(), Some("row1"));
+    assert!(key(&mut app, NamedKey::ArrowUp));
+    assert!(key(&mut app, NamedKey::ArrowUp));
+    assert_eq!(
+        (focused(&app).as_deref(), outer.get()),
+        (Some("row0"), 0),
+        "the first row keeps its up arrow: focus does not go to the header"
+    );
+
+    // The header takes 40 px, so four rows fit wholly under it.
+    assert!(key(&mut app, NamedKey::PageDown));
+    assert_eq!(focused(&app).as_deref(), Some("row3"));
+
+    assert!(key(&mut app, NamedKey::End));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("row999"),
+        "End scrolls the last row into the band and focuses it"
+    );
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    assert_eq!(
+        (focused(&app).as_deref(), outer.get()),
+        (Some("row999"), 0),
+        "the last row keeps its down arrow"
+    );
+    assert!(key(&mut app, NamedKey::Home));
+    assert_eq!(focused(&app).as_deref(), Some("row0"));
+
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    tab_once(&mut app);
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("after"),
+        "Tab leaves the sliver after one stop"
+    );
+    let manager = app.focus_manager();
+    let shift_tab = app.enter_owner_scope(|| {
+        super::chord(
+            &manager,
+            &Key::Named(NamedKey::Tab),
+            flui_platform::keyboard::Modifiers::SHIFT,
+        )
+    });
+    assert!(shift_tab);
+    settle(&mut app);
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("row1"),
+        "Shift+Tab returns to the row the sliver remembers"
+    );
+}
+
+/// A tile 90 px square labelled `label`.
+fn tile(label: String) -> flui_view::BoxedView {
+    SizedBox::new(90.0, 90.0)
+        .child(RawButton::new(Text::new(label)).on_press(|_cx| {}))
+        .boxed()
+}
+
+/// A focusable three-column grid of `count` tiles in a 270 px scrollable
+/// after a `before` button.
+fn grid_app(count: usize) -> LaidOut {
+    let grid = Scrollable::new()
+        .controller(ScrollController::new())
+        .viewport_builder(Rc::new(move |position| {
+            GridView::builder(
+                SliverGridDelegateWithFixedCrossAxisCount::new(3),
+                count,
+                move |index| (index < count).then(|| tile(format!("tile{index}"))),
+            )
+            .position(position)
+            .focusable(true)
+            .boxed()
+        }));
+    let mut app = lay_out(
+        Column::new(vec![
+            button("before".to_owned()),
+            SizedBox::new(270.0, 270.0).child(grid).boxed(),
+            Expanded::new(SizedBox::new(270.0, 0.0)).boxed(),
+        ]),
+        tight(270.0, 400.0),
+    );
+    app.enable_semantics();
+    settle(&mut app);
+    app
+}
+
+/// The arrows move over a focusable grid in two dimensions: by a row of
+/// tiles along the scroll axis, along the row across it, onto the last tile
+/// from a column past the end of a short last row; Page Down keeps the
+/// column and End reaches the last tile unbuilt.
+pub(crate) fn grid_keyboard_navigation() {
+    let mut app = grid_app(3_001);
+    tab_once(&mut app);
+    tab_once(&mut app);
+    assert_eq!(focused(&app).as_deref(), Some("tile0"));
+
+    assert!(key(&mut app, NamedKey::ArrowRight));
+    assert_eq!(focused(&app).as_deref(), Some("tile1"));
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("tile4"),
+        "Down moves a row of three"
+    );
+    assert!(key(&mut app, NamedKey::ArrowRight));
+    assert!(key(&mut app, NamedKey::ArrowRight));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("tile5"),
+        "Right stops at the row's edge"
+    );
+    assert!(key(&mut app, NamedKey::ArrowUp));
+    assert!(key(&mut app, NamedKey::ArrowUp));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("tile2"),
+        "Up stops at the top row"
+    );
+    assert!(key(&mut app, NamedKey::ArrowLeft));
+    assert_eq!(focused(&app).as_deref(), Some("tile1"));
+
+    // Three rows fit: Page Down goes to the last visible row, same column.
+    assert!(key(&mut app, NamedKey::PageDown));
+    assert_eq!(focused(&app).as_deref(), Some("tile7"));
+
+    assert!(key(&mut app, NamedKey::End));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("tile3000"),
+        "End scrolls the last tile into the band and focuses it"
+    );
+    assert!(key(&mut app, NamedKey::ArrowUp));
+    assert!(key(&mut app, NamedKey::ArrowRight));
+    assert_eq!(focused(&app).as_deref(), Some("tile2998"));
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("tile3000"),
+        "a column past the short last row lands on its last tile"
+    );
+    assert!(key(&mut app, NamedKey::ArrowDown));
+    assert_eq!(focused(&app).as_deref(), Some("tile3000"));
 }
