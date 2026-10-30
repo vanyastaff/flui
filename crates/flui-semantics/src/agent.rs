@@ -442,9 +442,12 @@ impl AgentFilter {
     }
 
     fn apply(self, node: &NodeRef<'_>) -> FilterResult {
-        if self
-            .announcers
-            .is_some_and(|announcers| announcers.contains(&node.locate().0))
+        // A field's text runs carry its text for assistive technology; an
+        // agent reads the text as the field's value.
+        if node.role() == accesskit::Role::TextRun
+            || self
+                .announcers
+                .is_some_and(|announcers| announcers.contains(&node.locate().0))
         {
             FilterResult::ExcludeSubtree
         } else {

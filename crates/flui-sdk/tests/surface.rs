@@ -227,7 +227,9 @@ mod measured {
         MenuRequest as _, MenuSpec as _, PanIntent as _, ShowContextMenuIntent as _,
         SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
     };
-    use flui_sdk::widgets::{CellPosition as _, SetSize as _, SortDirection as _, TableShape as _};
+    use flui_sdk::widgets::{
+        CellPosition as _, SetSize as _, SortDirection as _, TableShape as _, TextSelection as _,
+    };
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
         HeaderExtentsError as _, HeaderOrder as _,

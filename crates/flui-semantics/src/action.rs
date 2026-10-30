@@ -190,7 +190,10 @@ pub struct Reveal {
     pub scroll_position: Option<f64>,
 }
 
-/// A text selection within one node, in characters of its value.
+/// A text selection in a field's value, in UTF-8 bytes on `char` boundaries:
+/// what an editor works in. A platform request names positions in the
+/// field's text runs instead; the owner reads them through the field's
+/// [`TextContent`](crate::TextContent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextSelection {
     /// Where the selection starts; stays put as the selection grows.
@@ -317,11 +320,18 @@ pub enum ActionDecodeError {
         /// The action requested.
         action: SemanticsAction,
     },
-    /// The request carried a payload the action cannot take, or a text
-    /// selection whose ends lie on another node.
+    /// The request carried a payload the action cannot take.
     #[error("{action} cannot take the payload the request carried")]
     MismatchedPayload {
         /// The action requested.
         action: SemanticsAction,
+    },
+    /// A text selection whose ends are not positions in the target field's
+    /// current text runs: a run of another field, a run the field no longer
+    /// publishes, or a character past a run's end.
+    #[error("the text selection does not lie in the current text of {node_id}")]
+    InvalidTextPosition {
+        /// The field the request targets.
+        node_id: AccessibilityNodeId,
     },
 }

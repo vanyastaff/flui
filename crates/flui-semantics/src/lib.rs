@@ -57,6 +57,7 @@ pub mod regions;
 pub mod relation;
 pub mod role;
 pub mod states;
+mod text_content;
 pub mod tree;
 
 // ============================================================================
@@ -98,6 +99,10 @@ pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
 // RE-EXPORTS - Announcements
 // ============================================================================
 pub use announce::{AnnounceError, Announcements, Announcer};
+pub use text_content::{
+    MAX_RUN_CHARACTERS, TextContent, TextRun, TextRunError, TextRunParts, TextRunPosition,
+    TextRunSelection,
+};
 // ============================================================================
 // RE-EXPORTS - State Types
 // ============================================================================
@@ -125,7 +130,8 @@ pub use node::SemanticsNode;
 // RE-EXPORTS - Owner Types
 // ============================================================================
 pub use owner::{
-    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, report_diagnostic,
+    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, TextRunsWithheld,
+    report_diagnostic,
 };
 pub use owner::{
     SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,

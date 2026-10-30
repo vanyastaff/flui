@@ -1397,6 +1397,26 @@ impl SemanticsConfiguration {
         self.attributes.current_value_length
     }
 
+    /// Declares the field's text as runs, with its selection: published as
+    /// the field's `TextRun` children once the pipeline has given the runs
+    /// their identities. Only a text field publishes runs.
+    pub fn set_text_content(&mut self, content: crate::TextContent) {
+        self.attributes.text = Some(Arc::new(content));
+        self.mark_annotated();
+    }
+
+    /// Removes the field's text runs, as when their geometry cannot be
+    /// published.
+    pub fn clear_text_content(&mut self) {
+        self.attributes.text = None;
+    }
+
+    /// The field's text as runs, if declared.
+    #[inline]
+    pub fn text_content(&self) -> Option<&crate::TextContent> {
+        self.attributes.text.as_deref()
+    }
+
     // ========================================================================
     // Relations
     // ========================================================================
@@ -1526,6 +1546,7 @@ impl SemanticsConfiguration {
             platform_view_id,
             max_value_length,
             current_value_length,
+            text,
             heading_level: _,
             anchors: _,
             relations: _,
@@ -1568,7 +1589,9 @@ impl SemanticsConfiguration {
             || both(
                 max_value_length.is_some() || current_value_length.is_some(),
                 theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
-            ))
+            )
+            // Runs describe one field's layout.
+            || both(text.is_some(), theirs.text.is_some()))
     }
 
     /// A role, or the route scope a page declares, which a second one
@@ -1662,6 +1685,7 @@ impl SemanticsConfiguration {
             platform_view_id,
             max_value_length,
             current_value_length,
+            text,
             heading_level,
             anchors,
             relations,
@@ -1761,6 +1785,7 @@ impl SemanticsConfiguration {
             mine.max_value_length = *max_value_length;
             mine.current_value_length = *current_value_length;
         }
+        keep(&mut mine.text, text.as_ref());
         keep(&mut mine.heading_level, heading_level.as_ref());
         // A level belongs to a heading, as in `set_role`: a merge whose role is
         // not one publishes no level and keeps none to revive.

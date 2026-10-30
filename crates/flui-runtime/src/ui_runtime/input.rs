@@ -786,7 +786,10 @@ impl UiRuntime {
             );
             return Applied::default();
         };
-        let decoded = match flui_semantics::semantics_action_request_for(request) {
+        let decoded = match presentation
+            .pipeline()
+            .with(|pipeline| pipeline.decode_semantics_action(request))
+        {
             Ok(decoded) => decoded,
             Err(
                 error @ (flui_semantics::ActionDecodeError::UnknownTarget(_)
