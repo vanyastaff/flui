@@ -233,6 +233,23 @@ fn pointer_pressed(event: &PointerEvent) -> bool {
     )
 }
 
+/// Whether `input` is a discrete act of the user: a key going down (not its
+/// repeat) or a pointer button pressed. Only these try a dropped frame before
+/// its backoff ends.
+fn is_discrete_press(input: &PlatformInput) -> bool {
+    use flui_platform::keyboard::KeyRepeat;
+    match input {
+        PlatformInput::Keyboard(event) => {
+            event.state() == KeyState::Down && event.repeat() == KeyRepeat::First
+        }
+        PlatformInput::Pointer(event) => pointer_pressed(event),
+        PlatformInput::PointerFrame(frame) => frame.events().iter().any(pointer_pressed),
+        PlatformInput::Ime(_) | PlatformInput::DragDrop(_) | PlatformInput::Capabilities(_) => {
+            false
+        }
+    }
+}
+
 /// The back button (X1) going down or up in `event`, and when.
 fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
     let (state, button, time) = match event {
@@ -445,6 +462,9 @@ impl UiRuntime {
                 "dropping pointer input sent from the composition commit of a press"
             );
             return Applied::default();
+        }
+        if is_discrete_press(&input) && presentation.retry_failure_early() {
+            self.request_redraw_for(presentation);
         }
         if !begins_contact(&input) {
             return self.route_platform_input(target, presentation, input, recording);

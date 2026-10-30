@@ -111,6 +111,10 @@ fn headless_frame_driver_matrix() {
             ("controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor", controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor as fn()),
             ("pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it", pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it as fn()),
             ("pointer_script_replay::the_same_script_released_before_the_deadline_does_not", pointer_script_replay::the_same_script_released_before_the_deadline_does_not as fn()),
+            ("headless_host::a_repeating_paint_panic_backs_off_but_keeps_retrying", headless_host::a_repeating_paint_panic_backs_off_but_keeps_retrying as fn()),
+            ("headless_host::a_single_paint_panic_redraws_without_input", headless_host::a_single_paint_panic_redraws_without_input as fn()),
+            ("headless_host::a_pointer_move_does_not_bypass_the_backoff", headless_host::a_pointer_move_does_not_bypass_the_backoff as fn()),
+            ("headless_host::a_failure_streak_past_thirty_three_keeps_the_one_second_cap", headless_host::a_failure_streak_past_thirty_three_keeps_the_one_second_cap as fn()),
         ],
     );
 }

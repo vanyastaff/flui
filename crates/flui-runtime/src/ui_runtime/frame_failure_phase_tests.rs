@@ -95,6 +95,10 @@ pub(crate) fn every_segment_phase_survives_unwind_and_retries_to_scene() {
         );
 
         assert!(
+            ui_runtime.wait_out_failure_retry_for_test(),
+            "{phase:?} failure must arm its retry"
+        );
+        assert!(
             ui_runtime.render_frame(&mut backend),
             "{phase:?} must recover on the automatic retry"
         );
