@@ -109,6 +109,7 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 mod brightness;
+pub mod capability;
 mod clipboard;
 pub mod data_transfer;
 mod display;

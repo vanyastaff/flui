@@ -148,18 +148,48 @@ impl fmt::Display for UnsupportedReason {
 /// assert_eq!(absent.to_string(), "unsupported: not on this device");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
-#[error("unsupported: {reason}")]
 #[non_exhaustive]
 pub struct Unsupported {
     /// Why it is not here.
     pub reason: UnsupportedReason,
+    /// The [`NAME`](crate::capability::Capability::NAME) of the capability
+    /// asked for, when the refusal names one.
+    capability: Option<&'static str>,
+}
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.capability {
+            Some(name) => write!(f, "unsupported: {name}: {}", self.reason),
+            None => write!(f, "unsupported: {}", self.reason),
+        }
+    }
 }
 
 impl Unsupported {
     /// Not here, for `reason`.
     #[must_use]
     pub const fn new(reason: UnsupportedReason) -> Self {
-        Self { reason }
+        Self {
+            reason,
+            capability: None,
+        }
+    }
+
+    /// The capability `C` is not here, for `reason`; the refusal names it.
+    #[must_use]
+    pub const fn of<C: crate::capability::Capability>(reason: UnsupportedReason) -> Self {
+        Self {
+            reason,
+            capability: Some(C::NAME),
+        }
+    }
+
+    /// The [`NAME`](crate::capability::Capability::NAME) of the capability
+    /// this refusal is about, when it names one.
+    #[must_use]
+    pub const fn capability(self) -> Option<&'static str> {
+        self.capability
     }
 
     /// Whether asking again later may succeed: the reason is
