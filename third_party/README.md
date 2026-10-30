@@ -9,6 +9,10 @@ holds. To drop one: delete its directory and its `.patch` file, remove the `path
 dependency, bump the `version` to the upstream release that has the change, and run
 `cargo update -p <crate>`.
 
+Publishing blocks on these crates. `cargo publish` drops the `path` key and builds against the
+registry release, which lacks the change, so `flui-native` goes to crates.io only after upstream
+takes each change below or FLUI publishes the vendored crate under its own name.
+
 ## accesskit_ios 0.2.2
 
 **Source:** crates.io `accesskit_ios` 0.2.2, AccessKit commit
