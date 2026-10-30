@@ -123,9 +123,12 @@ mod measured {
         TranslationFraction as _,
     };
     // The capability seam a package declares, provides and acquires with
-    // (ADR-0152), and the clipboard, its first capability.
+    // (ADR-0152), the clipboard, its first capability, and the primary
+    // selection.
     use flui_sdk::interaction::{
-        ClipboardBackend as _, ClipboardCapability as _, ClipboardHandle as _,
+        ClipboardBackend as _, ClipboardCapability as _, ClipboardHandle as _, PrimaryClaim as _,
+        PrimaryClaimId as _, PrimaryClaims as _, PrimarySelectionBackend as _,
+        PrimarySelectionCapability as _, PrimarySelectionHandle as _, SelectionText as _,
     };
     use flui_sdk::platform::capability::{
         Abandoned as _, Capability as _, CapabilityProvider as _, CapabilityRegistrar as _,
@@ -499,7 +502,14 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::PointerId;",
         "pub use flui_interaction::PointerKind;",
         "pub use flui_interaction::PointerKindSet;",
+        "pub use flui_interaction::PrimaryClaim;",
+        "pub use flui_interaction::PrimaryClaimId;",
+        "pub use flui_interaction::PrimaryClaims;",
         "pub use flui_interaction::PrimaryContact;",
+        "pub use flui_interaction::PrimarySelectionBackend;",
+        "pub use flui_interaction::PrimarySelectionCapability;",
+        "pub use flui_interaction::PrimarySelectionHandle;",
+        "pub use flui_interaction::SelectionText;",
         "pub use flui_interaction::SwipeDetails;",
         "pub use flui_interaction::SwipeGestureRecognizer;",
         "pub use flui_interaction::SwipeStart;",
