@@ -14,7 +14,7 @@ use flui_view::prelude::*;
 use super::AutovalidateMode;
 use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
-use crate::Assertiveness;
+use crate::LiveSetting;
 use crate::flex::Column;
 use crate::semantics::Semantics;
 use crate::support::{event_callback, ref_callback};
@@ -210,7 +210,7 @@ fn with_error_line(input: BoxedView, error: Option<String>) -> BoxedView {
         children.push(
             Semantics::new()
                 .container(true)
-                .live_region(Assertiveness::Polite)
+                .live_region(LiveSetting::Polite)
                 .child(Text::new(error).style(TextStyle::default().with_color(ERROR_COLOR)))
                 .boxed(),
         );

@@ -316,7 +316,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
 
 struct HapticWindow {
     inner: Rc<dyn PlatformWindow>,
-    haptics: Arc<flui_platform::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::testing::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
     fn id(&self) -> flui_platform::WindowId {
@@ -377,9 +377,8 @@ impl PlatformWindow for HapticWindow {
 /// accepted revision decides the next request (ADR-0212 §1).
 pub(crate) fn haptics_preference_suppresses_both_tiers() {
     use flui_platform::HapticFeedback;
-    use flui_platform::haptics::{
-        FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
-    };
+    use flui_platform::haptics::{HapticOutcome, HapticPattern, HapticRequest, HapticTiming};
+    use flui_platform::testing::FakeHaptics;
     let haptics = Arc::new(FakeHaptics::new());
     let window = Rc::new(HapticWindow {
         inner: flui_native::headless_platform()
@@ -469,7 +468,8 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
     use crate::{presentation::PresentationWindow, runtime_services::RuntimeHostServices};
     use crate::{sink::SubmitVerdict, testing::ScriptedSink};
     use flui_platform::HapticFeedback;
-    use flui_platform::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
+    use flui_platform::haptics::{HapticOutcome, HapticRequest, HapticTiming};
+    use flui_platform::testing::FakeHaptics;
     for verdict in [
         SubmitVerdict::Presented,
         SubmitVerdict::NotShown,

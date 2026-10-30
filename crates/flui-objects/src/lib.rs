@@ -100,7 +100,7 @@ pub use image::{RenderImage, RenderTexture};
 // --- flat re-exports (sliver) ---
 pub use sliver::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselItemPlacement, CarouselLayout,
-    CarouselLayoutError, MAX_ITEM_EXTENT, RenderSliverCarousel,
+    CarouselLayoutError, CarouselLayoutKind, MAX_ITEM_EXTENT, RenderSliverCarousel,
 };
 pub use sliver::{
     FloatingHeaderSnapConfiguration, InvalidSliverCrossAxisExtent,

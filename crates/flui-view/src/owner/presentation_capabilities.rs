@@ -25,6 +25,9 @@ pub struct PresentationCapabilities {
     pub text_input: Option<flui_interaction::TextInputHandle>,
     /// The presentation's plain-text clipboard, over its platform's clipboard.
     pub clipboard: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's announcer, over its semantics pipeline's
+    /// announcement queue. Absent on a headless tree.
+    pub announcer: Option<flui_rendering::semantics::Announcer>,
     /// The presentation's haptics host. Widgets acquire it through
     /// `LifecycleContext::haptics`, which applies the enclosing `HapticsMode`.
     pub haptics: Option<flui_interaction::HapticsHandle>,
@@ -72,6 +75,7 @@ impl std::fmt::Debug for PresentationCapabilities {
         f.debug_struct("PresentationCapabilities")
             .field("text_input", &self.text_input.is_some())
             .field("clipboard", &self.clipboard.is_some())
+            .field("announcer", &self.announcer.is_some())
             .field("haptics", &self.haptics.is_some())
             .field("drag_and_drop", &self.drag_and_drop.is_some())
             .field("textures", &self.textures.is_some())

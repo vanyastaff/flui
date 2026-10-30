@@ -66,7 +66,7 @@ use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecor
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Assertiveness, Column, CrossAxisAlignment, DecoratedBox, ExcludeSemantics, IgnorePointer,
+    Column, CrossAxisAlignment, DecoratedBox, ExcludeSemantics, IgnorePointer, LiveSetting,
     MainAxisSize, MouseRegion, Padding, Semantics, Text, WidgetState, WidgetStates,
     WidgetStatesController,
 };
@@ -630,7 +630,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             let line = if is_error {
                 Semantics::new()
                     .container(true)
-                    .live_region(Assertiveness::Polite)
+                    .live_region(LiveSetting::Polite)
                     .child(line)
                     .boxed()
             } else {

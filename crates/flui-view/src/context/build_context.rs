@@ -439,6 +439,15 @@ pub trait LifecycleContext: BuildContext {
     /// with [`SignalError::WrittenDuringBuild`](crate::SignalError::WrittenDuringBuild).
     fn writer_source(&self) -> crate::WriterSource;
 
+    /// The UI runtime's build phase (ADR-0086 §7): building while any
+    /// element of the runtime builds.
+    ///
+    /// A widget that subscribes to a controller binds the controller to this
+    /// phase, so a mutator called from `build` is refused with
+    /// [`MutatedDuringBuild`](flui_foundation::MutatedDuringBuild) instead of
+    /// changing state its listeners can no longer write from.
+    fn build_phase(&self) -> flui_foundation::BuildPhase;
+
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///
@@ -486,6 +495,17 @@ pub trait LifecycleContext: BuildContext {
     /// ADR-0084: this becomes `cx.capability::<Clipboard>()` once the
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
+
+    /// The presentation's announcer: speaks a message through assistive
+    /// technology without a visible change (ADR-0204 §4).
+    ///
+    /// A declarative live region is the primary way to make a change heard;
+    /// announce what has no node of its own. The handle is `Send`, so a
+    /// completion on another thread can announce. `None` on a bare owner (an
+    /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), the same rule
+    /// `clipboard_handle` follows.
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer>;
 
     /// The presentation's haptics (ADR-0210 §10): semantic feedback and
     /// patterns, immediate or aligned with the next presented frame.

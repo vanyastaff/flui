@@ -390,7 +390,7 @@ pub(crate) fn a_controller_trigger_follows_its_animation() {
             .trigger(Trigger::Controller(progress)),
     );
     close(opacity(&laid), 0.0, 1e-9, "at the controller's start");
-    controller.set_value(0.25);
+    controller.set_value(0.25).expect("no build is running");
     laid.pump_for(Duration::ZERO);
     close(opacity(&laid), 0.25, 1e-9, "at the controller's value");
 }
@@ -557,7 +557,7 @@ impl Animation<f64> for RemovalPanics {
 pub(crate) fn a_panicking_controller_release_still_hands_progress_back() {
     let registry = Vsync::new();
     let inner = AnimationController::builder(ms(100)).build();
-    inner.set_value(0.5);
+    inner.set_value(0.5).expect("no build is running");
     let controller: Rc<dyn Animation<f64>> = Rc::new(RemovalPanics {
         inner,
         anchor: Rc::new(()),

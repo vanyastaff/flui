@@ -412,6 +412,9 @@ impl UiRuntime {
         let mut first = None;
         let mut paid = true;
         for presentation in self.presentations.iter() {
+            // A frame has passed since the actions an agent ran: the
+            // readings they owe are taken from the tree it left.
+            Self::complete_agent_reads(presentation);
             if presentation.text_input().is_transaction_open() {
                 // Its commits are still closed (a frame, a native text
                 // preparation): its anchor comes when they reopen.

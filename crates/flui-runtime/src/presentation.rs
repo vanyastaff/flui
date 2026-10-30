@@ -441,6 +441,10 @@ pub struct PresentationState {
     /// The bounds the agent's actionability check last read, to tell whether
     /// an element holds still. Owner thread only.
     pub(crate) agent_stability: RefCell<crate::ui_runtime::AgentStability>,
+    /// Actions the agent ran that owe a reading of the tree once a frame has
+    /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
+    /// and as failed when the presentation closes first. Owner thread only.
+    pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -896,6 +900,10 @@ impl PresentationState {
             }
         });
         let vsync = Vsync::new();
+        // Controllers ticked here refuse mutation while this runtime builds.
+        vsync.set_build_phase(Some(
+            widgets.with_build_owner(flui_view::BuildOwner::build_phase),
+        ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
         vsync.set_frame_requester(Some(Rc::new(move || {
@@ -921,6 +929,18 @@ impl PresentationState {
         });
         widgets.with_build_owner_mut(|owner| {
             owner.capabilities_mut().haptics = Some(haptics.handle());
+        });
+        // Announcements queue on the pipeline, which keeps them across
+        // accessibility being switched off and on, and request this
+        // presentation's frame so an idle window still speaks.
+        let announcer = pipeline
+            .with_mut(flui_rendering::pipeline::PipelineOwner::announcements)
+            .map(|announcements| {
+                let request_frame = Arc::clone(&request_frame);
+                announcements.announcer(Arc::new(move || request_frame()))
+            });
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().announcer = announcer;
         });
         let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
             capabilities.drag.clone(),
@@ -998,6 +1018,7 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1123,6 +1144,7 @@ impl PresentationState {
             semantics,
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
+            agent_reads: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1676,6 +1698,7 @@ impl PresentationState {
                 .try_with(|owner| {
                     owner.has_pending_invalidations()
                         || owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                        || owner.has_pending_announcements()
                 })
                 .unwrap_or(true)
     }
@@ -1704,6 +1727,7 @@ impl PresentationState {
                 // scope; `run_frame` drains again before its first phase.
                 owner.drain_pending_dirty_with_recovery(recovery);
                 owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                    || owner.has_pending_announcements()
             })
     }
 
@@ -1799,6 +1823,15 @@ impl PresentationState {
                 true
             }
             None => true,
+        }
+    }
+
+    /// Answers every reading an agent's action still owes as failed: the
+    /// presentation closes before a frame could take it. The actions ran.
+    pub(crate) fn abandon_agent_reads(&self) {
+        let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
+        for pending in owed {
+            pending.abandon();
         }
     }
 
@@ -2203,11 +2236,11 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
         }
-        let (announce, event) = self.semantics.take_close_callbacks();
 
         let source = self.widgets.lifecycle_source();
         source.begin_close();
@@ -2217,8 +2250,6 @@ impl PresentationState {
         failure.invoke(|| source.finish_close_with_mode(mode));
         let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
-        failure.retire(announce);
-        failure.retire(event);
         failure.retire(agent);
         failure.release(window_control);
         let mode = failure.mode();
@@ -2325,6 +2356,7 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
+        self.abandon_agent_reads();
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

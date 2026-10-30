@@ -408,7 +408,7 @@ impl ChildEntry {
         } else {
             // The very first entry sits
             // at rest, fully switched in, no motion.
-            controller.controller().set_value(1.0);
+            let _ = controller.controller().set_value(1.0);
         }
 
         let built = Self::build_transition(child_number, &child, &animation, transition);

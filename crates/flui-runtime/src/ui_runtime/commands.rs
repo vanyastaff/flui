@@ -1,6 +1,7 @@
 //! The owner inbox: `UiCommand`, `UiCommandSender`, and draining it on the owner thread.
 
 use super::UiRuntime;
+use super::agent::Served;
 use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
@@ -88,6 +89,16 @@ pub enum UiCommand {
         /// Where the answer goes.
         reply: super::agent::ReplySender<flui_protocol::Tree>,
     },
+    /// Read the announcements the addressed presentation delivered, for a
+    /// [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
+    SemanticsAnnouncements {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// Which announcements to answer.
+        params: flui_protocol::AnnouncementsParams,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::AnnouncementJournal>,
+    },
     /// Resolve an agent's wire action against the addressed presentation's
     /// committed tree, invoke it, and answer on `reply`.
     SemanticsAgentAction {
@@ -99,6 +110,20 @@ pub enum UiCommand {
         issued: bool,
         /// Where the answer goes.
         reply: super::agent::ReplySender<()>,
+    },
+    /// As [`Self::SemanticsAgentAction`], and read the tree back once the
+    /// action's effect has settled: the frame after the action ran.
+    SemanticsAgentActionRead {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The element and action.
+        request: flui_protocol::ActionRequest,
+        /// What to read back.
+        snapshot: flui_protocol::Snapshot,
+        /// Whether the agent's reads ever reported the element.
+        issued: bool,
+        /// Where the outcome goes.
+        reply: super::agent::ReplySender<flui_protocol::ActOutcome>,
     },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
@@ -172,6 +197,15 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("query", query)
                 .finish_non_exhaustive(),
+            UiCommand::SemanticsAnnouncements {
+                presentation_id,
+                params,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAnnouncements")
+                .field("presentation_id", presentation_id)
+                .field("since", &params.since)
+                .finish_non_exhaustive(),
             // The request's value stays out: it may be what a user typed.
             UiCommand::SemanticsAgentAction {
                 presentation_id,
@@ -182,6 +216,18 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("element", &request.element)
                 .field("action", &request.action)
+                .finish_non_exhaustive(),
+            UiCommand::SemanticsAgentActionRead {
+                presentation_id,
+                request,
+                snapshot,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentActionRead")
+                .field("presentation_id", presentation_id)
+                .field("element", &request.element)
+                .field("action", &request.action)
+                .field("snapshot", snapshot)
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -710,6 +756,19 @@ impl UiRuntime {
                     }
                     super::agent::send_reply(&reply, query.root, result);
                 }
+                UiCommand::SemanticsAnnouncements {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    let result = self.serve_semantics_announcements(presentation_id, &params);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result);
+                }
                 UiCommand::SemanticsAgentAction {
                     presentation_id,
                     request,
@@ -734,6 +793,53 @@ impl UiRuntime {
                                 report.invoked += 1;
                             }
                             super::agent::send_reply(&reply, Some(element), result);
+                        }
+                        Err(payload) => {
+                            let failure = if reached_handler.get() {
+                                super::AgentError::HandlerPanicked { element }
+                            } else {
+                                super::AgentError::ResolvePanicked { element }
+                            };
+                            self.fail_agent_job(&reply, element, failure, payload);
+                        }
+                    }
+                }
+                UiCommand::SemanticsAgentActionRead {
+                    presentation_id,
+                    request,
+                    snapshot,
+                    issued,
+                    reply,
+                } => {
+                    let element = request.element;
+                    let reached_handler = std::cell::Cell::new(false);
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        self.serve_semantics_act_read(
+                            presentation_id,
+                            &request,
+                            snapshot,
+                            issued,
+                            &reached_handler,
+                        )
+                    }));
+                    match served {
+                        Ok(Ok(Served::Answered(outcome))) => {
+                            report.invoked += 1;
+                            super::agent::send_reply(&reply, Some(element), Ok(outcome));
+                        }
+                        Ok(Ok(Served::Reading(pending))) => {
+                            report.invoked += 1;
+                            // The reading is owed once the effect settled; the
+                            // reply waits with it.
+                            self.park_act_read(presentation_id, pending, reply);
+                        }
+                        Ok(Err(error)) => {
+                            if error == super::AgentError::PresentationGone {
+                                report.dropped_stale += 1;
+                            } else {
+                                report.invoked += 1;
+                            }
+                            super::agent::send_reply(&reply, Some(element), Err(error));
                         }
                         Err(payload) => {
                             let failure = if reached_handler.get() {

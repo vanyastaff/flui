@@ -33,7 +33,7 @@ use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::properties::AttributedString;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
-use crate::role::{Assertiveness, SemanticsRole};
+use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use flui_foundation::geometry::Axis;
 use rustc_hash::FxHashMap;
@@ -197,22 +197,30 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
     })
 }
 
-/// How a node's changes are announced: its declared politeness, else what its
+/// How a node's changes are announced: its declared setting, else what its
 /// role implies (ARIA 1.2: `assertive` for an alert, `polite` for a status or
 /// a log, `off` for a timer or marquee), else not at all.
-fn live_politeness(live: Option<Assertiveness>, role: SemanticsRole) -> Option<accesskit::Live> {
+fn live_politeness(live: Option<LiveSetting>, role: SemanticsRole) -> Option<accesskit::Live> {
     match (live, role) {
-        (Some(Assertiveness::Assertive), _) | (None, SemanticsRole::Alert) => {
+        (Some(LiveSetting::Assertive), _) | (None, SemanticsRole::Alert) => {
             Some(accesskit::Live::Assertive)
         }
-        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
+        (Some(LiveSetting::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
             Some(accesskit::Live::Polite)
         }
-        // ARIA's implicit `off`, published: an absent setting would inherit an
-        // enclosing region's and announce every tick.
-        (None, SemanticsRole::Timer | SemanticsRole::Marquee) => Some(accesskit::Live::Off),
+        // `off`, published: an absent setting would inherit an enclosing
+        // region's and announce every tick.
+        (Some(LiveSetting::Off), _) | (None, SemanticsRole::Timer | SemanticsRole::Marquee) => {
+            Some(accesskit::Live::Off)
+        }
         (None, _) => None,
     }
+}
+
+/// Whether a change announces the whole region: as declared, else as the
+/// role implies (ARIA 1.2: `alert` and `status` are atomic).
+fn live_atomic(atomic: Option<bool>, role: SemanticsRole) -> bool {
+    atomic.unwrap_or(matches!(role, SemanticsRole::Alert | SemanticsRole::Status))
 }
 
 /// Translate one node's states onto the AccessKit node.
@@ -230,6 +238,7 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
         hidden,
         modal,
         required,
+        busy,
         invalid,
         current,
         has_popup,
@@ -267,6 +276,13 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
     }
     if let Some(live) = live_politeness(attrs.live, attrs.role) {
         node.set_live(live);
+        // Atomicity matters only to a region that announces.
+        if live != accesskit::Live::Off && live_atomic(attrs.live_atomic, attrs.role) {
+            node.set_live_atomic();
+        }
+    }
+    if busy == Some(true) {
+        node.set_busy();
     }
     if modal == Some(true) {
         node.set_modal();
@@ -613,6 +629,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         role: _,
         states: _,
         live: _,
+        live_atomic: _,
         label: _,
         value: _,
         numeric_range: _,
@@ -1684,29 +1701,90 @@ mod tests {
     }
 
     /// A live region announces at the politeness it was given; without one,
-    /// an alert is assertive and a status polite, as their ARIA roles imply.
+    /// an alert is assertive and a status polite, as their ARIA roles imply,
+    /// and both are atomic; an `Off` region announces nothing, so it is not.
     #[test]
     fn live_regions_announce_at_their_politeness() {
-        use Assertiveness::{Assertive, Polite};
+        use LiveSetting::{Assertive, Off, Polite};
         use accesskit::Live;
-        let table: &[(Option<Assertiveness>, SemanticsRole, Option<Live>)] = &[
-            (None, SemanticsRole::None, None),
-            (Some(Polite), SemanticsRole::None, Some(Live::Polite)),
-            (Some(Assertive), SemanticsRole::None, Some(Live::Assertive)),
-            (None, SemanticsRole::Alert, Some(Live::Assertive)),
-            (None, SemanticsRole::Status, Some(Live::Polite)),
-            (Some(Polite), SemanticsRole::Alert, Some(Live::Polite)),
-            (None, SemanticsRole::Log, Some(Live::Polite)),
-            (None, SemanticsRole::Timer, Some(Live::Off)),
-            (None, SemanticsRole::Marquee, Some(Live::Off)),
+        // (setting, atomic, role) → (published live, published atomic)
+        type Row = (
+            Option<LiveSetting>,
+            Option<bool>,
+            SemanticsRole,
+            Option<Live>,
+            bool,
+        );
+        let table: &[Row] = &[
+            (None, None, SemanticsRole::None, None, false),
+            (
+                Some(Polite),
+                None,
+                SemanticsRole::None,
+                Some(Live::Polite),
+                false,
+            ),
+            (
+                Some(Assertive),
+                None,
+                SemanticsRole::None,
+                Some(Live::Assertive),
+                false,
+            ),
+            (Some(Off), None, SemanticsRole::None, Some(Live::Off), false),
+            (
+                None,
+                None,
+                SemanticsRole::Alert,
+                Some(Live::Assertive),
+                true,
+            ),
+            (None, None, SemanticsRole::Status, Some(Live::Polite), true),
+            (
+                Some(Polite),
+                None,
+                SemanticsRole::Alert,
+                Some(Live::Polite),
+                true,
+            ),
+            (
+                Some(Off),
+                None,
+                SemanticsRole::Status,
+                Some(Live::Off),
+                false,
+            ),
+            (
+                None,
+                Some(false),
+                SemanticsRole::Alert,
+                Some(Live::Assertive),
+                false,
+            ),
+            (
+                Some(Polite),
+                Some(true),
+                SemanticsRole::None,
+                Some(Live::Polite),
+                true,
+            ),
+            (None, None, SemanticsRole::Log, Some(Live::Polite), false),
+            (None, None, SemanticsRole::Timer, Some(Live::Off), false),
+            (None, None, SemanticsRole::Marquee, Some(Live::Off), false),
         ];
-        for &(live, role, expected) in table {
+        for &(live, live_atomic, role, expected, atomic) in table {
             let node = translate(&SemanticsAttributes {
                 live,
+                live_atomic,
                 role,
                 ..Default::default()
             });
-            assert_eq!(node.live(), expected, "{live:?} {role}");
+            assert_eq!(node.live(), expected, "{live:?} {live_atomic:?} {role}");
+            assert_eq!(
+                node.is_live_atomic(),
+                atomic,
+                "{live:?} {live_atomic:?} {role}"
+            );
         }
     }
 

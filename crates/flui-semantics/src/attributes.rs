@@ -19,7 +19,7 @@ use crate::{
         TextDirection,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::{Assertiveness, SemanticsRole},
+    role::{LiveSetting, SemanticsRole},
     states::States,
 };
 
@@ -33,7 +33,10 @@ pub(crate) struct SemanticsAttributes {
     /// The states this node declares.
     pub(crate) states: States,
     /// How changes are announced, when the node is a live region.
-    pub(crate) live: Option<Assertiveness>,
+    pub(crate) live: Option<LiveSetting>,
+    /// Whether a change announces the whole region (`aria-atomic`) rather
+    /// than only what changed.
+    pub(crate) live_atomic: Option<bool>,
     /// The label describing this node.
     pub(crate) label: Option<AttributedString>,
     /// The current value of this node.

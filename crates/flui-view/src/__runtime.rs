@@ -27,8 +27,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{
-    ActionRequest, Actionability, ActionabilityParams, LocateParams, Matches, ReadQuery, Tree,
-    WindowId,
+    ActOutcome, ActionRequest, Actionability, ActionabilityParams, LocateParams, Matches,
+    ReadQuery, Snapshot, Tree, WindowId,
 };
 use flui_scheduler::AppLifecycleState;
 
@@ -65,6 +65,18 @@ pub trait AgentPort: Send + Sync {
     /// When the request cannot be enqueued.
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault>;
 
+    /// Enqueue an action on one of the window's elements, and a reading of
+    /// the tree once its effect has settled.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn act_and_read(
+        &self,
+        request: ActionRequest,
+        snapshot: Snapshot,
+    ) -> Result<AgentAnswer<ActOutcome>, AgentFault>;
+
     /// Enqueue a locator resolution over the window's committed semantics tree.
     ///
     /// # Errors
@@ -90,6 +102,16 @@ pub trait AgentPort: Send + Sync {
         &self,
         request: flui_protocol::MotionRequest,
     ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault>;
+
+    /// Enqueue a read of the announcements the window delivered to assistive
+    /// technology.
+    ///
+    /// # Errors
+    /// Returns the same admission faults as [`Self::read`].
+    fn announcements(
+        &self,
+        params: flui_protocol::AnnouncementsParams,
+    ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault>;
 }
 
 /// The pending half of an [`AgentAnswer`].

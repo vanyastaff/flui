@@ -141,7 +141,9 @@ pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     harness.tick();
 
     // The push flight is airborne, parked mid-entrance so the pop genuinely reverses.
-    harness.enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| b_transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     let push_flight = controller.flights().get(&tag("shared")).expect("airborne");
     let push_entry = push_flight.entry_id();
     let push_begin = push_flight.begin_rect();
@@ -232,7 +234,9 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
         let push = controller.flights().get(&tag("shared")).expect("airborne");
         let entry = push.entry_id();
         let samples = [0.2, 0.4, 0.7].map(|t| {
-            harness.enter_owner_scope(|| route_animation.set_value(t));
+            harness
+                .enter_owner_scope(|| route_animation.set_value(t))
+                .expect("no build is running");
             (t, push.shuttle_rect())
         });
 
@@ -241,7 +245,9 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
         let pop = controller.flights().get(&tag("shared")).expect("returning");
         assert_eq!(pop.entry_id(), entry, "the same shuttle returns");
         for (t, expected) in samples.into_iter().rev() {
-            harness.enter_owner_scope(|| route_animation.set_value(t));
+            harness
+                .enter_owner_scope(|| route_animation.set_value(t))
+                .expect("no build is running");
             assert_rect_close(pop.shuttle_rect(), expected, "pop retraces the push path");
         }
         if source_bend.is_some() {
@@ -256,7 +262,9 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
             let _next = harness.enter_owner_scope(|| navigator.push(next_page));
             harness.tick();
             let next_animation = next_transition.controller().expect("installed");
-            harness.enter_owner_scope(|| next_animation.set_value(0.5));
+            harness
+                .enter_owner_scope(|| next_animation.set_value(0.5))
+                .expect("no build is running");
             let redirected = controller
                 .flights()
                 .get(&tag("shared"))
@@ -282,9 +290,13 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
                 expected,
                 "a new destination selects its own forward path",
             );
-            harness.enter_owner_scope(|| next_animation.set_value(1.0));
+            harness
+                .enter_owner_scope(|| next_animation.set_value(1.0))
+                .expect("no build is running");
         } else {
-            harness.enter_owner_scope(|| route_animation.set_value(0.0));
+            harness
+                .enter_owner_scope(|| route_animation.set_value(0.0))
+                .expect("no build is running");
         }
         harness.tick();
         assert_eq!(controller.flights().len(), 0, "the flight lands");
@@ -418,7 +430,9 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
             hero.curve(Interval::linear(0.9, 1.0))
         }),
     );
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     assert!(
         configure_calls.get() > 0,
         "hero page configuration must accept owner-local Rc<Cell<_>> state"
@@ -585,7 +599,9 @@ fn rect_mapping_reentry(phase: &'static str) {
                 })
         }),
     );
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     armed.set(true);
     let rect = flight.shuttle_rect();
@@ -602,7 +618,9 @@ fn rect_mapping_reentry(phase: &'static str) {
         "custom mapping drives the shuttle",
     );
     armed.set(false);
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0))
+        .expect("no build is running");
     harness.tick();
     assert_eq!(
         controller.flights().len(),
@@ -689,7 +707,9 @@ fn rect_mapping_failure(phase: &'static str) {
                 })
         }),
     );
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let before = drops.get();
     armed.set(true);
@@ -724,7 +744,9 @@ fn rect_mapping_failure(phase: &'static str) {
         "the next read recovers through the same flight",
     );
     assert!(drops.get() > before, "healthy mapping destruction resumes");
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0))
+        .expect("no build is running");
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
 }
@@ -767,7 +789,9 @@ pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     for step in 0..=20 {
         let t = f64::from(step) / 20.0;
-        harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(t));
+        harness
+            .enter_owner_scope(|| transition.controller().expect("installed").set_value(t))
+            .expect("no build is running");
         let rect = flight.shuttle_rect();
         assert!(
             rect.width() >= 0.0 && rect.height() >= 0.0,
@@ -818,13 +842,17 @@ fn exercise_hero_geometry_sample(sample: Rect, accepted: Option<Rect>) {
     );
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let entry = flight.entry_id();
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     harness.tick();
     let previous = flight.shuttle_rect();
     assert!(previous.is_finite() && previous.width() > 0.0 && previous.height() > 0.0);
 
     replacement.set(Some(sample));
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.75));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.75))
+        .expect("no build is running");
     let sampled = flight.shuttle_rect();
     assert!(
         sampled.is_finite(),
@@ -855,7 +883,9 @@ fn exercise_hero_geometry_sample(sample: Rect, accepted: Option<Rect>) {
         flight.begin_rect().lerp(flight.target_rect(), 0.75),
         "the next finite mapping recovers on the same flight",
     );
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0))
+        .expect("no build is running");
     harness.tick();
     assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
     assert_rect_close(
@@ -1004,7 +1034,9 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
             }
         }),
     );
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     harness.tick();
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     let previous = flight.shuttle_rect();
@@ -1040,7 +1072,9 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
             .get(&tag("shared"))
             .expect("the next flight is admitted");
         assert!(recovered.shuttle_rect().is_finite());
-        harness.enter_owner_scope(|| next.controller().expect("installed").set_value(1.0));
+        harness
+            .enter_owner_scope(|| next.controller().expect("installed").set_value(1.0))
+            .expect("no build is running");
         harness.tick();
         assert_eq!(
             controller.flights().len(),
@@ -1063,7 +1097,9 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
             newer,
             "the next read retains the accepted geometry",
         );
-        harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+        harness
+            .enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0))
+            .expect("no build is running");
         harness.tick();
         assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
     }
@@ -1219,7 +1255,9 @@ fn missing_destination_fade_case(
             } else {
                 0.7
             };
-            harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(t));
+            harness
+                .enter_owner_scope(|| transition.controller().expect("installed").set_value(t))
+                .expect("no build is running");
             harness.tick();
             assert!(harness.enter_owner_scope(|| navigator.pop()));
             harness.tick();
@@ -1243,7 +1281,9 @@ fn missing_destination_fade_case(
                 hero_page("shared", 30.0, 20.0),
                 hero_page("shared", 40.0, 30.0),
             );
-            harness.enter_owner_scope(|| previous.controller().expect("installed").set_value(0.7));
+            harness
+                .enter_owner_scope(|| previous.controller().expect("installed").set_value(0.7))
+                .expect("no build is running");
             harness.tick();
             let entry = controller
                 .flights()
@@ -1252,7 +1292,9 @@ fn missing_destination_fade_case(
                 .entry_id();
             assert!(harness.enter_owner_scope(|| navigator.pop()));
             harness.tick();
-            harness.enter_owner_scope(|| previous.controller().expect("installed").set_value(0.4));
+            harness
+                .enter_owner_scope(|| previous.controller().expect("installed").set_value(0.4))
+                .expect("no build is running");
             harness.tick();
             let transition = disappearing.transition_handle();
             let _next = harness.enter_owner_scope(|| navigator.push(disappearing));
@@ -1270,7 +1312,9 @@ fn missing_destination_fade_case(
         }
     };
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
-    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness
+        .enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5))
+        .expect("no build is running");
     harness.tick();
     assert_eq!(flight.opacity(), 1.0);
     let mounted_heroes = harness
@@ -1296,7 +1340,8 @@ fn missing_destination_fade_case(
         transition
             .controller()
             .expect("installed")
-            .set_value(if pop { 0.4 } else { 0.6 });
+            .set_value(if pop { 0.4 } else { 0.6 })
+            .expect("no build is running");
     });
     harness.tick();
     assert!(
@@ -1318,7 +1363,8 @@ fn missing_destination_fade_case(
         transition
             .controller()
             .expect("installed")
-            .set_value(if pop { 0.25 } else { 0.75 });
+            .set_value(if pop { 0.25 } else { 0.75 })
+            .expect("no build is running");
     });
     harness.tick();
     assert!(
@@ -1343,7 +1389,8 @@ fn missing_destination_fade_case(
             next_transition
                 .controller()
                 .expect("installed")
-                .set_value(0.5);
+                .set_value(0.5)
+                .expect("no build is running");
         });
         harness.tick();
         assert_eq!(
@@ -1355,7 +1402,8 @@ fn missing_destination_fade_case(
             next_transition
                 .controller()
                 .expect("installed")
-                .set_value(1.0);
+                .set_value(1.0)
+                .expect("no build is running");
         });
         harness.tick();
         assert_eq!(controller.flights().len(), 0, "the redirected flight lands");
@@ -1365,7 +1413,8 @@ fn missing_destination_fade_case(
         transition
             .controller()
             .expect("installed")
-            .set_value(if pop { 0.0 } else { 1.0 });
+            .set_value(if pop { 0.0 } else { 1.0 })
+            .expect("no build is running");
     });
     harness.tick();
     assert_eq!(

@@ -45,8 +45,9 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # promotes this from a transitive (dev-only) dependency to a normal one.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The text-store contract `text_store_kit` certifies stores against, and
-# `InMemoryTextStore`, the reference store its own fixture drives.
-flui-platform = { workspace = true }
+# `InMemoryTextStore`, the reference store its own fixture drives; its
+# `testing` doubles (`FakeHaptics`), which `TestHost` hands out.
+flui-platform = { workspace = true, features = ["testing"] }
 # The handle traits a window's surface target answers through, which the
 # window conformance checks query (ADR-0254 §5).
 raw-window-handle = { workspace = true }
@@ -107,6 +108,9 @@ tracing = { workspace = true }
 # serialiser stays out of every production graph.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The preferences row shares the native recording's schema, so the two never
+# spell a preference differently.
+flui-protocol = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 static_assertions.workspace = true

@@ -385,7 +385,7 @@ ten-second cap) and freezes the events as an `Arc<[HapticEvent]>` (ADR-0210 §2)
 zero as zero. A backend therefore never sees an invalid pattern, and a play can
 only degrade, never fail. `PlatformHaptics` gained `perform_with`, `play` and
 `capabilities` with default bodies, so an implementor of the Stable `perform`
-keeps compiling; `FakeHaptics` records each request with the actuator that
+keeps compiling; `testing::FakeHaptics` (ADR-0264) records each request with the actuator that
 played it and the outcome it returned.
 **Tests:** `haptic_pattern_builder_rejects_invalid_patterns`.
 

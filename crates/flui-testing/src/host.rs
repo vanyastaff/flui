@@ -87,7 +87,7 @@ pub struct HeadlessWindow {
     /// every change this double makes to it.
     revision: Mutex<flui_platform::WindowRevision>,
     input_regions: Mutex<SentInputRegions>,
-    haptics: Arc<flui_platform::haptics::FakeHaptics>,
+    haptics: Arc<flui_platform::testing::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
     /// Whether the simulated platform reports when frames reached the screen
     /// ([`HeadlessWindow::with_presentation_reports`]).
@@ -159,7 +159,7 @@ impl HeadlessWindow {
             display: Mutex::new(None),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
-            haptics: Arc::new(flui_platform::haptics::FakeHaptics::new()),
+            haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
         }
@@ -175,7 +175,7 @@ impl HeadlessWindow {
     /// The recording actuator this window plays haptics on: every request the
     /// UI runtime handed the platform, with the outcome it returned.
     #[must_use]
-    pub fn haptic_actuator(&self) -> &flui_platform::haptics::FakeHaptics {
+    pub fn haptic_actuator(&self) -> &flui_platform::testing::FakeHaptics {
         &self.haptics
     }
 
