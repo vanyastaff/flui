@@ -935,6 +935,12 @@ required-features = ["native"]
 name = "thread_boundary_ui"
 path = "tests/thread_boundary_ui.rs"
 
+# An application on wasm32 capturing `Rc` in owner-local callbacks; `cargo xtask wasm-check`
+# compiles it for wasm32.
+[[test]]
+name = "wasm_consumer"
+path = "tests/wasm_consumer.rs"
+
 # The acceptance application in a window, for native runs through flui-driver.
 # Its tree is `tests/fixtures/acceptance_app/app.rs`, which uses the Material
 # catalog; `tests/facade_consumer.rs` runs its headless rows.
