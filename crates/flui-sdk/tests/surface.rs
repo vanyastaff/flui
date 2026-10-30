@@ -263,6 +263,10 @@ mod measured {
         SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
     };
     use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
+    use flui_sdk::widgets::{
+        PageIndicator as _, PageIndicatorState as _, PageIndicatorStyle as _,
+        PageIndicatorStyleError as _,
+    };
     use flui_sdk::{
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
