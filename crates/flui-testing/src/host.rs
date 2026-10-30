@@ -1340,6 +1340,19 @@ impl HeadlessHost {
         });
     }
 
+    /// Report that the primary window gained (`true`) or lost OS focus, as a
+    /// backend's focus callback does: the host delivers
+    /// `WindowObservation::Focus(focused)`. A window that loses focus forgets
+    /// its pressed keys and cancels its pointer sequences; the focus inside
+    /// its tree stays where it was. [`focus_window`](Self::focus_window)
+    /// moves the OS focus between windows this host opened.
+    pub fn set_window_focused(&self, focused: bool) {
+        self.observe(
+            self.ui_runtime.presentation_id(),
+            flui_runtime::owner::WindowObservation::Focus(focused),
+        );
+    }
+
     /// The primary window's gesture arena, the one its detectors compete in:
     /// observe it to watch the arena decide what this host dispatches.
     #[must_use]

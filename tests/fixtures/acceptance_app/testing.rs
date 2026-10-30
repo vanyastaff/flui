@@ -1,13 +1,15 @@
 //! Driving the acceptance application headless, the way its rows do: start
 //! it over a storage, restart it over the same storage, close it or end its
-//! session, and give it the user's taps and keys.
+//! session, give it the user's taps and keys, and read where the keyboard
+//! focus is.
 
 use std::time::Duration;
 
 use flui::foundation::RenderId;
 use flui::interaction::PointerKind;
 use flui::platform::EventTime;
-use flui::platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui::platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui::testing::a11y::Role;
 use flui::testing::storage::MemoryStorage;
 use flui::testing::widgets::{LaidOut, lay_out_with_storage, offset, settle_lazy, tight};
 use flui::view::CloseReason;
@@ -145,18 +147,123 @@ impl AppRun {
             .expect("BUG: an editable reports its text")
     }
 
+    /// Press and release `key`, then settle.
+    pub fn key(&mut self, key: NamedKey) {
+        self.chord(key, Modifiers::NONE);
+    }
+
+    /// Press and release `key` with `modifiers` held, then settle.
+    pub fn chord(&mut self, key: NamedKey, modifiers: Modifiers) {
+        self.press(Key::Named(key), modifiers);
+        self.settle();
+    }
+
+    /// Tab, then settle.
+    pub fn tab(&mut self) {
+        self.key(NamedKey::Tab);
+    }
+
+    /// Shift+Tab, then settle.
+    pub fn shift_tab(&mut self) {
+        self.chord(NamedKey::Tab, Modifiers::SHIFT);
+    }
+
+    /// The platform's Back chord: Cmd+\[ on Apple, Alt+Left elsewhere.
+    pub fn back_key(&mut self) {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
+            self.press(Key::character("["), Modifiers::META);
+            self.settle();
+        } else {
+            self.chord(NamedKey::ArrowLeft, Modifiers::ALT);
+        }
+    }
+
+    /// Hold `key` down through `repeats` auto-repeats, release it, then
+    /// settle.
+    pub fn hold(&mut self, key: NamedKey, repeats: usize) {
+        let key = Key::Named(key);
+        self.dispatch(KeyState::Down, &key, KeyRepeat::First, Modifiers::NONE);
+        for _ in 0..repeats {
+            self.dispatch(KeyState::Down, &key, KeyRepeat::AutoRepeat, Modifiers::NONE);
+        }
+        self.dispatch(KeyState::Up, &key, KeyRepeat::First, Modifiers::NONE);
+        self.settle();
+    }
+
+    /// The window loses (`false`) or regains its OS focus, then settles.
+    pub fn set_window_focused(&mut self, focused: bool) {
+        self.laid.set_window_focused(focused);
+        self.settle();
+    }
+
+    /// Drop the keyboard focus, as a fresh window has none.
+    pub fn unfocus(&mut self) {
+        self.laid.focus_manager().unfocus();
+        self.settle();
+    }
+
+    /// The label of the element the accessibility tree reports focused.
+    ///
+    /// # Panics
+    ///
+    /// When the tree's focused node is not where the primary focus is: after
+    /// every step the two name the same element.
+    pub fn focused(&self) -> Option<String> {
+        let tree = self.laid.a11y_tree().expect("BUG: AppRun enables semantics");
+        // With nothing focused the tree reports its root window focused.
+        let node = tree.focus().filter(|node| node.role() != Role::Window);
+        let primary = self.laid.focus_manager().primary_focus();
+        match (&node, &primary) {
+            (None, None) => {}
+            (Some(node), Some(primary)) => {
+                let bounds = tree
+                    .window_bounds(node)
+                    .expect("BUG: a focused node has bounds");
+                let rect = primary.rect();
+                let (x, y) = (
+                    (rect.left() + rect.right()) / 2.0,
+                    (rect.top() + rect.bottom()) / 2.0,
+                );
+                assert!(
+                    (bounds.x0..=bounds.x1).contains(&x) && (bounds.y0..=bounds.y1).contains(&y),
+                    "the accessibility tree's focus {} is not the primary focus at {rect:?}",
+                    node.describe()
+                );
+            }
+            _ => panic!(
+                "the accessibility tree's focus ({:?}) and the primary focus ({}) disagree",
+                node.map(|node| node.describe()),
+                if primary.is_some() { "set" } else { "none" }
+            ),
+        }
+        node.and_then(|node| node.label().map(ToOwned::to_owned))
+    }
+
+    /// Whether the focused element shows the focus indicator.
+    pub fn shows_focus_indicator(&self) -> bool {
+        self.laid
+            .focus_manager()
+            .primary_focus()
+            .is_some_and(|node| node.has_visible_focus())
+    }
+
     fn press(&self, key: Key, modifiers: Modifiers) {
         for state in [KeyState::Down, KeyState::Up] {
-            self.laid.dispatch_key(
-                KeyEvent::new(
-                    state,
-                    key.clone(),
-                    Code::Unidentified,
-                    EventTime::from_nanos(0),
-                )
-                .with_modifiers(modifiers),
-            );
+            self.dispatch(state, &key, KeyRepeat::First, modifiers);
         }
+    }
+
+    fn dispatch(&self, state: KeyState, key: &Key, repeat: KeyRepeat, modifiers: Modifiers) {
+        self.laid.dispatch_key(
+            KeyEvent::new(
+                state,
+                key.clone(),
+                Code::Unidentified,
+                EventTime::from_nanos(0),
+            )
+            .with_modifiers(modifiers)
+            .with_repeat(repeat),
+        );
     }
 
     fn title_field(&self) -> RenderId {

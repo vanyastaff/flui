@@ -12,3 +12,6 @@ pub mod testing;
 
 #[cfg(test)]
 mod smoke;
+
+#[cfg(test)]
+mod keyboard;
