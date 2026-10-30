@@ -527,6 +527,10 @@ fn navigation_and_layout_contracts() {
             navigation_bar::a_newly_selected_icon_bounces,
         ),
         (
+            "navigation_bar::a distinct selected icon bounces too",
+            navigation_bar::a_distinct_selected_icon_bounces_too,
+        ),
+        (
             "navigation_bar::an index at the destination count is rejected",
             navigation_bar::an_index_at_the_destination_count_is_rejected,
         ),

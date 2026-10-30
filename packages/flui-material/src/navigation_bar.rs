@@ -142,9 +142,10 @@ use flui_sdk::painting::{Canvas, Paint};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, MainAxisAlignment,
-    MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
-    Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty, WidgetStates,
+    Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, IndexedStack,
+    MainAxisAlignment, MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics,
+    SemanticsRole, SizedBox, Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty,
+    WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -523,13 +524,16 @@ fn build_destination(
     let label_style =
         resolve_navigation_destination_label_style(label_style_theme, label_base, colors, states);
 
-    let icon_child = if selected {
-        destination
-            .selected_icon
-            .clone()
-            .unwrap_or_else(|| destination.icon.clone())
-    } else {
-        destination.icon.clone()
+    // Both icons stay mounted when they differ, so the selected one keeps its effect host
+    // across the swap and bounces instead of mounting at rest.
+    let icon_child = match &destination.selected_icon {
+        Some(selected_icon) => {
+            IndexedStack::new(vec![destination.icon.clone(), selected_icon.clone()])
+                .alignment(Alignment::CENTER)
+                .index(Some(usize::from(selected)))
+                .boxed()
+        }
+        None => destination.icon.clone(),
     };
     let icon_themed = SelectionBounce {
         selected,

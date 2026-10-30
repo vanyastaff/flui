@@ -9,6 +9,8 @@
   to take one.
 - `IconThemeData::symbol_effect` applies an effect to every icon below that has none of its
   own. `NavigationBar` uses it to bounce a newly selected destination's icon.
+- `FadeTransition::always_include_semantics` keeps a fully transparent child in the semantics
+  tree, backed by `RenderAnimatedOpacity::set_always_include_semantics`.
 
 ### Changed
 

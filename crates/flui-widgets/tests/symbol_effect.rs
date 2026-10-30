@@ -235,6 +235,15 @@ pub(crate) fn a_replace_cross_fades_and_only_the_new_label_is_heard() {
     stage.laid.enable_semantics();
     assert_eq!(stage.opacities(), [1.0], "one glyph at rest");
     stage.show(icon(2, "Pause"));
+    let first = stage.laid.a11y_tree().expect("semantics enabled");
+    assert!(
+        first.find_by_label("Pause").is_ok(),
+        "the new label is heard on the first frame, while the glyph is unseen"
+    );
+    assert!(
+        first.find_by_label("Play").is_err(),
+        "and the old one is not"
+    );
     stage.laid.pump_for(ms(125));
     let fading = stage.opacities();
     assert_eq!(fading.len(), 2, "both glyphs mid-fade: {fading:?}");
@@ -255,6 +264,26 @@ pub(crate) fn a_replace_cross_fades_and_only_the_new_label_is_heard() {
     assert_eq!(stage.opacities(), [1.0], "the same glyph does not fade");
 }
 
+/// A replace by a smaller icon takes the new icon's size at once: the old one fades over it
+/// without holding the layout.
+pub(crate) fn a_replace_sizes_to_the_new_icon_only() {
+    let icon = |code, size| {
+        Icon::new(IconData::new(code))
+            .size(size)
+            .symbol_effect(SymbolEffect::replace())
+    };
+    let mut stage = Stage::mount(icon(1, 48.0));
+    let root = stage.laid.root();
+    assert_eq!(stage.laid.size(root).width, 48.0);
+    stage.show(icon(2, 24.0));
+    stage.laid.pump_for(ms(125));
+    assert_eq!(stage.opacities().len(), 2, "both glyphs mid-fade");
+    assert_eq!(
+        stage.laid.size(root).width,
+        24.0,
+        "the new size during the fade"
+    );
+}
 /// A transition plays when first applied: on mount, unless `animate_on_appear` is off, and
 /// when it takes another effect's place.
 pub(crate) fn transitions_play_when_first_applied() {

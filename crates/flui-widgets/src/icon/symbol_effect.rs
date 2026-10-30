@@ -24,8 +24,8 @@ use flui_view::{BoxedView, ViewExt};
 use super::{AnimatedIconData, IconData};
 use crate::animated::VsyncScope;
 use crate::{
-    AnimatedBuilder, ExcludeSemantics, FadeTransition, MediaQuery, RotationTransition,
-    ScaleTransition, Stack, TickerMode,
+    AnimatedBuilder, ExcludeSemantics, FadeTransition, MediaQuery, OverflowBox, Positioned,
+    RotationTransition, ScaleTransition, Stack, TickerMode,
 };
 
 /// The longest run a slow [`Speed`] stretches an effect to.
@@ -621,16 +621,31 @@ impl SymbolEffectHostState {
             .map(|track| observe(track, &progress))
             .expect("BUG: a replace has an opacity track");
         AnimatedBuilder::new(Rc::clone(&progress) as Rc<dyn Listenable>, move || {
-            let mut layers =
-                vec![FadeTransition::new(Rc::clone(&fade_in), content.clone()).boxed()];
+            // The new content is heard from the first frame, while it is still unseen.
+            let mut layers = vec![
+                FadeTransition::new(Rc::clone(&fade_in), content.clone())
+                    .always_include_semantics(true)
+                    .boxed(),
+            ];
             let fading = progress.value() < 1.0;
             if let Some(leaving) = outgoing.borrow().as_ref().filter(|_| fading) {
                 let fade_out: Rc<dyn Animation<f64>> =
                     Rc::new(ReverseAnimation::new(Rc::clone(&fade_in)));
+                // Positioned, so only the new content sizes the stack; unconstrained, so the
+                // old content keeps its own size, centred over the new.
                 layers.push(
-                    ExcludeSemantics::new()
-                        .child(FadeTransition::new(fade_out, leaving.clone()))
-                        .boxed(),
+                    Positioned::fill(
+                        OverflowBox::new()
+                            .with_min_width(0.0)
+                            .with_max_width(f64::INFINITY)
+                            .with_min_height(0.0)
+                            .with_max_height(f64::INFINITY)
+                            .child(
+                                ExcludeSemantics::new()
+                                    .child(FadeTransition::new(fade_out, leaving.clone())),
+                            ),
+                    )
+                    .boxed(),
                 );
             }
             Stack::new(layers)

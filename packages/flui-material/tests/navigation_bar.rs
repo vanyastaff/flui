@@ -328,3 +328,33 @@ pub fn a_newly_selected_icon_bounces() {
         "no bounce under reduced motion"
     );
 }
+
+/// A destination whose selected icon is built differently from its plain one still bounces
+/// on selection.
+pub fn a_distinct_selected_icon_bounces_too() {
+    let destinations = || {
+        vec![
+            NavigationDestination::new(icon(), "Home"),
+            NavigationDestination::new(icon(), "Profile").selected_icon(
+                flui_sdk::widgets::Padding::all(0.0).child(Icon::new(IconData::new(0xE7FD))),
+            ),
+        ]
+    };
+    let bar = |vsync: &Vsync, selected| {
+        VsyncScope::new(
+            vsync.clone(),
+            themed(NavigationBar::new(destinations()).selected_index(selected)),
+        )
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(bar(&vsync, 0), bar_constraints(300.0, 800.0), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+    laid.pump_widget(bar(&vsync, 1));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scaled_layers(&laid),
+        [1.2],
+        "the selected icon at the bounce's peak"
+    );
+}

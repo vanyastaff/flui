@@ -1045,6 +1045,7 @@ fn animation_and_visibility() {
             ("symbol_effect::a_one_shot_effect_plays_per_change_and_repeat", crate::symbol_effect::a_one_shot_effect_plays_per_change_and_repeat),
             ("symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off", crate::symbol_effect::a_repeating_effect_finishes_its_cycle_when_turned_off),
             ("symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard", crate::symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard),
+            ("symbol_effect::a_replace_sizes_to_the_new_icon_only", crate::symbol_effect::a_replace_sizes_to_the_new_icon_only),
             ("symbol_effect::transitions_play_when_first_applied", crate::symbol_effect::transitions_play_when_first_applied),
             ("symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end", crate::symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end),
             ("symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing", crate::symbol_effect::a_speed_is_positive_and_finite_and_scales_the_timing),
