@@ -406,7 +406,7 @@ request.
 - Power state (battery, low-power mode, thermal) is read on no environment, and nothing acts on it: no row named a frame cap or a background pause before.
 - The native signals exist: Apple's `ProcessInfo.thermalState` and `isLowPowerModeEnabled` with a change notification, Android's `PowerManager.getCurrentThermalStatus()` and `addThermalStatusListener`, Windows battery saver through `SYSTEM_POWER_STATUS.SystemStatusFlag` and `RegisterPowerSettingNotification`, and the Linux portal's `PowerProfileMonitor.power-saver-enabled`.
 - Apple's `CADisplayLink.preferredFrameRateRange` is only a hint that Low Power Mode, a critical thermal state and accessibility settings can override, so an app that asks for 120 Hz still has to follow the state.
-- iOS asks its display link for the screen's best rate only while a presentation animates or a pointer is down (the runtime's frame-rate demand, as on Android), and leaves a still screen to the system's rate. The link still ticks at that rate on a still screen and each tick asks for a frame the runner then skips: pausing it while nothing is owed needs a redraw request that reaches the main thread, which it does not today (type-checked, no device run). The Web's frame callback re-requests itself every frame the same way.
+- iOS asks its display link for the screen's best rate only while a presentation animates or a pointer is down (the runtime's frame-rate demand, as on Android), and leaves a still screen to the system's rate. On a still screen the link pauses: it runs only while a frame is asked for, and a request from any thread resumes it on the main thread (type-checked, no device run). The Web's frame loop stands still the same way once the refresh estimate has its window of frames, and a request resumes it (run in the wasm32 suite on Node, not in a browser).
 - The check forces each state and asserts a delivery within one event-loop turn and a frame-rate or work reduction.
 
 ### 35. Locale edge: layout direction, per-app language, system fonts and fallback
@@ -521,6 +521,7 @@ request.
 | 2026-10-30 | minor | Entry 15: the iPad pointer scrolls, pinches, rotates, hovers and reads its secondary button, type-checked, never run on an iPad |
 | 2026-10-30 | minor | Entry 30: a macOS live resize presents each frame in the Core Animation transaction of its window frame, type-checked |
 | 2026-10-30 | minor | Entry 27: iOS attaches coalesced and predicted touches to a move; revised Pencil estimates are not reported, the planned `SampleRevised` event is named |
+| 2026-10-30 | minor | Entry 34: the iOS display link and the Web frame loop stand still while no frame is asked for |
 | 2026-10-30 | minor | Entry 34: iOS holds the high refresh rate only while a presentation is active; its display link still ticks on a still screen |
 
 </details>

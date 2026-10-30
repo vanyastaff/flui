@@ -323,6 +323,14 @@ pub(crate) trait HostDisplays {
     /// published period changed, so the owner is woken to sample again.
     fn frame(&self, timestamp_ms: f64) -> bool;
 
+    /// Whether the refresh estimate still needs frames: the animation-frame
+    /// loop runs for it while no frame is asked for.
+    fn measuring(&self) -> bool;
+
+    /// The animation-frame loop runs again after standing still: the time
+    /// since its last frame is no interval of the display's cadence.
+    fn frames_resumed(&self);
+
     /// Keep the snapshot current from the browser's events, each of which
     /// wakes the owner behind `signal`, until the watch is dropped.
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch;
@@ -379,6 +387,12 @@ pub struct WebLoop {
     /// The listeners that report the page being hidden and shown again; present
     /// while the platform runs.
     page_observers: RefCell<Option<Watch>>,
+    /// The frames the window asks for: the animation-frame loop runs while
+    /// one is asked for.
+    frames: Arc<crate::owner::frame_demand::FrameDemand>,
+    /// The running animation-frame loop: its closure, and whether it stopped
+    /// for want of a request.
+    raf: RefCell<Option<(RafClosureSlot, Rc<Cell<bool>>)>>,
 }
 
 pub(crate) struct WebState {
@@ -447,10 +461,12 @@ impl WebLoop {
                     // An arbitrary payload's drop may panic again.
                     std::mem::forget(payload);
                 }
-                if let Some(owner) = owner
-                    && owner.signal.drive()
-                {
-                    owner.quit();
+                if let Some(owner) = owner {
+                    // A frame request wakes the owner: the loop runs again.
+                    owner.resume_frames();
+                    if owner.signal.drive() {
+                        owner.quit();
+                    }
                 }
             });
             Ok(())
@@ -467,6 +483,8 @@ impl WebLoop {
             display_observers: RefCell::new(None),
             page: H::page(),
             page_observers: RefCell::new(None),
+            frames: Arc::default(),
+            raf: RefCell::new(None),
         })
     }
 
@@ -492,17 +510,21 @@ impl WebLoop {
             .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
     }
 
-    /// Start the requestAnimationFrame render loop
+    /// Start the `requestAnimationFrame` loop. It runs while the window asks
+    /// for frames (`frames`) or the refresh estimate is measuring, and stands
+    /// still after a frame neither wanted; a request wakes the owner, whose
+    /// turn resumes it ([`resume_frames`](Self::resume_frames)).
     fn start_raf_loop(&self) {
         let state = Arc::clone(&self.state);
         let displays = Arc::downgrade(&self.displays);
         let signal = Arc::downgrade(&self.signal);
+        let frames = Arc::clone(&self.frames);
 
         // Recursive RAF pattern: closure references itself via Rc<RefCell>
         let f: RafClosureSlot = Rc::new(RefCell::new(None));
         let g = Rc::clone(&f);
-
-        let window = web_sys::window().expect("no global window");
+        let idle = Rc::new(Cell::new(false));
+        let stopped = Rc::clone(&idle);
 
         *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
             let (is_running, delivery) = {
@@ -514,18 +536,15 @@ impl WebLoop {
             }
 
             crate::owner::animation_frame::turn(
+                &frames,
                 || {
-                    if let Some(w) = web_sys::window() {
-                        let _ = w.request_animation_frame(
-                            f.borrow()
-                                .as_ref()
-                                .expect("BUG: the RAF closure slot is filled before any frame runs")
-                                .as_ref()
-                                .unchecked_ref(),
-                        );
-                    }
+                    displays
+                        .upgrade()
+                        .is_some_and(|displays| displays.measuring())
                 },
-                || {
+                || request_frame(&f),
+                || stopped.set(true),
+                |requested| {
                     // The callback's timestamp is the display's cadence: the
                     // refresh estimate follows it. A new published period
                     // wakes the owner, whose next turn reads the changed
@@ -538,8 +557,7 @@ impl WebLoop {
                         let _ = signal.wake();
                     }
 
-                    // Dispatch frame request to window callbacks
-                    if let Some(ref cbs) = delivery {
+                    if requested && let Some(ref cbs) = delivery {
                         cbs.dispatch_frame(frame_request_for_animation_frame(timestamp));
                     }
                 },
@@ -547,13 +565,64 @@ impl WebLoop {
         }));
 
         // Kick off the first frame
+        request_frame(&g);
+        *self.raf.borrow_mut() = Some((g, idle));
+    }
+
+    /// Resume the animation-frame loop if it stood still and a frame is asked
+    /// for now, or the refresh estimate restarted. The time the loop stood
+    /// still is no interval of the display's cadence.
+    fn resume_frames(&self) {
+        let raf = self.raf.borrow();
+        let Some((slot, idle)) = raf.as_ref() else {
+            return;
+        };
+        let wanted = self.frames.pending() || self.displays.measuring();
+        if idle.get() && wanted && self.state.lock().is_running {
+            idle.set(false);
+            self.displays.frames_resumed();
+            request_frame(slot);
+        }
+    }
+
+    /// How the window asks for a frame from anywhere.
+    pub(crate) fn frame_requests(&self) -> FrameRequests {
+        FrameRequests {
+            demand: Arc::clone(&self.frames),
+            signal: Arc::downgrade(&self.signal),
+        }
+    }
+}
+
+/// Ask the browser for the next animation frame of the loop in `slot`.
+fn request_frame(slot: &RafClosureSlot) {
+    if let Some(window) = web_sys::window() {
         let _ = window.request_animation_frame(
-            g.borrow()
+            slot.borrow()
                 .as_ref()
-                .expect("BUG: the RAF closure slot was filled on the line above")
+                .expect("BUG: the RAF closure slot is filled before a frame is asked for")
                 .as_ref()
                 .unchecked_ref(),
         );
+    }
+}
+
+/// The page window's redraw requester: it marks the window's frame demand,
+/// and the first request since the loop stopped wakes the owner, whose turn
+/// resumes the loop.
+pub(crate) struct FrameRequests {
+    demand: Arc<crate::owner::frame_demand::FrameDemand>,
+    signal: Weak<OwnerSignal>,
+}
+
+impl flui_platform::RedrawRequester for FrameRequests {
+    fn request_redraw(&self) {
+        if self.demand.request()
+            && let Some(signal) = self.signal.upgrade()
+        {
+            // A failed wake leaves the signal's retry debt.
+            let _ = signal.wake();
+        }
     }
 }
 
