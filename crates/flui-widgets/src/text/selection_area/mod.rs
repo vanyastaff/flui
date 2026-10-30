@@ -312,7 +312,12 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
             TextDirection::Rtl => SemanticsTextDirection::Rtl,
         };
-        self.model.direction.set(direction);
+        // Shown handles are built for the direction they read in.
+        if self.model.direction.replace(direction) != direction {
+            let mut failure = FirstPanic::new();
+            self.model.handles.refresh(&mut failure);
+            failure.resume();
+        }
         let content = SelectionGestures {
             model: Rc::clone(&self.model),
             child: SelectionScope {

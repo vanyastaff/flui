@@ -14,14 +14,14 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::TextDirection;
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample,
 };
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Column, DefaultSelectionHandles, HandleInfo, HandleSide, SelectionArea, SelectionHandles,
-    SizedBox, Text, WidgetsApp,
+    Column, DefaultSelectionHandles, Directionality, HandleInfo, HandleSide, SelectionArea,
+    SelectionHandles, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -166,6 +166,36 @@ impl Scene {
         self.laid.dispatch_pointer_event(&down);
         self.laid.dispatch_pointer_event(&up);
         self.settle();
+    }
+
+    /// One step of a touch contact by hand, `millis` into it, for a test
+    /// whose release lands where no move reported.
+    fn touch(&mut self, step: Touch, millis: u64, at: Offset<f64>) {
+        let finger = PointerInfo::new(
+            PointerId::try_from(79_u64).expect("a nonzero id"),
+            PointerKind::Touch,
+        );
+        let sample = PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        );
+        let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let event = match step {
+            Touch::Down => PointerEvent::Down(PointerPress::new(
+                finger,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
+            Touch::Move => PointerEvent::Move(PointerMove::new(finger, held, sample)),
+            Touch::Up => PointerEvent::Up(PointerRelease::new(
+                finger,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
+        };
+        self.laid.dispatch_pointer_event(&event);
     }
 }
 
@@ -522,4 +552,61 @@ pub(crate) fn a_failing_primary_release_still_takes_the_handles_away() {
     }));
     scene.settle();
     assert_eq!(scene.handles(), 0);
+}
+
+/// A step of a touch contact made by hand.
+#[derive(Clone, Copy)]
+enum Touch {
+    Down,
+    Move,
+    Up,
+}
+
+/// A handle released where no update reported moves its end there.
+///
+/// Red-check: clear the grip on the release without applying its
+/// position (the end stays where the last move left it).
+pub(crate) fn a_handle_released_past_its_last_move_ends_there() {
+    let mut scene = Scene::over(Some(Marked::default()));
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    let from = scene.handle_at(width_of("alpha beta"));
+    let released = scene.handle_at(width_of(WORDS) + 10.0);
+    scene.touch(Touch::Down, 0, from);
+    scene.touch(Touch::Move, 16, from + Offset::new(20.0, 0.0));
+    scene.touch(Touch::Move, 32, from + Offset::new(24.0, 0.0));
+    scene.touch(Touch::Up, 48, released);
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+}
+
+/// Shown handles rebuild when the direction the area reads in changes,
+/// though the handles stay the same.
+///
+/// Red-check: store the new direction without rebuilding the shown
+/// handles (the handles keep the left-to-right direction).
+pub(crate) fn shown_handles_rebuild_with_a_new_direction() {
+    let marked = Marked::default();
+    let heard: Heard = Rc::default();
+    let area = Scene::area(&heard, Some(marked.clone()));
+    let mut scene = Scene::laid_out(
+        WidgetsApp::new(Directionality::new(TextDirection::Ltr, area.clone())),
+        heard,
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+
+    scene.laid.pump_widget(WidgetsApp::new(Directionality::new(
+        TextDirection::Rtl,
+        area,
+    )));
+    scene.settle();
+    let built = marked.0.borrow().clone();
+    let last = &built[built.len() - 2..];
+    assert!(
+        last.iter()
+            .all(|info| info.text_direction == TextDirection::Rtl),
+        "{last:?}"
+    );
 }

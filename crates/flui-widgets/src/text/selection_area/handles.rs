@@ -8,6 +8,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
+use flui_interaction::GestureEndReason;
 use flui_objects::RenderFollowerLayer;
 use flui_painting::BoxShape;
 use flui_painting::paint::Alignment;
@@ -347,8 +348,13 @@ fn handle(
                         model.handle_dragged(side, details.global_position);
                     }
                 })
-                .on_end(move |_cx, _details| {
+                .on_end(move |_cx, details| {
                     if let Some(model) = end.upgrade() {
+                        // A release ends where the finger lifted, which no
+                        // update may have reported yet.
+                        if details.reason == GestureEndReason::Completed {
+                            model.handle_dragged(side, details.global_position);
+                        }
                         model.handles.grip.set(None);
                     }
                 }),
