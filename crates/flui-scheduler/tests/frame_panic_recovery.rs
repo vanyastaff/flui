@@ -146,7 +146,7 @@ fn assert_recovered_from_panic(
 
 fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let frame_count_before = scheduler.frame_count();
     let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
 
@@ -207,7 +207,7 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
 
 fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let frame_count_before = scheduler.frame_count();
     let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
 
@@ -323,7 +323,7 @@ impl Future for CountedThenReady {
 
 fn async_future_poll_panic_closes_the_frame() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let frame_count_before = scheduler.frame_count();
     let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
     let pending_before = owner.async_driver().pending_task_count();
@@ -396,7 +396,7 @@ fn async_future_poll_panic_closes_the_frame() {
 
 fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     scheduler.schedule_frame_callback(Box::new(|_| panic!("idle-starvation probe")));
 
     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -442,7 +442,7 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
 /// exist before it -- both paths resolved the same bare `FrameTiming`).
 fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let (mut completion_future, completion_counter) = armed_completion_probe(&scheduler);
 
     scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
@@ -496,7 +496,7 @@ impl Wake for PanicWaker {
 /// actually reporting is lost.
 fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let mut future = scheduler.end_of_frame();
     let panic_waker = Waker::from(Arc::new(PanicWaker));
     let mut cx = Context::from_waker(&panic_waker);
@@ -532,7 +532,7 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
 /// frame: the frame that failed requests the one that runs them.
 fn a_post_frame_panic_requests_the_frame_for_the_callbacks_behind_it() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let tail_ran = Arc::new(AtomicUsize::new(0));
     let tail = Arc::clone(&tail_ran);
     scheduler.add_post_frame_callback(Box::new(|_| panic!("post-frame probe")));

@@ -644,7 +644,7 @@ pub(crate) struct Pixels {
 impl Pixels {
     /// A transparent image of `width` by `height` device pixels; `None` for
     /// an empty one or one past [`MAX_EXTENT`].
-    pub(crate) fn new(width: u32, height: u32) -> Option<Self> {
+    pub(crate) fn try_new(width: u32, height: u32) -> Option<Self> {
         if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
             return None;
         }
@@ -804,7 +804,7 @@ pub(crate) fn paint_header(frame: &Frame, scale: f64, look: HeaderLook<'_>) -> O
     if !(scale.is_finite() && scale > 0.0) {
         return None;
     }
-    let mut pixels = Pixels::new(
+    let mut pixels = Pixels::try_new(
         device_extent(rect.width, scale)?,
         device_extent(rect.height, scale)?,
     )?;
@@ -964,7 +964,7 @@ fn square(centre: (f64, f64), half: f64) -> Vec<((f64, f64), (f64, f64))> {
 /// A margin's image: transparent, so the window shows no frame there while
 /// the margin still takes the pointer.
 pub(crate) fn paint_margin(width: u32, height: u32) -> Option<Pixels> {
-    Pixels::new(width, height)
+    Pixels::try_new(width, height)
 }
 
 pub(crate) mod title {

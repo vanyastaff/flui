@@ -178,7 +178,7 @@ impl WindowsWindow {
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
@@ -236,7 +236,7 @@ impl WindowsWindow {
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsLoop::new` guarantees before any `open_window`
+        // `WindowsLoop::try_new` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
         // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
@@ -676,7 +676,7 @@ impl WindowsWindow {
             cyBottomHeight: -1,
         };
         // SAFETY: `hwnd` is the window `CreateWindowExW` just returned on this
-        // thread (the caller, `WindowsWindow::new`); the call reads the
+        // thread (the caller, `WindowsWindow::try_new`); the call reads the
         // stack-local `margins` through the typed pointer for its duration.
         let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &raw const margins) };
         if let Ok(gate) = material {

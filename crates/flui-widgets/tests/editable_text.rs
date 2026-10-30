@@ -1026,10 +1026,10 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     let exact = |answer| {
         TextSizing::exact([(
             TextSizeRequest {
-                size: TextSize::new(16.0).expect("authored size"),
+                size: TextSize::try_new(16.0).expect("authored size"),
                 profile: TextScaleProfile::Body,
             },
-            TextSize::new(answer).expect("resolved size"),
+            TextSize::try_new(answer).expect("resolved size"),
         )])
         .expect("one exact answer")
     };
@@ -1880,7 +1880,7 @@ pub(crate) mod text_store {
         harness.tick();
         let field = store(&harness);
         *slot.borrow_mut() = Some(Rc::clone(&field));
-        let composing = Utf16Range::new(at(2), at(6)).expect("ordered");
+        let composing = Utf16Range::try_new(at(2), at(6)).expect("ordered");
         edit(&field, move |session| {
             session.insert_at_selection("東京").expect("in range");
             session.insert_at_selection("おおさか").expect("in range");
@@ -2283,7 +2283,7 @@ pub(crate) mod text_store {
         controller.set_text("ba");
         controller.set_selection(0, 0);
         let refused = read(&field, |session| {
-            session.rect_for_range(Utf16Range::new(at(0), at(1)).expect("ordered"))
+            session.rect_for_range(Utf16Range::try_new(at(0), at(1)).expect("ordered"))
         });
         assert_eq!(
             refused.err(),
@@ -2695,7 +2695,7 @@ pub(crate) mod text_store {
         let units = flui_platform::text_store::utf16::utf16_len(text);
         let full = read(&field, move |session| {
             session
-                .rect_for_range(Utf16Range::new(at(0), units).expect("ordered document range"))
+                .rect_for_range(Utf16Range::try_new(at(0), units).expect("ordered document range"))
                 .expect("laid-out document")
         });
         assert!(full.clipped, "long document exceeds the visible field");

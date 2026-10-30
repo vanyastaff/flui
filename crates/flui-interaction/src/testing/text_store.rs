@@ -450,7 +450,7 @@ fn shift_composition(
     );
     if end <= composed_start {
         let shift = |offset: usize| Utf16Offset::new(offset + inserted - (end - start));
-        let range = Utf16Range::new(shift(composed_start), shift(composed_end))
+        let range = Utf16Range::try_new(shift(composed_start), shift(composed_end))
             .expect("BUG: shifting both ends by one amount keeps them ordered");
         Some(Composition {
             range,
@@ -652,7 +652,7 @@ mod tests {
     }
 
     fn range(start: usize, end: usize) -> Utf16Range {
-        Utf16Range::new(at(start), at(end)).expect("ordered")
+        Utf16Range::try_new(at(start), at(end)).expect("ordered")
     }
 
     #[test]

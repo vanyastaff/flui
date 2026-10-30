@@ -127,13 +127,42 @@ pub(crate) enum TouchPhase {
     Cancel,
 }
 
-/// The input's part of one window's view: the touches and the Pencil hover
-/// UIKit delivers to it, which the view hands over as they arrive and
+/// Which indirect gesture (an iPad's trackpad or mouse) a recognizer
+/// reports, with the value it holds, cumulative since the gesture began.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TrackpadGesture {
+    /// A two-finger scroll, and its translation in view points.
+    Scroll {
+        /// The translation since the scroll began.
+        translation: (f64, f64),
+    },
+    /// A mouse wheel's notches, and their translation in view points.
+    Wheel {
+        /// The translation since the notches began.
+        translation: (f64, f64),
+    },
+    /// A pinch, and its scale.
+    Pinch {
+        /// The scale since the pinch began.
+        scale: f64,
+    },
+    /// A rotation, and its angle.
+    Rotation {
+        /// The clockwise angle since the rotation began, in radians.
+        radians: f64,
+    },
+    /// The cursor resting over the view, no button held.
+    Hover,
+}
+
+/// The input's part of one window's view: the touches, the Pencil hover and
+/// the indirect gestures UIKit delivers to it, which the view hands over as they arrive and
 /// dispatches what they carry. Made with the view ([`IosHost::view_touches`])
 /// and dropped with it, so the contacts it admitted are the view's own.
 pub(crate) trait ViewTouches {
-    /// What `touch`, delivered in `phase`, carries.
-    fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput>;
+    /// What `touch`, delivered in `phase`, carries; `buttons` is its event's
+    /// `buttonMask` (0 where UIKit reports none).
+    fn touch(&mut self, touch: &UITouch, phase: TouchPhase, buttons: isize) -> Vec<PlatformInput>;
 
     /// What the Pencil's hover over `view`, as `recognizer` reports it,
     /// carries. `stamp` is the uptime of the event UIKit last handed the
@@ -142,6 +171,16 @@ pub(crate) trait ViewTouches {
         &mut self,
         recognizer: &UIHoverGestureRecognizer,
         view: &UIView,
+        stamp: Option<f64>,
+    ) -> Vec<PlatformInput>;
+
+    /// What an indirect `gesture` in recognizer state `state` at view point
+    /// `location` carries; `stamp` as for [`hover`](Self::hover).
+    fn trackpad(
+        &mut self,
+        gesture: TrackpadGesture,
+        state: isize,
+        location: (f64, f64),
         stamp: Option<f64>,
     ) -> Vec<PlatformInput>;
 }
@@ -430,10 +469,12 @@ impl IOSLoop {
     /// # Errors
     ///
     /// [`PlatformError::Init`] off the main thread.
-    pub(crate) fn new<H: IosHost>(windows: Arc<dyn SceneWindows>) -> Result<Self, PlatformError> {
+    pub(crate) fn try_new<H: IosHost>(
+        windows: Arc<dyn SceneWindows>,
+    ) -> Result<Self, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Init {
-                message: "IOSPlatform::new must run on the main thread (UIKit is \
+                message: "IOSPlatform::try_new must run on the main thread (UIKit is \
                           main-thread-only)"
                     .to_string(),
             });

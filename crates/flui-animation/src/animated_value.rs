@@ -188,7 +188,7 @@ impl<T> Admission<T> {
 ///     duration: Duration::from_millis(200),
 ///     curve: SharedCurve::new(curves::EASE_IN_OUT),
 /// };
-/// let mut value = AnimatedValue::new(0.0_f64, motion, Some(&registry)).expect("finite value");
+/// let mut value = AnimatedValue::try_new(0.0_f64, motion, Some(&registry)).expect("finite value");
 /// let old = value.animate_to(1.0).expect("finite target");
 /// registry.tick_all(&clock.frame(Duration::ZERO));
 /// registry.tick_all(&clock.frame(Duration::from_millis(50)));
@@ -237,7 +237,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     /// # Errors
     /// Refuses a non-finite initial component before constructing the owner.
     #[track_caller]
-    pub fn new(
+    pub fn try_new(
         initial: T,
         motion: MotionSpec,
         vsync: Option<&Vsync>,
@@ -245,7 +245,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         Self::construct(None, initial, motion, vsync)
     }
 
-    /// Like [`new`](Self::new), naming the owner's controller `label` in
+    /// Like [`try_new`](Self::try_new), naming the owner's controller `label` in
     /// diagnostics (see
     /// [`AnimationControllerBuilder::debug_label`](crate::AnimationControllerBuilder::debug_label)).
     ///
@@ -272,7 +272,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let motion = Terminal::new(motion);
         let vector = initial.to_vector();
         crate::refusal::report(
-            "AnimatedValue::new",
+            "AnimatedValue::try_new",
             || None,
             validate(&vector, crate::AnimationInput::InitialValue),
         )?;
@@ -573,7 +573,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             .map(
                 |(component, (((&position, &velocity), &target), &threshold))| {
                     let tolerance = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
-                        crate::simulation::Tolerance::new(threshold, f64::INFINITY).map_err(
+                        crate::simulation::Tolerance::try_new(threshold, f64::INFINITY).map_err(
                             |error| AnimationError::ComponentSimulation {
                                 component,
                                 source: error,

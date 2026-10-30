@@ -247,7 +247,7 @@ impl PlatformWindow for TestWindow {
             .with_visible(self.visible)
             .with_focused(self.focused)
             .with_metrics(
-                flui_foundation::geometry::WindowMetrics::new(
+                flui_foundation::geometry::WindowMetrics::try_new(
                     self.physical_size,
                     self.scale_factor,
                 )

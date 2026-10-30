@@ -76,7 +76,7 @@
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
 //! // async tasks and complete execution. A UI runtime owns one.
-//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+//! let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {

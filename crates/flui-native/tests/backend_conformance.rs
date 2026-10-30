@@ -1028,7 +1028,7 @@ struct Win32Window {
 #[cfg(target_os = "windows")]
 impl Win32Window {
     fn new() -> Self {
-        let platform = flui_native::WindowsPlatform::new().expect("native Windows platform");
+        let platform = flui_native::WindowsPlatform::try_new().expect("native Windows platform");
         let handler = flui_testing::window_handler::RecordingWindowHandler::new();
         let window = platform
             .open_window(WindowOptions::default(), handler.clone())
@@ -1437,7 +1437,7 @@ pub(crate) fn wayland_window_conforms() {
         eprintln!("wayland window: skipped, WAYLAND_DISPLAY names no compositor");
         return;
     }
-    let platform = flui_native::WaylandPlatform::new().expect("the compositor answers");
+    let platform = flui_native::WaylandPlatform::try_new().expect("the compositor answers");
     let handler = flui_testing::window_handler::RecordingWindowHandler::new();
     let window = platform
         .open_window(WindowOptions::default(), handler.clone())

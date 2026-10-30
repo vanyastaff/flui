@@ -30,7 +30,7 @@ impl std::fmt::Debug for ArboardClipboard {
 
 impl ArboardClipboard {
     /// Create a new clipboard instance
-    pub fn new() -> Result<Self, arboard::Error> {
+    pub fn try_new() -> Result<Self, arboard::Error> {
         let clipboard = arboard::Clipboard::new()?;
         Ok(Self {
             clipboard: Mutex::new(Some(clipboard)),
@@ -40,7 +40,7 @@ impl ArboardClipboard {
     /// An inert clipboard for sessions where no clipboard backend is
     /// reachable: every read answers `None`, every write is dropped with a
     /// warning. The platform's failed-initialization fallback — it used to
-    /// call [`Self::new`] again and `expect` it, which panicked the whole
+    /// call [`Self::try_new`] again and `expect` it, which panicked the whole
     /// app at startup with the exact failure the fallback existed to absorb
     /// (observed on a Wayland-only session, where arboard has no X11 socket
     /// to reach). Deliberately a separate constructor rather than the
@@ -59,7 +59,7 @@ impl ArboardClipboard {
         // `default()` would retry the same doomed backend init before
         // falling back — the fallback for a KNOWN-failed init is the inert
         // clipboard directly.
-        Self::new().map_or_else(
+        Self::try_new().map_or_else(
             |err| {
                 tracing::warn!(?err, "Failed to initialize clipboard, using inert fallback");
                 Arc::new(Self::inert())
@@ -94,7 +94,7 @@ impl Default for ArboardClipboard {
     /// construct through `Default`); only a failed backend init degrades to
     /// [`Self::inert`].
     fn default() -> Self {
-        Self::new().unwrap_or_else(|err| {
+        Self::try_new().unwrap_or_else(|err| {
             tracing::warn!(
                 ?err,
                 "clipboard backend unreachable; using the inert clipboard"

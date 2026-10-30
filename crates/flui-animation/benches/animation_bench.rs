@@ -90,7 +90,7 @@ fn spring_step(c: &mut Criterion) {
 
     let spring =
         SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8).unwrap();
-    let sim = SpringSimulation::new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
+    let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
     group.bench_function("simulation_x_dx", |b| {
         b.iter(|| {
             let t = black_box(0.1_f64);
@@ -102,7 +102,7 @@ fn spring_step(c: &mut Criterion) {
     group.bench_function("simulation_new", |b| {
         b.iter(|| {
             black_box(
-                SpringSimulation::new(
+                SpringSimulation::try_new(
                     black_box(spring),
                     black_box(0.0),
                     black_box(100.0),
@@ -125,7 +125,7 @@ fn spring_step(c: &mut Criterion) {
             || {
                 let registry = Vsync::new();
                 let mut clock = MotionClock::new();
-                let mut value = AnimatedValue::new(
+                let mut value = AnimatedValue::try_new(
                     Color::rgba(0, 0, 0, 255),
                     MotionSpec::Spring(smooth),
                     Some(&registry),
@@ -236,7 +236,9 @@ fn controller_tick(c: &mut Criterion) {
         .unbounded()
         .build();
     friction
-        .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap())
+        .animate_with(
+            FrictionSimulation::try_new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap(),
+        )
         .unwrap();
     bench_live_tick(&mut group, "simulation_friction", &friction);
     drop(friction);
@@ -246,8 +248,8 @@ fn controller_tick(c: &mut Criterion) {
         .build();
     spring
         .animate_with(
-            SpringSimulation::new(
-                SpringDescription::new(1.0, 100.0, 1e-6).unwrap(),
+            SpringSimulation::try_new(
+                SpringDescription::try_new(1.0, 100.0, 1e-6).unwrap(),
                 0.0,
                 1000.0,
                 0.0,

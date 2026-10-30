@@ -21,8 +21,8 @@ use std::time::Duration;
 ///
 /// ```
 /// use flui_animation::{Curve, SpringCurve, SpringDescription, Tolerance};
-/// let spring = SpringDescription::new(1.0, 100.0, 10.0)?;
-/// let curve = SpringCurve::new(spring, Tolerance::DEFAULT)?;
+/// let spring = SpringDescription::try_new(1.0, 100.0, 10.0)?;
+/// let curve = SpringCurve::try_new(spring, Tolerance::DEFAULT)?;
 /// assert!(!curve.duration().is_zero());
 /// assert_eq!(curve.transform(1.0), 1.0);
 /// # Ok::<(), flui_animation::SimulationError>(())
@@ -43,14 +43,17 @@ impl SpringCurve {
     /// 1, which would consider the initial displacement already at rest.
     /// Returns [`SimulationError::Overflow`] for unrepresentable physical
     /// coefficients or a rest duration outside [`Duration`]'s range.
-    pub fn new(spring: SpringDescription, tolerance: Tolerance) -> Result<Self, SimulationError> {
+    pub fn try_new(
+        spring: SpringDescription,
+        tolerance: Tolerance,
+    ) -> Result<Self, SimulationError> {
         if tolerance.distance >= 1.0 {
             return Err(SimulationError::OutOfRange {
                 parameter: SimulationParameter::UnitDistance,
                 value: tolerance.distance,
             });
         }
-        let simulation = SpringSimulation::new(spring, 0.0, 1.0, 0.0, tolerance)?;
+        let simulation = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, tolerance)?;
         let rest = simulation.rest_transition().0;
         let mut duration =
             Duration::try_from_secs_f64(rest).map_err(|_| SimulationError::Overflow)?;

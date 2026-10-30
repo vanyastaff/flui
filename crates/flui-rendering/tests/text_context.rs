@@ -1149,10 +1149,10 @@ fn numeric_sizing_is_presentation_local() {
     assert_eq!(query(&mut second, b), normal);
     let sizing = TextSizing::exact([(
         TextSizeRequest {
-            size: TextSize::new(14.0).expect("authored"),
+            size: TextSize::try_new(14.0).expect("authored"),
             profile: TextScaleProfile::Body,
         },
-        TextSize::new(27.25).expect("answer"),
+        TextSize::try_new(27.25).expect("answer"),
     )])
     .expect("consistent answers");
     if let Some(update) = first.set_text_sizing(sizing) {

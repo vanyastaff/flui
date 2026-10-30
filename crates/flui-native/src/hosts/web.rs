@@ -52,7 +52,7 @@ impl WebHost for Web {
     fn preferences(
         signal: &Arc<OwnerSignal>,
     ) -> Result<Rc<dyn SystemPreferenceSource>, PlatformError> {
-        Ok(Rc::new(WebPreferences::new(signal)?))
+        Ok(Rc::new(WebPreferences::try_new(signal)?))
     }
 
     fn page() -> Box<dyn PageLifecycle> {
@@ -85,7 +85,7 @@ impl HostPlatform<Web> {
     /// # Errors
     /// [`PlatformError::Preferences`] when the browser's preference queries
     /// cannot be observed.
-    pub fn new() -> Result<Self, PlatformError> {
-        Self::try_from_parts(|positions| positions, |_| WebLoop::new::<Web>())
+    pub fn try_new() -> Result<Self, PlatformError> {
+        Self::try_from_parts(|positions| positions, |_| WebLoop::try_new::<Web>())
     }
 }

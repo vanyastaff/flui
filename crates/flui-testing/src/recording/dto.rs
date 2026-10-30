@@ -438,7 +438,7 @@ impl TryFrom<PlatformInputDto> for PlatformInput {
         Ok(match input {
             PlatformInputDto::Pointer(event) => Self::Pointer(event.try_into()?),
             PlatformInputDto::PointerFrame(events) => Self::PointerFrame(
-                flui_platform::PointerFrame::new(
+                flui_platform::PointerFrame::try_new(
                     events
                         .into_iter()
                         .map(PointerEvent::try_from)
@@ -1869,7 +1869,7 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
                 height,
                 scale_factor,
             } => Self::Metrics(
-                WindowMetrics::new(
+                WindowMetrics::try_new(
                     flui_foundation::geometry::DeviceSize::new(width, height),
                     scale_factor,
                 )
@@ -2233,7 +2233,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
 }
 
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
-    DevicePixelRatio::new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods
@@ -2298,7 +2298,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
                 .map(|geometry| {
                     let [area_w, area_h] = geometry.double_click_area;
                     let [drag_w, drag_h] = geometry.drag_tolerance;
-                    NativeMouseGeometry::new(
+                    NativeMouseGeometry::try_new(
                         Size::new(area_w, area_h),
                         Size::new(drag_w, drag_h),
                         pixel_ratio(geometry.pixel_ratio)?,
@@ -2309,7 +2309,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
             native_touch_geometry: gestures
                 .native_touch_geometry
                 .map(|geometry| {
-                    NativeTouchGeometry::new(
+                    NativeTouchGeometry::try_new(
                         geometry.touch_slop,
                         geometry.double_tap_slop,
                         geometry.min_fling,

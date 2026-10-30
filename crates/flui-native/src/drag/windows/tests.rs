@@ -563,7 +563,7 @@ fn owner_window(transport: &OleTransfer) -> HWND {
 
 /// Every window registers its drop target with OLE as it is created.
 fn a_window_registers_its_drop_target() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let target = open(&platform, "flui drop target", |_| {});
     let again = target.ole.clone();
     // SAFETY: the case's own live window, on its thread.
@@ -579,7 +579,7 @@ fn a_window_registers_its_drop_target() {
 /// is answered from the feedback the window cached, and after the drop each
 /// representation is fetched from the source's data object.
 fn a_drag_over_a_window_is_offered_answered_and_fetched() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -649,7 +649,7 @@ fn a_drag_over_a_window_is_offered_answered_and_fetched() {
 /// A drag over a window whose DPI changed reaches it at the window's new
 /// scale.
 fn a_drop_target_follows_its_window_to_a_new_scale() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -695,7 +695,7 @@ fn a_drop_target_follows_its_window_to_a_new_scale() {
 /// scale, the one value the window holds: as it opens, and at a scale other
 /// than 100% once the window moves to one.
 fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -744,7 +744,7 @@ fn a_window_hands_its_drop_target_and_text_services_its_one_scale() {
 /// A window that accepts nothing is answered "none", and a release over it
 /// leaves it instead of dropping.
 fn a_refused_drag_leaves_instead_of_dropping() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -769,7 +769,7 @@ fn a_refused_drag_leaves_instead_of_dropping() {
 /// A provider that fetches from its own drag while it serves one is refused
 /// that inner fetch, and the outer fetch still gets its payload.
 fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -836,7 +836,7 @@ fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
 
 /// A window its own drag callback closes is left, and OLE is answered "none".
 fn a_window_closed_by_its_drag_callback_is_left() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let closing: Rc<RefCell<Option<Rc<dyn HostWindow>>>> = Rc::default();
     let closer = Rc::clone(&closing);
@@ -1237,7 +1237,7 @@ fn pending(
     Window,
     Arc<dyn flui_platform::drag::PlatformDragSource>,
 ) {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let source = open(&platform, "flui pending drag", |_| {});
     let drag = source
         .host
@@ -1337,7 +1337,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
 /// conclude: the window's going releases nothing, and the owner's conclusion
 /// afterwards releases the drag's data object, with the provider it holds.
 fn a_drop_concluded_after_its_window_closed_releases_the_data_object() {
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let transfer = platform.data_transfer();
     let target = open(
         &platform,
@@ -1383,7 +1383,7 @@ fn the_drag_objects_are_bound_to_their_apartment() {
     use windows::Win32::System::Com::{DATADIR_GET, IAgileObject};
     use windows_core::Interface as _;
 
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let target = open(&platform, "flui drop target", |_| {});
     let ended = Rc::new(Cell::new(None));
     let data = data_object(request(&ended));
@@ -1435,7 +1435,7 @@ fn place(hwnd: HWND, x: i32, y: i32) {
 fn a_window_finds_the_window_of_this_process_under_a_point() {
     use flui_platform::WindowAt;
 
-    let platform = WindowsPlatform::new().expect("platform");
+    let platform = WindowsPlatform::try_new().expect("platform");
     let source = open(&platform, "flui drag source", |_| {});
     let target = open(&platform, "flui drag target", |_| {});
     place(source.hwnd, 120, 120);

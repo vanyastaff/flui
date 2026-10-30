@@ -1408,7 +1408,7 @@ impl PresentationState {
     ) -> Result<(flui_protocol::MotionState, bool), flui_animation::InvalidPlaybackRate> {
         let rate = request
             .rate
-            .map(flui_animation::PlaybackRate::new)
+            .map(flui_animation::PlaybackRate::try_new)
             .transpose()?;
         let mut clock = self.motion_clock.borrow_mut();
         let old_rate = clock.rate();

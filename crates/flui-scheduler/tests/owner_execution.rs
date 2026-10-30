@@ -15,7 +15,7 @@ use flui_scheduler::{
 
 fn nested_preparation_is_refused_before_invocation() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("owner");
     let nested_preparation = Cell::new(false);
     let nested_pipeline = Cell::new(false);
     let prepared = Cell::new(false);
@@ -45,7 +45,7 @@ fn nested_preparation_is_refused_before_invocation() {
 
 fn failed_preparation_does_not_fabricate_a_frame() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("owner");
     let task_ran = Rc::new(Cell::new(false));
     let observed = Rc::clone(&task_ran);
     let _task = owner.async_driver().spawn_local(Box::pin(async move {
@@ -104,7 +104,7 @@ impl Drop for HostileCapture {
 fn callable_retirement_preserves_the_first_failure() {
     for refused in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("owner");
+        let owner = OwnerFrame::try_new(&scheduler).expect("owner");
         if refused {
             assert!(owner.retire().is_none());
         }
@@ -149,7 +149,7 @@ fn callable_retirement_preserves_the_first_failure() {
 fn invocation_failure_retains_both_callable_envelopes() {
     for fail_preparation in [true, false] {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("owner");
+        let owner = OwnerFrame::try_new(&scheduler).expect("owner");
         let post_frame = owner.post_frame_handle();
         let preparation_drops = Rc::new(Cell::new(0));
         let pipeline_drops = Rc::new(Cell::new(0));
@@ -239,7 +239,7 @@ impl Drop for ProducedResult {
 fn terminal_release_closes_authority_and_preserves_result_custody() {
     for fail in [false, true] {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler).expect("owner");
+        let owner = OwnerFrame::try_new(&scheduler).expect("owner");
         let driver = owner.async_driver();
         let post_frame = owner.post_frame_handle();
         let pending = driver.spawn_local(Box::pin(std::future::pending()));
@@ -256,7 +256,7 @@ fn terminal_release_closes_authority_and_preserves_result_custody() {
         let producer = Rc::new(RefCell::new(Some(scheduler)));
         let result_drops = Rc::new(Cell::new(0));
         let sibling_scheduler = UpdateScheduler::new();
-        let sibling = OwnerFrame::new(&sibling_scheduler).expect("independent owner");
+        let sibling = OwnerFrame::try_new(&sibling_scheduler).expect("independent owner");
         let now = Instant::now();
         let result = catch_unwind(AssertUnwindSafe(|| {
             owner.drive_frame(

@@ -1217,7 +1217,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
         // resource; without one, from the built-in English strings.
         let root = if localized {
             flui_widgets::Localizations::new(
-                flui_platform::Locale::new("en", None::<&str>).expect("valid locale"),
+                flui_platform::Locale::try_new("en", None::<&str>).expect("valid locale"),
                 vec![flui_widgets::BoxedLocalizationsDelegate::new(
                     flui_widgets::DefaultWidgetsLocalizationsDelegate,
                 )],

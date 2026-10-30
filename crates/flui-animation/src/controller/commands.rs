@@ -923,7 +923,8 @@ impl AnimationController {
             });
         }
 
-        let sim = SpringSimulation::new(spring, inner.value, target, velocity, Tolerance::DEFAULT)?;
+        let sim =
+            SpringSimulation::try_new(spring, inner.value, target, velocity, Tolerance::DEFAULT)?;
 
         inner.direction = direction;
         let fling = SimulationRun::Fling {
@@ -974,7 +975,7 @@ impl AnimationController {
     /// # use std::time::Duration;
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5).unwrap();
-    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT).unwrap();
+    /// let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT).unwrap();
     /// controller.animate_with(sim).unwrap();
     /// ```
     pub fn animate_with<S: Simulation + 'static>(

@@ -153,7 +153,7 @@ impl Doc {
         self.composing
             .as_ref()
             .map(|(range, hides_caret)| Composition {
-                range: Utf16Range::new(self.units(range.start), self.units(range.end))
+                range: Utf16Range::try_new(self.units(range.start), self.units(range.end))
                     .expect("BUG: a composing range is ordered"),
                 hides_caret: *hides_caret,
             })

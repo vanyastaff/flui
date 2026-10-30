@@ -205,7 +205,7 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
-    let platform = match IOSPlatform::new() {
+    let platform = match IOSPlatform::try_new() {
         Ok(platform) => platform,
         Err(error) => {
             tracing::error!(%error, "iOS initialization failed");

@@ -995,7 +995,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                     .map(|request| {
                         (
                             *request,
-                            flui_foundation::TextSize::new(request.size.value() * 1.5)
+                            flui_foundation::TextSize::try_new(request.size.value() * 1.5)
                                 .expect("finite native answer"),
                         )
                     })
@@ -1208,7 +1208,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                     let end = session.document_len();
                     session
                         .replace(
-                            Utf16Range::new(Utf16Offset::new(0), end)
+                            Utf16Range::try_new(Utf16Offset::new(0), end)
                                 .expect("the whole document is an ordered range"),
                             "edited document",
                         )

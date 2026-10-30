@@ -5,14 +5,14 @@ use flui_foundation::geometry::{DeviceSize, InvalidMetrics, Size, WindowMetrics}
 
 fn physical_size_survives_a_fractional_scale() {
     // 115 / 1.75 = 65.714…; truncating the logical size back to pixels gave 114.
-    let metrics = WindowMetrics::new(DeviceSize::new(115, 201), 1.75).expect("valid metrics");
+    let metrics = WindowMetrics::try_new(DeviceSize::new(115, 201), 1.75).expect("valid metrics");
     assert_eq!(metrics.physical(), DeviceSize::new(115, 201));
     let rebuilt = WindowMetrics::from_logical(metrics.logical(), 1.75).expect("valid metrics");
     assert_eq!(rebuilt.physical(), DeviceSize::new(115, 201));
 }
 
 fn logical_size_is_the_device_size_over_the_ratio() {
-    let metrics = WindowMetrics::new(DeviceSize::new(300, 150), 1.5).expect("valid metrics");
+    let metrics = WindowMetrics::try_new(DeviceSize::new(300, 150), 1.5).expect("valid metrics");
     assert_eq!(metrics.logical(), Size::new(200.0, 100.0));
     assert!((metrics.scale().get() - 1.5).abs() < f64::EPSILON);
 }
@@ -31,34 +31,42 @@ type Row = (
 fn a_report_that_is_not_a_drawable_area_names_its_cause() {
     let size = DeviceSize::new;
     let rows: [Row; 12] = [
-        ("zero width", WindowMetrics::new(size(0, 10), 1.0), |e| {
-            matches!(
-                e,
-                InvalidMetrics::EmptyExtent {
-                    width: 0,
-                    height: 10
-                }
-            )
-        }),
-        ("zero height", WindowMetrics::new(size(10, 0), 1.0), |e| {
-            matches!(e, InvalidMetrics::EmptyExtent { .. })
-        }),
+        (
+            "zero width",
+            WindowMetrics::try_new(size(0, 10), 1.0),
+            |e| {
+                matches!(
+                    e,
+                    InvalidMetrics::EmptyExtent {
+                        width: 0,
+                        height: 10
+                    }
+                )
+            },
+        ),
+        (
+            "zero height",
+            WindowMetrics::try_new(size(10, 0), 1.0),
+            |e| matches!(e, InvalidMetrics::EmptyExtent { .. }),
+        ),
         (
             "negative width",
-            WindowMetrics::new(size(-1, 10), 1.0),
+            WindowMetrics::try_new(size(-1, 10), 1.0),
             |e| matches!(e, InvalidMetrics::EmptyExtent { width: -1, .. }),
         ),
-        ("zero scale", WindowMetrics::new(size(10, 10), 0.0), |e| {
-            matches!(e, InvalidMetrics::InvalidScale(_))
-        }),
+        (
+            "zero scale",
+            WindowMetrics::try_new(size(10, 10), 0.0),
+            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
+        ),
         (
             "negative scale",
-            WindowMetrics::new(size(10, 10), -2.0),
+            WindowMetrics::try_new(size(10, 10), -2.0),
             |e| matches!(e, InvalidMetrics::InvalidScale(_)),
         ),
         (
             "nan scale",
-            WindowMetrics::new(size(10, 10), f64::NAN),
+            WindowMetrics::try_new(size(10, 10), f64::NAN),
             |e| matches!(e, InvalidMetrics::InvalidScale(_)),
         ),
         (
@@ -83,7 +91,7 @@ fn a_report_that_is_not_a_drawable_area_names_its_cause() {
         ),
         (
             "scale too small for a logical size",
-            WindowMetrics::new(size(1, 1), f64::from_bits(1)),
+            WindowMetrics::try_new(size(1, 1), f64::from_bits(1)),
             |e| matches!(e, InvalidMetrics::LogicalOverflow { .. }),
         ),
         (

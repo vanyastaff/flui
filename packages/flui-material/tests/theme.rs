@@ -156,10 +156,10 @@ pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
             .map(|(profile, answer)| {
                 (
                     TextSizeRequest {
-                        size: TextSize::new(14.0).expect("authored size"),
+                        size: TextSize::try_new(14.0).expect("authored size"),
                         profile,
                     },
-                    TextSize::new(answer).expect("answer size"),
+                    TextSize::try_new(answer).expect("answer size"),
                 )
             }),
         )

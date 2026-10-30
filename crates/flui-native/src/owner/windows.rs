@@ -388,7 +388,7 @@ impl host::Drag<WindowsLoop> for WindowsLoop {
 /// (ADR-0151 §10).
 ///
 /// The loop holds them without naming them: the host builds the window
-/// feature's object and hands it to [`WindowsLoop::new`]. The loop asks it
+/// feature's object and hands it to [`WindowsLoop::try_new`]. The loop asks it
 /// whether a window is left (the exit policy), and delivers to it what the main
 /// loop and the modal loops pace: a wake deadline's frames and the paints a
 /// modal drag-and-drop loop would otherwise hold back.
@@ -684,7 +684,7 @@ impl WindowIdentity {
         &NEXT
     }
 
-    /// The admission boundary `WindowsWindow::new` runs: reserve an
+    /// The admission boundary `WindowsWindow::try_new` runs: reserve an
     /// identity from `source`, then run `acquire` for the native window it
     /// will own. Exhaustion refuses before `acquire` runs, so a refusal
     /// leaves nothing to release.
@@ -730,7 +730,7 @@ impl WindowsLoop {
         for seed in [0, u64::MAX - 1] {
             let next = AtomicU64::new(seed);
             let acquisitions = Cell::new(0);
-            // The admission `WindowsWindow::new` runs, with an acquisition
+            // The admission `WindowsWindow::try_new` runs, with an acquisition
             // that records native creation instead of performing it.
             let admit =
                 || WindowIdentity::admit(&next, || acquisitions.set(acquisitions.get() + 1)).0;
@@ -914,13 +914,13 @@ impl WindowsLoop {
     ///
     /// [`PlatformError::Init`] when the process's window class is already
     /// registered for another host, and whatever the native setup refuses.
-    pub(crate) fn new<H: WindowsHost>(
+    pub(crate) fn try_new<H: WindowsHost>(
         windows: Arc<dyn ClassWindows>,
     ) -> Result<Self, PlatformError> {
         Self::admit::<H>(windows, WindowIdentity::source(), H::drag)
     }
 
-    /// [`Self::new`] holding `drag` in place of the transport `H` makes, for
+    /// [`Self::try_new`] holding `drag` in place of the transport `H` makes, for
     /// a test that drives the transport through a handle of its own.
     #[cfg(test)]
     pub(crate) fn with_drag<H: WindowsHost>(
@@ -930,7 +930,7 @@ impl WindowsLoop {
         Self::admit::<H>(windows, WindowIdentity::source(), move || drag)
     }
 
-    /// [`Self::new`] with the identity drawn from `source` and the transport
+    /// [`Self::try_new`] with the identity drawn from `source` and the transport
     /// `drag` makes. The owner control's identity is reserved first:
     /// exhaustion refuses before COM is initialized or any HWND exists, so a
     /// refusal (and every caught retry) leaves nothing to release.
@@ -976,7 +976,7 @@ impl WindowsLoop {
         let app = Arc::new(AppDelivery::new());
         let notices = H::notices(&app);
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
-        let owner_control = control::OwnerControl::new::<H>(
+        let owner_control = control::OwnerControl::try_new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
             vec![Arc::clone(&drag) as Arc<dyn control::OwnerMessages>],
@@ -1717,7 +1717,7 @@ impl Drop for WindowsLoop {
         // `is_invalid()` guard skips the call for a handle that was never
         // successfully created. This window carries no `GWLP_USERDATA`
         // context (it is message-only and never routed through
-        // `WindowsWindow::new`), so there is no allocation to reclaim here.
+        // `WindowsWindow::try_new`), so there is no allocation to reclaim here.
         if !self.message_window.is_invalid() {
             unsafe {
                 if let Err(error) = DestroyWindow(self.message_window) {

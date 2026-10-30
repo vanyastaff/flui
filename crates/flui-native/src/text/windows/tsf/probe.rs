@@ -416,7 +416,7 @@ fn text_services_probe() {
         .finish();
     let _subscriber = tracing::subscriber::set_default(subscriber);
 
-    let platform = crate::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::try_new().expect("platform");
     let options = WindowOptions::default()
         .with_title("flui tsf probe")
         .with_size(Size::new(640.0, 200.0));
@@ -782,7 +782,7 @@ fn activate_profile(
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
     let scale =
         crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale.scale())
-            .and_then(DevicePixelRatio::new)
+            .and_then(DevicePixelRatio::try_new)
             .unwrap_or_default();
     let mut origin = POINT::default();
     // SAFETY: a live local.

@@ -129,7 +129,7 @@ fn sample_state(
             state.hidden,
             state.execution,
             // The backing store is the drawable area; an empty box is none.
-            flui_foundation::geometry::WindowMetrics::new(
+            flui_foundation::geometry::WindowMetrics::try_new(
                 flui_foundation::geometry::DeviceSize::new(
                     i32::try_from(state.backing.width).unwrap_or(i32::MAX),
                     i32::try_from(state.backing.height).unwrap_or(i32::MAX),
@@ -331,7 +331,7 @@ impl WebWindow {
     /// [`OpenWindowError::Backend`] when the browser environment lacks the
     /// pieces this needs (no global window/document/body) or the canvas
     /// element cannot be created.
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         id: WindowId,
         title: &str,
         width: f64,
@@ -553,7 +553,7 @@ impl WebWindow {
     }
 
     /// Keep the canvas's backing store and the window's tracked size in step
-    /// with its CSS box — see `WebWindow::new`'s "Size" section. A
+    /// with its CSS box — see `WebWindow::try_new`'s "Size" section. A
     /// `ResizeObserver` on the canvas sees every layout change (a viewport
     /// resize under `100vw`, a container reflow, a style change). Where the
     /// browser observes the device-pixel content box (Chrome, Firefox), a report
@@ -1042,7 +1042,7 @@ impl host::Window<WebLoop> for WebWindow {
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
-        let window = Self::new(
+        let window = Self::try_new(
             WindowId(0), // Single window in browser
             &options.title,
             options.size.width,

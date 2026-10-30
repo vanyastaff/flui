@@ -8,7 +8,7 @@ use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 fn recursive_turns_preserve_the_admitted_frame() {
     use flui_scheduler::{ExecutionError, IdleDeadline, Instant, SchedulerPhase};
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let delivered = Rc::new(std::cell::Cell::new(false));
     let observed = delivered.clone();
     let now = Instant::now();
@@ -49,7 +49,7 @@ fn recursive_turns_preserve_the_admitted_frame() {
 fn retired_owner_refuses_without_consuming_demand() {
     use flui_scheduler::{ExecutionError, IdleDeadline, Instant};
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     assert!(owner.retire().is_none());
     scheduler.request_frame();
     let now = Instant::now();
@@ -78,7 +78,7 @@ fn produced_result_is_retained_after_completion_failure() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(std::cell::Cell::new(0));
     owner
         .post_frame_handle()
@@ -159,7 +159,7 @@ fn handled_nested_failure_retains_completion_envelope() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     EXECUTING_OWNER.with(|slot| *slot.borrow_mut() = Some(owner.clone()));
     let drops = Arc::new(AtomicUsize::new(0));
     let waker = Waker::from(Arc::new(CompletionProbe(drops.clone())));
@@ -211,7 +211,7 @@ impl OwnerProbe {
 
 fn callbacks_share_owner_state_and_allow_registration_reentry() {
     let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::new(&scheduler).expect("one frame owner");
+    let owner = OwnerFrame::try_new(&scheduler).expect("one frame owner");
     let events = Rc::new(RefCell::new(Vec::new()));
     let callback_events = events.clone();
     let reentrant = scheduler.clone();
@@ -270,7 +270,7 @@ fn post_frame_storage_belongs_to_one_owner_generation() {
     construction
         .schedule(move |_| observed.borrow_mut().push("construction"))
         .expect("construction admits work before its first owner");
-    let first = OwnerFrame::new(&scheduler).expect("first owner");
+    let first = OwnerFrame::try_new(&scheduler).expect("first owner");
     first
         .drive_frame(
             flui_scheduler::Instant::now(),
@@ -298,7 +298,7 @@ fn post_frame_storage_belongs_to_one_owner_generation() {
         1,
         "scheduler and weak handles do not retain the retired queue"
     );
-    let second = OwnerFrame::new(&scheduler).expect("replacement owner");
+    let second = OwnerFrame::try_new(&scheduler).expect("replacement owner");
     assert!(
         stale
             .schedule(|_| panic!("stale admission must be refused"))

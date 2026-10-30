@@ -171,7 +171,7 @@ async fn browser_motion_observations_wake_replace_and_retire_their_owner() {
     let _probe = Probe;
     support_motion(false);
     {
-        let unsupported = WebPlatform::new().expect("unsupported query source");
+        let unsupported = WebPlatform::try_new().expect("unsupported query source");
         assert!(
             unsupported
                 .preferences()
@@ -185,12 +185,12 @@ async fn browser_motion_observations_wake_replace_and_retire_their_owner() {
     support_motion(true);
     refuse_registration(true);
     assert!(
-        WebPlatform::new().is_err(),
+        WebPlatform::try_new().is_err(),
         "failed registration is not an observation"
     );
     assert_eq!(listener_count(), 0);
     refuse_registration(false);
-    let platform = WebPlatform::new().expect("browser source");
+    let platform = WebPlatform::try_new().expect("browser source");
     assert_eq!(
         platform
             .preferences()
@@ -342,7 +342,7 @@ async fn browser_contrast_and_languages_reach_their_owner() {
     set_contrast(JsValue::NULL, JsValue::NULL);
     set_languages(Vec::new(), JsValue::UNDEFINED);
     {
-        let unknown = WebPlatform::new()
+        let unknown = WebPlatform::try_new()
             .expect("unsupported features")
             .preferences()
             .expect("unknown observation");
@@ -351,7 +351,7 @@ async fn browser_contrast_and_languages_reach_their_owner() {
     }
     set_languages(Vec::new(), "de-DE".into());
     {
-        let fallback = WebPlatform::new()
+        let fallback = WebPlatform::try_new()
             .expect("fallback source")
             .preferences()
             .expect("fallback observation");
@@ -368,7 +368,7 @@ async fn browser_contrast_and_languages_reach_their_owner() {
     let installed = Rc::clone(&owner);
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&wakes);
-    Box::new(WebPlatform::new().expect("browser source"))
+    Box::new(WebPlatform::try_new().expect("browser source"))
         .run(crate::app::on_ready(move |capability| {
             capability
                 .on_wake(Box::new(move || {
@@ -446,7 +446,7 @@ fn counter_owner() -> (flui_native::OwnerPlatform, Arc<AtomicUsize>) {
     let installed = Rc::clone(&retained);
     let wakes = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&wakes);
-    Box::new(WebPlatform::new().expect("successor source"))
+    Box::new(WebPlatform::try_new().expect("successor source"))
         .run(crate::app::on_ready(move |owner| {
             owner
                 .on_wake(Box::new(move || {

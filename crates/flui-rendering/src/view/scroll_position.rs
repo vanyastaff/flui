@@ -1084,7 +1084,7 @@ mod tests {
             "the flush must not fire before the frame completes"
         );
 
-        OwnerFrame::new(&scheduler)
+        OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
             .drive_frame(
                 flui_scheduler::Instant::now(),

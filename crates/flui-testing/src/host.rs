@@ -124,7 +124,7 @@ impl SentInputRegions {
     fn update(&mut self, regions: &[InputRegion], scale: f64, display: Option<DisplayId>) {
         // A scale that is not a positive finite number projects nothing; the OS keeps
         // what it holds.
-        let Some(ratio) = DevicePixelRatio::new(scale) else {
+        let Some(ratio) = DevicePixelRatio::try_new(scale) else {
             return;
         };
         let projected: Vec<DeviceInputRegion> = regions

@@ -181,7 +181,7 @@ impl Placement {
     fn restart(&self) {
         let run = match &self.motion {
             MotionSpec::Spring(spring) => {
-                SpringSimulation::new(*spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
+                SpringSimulation::try_new(*spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
                     .map_err(|error| tracing::warn!(%error, "placement spring refused"))
                     .ok()
                     .map(|simulation| {

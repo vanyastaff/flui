@@ -681,10 +681,10 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
                 hit_test: Rc::clone(&hit_test),
                 pending_sizing: flui_painting::TextSizing::exact([(
                     TextSizeRequest {
-                        size: TextSize::new(16.0).expect("authored editable size"),
+                        size: TextSize::try_new(16.0).expect("authored editable size"),
                         profile: TextScaleProfile::Body,
                     },
-                    TextSize::new(32.0).expect("resolved editable size"),
+                    TextSize::try_new(32.0).expect("resolved editable size"),
                 )])
                 .expect("sealed capture intentionally omits the later sibling"),
                 controller: flui_widgets::TextEditingController::with_text("abcd"),
@@ -765,7 +765,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
             assert_eq!(
                 preparation.requests,
                 [TextSizeRequest {
-                    size: TextSize::new(20.0).expect("authored sibling size"),
+                    size: TextSize::try_new(20.0).expect("authored sibling size"),
                     profile: TextScaleProfile::Body,
                 }]
             );
@@ -1007,7 +1007,7 @@ fn answer_prepared_frontier(
             };
             (
                 *request,
-                flui_foundation::TextSize::new(request.size.value() * factor)
+                flui_foundation::TextSize::try_new(request.size.value() * factor)
                     .expect("finite fixture answer"),
             )
         }))

@@ -846,7 +846,7 @@ mod event_loop {
     pub(crate) struct LoopWaker(OwnedFd);
 
     impl LoopWaker {
-        fn new() -> rustix::io::Result<Self> {
+        fn try_new() -> rustix::io::Result<Self> {
             eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).map(Self)
         }
 
@@ -1254,7 +1254,7 @@ mod event_loop {
         /// [`PlatformError::Init`] when no compositor answers, libwayland
         /// cannot be loaded, or the compositor lacks `wl_compositor` or
         /// `xdg_wm_base`.
-        pub(crate) fn new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
+        pub(crate) fn try_new<H: WaylandHost>(socket: &Path) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
             };
@@ -1318,7 +1318,7 @@ mod event_loop {
                 }
             }
             let waker = Arc::new(
-                LoopWaker::new().map_err(|error| init("the loop's wake descriptor", &error))?,
+                LoopWaker::try_new().map_err(|error| init("the loop's wake descriptor", &error))?,
             );
             let signal = {
                 let waker = Arc::downgrade(&waker);

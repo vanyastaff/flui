@@ -20,7 +20,7 @@ fn at(units: usize) -> Utf16Offset {
 }
 
 fn range(start: usize, end: usize) -> Utf16Range {
-    Utf16Range::new(at(start), at(end)).expect("ordered")
+    Utf16Range::try_new(at(start), at(end)).expect("ordered")
 }
 
 fn preedit_event(text: &str, cursor: Option<(usize, usize)>) -> ImeEvent {

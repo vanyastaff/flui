@@ -134,7 +134,7 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     }
 
     let vsync = Vsync::new();
-    let mut owner = AnimatedValue::new(
+    let mut owner = AnimatedValue::try_new(
         CardMotion(Appearance { position: Offset::ZERO, color: Color::rgb(255, 0, 0) }, 0.0),
         MotionSpec::Curve { duration: Duration::from_secs(1), curve: SharedCurve::new(Linear) },
         Some(&vsync),
