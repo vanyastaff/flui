@@ -713,3 +713,63 @@ pub(crate) fn a_failure_streak_past_thirty_three_keeps_the_one_second_cap() {
         "the fortieth failure waits the cap"
     );
 }
+
+/// The window losing OS focus and gaining it back: the key it held is
+/// forgotten, so the release that arrives while it is away reaches no one,
+/// and the focus inside its tree is where it was when the window returns.
+///
+/// Fails against a host that ignores the loss (the release reaches the
+/// focused node) or that drops the tree's focus with it.
+#[test]
+fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
+    use flui_interaction::focus::KeyEventResult;
+    use flui_platform::EventTime;
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let keys = Rc::clone(&log);
+    let mut laid = lay_out(
+        flui_widgets::Focus::new(flui_widgets::SizedBox::new(40.0, 40.0))
+            .autofocus(true)
+            .on_key_event(move |_, event| {
+                keys.borrow_mut().push((event.state(), event.key.clone()));
+                KeyEventResult::Handled
+            }),
+        tight(100.0, 100.0),
+    );
+    laid.pump();
+    let focused = laid
+        .focus_manager()
+        .primary_focus()
+        .expect("the autofocus node holds the focus");
+    let key = |state, name: &str| {
+        KeyEvent::new(
+            state,
+            Key::character(name),
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
+    };
+
+    laid.dispatch_key(key(KeyState::Down, "a"));
+    laid.set_window_focused(false);
+    laid.dispatch_key(key(KeyState::Up, "a"));
+    assert_eq!(
+        *log.borrow(),
+        [(KeyState::Down, Key::character("a"))],
+        "the release of a forgotten key reaches no one"
+    );
+
+    laid.set_window_focused(true);
+    let restored = laid.focus_manager().primary_focus();
+    assert!(
+        restored.is_some_and(|node| Rc::ptr_eq(&node, &focused)),
+        "the window returns with the focus it had"
+    );
+    laid.dispatch_key(key(KeyState::Down, "b"));
+    assert_eq!(
+        log.borrow().last(),
+        Some(&(KeyState::Down, Key::character("b"))),
+        "keys reach the focused node again"
+    );
+}

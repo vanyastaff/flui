@@ -18,11 +18,13 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::ConnectionState;
+use flui::foundation::{ConnectionState, ValueKey, ViewKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
 use flui::prelude::*;
+use flui::view::View;
+use flui::view::element::ElementKind;
 use flui::widgets::{
     BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
     column,
@@ -494,30 +496,31 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
         Scrollable::new()
             .controller(shared.scroll.clone())
             .viewport_builder(Rc::new(move |position| {
-                let notes = Rc::clone(&notes);
+                let built = Rc::clone(&notes);
+                let found = Rc::clone(&notes);
                 let shared = shared.clone();
                 let router = router.clone();
                 ListView::builder(notes.len(), extent, move |index| {
-                    let note = notes.get(index)?;
-                    let id = note.id;
-                    let shared = shared.clone();
+                    let note = built.get(index)?;
                     Some(
-                        SizedBox::height(extent)
-                            .child(
-                                on_current_page(
-                                    &note.title,
-                                    &router,
-                                    &Route::Home,
-                                    move |cx, router| {
-                                        open_note(cx, &shared, router, id);
-                                    },
-                                )
-                                .style(flat_row()),
-                            )
-                            .boxed(),
+                        NoteRow {
+                            key: ValueKey::new(note.id),
+                            title: note.title.clone(),
+                            extent,
+                            shared: shared.clone(),
+                            router: router.clone(),
+                        }
+                        .boxed(),
                     )
                 })
+                .find_index_by_key(move |key| {
+                    let id = key.as_any().downcast_ref::<ValueKey<NoteId>>()?.value();
+                    found.iter().position(|note| note.id == *id)
+                })
                 .position(position)
+                .focusable(true)
+                .semantics_label("Notes")
+                .empty_label("No notes")
                 .boxed()
             }))
     };
@@ -554,6 +557,40 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
     .boxed()
 }
 
+/// One note's row, keyed by the note's id: the row of the same note keeps
+/// its element, and so its focus, across a rebuild that moves or resizes it.
+#[derive(Clone)]
+struct NoteRow {
+    key: ValueKey<NoteId>,
+    title: String,
+    extent: f64,
+    shared: Shared,
+    router: RouterHandle<Route>,
+}
+
+impl StatelessView for NoteRow {
+    fn build(&self, _cx: &dyn BuildContext) -> impl IntoView {
+        let id = *self.key.value();
+        let shared = self.shared.clone();
+        SizedBox::height(self.extent).child(
+            on_current_page(&self.title, &self.router, &Route::Home, move |cx, router| {
+                open_note(cx, &shared, router, id);
+            })
+            .style(flat_row()),
+        )
+    }
+}
+
+impl View for NoteRow {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+
+    fn key(&self) -> Option<&dyn ViewKey> {
+        Some(&self.key)
+    }
+}
+
 fn flat_row() -> ButtonStyle {
     ButtonStyle {
         minimum_size: Some(WidgetStateProperty::all(Some(Size::ZERO))),
@@ -582,6 +619,7 @@ fn editor(
         Text::new(format!("Editing note {id}")),
         TextFormField::new(shared.draft.clone())
             .focus_node(Rc::clone(focus))
+            .autofocus(true)
             .decoration(InputDecoration {
                 label_text: Some("Title".to_owned()),
                 ..InputDecoration::default()
