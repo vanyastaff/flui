@@ -524,6 +524,25 @@ impl TextEditingController {
         });
     }
 
+    /// Insert `text` at source byte `offset` and leave the caret after it,
+    /// as one edit with one notification: a paste where a middle press
+    /// landed. `offset` is clamped and snapped like
+    /// [`Self::set_caret_byte_offset`]'s, and the composing region is
+    /// cleared as [`Self::insert_str`] clears it. One mutation, so a
+    /// listener that panics cannot leave the caret moved and the text
+    /// unpasted.
+    pub(crate) fn insert_str_at(&self, offset: usize, text: &str) {
+        self.app_edit(|guard| {
+            let at = clamp_to_grapheme_boundary(&guard.text, offset);
+            clear_caret_hidden(guard);
+            guard.text.insert_str(at, text);
+            let caret = clamp_to_grapheme_boundary(&guard.text, at + text.len());
+            guard.selection = Selection::collapsed(caret);
+            guard.composing = None;
+            true
+        });
+    }
+
     /// Replace the whole buffer with `text`, ignoring the current selection —
     /// the programmatic counterpart to typing. Clears any active composing
     /// region, the same non-IME-edit rule [`Self::insert_str`] documents.
