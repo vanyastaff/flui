@@ -10,7 +10,8 @@
 //! - `android`: `ClipboardManager`, through JNI;
 //! - `web`: `navigator.clipboard`, whose read answers when its promise
 //!   settles;
-//! - `linux`: the Wayland seats' selection through `wl_data_device`, and
+//! - `linux`: the Wayland seats' selection through `wl_data_device`, X11's
+//!   `CLIPBOARD` selection on a connection of its own, and
 //!   the text forms the Linux desktops exchange;
 //! - `winit`: `arboard`;
 //! - `headless`: a `MemoryClipboard`, one per loop.
@@ -20,7 +21,7 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 mod headless;
-#[cfg(wayland_host)]
+#[cfg(any(wayland_host, x11_host))]
 pub(crate) mod linux;
 #[cfg(windows)]
 mod lock;
