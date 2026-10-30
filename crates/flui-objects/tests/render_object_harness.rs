@@ -3408,7 +3408,7 @@ fn exercise_static_opacity_updates(sliver: bool) {
 
 fn ticking_controller(ms: u64, value: f64) -> AnimationController {
     let controller = AnimationController::builder(Duration::from_millis(ms)).build();
-    controller.set_value(value);
+    controller.set_value(value).expect("no build is running");
     controller
 }
 
@@ -3473,7 +3473,7 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
             run.structure(),
         );
         for next in [0.0, 0.0025, 0.005, 1.0, 1e-17, 0.0] {
-            controller.set_value(next);
+            controller.set_value(next).expect("no build is running");
             run.pump();
             assert_eq!(
                 run.opacity_alpha(),
@@ -3512,7 +3512,7 @@ fn harness_animated_opacity_semantics_follow_accepted_visibility() {
                 .with_semantics_enabled()
                 .run_frame();
             for alpha in [0.0, 0.0025, 0.005, 0.0, 1.0, 0.0] {
-                controller.set_value(alpha);
+                controller.set_value(alpha).expect("no build is running");
                 run.pump();
                 let included = run
                     .owner()
@@ -3806,7 +3806,7 @@ fn tick_to(
     value: f64,
 ) -> (u64, Vec<&'static str>) {
     let before = run.owner().counters().nodes_painted;
-    controller.set_value(value);
+    controller.set_value(value).expect("no build is running");
     run.pump();
     let painted = run.owner().counters().nodes_painted - before;
     (painted, run.structure())
@@ -4068,7 +4068,9 @@ impl ScriptedAnimation {
         } else {
             0.0
         };
-        self.controller.set_value(poke);
+        self.controller
+            .set_value(poke)
+            .expect("no build is running");
     }
 }
 
@@ -4260,7 +4262,7 @@ fn harness_animated_transform_reads_only_its_cached_sample() {
         after_mount,
         "paint, hit-testing and coordinate mapping must read the cached sample, not the animation"
     );
-    controller.set_value(0.25);
+    controller.set_value(0.25).expect("no build is running");
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
         after_mount + 1,
@@ -4309,7 +4311,7 @@ where
 /// Sets `value`, pumps one frame and returns `(nodes laid out, nodes painted)`.
 fn tick_counts(run: &mut FrameRun, controller: &AnimationController, value: f64) -> (u64, u64) {
     let before = run.owner().counters();
-    controller.set_value(value);
+    controller.set_value(value).expect("no build is running");
     run.pump();
     let after = run.owner().counters();
     (
@@ -4363,7 +4365,7 @@ fn harness_animated_align_factor_sizes_the_box_and_answers_queries() {
     let (root, child) = (run.root(), run.id("child"));
     assert_eq!(run.box_geometry(root), Size::new(40.0, 40.0));
 
-    controller.set_value(0.25);
+    controller.set_value(0.25).expect("no build is running");
     run.pump();
     assert_eq!(run.box_geometry(root), Size::new(40.0, 20.0));
     assert_eq!(
@@ -4374,7 +4376,7 @@ fn harness_animated_align_factor_sizes_the_box_and_answers_queries() {
     assert_eq!(run.max_intrinsic_height(root, f64::INFINITY), 20.0);
     assert_eq!(run.dry_layout(root, loose(200.0)), Size::new(40.0, 20.0));
 
-    controller.set_value(0.75);
+    controller.set_value(0.75).expect("no build is running");
     run.pump();
     assert_eq!(
         run.box_geometry(root),
@@ -4468,7 +4470,7 @@ fn harness_animated_inset_clips_a_child_outside_its_box() {
         "a child inside the box is not clipped"
     );
 
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     run.pump();
     assert_eq!(run.offset(run.id("child")), Offset::new(-10.0, -10.0));
     assert!(
@@ -4534,7 +4536,7 @@ fn harness_animated_inset_overflowing_insets_keep_finite_geometry() {
     .with_constraints(unbounded_width)
     .run_frame();
     let root = run.root();
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     run.pump();
     assert_eq!(
         run.box_geometry(root),
@@ -4637,10 +4639,10 @@ fn harness_animated_align_retries_a_delivery_whose_wake_failed() {
         );
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_value(0.6);
+        controller.set_value(0.6).expect("no build is running");
     }));
     assert!(failed.is_err(), "the authored wake failure propagates");
-    controller.set_value(0.7);
+    controller.set_value(0.7).expect("no build is running");
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -4806,10 +4808,10 @@ fn harness_animated_align_retries_a_failed_delivery_on_a_refused_reading() {
         );
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_value(0.4);
+        controller.set_value(0.4).expect("no build is running");
     }));
     assert!(failed.is_err(), "the authored wake failure propagates");
-    controller.set_value(0.9);
+    controller.set_value(0.9).expect("no build is running");
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -4861,11 +4863,11 @@ fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
         );
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_value(0.4);
+        controller.set_value(0.4).expect("no build is running");
     }));
     assert!(failed.is_err(), "the authored wake failure propagates");
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_value(0.9);
+        controller.set_value(0.9).expect("no build is running");
     }));
     assert!(failed.is_err(), "the failing animation read propagates");
     assert_eq!(
@@ -4907,13 +4909,13 @@ fn harness_animated_align_settles_after_a_same_sample_reentry() {
         if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
             NOTIFIED.with(|slot| {
                 if let Some(controller) = slot.borrow().as_ref() {
-                    controller.set_value(0.7);
+                    controller.set_value(0.7).expect("no build is running");
                 }
             });
         }
     });
-    controller.set_value(0.6);
-    controller.set_value(0.8);
+    controller.set_value(0.6).expect("no build is running");
+    controller.set_value(0.8).expect("no build is running");
     NOTIFIED.with(|slot| slot.borrow_mut().take());
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
@@ -4958,16 +4960,16 @@ fn harness_animated_align_does_not_retry_a_delivery_already_running() {
             let next = if count.is_multiple_of(2) { 0.7 } else { 0.6 };
             TOGGLED.with(|slot| {
                 if let Some(controller) = slot.borrow().as_ref() {
-                    controller.set_value(next);
+                    controller.set_value(next).expect("no build is running");
                 }
             });
         }
     });
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        controller.set_value(0.4);
+        controller.set_value(0.4).expect("no build is running");
     }));
     assert!(failed.is_err(), "the authored wake failure propagates");
-    controller.set_value(0.6);
+    controller.set_value(0.6).expect("no build is running");
     TOGGLED.with(|slot| slot.borrow_mut().take());
     assert!(
         wakes.load(std::sync::atomic::Ordering::SeqCst) <= 3,
@@ -5010,12 +5012,14 @@ fn harness_animated_align_nested_publication_rides_the_running_request() {
         if count < LIMIT {
             REENTERED.with(|slot| {
                 if let Some(controller) = slot.borrow().as_ref() {
-                    controller.set_value(0.3 + 0.001 * count as f64);
+                    controller
+                        .set_value(0.3 + 0.001 * count as f64)
+                        .expect("no build is running");
                 }
             });
         }
     });
-    controller.set_value(0.2);
+    controller.set_value(0.2).expect("no build is running");
     REENTERED.with(|slot| slot.borrow_mut().take());
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
@@ -5059,7 +5063,7 @@ fn harness_animated_inset_clips_its_child_semantics() {
     let unclipped = moving_rect(&run);
     assert_eq!(unclipped.size(), Size::new(100.0, 100.0));
 
-    controller.set_value(1.0);
+    controller.set_value(1.0).expect("no build is running");
     run.pump();
     let clipped = moving_rect(&run);
     assert_eq!(
@@ -8628,7 +8632,7 @@ fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
 /// motion that reads it.
 fn placement_clock() -> (AnimationController, AnimationController, MotionSpec) {
     let clock = AnimationController::builder(Duration::from_millis(100)).build();
-    clock.set_value(1.0);
+    clock.set_value(1.0).expect("no build is running");
     let driver = clock.clone();
     let motion = MotionSpec::default()
         .with_duration(Duration::from_millis(100))
@@ -8853,7 +8857,7 @@ fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_part
             run.structure(),
         );
         for next in [0.0, 0.0025, 0.005, 1.0, 1e-17, 0.0] {
-            controller.set_value(next);
+            controller.set_value(next).expect("no build is running");
             run.pump();
             assert_eq!(
                 run.opacity_alpha(),
@@ -11375,14 +11379,14 @@ fn harness_swapping_the_snap_controller_moves_the_layout_listener() {
             run.update::<$header>(id, |header| header.set_snap_controller(Some(new.clone())));
             run.pump();
             let clean = run.owner().layout_roots_total();
-            old.set_value(0.25);
+            old.set_value(0.25).expect("no build is running");
             run.pump();
             assert_eq!(
                 run.owner().layout_roots_total(),
                 clean,
                 "the outgoing controller no longer requests header layout"
             );
-            new.set_value(0.25);
+            new.set_value(0.25).expect("no build is running");
             run.pump();
             assert!(
                 run.owner().layout_roots_total() > clean,
@@ -11391,7 +11395,7 @@ fn harness_swapping_the_snap_controller_moves_the_layout_listener() {
             run.update::<$header>(id, |header| header.set_snap_controller(None));
             run.pump();
             let clean = run.owner().layout_roots_total();
-            new.set_value(0.5);
+            new.set_value(0.5).expect("no build is running");
             run.pump();
             assert_eq!(
                 run.owner().layout_roots_total(),
@@ -11402,7 +11406,7 @@ fn harness_swapping_the_snap_controller_moves_the_layout_listener() {
             run.pump();
             run.owner_mut().remove_render_object(id);
             run.pump();
-            new.set_value(0.75);
+            new.set_value(0.75).expect("no build is running");
             assert_eq!(
                 run.owner_mut().drain_pending_dirty(),
                 0,

@@ -187,7 +187,7 @@ impl<T, K> Entry<T, K> {
             .debug_label("AnimatedList.item")
             .build_on(vsync);
         if !entering {
-            driver.controller().set_value(1.0);
+            let _ = driver.controller().set_value(1.0);
         }
         let linear: Rc<dyn Animation<f64>> = Rc::new(driver.controller().clone());
         let progress: Rc<dyn Animation<f64>> =
@@ -279,7 +279,7 @@ impl<T, K> Entry<T, K> {
     fn admit(&self, what: &str, run: Result<AnimationRunFuture, AnimationError>) {
         if let Err(error) = run {
             tracing::warn!(%error, what, "an animated list item refused a run; it shows at once");
-            self.driver.controller().set_value(1.0);
+            let _ = self.driver.controller().set_value(1.0);
         }
     }
 }

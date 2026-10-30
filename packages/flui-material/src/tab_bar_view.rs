@@ -302,7 +302,7 @@ impl Action<TabStep> for TabStepAction {
         let Some(target) = self.target(*step) else {
             return ActionOutcome::NotPerformed;
         };
-        self.controller.animate_to(target);
+        let _ = self.controller.animate_to(target);
         ActionOutcome::Performed
     }
 }

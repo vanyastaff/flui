@@ -142,7 +142,7 @@ fn gesture_fixture_with(
     let from_controller = transition
         .controller()
         .expect("install() created the transition controller");
-    from_controller.set_value(1.0);
+    from_controller.set_value(1.0).expect("no build is running");
 
     (navigator, harness, controller, to, from, from_controller)
 }
@@ -205,7 +205,7 @@ pub(crate) fn an_excluding_gesture_restores_pending_programmatic_placeholders() 
     let animation = transition
         .controller()
         .expect("the route owns its animation");
-    animation.set_value(1.0);
+    animation.set_value(1.0).expect("no build is running");
     assert_eq!(
         controller.flights().len(),
         1,

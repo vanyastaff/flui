@@ -876,6 +876,16 @@ has no work pending that could still move the element. The first call for an ele
 made in the frame of the call before it with work pending, answer unstable. Pinned by
 `src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
 
+**Act and read.** `act_and_read` (`UiCommand::SemanticsAgentActionRead`) takes the committed tree
+as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as `act` does, parks
+the reply on the presentation (`agent_reads`, at most 256) and requests a redraw. The reply
+completes in `drive_frame`'s commit-anchor loop, after the frame the effect landed in, by diffing
+the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
+(name, value, description, state, actions; bounds only when asked), a role change counting as
+appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
+owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
+`src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first

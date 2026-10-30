@@ -181,7 +181,7 @@ impl Waves {
         let amplitude = AnimationController::builder(AMPLITUDE_TRANSITION)
             .debug_label("WavyProgressIndicator.amplitude")
             .build_on(None);
-        amplitude.controller().set_value(target);
+        let _ = amplitude.controller().set_value(target);
         let phase = AnimationController::builder(WAVE_PERIOD)
             .debug_label("WavyProgressIndicator.phase")
             .build_on(None);
@@ -219,7 +219,7 @@ impl Waves {
 
     fn update(&mut self, value: Option<f64>) {
         if self.indeterminate && value.is_some() {
-            self.cycle.controller().set_value(0.0);
+            let _ = self.cycle.controller().set_value(0.0);
         }
         self.fraction.update(value);
         self.indeterminate = value.is_none();
@@ -253,7 +253,7 @@ impl Waves {
             if self.amplitude.is_bound() {
                 let _ = self.amplitude.controller().animate_to(target, None);
             } else {
-                self.amplitude.controller().set_value(target);
+                let _ = self.amplitude.controller().set_value(target);
             }
         }
         let flat = target == 0.0

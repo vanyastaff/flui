@@ -856,7 +856,7 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                 if status {
                     parent.forward().expect("run admitted");
                 } else {
-                    parent.set_value(0.5);
+                    parent.set_value(0.5).expect("no build is running");
                 }
             }));
             if failed {
@@ -878,7 +878,7 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             if status {
                 parent.tick_at(std::time::Duration::from_secs_f64(1.0));
             } else {
-                parent.set_value(1.0);
+                parent.set_value(1.0).expect("no build is running");
             }
             assert_eq!(
                 tail.get(),
@@ -944,7 +944,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         if status {
             parent.forward().expect("run admitted");
         } else {
-            parent.set_value(0.5);
+            parent.set_value(0.5).expect("no build is running");
         }
     }))
     .expect_err("parent failure resumes after wrapper tail");
@@ -960,7 +960,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     if status {
         parent.tick_at(std::time::Duration::from_secs_f64(1.0));
     } else {
-        parent.set_value(1.0);
+        parent.set_value(1.0).expect("no build is running");
     }
     assert_eq!(calls.get(), 2, "next notification still arrives");
     lifecycle.dispose();
@@ -1066,7 +1066,7 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     } else {
         [0.25, 0.5, 0.75]
     };
-    source.set_value(values[0]);
+    source.set_value(values[0]).expect("no build is running");
     assert_eq!(drops.load(Ordering::SeqCst), 1, "healthy capture retires");
     armed.set(true);
     let failure = catch_unwind(AssertUnwindSafe(|| source.set_value(values[1])))
@@ -1079,7 +1079,7 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
         "parent retirement inherits failure caught by its child relay"
     );
     armed.set(false);
-    source.set_value(values[2]);
+    source.set_value(values[2]).expect("no build is running");
     assert_eq!(calls.get(), 3, "next notification still arrives");
     assert_eq!(
         drops.load(Ordering::SeqCst),
@@ -1773,7 +1773,7 @@ fn switch_parent_status_may_read_the_switch() {
 
 fn switch_hop_announces_the_new_train_status() {
     let train = controller();
-    train.set_value(0.2);
+    train.set_value(0.2).expect("no build is running");
     let switch = AnimationSwitch::new(
         std::rc::Rc::new(train.clone()),
         Some(std::rc::Rc::new(ConstantAnimation::with_status(
@@ -1784,7 +1784,7 @@ fn switch_hop_announces_the_new_train_status() {
     let (log, listener) = recorder();
     switch.subscribe_status(listener).detach();
 
-    train.set_value(0.6);
+    train.set_value(0.6).expect("no build is running");
 
     assert_eq!(switch.value(), 0.5, "the switch hopped to the next train");
     assert_eq!(switch.status(), ForwardSettled);
@@ -1809,9 +1809,9 @@ struct Parents {
 /// Three parents with distinct statuses: `a` Forward, `b` ForwardSettled, `c` ReverseSettled.
 fn parents() -> Parents {
     let a = controller();
-    a.set_value(0.5);
+    a.set_value(0.5).expect("no build is running");
     let b = controller();
-    b.set_value(1.0);
+    b.set_value(1.0).expect("no build is running");
     let c = controller();
     assert_eq!(
         (a.status(), b.status(), c.status()),
@@ -1848,7 +1848,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
         "the new status is announced once"
     );
 
-    a.set_value(0.0);
+    a.set_value(0.0).expect("no build is running");
     assert_eq!(
         count(&values),
         1,
@@ -1860,7 +1860,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
         "the replaced parent's status is ignored"
     );
 
-    b.set_value(0.4);
+    b.set_value(0.4).expect("no build is running");
     assert_eq!(proxy.value(), 0.4);
     assert_eq!(count(&values), 2, "the new parent's values arrive");
     assert_eq!(
@@ -1904,13 +1904,13 @@ fn reentrant_set_parent_last_commit_wins() {
         "the last announced status is the status of the parent in charge"
     );
 
-    b.set_value(0.3);
+    b.set_value(0.3).expect("no build is running");
     assert_eq!(
         count(&values),
         2,
         "the parent replaced mid-notification is ignored"
     );
-    c.set_value(0.3);
+    c.set_value(0.3).expect("no build is running");
     assert_eq!(count(&values), 3, "the reentrant parent's values arrive");
 }
 

@@ -77,7 +77,8 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
             | Row::Notice(_)
             | Row::SessionEnd(_)
             | Row::Reopen
-            | Row::Ime { .. } => {}
+            | Row::Ime { .. }
+            | Row::Preferences(_) => {}
         }
     }
     super::transcript(&device.replay().expect("a registry's recording replays"))
