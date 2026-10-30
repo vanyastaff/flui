@@ -1,6 +1,6 @@
 //! [`KeylineSnap`]: where a released carousel comes to rest.
 
-use flui_objects::{CarouselGeometry, CarouselLayout};
+use flui_objects::{CarouselGeometry, CarouselLayout, CarouselLayoutKind};
 
 use crate::scroll::{ScrollMetrics, SnapPolicy};
 
@@ -23,6 +23,19 @@ pub enum KeylineSnap {
     SingleAdvance,
     /// A fling coasts and settles on the item nearest where it would come to rest.
     MultiBrowse,
+}
+
+impl KeylineSnap {
+    /// Material's snap for `layout`: one item per swipe for every layout whose items rest
+    /// whole, none for an uncontained one, whose last item the viewport's edge cuts and which
+    /// scrolls freely (as Compose's carousels default).
+    #[must_use]
+    pub fn for_layout(layout: &CarouselLayout) -> Option<Self> {
+        match layout.kind() {
+            CarouselLayoutKind::Uncontained => None,
+            _ => Some(Self::SingleAdvance),
+        }
+    }
 }
 
 /// [`KeylineSnap`] over one carousel's layout, spacing and item count; the viewport comes
