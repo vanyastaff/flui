@@ -25,6 +25,8 @@ vocabulary! {
         Semantics => "semantics",
         /// A window opened or closed.
         Window => "window",
+        /// An announcement was spoken to assistive technology.
+        Announcement => "announcement",
         /// The subscriber's queue overflowed. Sent unasked.
         Gap => "gap",
     }
@@ -166,6 +168,8 @@ pub enum Event {
     Semantics(SemanticsEvent),
     /// A window opened or closed.
     Window(WindowEvent),
+    /// An announcement was spoken.
+    Announcement(AnnouncementEvent),
     /// The queue overflowed.
     Gap(GapEvent),
 }
@@ -179,7 +183,143 @@ impl Event {
             Self::Input(_) => EventKind::Input,
             Self::Semantics(_) => EventKind::Semantics,
             Self::Window(_) => EventKind::Window,
+            Self::Announcement(_) => EventKind::Announcement,
             Self::Gap(_) => EventKind::Gap,
         }
     }
+}
+
+vocabulary! {
+    /// How an announcement interrupts what assistive technology is saying.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum AnnouncementUrgency {
+        /// Spoken once the user is idle.
+        Polite => "polite",
+        /// Spoken at once, interrupting.
+        Assertive => "assertive",
+    }
+}
+
+/// One announcement the window delivered to assistive technology.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct Announcement {
+    /// Its place in the window's announcement journal, from 1.
+    pub seq: u64,
+    /// How it interrupts.
+    pub urgency: AnnouncementUrgency,
+    /// What was said.
+    pub message: String,
+    /// The revision of the tree whose publication delivered it.
+    pub revision: TreeRevision,
+}
+
+impl Announcement {
+    /// Announcement `seq`: `message` at `urgency`, delivered with `revision`.
+    #[must_use]
+    pub fn new(
+        seq: u64,
+        urgency: AnnouncementUrgency,
+        message: impl Into<String>,
+        revision: TreeRevision,
+    ) -> Self {
+        Self {
+            seq,
+            urgency,
+            message: message.into(),
+            revision,
+        }
+    }
+}
+
+/// `semantics.announcements`: the announcements after `since`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct AnnouncementsParams {
+    /// The window.
+    pub window: WindowId,
+    /// Announcements after this sequence number; every one still held when absent.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub since: Option<u64>,
+    /// Announcements to answer at most.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub max_entries: Option<u32>,
+}
+
+impl AnnouncementsParams {
+    /// Every announcement `window` still holds.
+    #[must_use]
+    pub const fn new(window: WindowId) -> Self {
+        Self {
+            window,
+            since: None,
+            max_entries: None,
+        }
+    }
+
+    /// Only the announcements after `seq`.
+    #[must_use]
+    pub const fn since(mut self, seq: u64) -> Self {
+        self.since = Some(seq);
+        self
+    }
+
+    /// At most `max` announcements.
+    #[must_use]
+    pub const fn with_max_entries(mut self, max: u32) -> Self {
+        self.max_entries = Some(max);
+        self
+    }
+}
+
+/// What `semantics.announcements` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct AnnouncementJournal {
+    /// The announcements, oldest first.
+    pub entries: Vec<Announcement>,
+    /// Announcements after `since` the bounded journal no longer holds.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub dropped: u64,
+}
+
+impl AnnouncementJournal {
+    /// `entries`, oldest first, after `dropped` the journal no longer holds.
+    #[must_use]
+    pub const fn new(entries: Vec<Announcement>, dropped: u64) -> Self {
+        Self { entries, dropped }
+    }
+}
+
+/// `announcement`: the window spoke an announcement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct AnnouncementEvent {
+    /// The window.
+    pub window: WindowId,
+    /// What it said.
+    pub announcement: Announcement,
 }
