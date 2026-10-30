@@ -252,6 +252,14 @@ fn runner_teardown() {
                 capture_drop_panic_keeps_the_first_failure_and_still_flushes,
             ),
             (
+                "a_panicking_tap_handler_reports_once_and_the_next_tap_works",
+                a_panicking_tap_handler_reports_once_and_the_next_tap_works,
+            ),
+            (
+                "a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds",
+                a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds,
+            ),
+            (
                 "a_session_end_handler_panic_with_a_panicking_payload_refuses",
                 a_session_end_handler_panic_with_a_panicking_payload_refuses,
             ),
@@ -1638,4 +1646,175 @@ pub(crate) fn capture_drop_panic_keeps_the_first_failure_and_still_flushes() {
         report.teardown, TEARDOWN_ORDER,
         "the services, the pools and the loop's return followed the failure"
     );
+}
+
+/// The contained callback panics an application's frame-failure handler
+/// was told of, by their text.
+type CallbackPanics = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// An application config whose frame-failure handler records each
+/// `CallbackPanic` into `panics`.
+fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
+    let panics = std::sync::Arc::clone(panics);
+    AppConfig::new()
+        .with_exit_policy(ExitPolicy::OnLastWindowClosed)
+        .with_frame_failure_handler(flui_app::app::FrameFailureHandler::new(move |report| {
+            if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
+                panics
+                    .lock()
+                    .expect("BUG: the frame-failure handler does not panic")
+                    .push(message.to_string());
+            }
+        }))
+}
+
+/// Presses and releases a finger at `at` in `window`, the application's turn
+/// running after each.
+fn tap(
+    run: &flui_app::testing::HeadlessRunHandle,
+    window: &flui_native::MockWindow,
+    at: flui_foundation::geometry::Offset<f64>,
+) {
+    use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
+    for event in [
+        make_down_event(at, PointerKind::Touch).expect("a finite position"),
+        make_up_event(at, PointerKind::Touch).expect("a finite position"),
+    ] {
+        window.inject_event(flui_platform::PlatformInput::Pointer(event));
+        run.run_owner_turn();
+    }
+}
+
+/// R9: an application's tap handler that panics is contained at its own
+/// boundary: one report with the panic's text, the window stays, and the
+/// next tap reaches the handler.
+pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
+    let panics = CallbackPanics::default();
+    let taps = Rc::new(std::cell::Cell::new(0_u32));
+    let counted = Rc::clone(&taps);
+    let application = Application::new(move |_| {
+        let counted = Rc::clone(&counted);
+        flui_widgets::GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .on_tap(move |_| {
+                counted.set(counted.get() + 1);
+                assert!(counted.get() > 1, "the first tap's handler failed");
+            })
+            .child(flui_widgets::SizedBox::square(100.0))
+    })
+    .with_config(reporting_callback_panics(&panics));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    let at = flui_foundation::geometry::Offset::new(10.0, 10.0);
+
+    tap(&run, &window, at);
+    run.run_owner_turn();
+    assert_eq!(taps.get(), 1, "the first tap reached the handler");
+    assert_eq!(
+        *panics.lock().expect("unpoisoned"),
+        ["the first tap's handler failed"],
+        "one report, with the panic's text"
+    );
+
+    tap(&run, &window, at);
+    run.run_owner_turn();
+    assert_eq!(taps.get(), 2, "the next tap reached the handler");
+    assert_eq!(
+        panics.lock().expect("unpoisoned").len(),
+        1,
+        "no second report"
+    );
+    assert!(run.is_running(), "the application still runs");
+    run.join().expect("the run returns Ok");
+}
+
+/// A state that schedules a post-frame callback which panics, and keeps its
+/// post-frame handle for the test.
+#[derive(Clone)]
+struct PostFramePanics {
+    handle: Rc<RefCell<Option<flui_view::PostFrameHandle>>>,
+}
+
+struct PostFramePanicsState {
+    view: PostFramePanics,
+}
+
+impl flui_view::StatefulView for PostFramePanics {
+    type State = PostFramePanicsState;
+
+    fn create_state(&self) -> Self::State {
+        PostFramePanicsState { view: self.clone() }
+    }
+}
+
+impl flui_view::ViewState<PostFramePanics> for PostFramePanicsState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let handle = ctx.post_frame_handle().expect("a frame scheduler");
+        handle
+            .schedule(|_| panic!("the post-frame callback failed"))
+            .expect("the scheduler takes the callback");
+        self.view.handle.replace(Some(handle));
+    }
+
+    fn build(
+        &self,
+        _view: &PostFramePanics,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for PostFramePanics {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// R9: a post-frame callback that panics is contained at its own boundary:
+/// one report with the panic's text, and the next frame still runs the
+/// callbacks scheduled for it.
+pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds() {
+    let panics = CallbackPanics::default();
+    let handle = Rc::new(RefCell::new(None));
+    let view = PostFramePanics {
+        handle: Rc::clone(&handle),
+    };
+    let application =
+        Application::new(move |_| view.clone()).with_config(reporting_callback_panics(&panics));
+    let run = HeadlessRun::start(application);
+    run.run_owner_turn();
+    assert_eq!(
+        *panics.lock().expect("unpoisoned"),
+        ["the post-frame callback failed"],
+        "one report, with the panic's text"
+    );
+
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    let ran = Rc::new(std::cell::Cell::new(false));
+    let marked = Rc::clone(&ran);
+    handle
+        .borrow()
+        .as_ref()
+        .expect("init_state kept the handle")
+        .schedule(move |_| marked.set(true))
+        .expect("the scheduler still takes callbacks");
+    flui_platform::PlatformWindow::request_redraw(&window);
+    run.run_owner_turn();
+    assert!(ran.get(), "the next frame ran its post-frame callback");
+    assert_eq!(
+        panics.lock().expect("unpoisoned").len(),
+        1,
+        "no second report"
+    );
+    run.join().expect("the run returns Ok");
 }

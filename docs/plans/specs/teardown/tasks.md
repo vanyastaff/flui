@@ -220,7 +220,7 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6, R9, R11 `user_panic_exit_code_matrix`, строки с паникой в
+  Остаток T9: R6, R11 `user_panic_exit_code_matrix`, строки с паникой в
   маршрутизации `flui-app`.
   - [x] Паника приложения в `AppHandler::session_end` и `AppHandler::host_notice`: таблица
     `a_notice_subscriber_panic_never_leaves_the_handler` (`runner_teardown`; запрос, завершение,
@@ -234,6 +234,11 @@ graph LR
     сдержанную панику своей ошибкой: остальные `dispose` выполнены, у последнего окна — 101 после
     сброса. Зубы: без этого R12 падает (`Returned`). R13 — характеризация: захват наблюдателя
     жизненного цикла падает раньше дерева, дерево удерживается, `dispose` не вызывается.
+  - [x] R9 (headless): `a_panicking_tap_handler_reports_once_and_the_next_tap_works` и
+    `a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds` (`runner_teardown`):
+    один отчёт `CallbackPanic` с текстом паники, приложение живо, следующий тап доходит до
+    обработчика, следующий кадр выполняет свои post-frame callbacks. Характеризация: границы
+    сдерживания уже есть. Нативная строка 5 (`save-panic`) — в T19.
 - [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
   `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
   задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
