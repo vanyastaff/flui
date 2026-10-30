@@ -3801,9 +3801,11 @@ route's scope, so a key never reaches the page a push covers or the page a pop i
 A navigator's first route takes no focus (the first Tab enters it). A route's first entry
 is a provisional focus, which an `autofocus` control in its page replaces until the user
 moves the focus; returning to a route restores the focus it had and that is final, so a
-late `autofocus` does not take it back. The route's scope answers `BackIntent` (pop, declined
+late `autofocus` does not take it back. The route's key actions answer `BackIntent` (pop, declined
 at the bottom of the stack) and, for a dismissible barrier, `DismissIntent`, so Escape never
-pops a page. `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
+pops a page. They sit around the route's scope, not inside it, so they answer with the focus on
+the scope itself, as it is on a page with nothing focusable (an `ErrorView` in place of a page
+whose build failed). `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
 disable or restore, so none of this applies to it, and an app that wants keyboard
 navigation across screens uses `PageRoute`. Giving it a scope would make it a second
 `ModalRoute` without a barrier or animation. For that reason `WidgetsApp` seeds its home
