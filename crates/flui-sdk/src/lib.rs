@@ -212,6 +212,16 @@ pub mod interaction {
         pub use flui_interaction::drag::SpringLoading;
         pub use flui_platform::data_transfer::TransferActions;
     }
+
+    /// What a text widget's store is built from (ADR-0151 §6): the lock
+    /// arbiter that decides when a platform grant runs, the ledger of the
+    /// committed text and the count of application edits.
+    pub mod text_input {
+        pub use flui_interaction::text_input::CompositionLedger;
+        pub use flui_interaction::text_input::EditGeneration;
+        pub use flui_interaction::text_input::LockArbiter;
+        pub use flui_interaction::text_input::committed_text;
+    }
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.

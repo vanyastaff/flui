@@ -7,13 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Bounds;
+use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::{
     ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-    TextStoreObserver, TextStoreStatus,
+    CommitGate, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError, TextStoreObserver,
+    TextStoreStatus,
 };
 
 #[derive(Default)]

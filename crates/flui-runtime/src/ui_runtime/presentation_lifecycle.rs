@@ -931,9 +931,9 @@ mod tests {
     /// Red-check: drop the commit from `commit_composition_for_close` — the
     /// store is still composing.
     fn an_accepted_close_commits_the_preedit_before_the_guard() {
+        use flui_interaction::testing::InMemoryTextStore;
         use flui_platform::text_store::{
-            Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore,
-            Utf16Offset, Utf16Range,
+            Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =

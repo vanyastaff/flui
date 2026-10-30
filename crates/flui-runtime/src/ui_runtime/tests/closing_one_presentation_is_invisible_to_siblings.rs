@@ -1038,7 +1038,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     assert!(focused.has_primary_focus());
 
     let input = ui_runtime.text_input_handle();
-    let store: Rc<dyn TextStore> = flui_platform::text_store::InMemoryTextStore::new("editing");
+    let store: Rc<dyn TextStore> = flui_interaction::testing::InMemoryTextStore::new("editing");
     let opaque_drops = Arc::new(AtomicUsize::new(0));
     let bundle = DropCompetition {
         first: CursorCapture {
@@ -1202,7 +1202,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                     },
                 };
                 let store: Rc<dyn TextStore> =
-                    flui_platform::text_store::InMemoryTextStore::new("rejected");
+                    flui_interaction::testing::InMemoryTextStore::new("rejected");
                 let client =
                     flui_interaction::TextInputClient::new(store).on_session_start(move || {
                         let _ = (&bundle.first, &bundle.second);

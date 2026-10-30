@@ -43,6 +43,11 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`interaction::text_input` holds what a text widget's store is built from: the
+lock arbiter, the composition ledger, `committed_text` and the edit count,
+which left the platform contract because only text widgets call them
+(ADR-0151 §6). A package's text field embeds them through the SDK alone.
+
 `painting::SemanticsRegion` and `painting::SemanticsRegionKey` name the values
 returned by `widgets::CustomPainter::semantics_regions` (ADR-0223). A package
 can implement that trait using only the SDK, with configuration from the

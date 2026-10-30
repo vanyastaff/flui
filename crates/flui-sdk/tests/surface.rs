@@ -88,6 +88,10 @@ mod measured {
         PointerId as _, PointerKind as _, PointerKindSet as _, PrimaryContact as _,
         RejectionReason as _, SequencedBranch as _, cancel_all as _,
     };
+    // What a text widget's store is built from (ADR-0151 §6).
+    use flui_sdk::interaction::text_input::{
+        CompositionLedger as _, EditGeneration as _, LockArbiter as _, committed_text as _,
+    };
     // The slot locks and the swipe the placement table puts in the SDK.
     use flui_sdk::interaction::{
         AxisLock as _, PhysicalEdge as _, SwipeDetails as _, SwipeGestureRecognizer as _,
@@ -443,6 +447,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod pipeline {",
         "pub mod platform {",
         "pub mod rendering {",
+        "pub mod text_input {",
         "pub mod view {",
         "pub use flui_animation as animation;",
         "pub use flui_foundation as foundation;",
@@ -515,6 +520,10 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::gesture::PanClaim;",
         "pub use flui_interaction::gesture::RejectionReason;",
         "pub use flui_interaction::gesture::SequencedBranch;",
+        "pub use flui_interaction::text_input::CompositionLedger;",
+        "pub use flui_interaction::text_input::EditGeneration;",
+        "pub use flui_interaction::text_input::LockArbiter;",
+        "pub use flui_interaction::text_input::committed_text;",
         "pub use flui_objects::PathClipConfiguration;",
         "pub use flui_objects::RenderPhysicalShape;",
         "pub use flui_objects::TranslationFraction;",

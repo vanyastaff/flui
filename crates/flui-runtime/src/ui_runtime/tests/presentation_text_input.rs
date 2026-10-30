@@ -1,6 +1,5 @@
-use flui_platform::text_store::{
-    InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
-};
+use flui_interaction::testing::InMemoryTextStore;
+use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError};
 
 use super::*;
 

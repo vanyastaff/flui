@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::testing::InMemoryTextStore;
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange,
-    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
-    TextStoreStatus, project_ime_event,
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore,
+    TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    project_ime_event,
 };
 use flui_platform::{ImeEvent, PlatformTextInput};
 use flui_widgets::{EditableText, TextEditingController};
