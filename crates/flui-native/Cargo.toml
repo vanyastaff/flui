@@ -198,6 +198,8 @@ block2.workspace = true
 core-foundation = { workspace = true }
 objc2-app-kit = { workspace = true, features = [
     "objc2-core-foundation",
+    # `NSEvent`'s local monitor, the route of a key release under Command.
+    "block2",
     "NSApplication",
     "NSGraphicsContext",
     "NSRunningApplication",

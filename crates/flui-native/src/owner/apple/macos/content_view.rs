@@ -937,14 +937,6 @@ fn view_class() -> &'static AnyClass {
             Bool::YES
         }
 
-        // `flagsChanged:` — modifier state is carried on every converted
-        // event, so flag-only transitions are observed but not dispatched.
-        extern "C-unwind" fn flags_changed(_this: &AnyObject, _sel: Sel, _event: *mut AnyObject) {
-            os_entry("flagsChanged:", (), AfterPanic::Answer(|()| ()), || {
-                tracing::trace!("Modifier flags changed");
-            });
-        }
-
         // A context whose teardown panics is contained apart, so the
         // mandatory super `dealloc` still runs after it.
         extern "C-unwind" fn dealloc(this: &AnyObject, _sel: Sel) {
@@ -1018,12 +1010,12 @@ fn view_class() -> &'static AnyClass {
                 sel!(keyUp:),
                 key_up as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
-            builder.add_method(
-                sel!(flagsChanged:),
-                flags_changed as extern "C-unwind" fn(_, _, *mut AnyObject),
-            );
-
+            // A modifier key is a key event of its own (the input reads
+            // whether it went down from the flags); `mouseCancelled:` takes a
+            // press back.
             for event in [
+                sel!(flagsChanged:),
+                sel!(mouseCancelled:),
                 sel!(mouseDown:),
                 sel!(mouseUp:),
                 sel!(mouseMoved:),

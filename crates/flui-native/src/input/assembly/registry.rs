@@ -997,6 +997,17 @@ impl ContactRegistry {
                 }
             }
             ReadingAction::Move => {
+                if let Some(reported) = reading.buttons
+                    && contact.buttons.forget_lost_releases(reported)
+                {
+                    // Where the release happened is unknown: the press is
+                    // taken back, not completed here.
+                    contact.origin = None;
+                    contact.buttons.clear();
+                    output.push(PlatformInput::Pointer(PointerEvent::Cancel(
+                        PointerCancel::new(info, time, CancelReason::Platform),
+                    )));
+                }
                 if let Some(sample) = measured.sample {
                     let held = reading.buttons.unwrap_or(contact.buttons.held());
                     let mut movement =
