@@ -24,6 +24,15 @@ mod runner_frame_ordering;
 #[path = "runner_teardown.rs"]
 mod runner_teardown;
 
+// The same kit, with a main window that renders with its stand-in renderer.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "runner_close.rs"]
+mod runner_close;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases

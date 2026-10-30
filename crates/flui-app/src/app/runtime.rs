@@ -322,6 +322,13 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) main_controller: Option<super::runner::main_window::MainController>,
+    /// Where this loop's windows get their renderers.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) window_renderers: super::runner::window_renderer::WindowRenderers,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
     #[cfg(target_os = "ios")]
@@ -487,6 +494,12 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_controller: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            window_renderers: super::runner::window_renderer::WindowRenderers::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,
             #[cfg(target_os = "ios")]

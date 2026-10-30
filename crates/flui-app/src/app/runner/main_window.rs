@@ -2,6 +2,7 @@
 #[cfg(test)]
 #[path = "host_delivery_tests.rs"]
 mod host_delivery_tests;
+use super::window_renderer::WindowRenderers;
 use super::{
     desktop::{RenderedMain, install_desktop_window},
     host::{
@@ -698,7 +699,7 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    start_loop(application, platform, Rc::default())?.finish()
+    start_loop(application, platform, Rc::default(), WindowRenderers::Gpu)?.finish()
 }
 
 /// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
@@ -754,11 +755,13 @@ impl StartedLoop {
 
 /// Run `application` on the platform `platform` makes, up to the point
 /// [`Platform::run`](flui_native::Platform::run) returns, writing each
-/// teardown step that ends to `teardown_log`, on unwind too.
+/// teardown step that ends to `teardown_log`, on unwind too. Its windows
+/// render with what `renderers` builds.
 pub(crate) fn start_loop<V, F>(
     application: Application<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
+    renderers: WindowRenderers,
 ) -> Result<StartedLoop, AppRunError>
 where
     V: View + Clone + 'static,
@@ -798,6 +801,7 @@ where
                 let mut runtime = slot.borrow_mut();
                 runtime.main_ingress = Some(Arc::clone(&ingress));
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
+                runtime.window_renderers = renderers;
                 if let Some(executors) = config.executors.clone() {
                     runtime.install_host_executors(executors);
                 }
