@@ -50,7 +50,7 @@ use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
 use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
-use crate::window_target::WindowTarget;
+use crate::window_target::{TargetDisplay, WindowTarget};
 
 /// `DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: the statistics broke off (a mode
 /// change, a move to another output), so what came before does not compare.
@@ -1544,15 +1544,42 @@ impl Renderer {
         wgpu::Device,
         wgpu::Queue,
     )> {
+        // EGL picks its display when the instance is created, so the GL
+        // backend presents to a Wayland or X11 window only when the instance
+        // is given that window's display; the other backends ignore it.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: attempt.backends,
             backend_options: wgpu::BackendOptions {
                 dx12: dx12_options,
                 ..Default::default()
             },
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(TargetDisplay(
+                Arc::clone(target),
+            )))
         });
 
+        // A canvas keeps the first context kind it hands out, so on the web
+        // WebGPU gets its device before it claims the canvas: a browser that
+        // exposes WebGPU but refuses the adapter or device leaves the canvas
+        // free for WebGL2. Elsewhere the surface comes first, so the adapter
+        // chosen is one that can present to it.
+        if attempt.backend == crate::gpu_backend::GpuBackend::WebGpu {
+            let (adapter, capabilities, device, queue) =
+                Self::adapter_and_device(&instance, attempt, None).await?;
+            let surface = Self::create_target_surface(&instance, target)?;
+            return Ok((instance, surface, adapter, capabilities, device, queue));
+        }
+        let surface = Self::create_target_surface(&instance, target)?;
+        let (adapter, capabilities, device, queue) =
+            Self::adapter_and_device(&instance, attempt, Some(&surface)).await?;
+        Ok((instance, surface, adapter, capabilities, device, queue))
+    }
+
+    /// The surface over `target` on `instance`.
+    fn create_target_surface(
+        instance: &wgpu::Instance,
+        target: &Arc<dyn WindowTarget>,
+    ) -> EngineResult<wgpu::Surface<'static>> {
         // Create the surface through wgpu's SAFE owned-target path (issue
         // #1043): `Arc<dyn WindowTarget>` satisfies wgpu's
         // `DisplayAndWindowHandle + 'static` bound through raw-window-handle
@@ -1564,10 +1591,18 @@ impl Renderer {
         // No `unsafe` block: the old unsafe raw-handle surface-creation call
         // and the newtype that narrowed its two handle fields are both gone
         // from this crate, and its `deny(unsafe_code)` keeps them out.
-        let surface: wgpu::Surface<'static> = instance
+        instance
             .create_surface(Arc::clone(target))
-            .map_err(EngineError::surface_creation)?;
+            .map_err(EngineError::surface_creation)
+    }
 
+    /// The adapter `attempt` asks `instance` for, one that can present to
+    /// `surface` when one is given, and its device.
+    async fn adapter_and_device(
+        instance: &wgpu::Instance,
+        attempt: crate::gpu_backend::Attempt,
+        surface: Option<&wgpu::Surface<'static>>,
+    ) -> EngineResult<(wgpu::Adapter, GpuCapabilities, wgpu::Device, wgpu::Queue)> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 // WARP is asked for by name: the software adapter is this
@@ -1575,7 +1610,7 @@ impl Renderer {
                 force_fallback_adapter: attempt.software,
                 ..crate::adapter::trusted_adapter_options(
                     wgpu::PowerPreference::HighPerformance,
-                    Some(&surface),
+                    surface,
                 )
             })
             .await
@@ -1584,7 +1619,7 @@ impl Renderer {
         let capabilities = GpuCapabilities::detect(&adapter);
         let (device, queue) =
             crate::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
-        Ok((instance, surface, adapter, capabilities, device, queue))
+        Ok((adapter, capabilities, device, queue))
     }
 
     /// Installs diagnostic callbacks on a freshly created device.
@@ -1687,9 +1722,9 @@ impl Renderer {
     /// with `LimitsExceeded` on that platform. Requesting a limit above the
     /// adapter's own can never succeed — the adapter's `Limits` are what
     /// `request_device` validates against — so the engine takes the adapter's
-    /// value wherever the default exceeds it. The `max_texture_dimension_2d`
-    /// clamp below has always worked this way; the rest of the struct simply
-    /// had not met an adapter small enough to need it.
+    /// value wherever the default exceeds it, as the GLES 3.0 and WebGL2
+    /// fallback adapters (ADR-0244 §1) do for every storage and compute
+    /// limit.
     pub(super) fn required_limits(
         capabilities: &GpuCapabilities,
         adapter_limits: &wgpu::Limits,
@@ -1704,15 +1739,11 @@ impl Renderer {
             limits.max_immediate_size = 128;
         }
 
-        // Never ask for more than the adapter offers. `min` per field rather
-        // than a whole-struct `min` so a future field added to `Limits` is
-        // covered by the default `..default()` and this line keeps the ones
-        // that matter honest.
-        limits.max_inter_stage_shader_variables = limits
-            .max_inter_stage_shader_variables
-            .min(adapter_limits.max_inter_stage_shader_variables);
-
-        limits
+        // Never ask for more than the adapter offers, field by field: a
+        // GLES 3.0 or WebGL2 adapter has no storage buffers, storage textures
+        // or compute, which the desktop default asks for, and the engine
+        // uses none of them.
+        limits.or_worse_values_from(adapter_limits)
     }
 
     /// Select present mode based on capabilities.

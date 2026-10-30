@@ -47,6 +47,27 @@ impl<T> WindowTarget for T where
 {
 }
 
+/// A target's display, the connection a wgpu instance is created on.
+///
+/// wgpu wants the display as a `Debug` value of its own, which an
+/// `Arc<dyn WindowTarget>` is not; holding the `Arc` keeps the display open
+/// for as long as the instance lives.
+pub(crate) struct TargetDisplay(pub(crate) std::sync::Arc<dyn WindowTarget>);
+
+impl std::fmt::Debug for TargetDisplay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TargetDisplay")
+    }
+}
+
+impl HasDisplayHandle for TargetDisplay {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.0.display_handle()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
