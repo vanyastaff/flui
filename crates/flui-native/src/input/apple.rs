@@ -548,7 +548,7 @@ pub mod keys {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod wheel {
     //! AppKit's wheel step. An `NSEvent`'s `scrollingDeltaX` and
     //! `scrollingDeltaY` move the content, in points when the device reports
@@ -654,6 +654,154 @@ pub(crate) mod force {
             click.pressure_event(1, 0.5);
             click.reset();
             assert_eq!(click.drag(), None, "the next click starts unread");
+        }
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod indirect {
+    //! An iPad's trackpad and mouse, as UIKit's gesture recognizers report
+    //! them. A recognizer reports a value cumulative since its gesture began
+    //! (a pan's translation, a pinch's scale, a rotation's angle) where the
+    //! assembly takes each event's change, so each gesture keeps the value it
+    //! last reported.
+
+    #![forbid(unsafe_code)]
+
+    use crate::input::assembly::GesturePhase;
+
+    /// Where a recognizer's gesture is, from its state: `None` for a state
+    /// that reports nothing (possible, failed).
+    pub(crate) fn phase(state: isize) -> Option<GesturePhase> {
+        // UIGestureRecognizerState: possible, began, changed, ended,
+        // cancelled, failed.
+        match state {
+            1 => Some(GesturePhase::Began),
+            2 => Some(GesturePhase::Changed),
+            3 => Some(GesturePhase::Ended),
+            4 => Some(GesturePhase::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// The last cumulative value of each indirect gesture.
+    #[derive(Debug, Default)]
+    pub(crate) struct IndirectGestures {
+        translation: Option<(f64, f64)>,
+        scale: Option<f64>,
+        rotation: Option<f64>,
+    }
+
+    impl IndirectGestures {
+        /// A pan's change in `phase` to `translation`; a non-finite
+        /// translation moves nothing.
+        pub(crate) fn translate(
+            &mut self,
+            phase: GesturePhase,
+            translation: (f64, f64),
+        ) -> (f64, f64) {
+            let last = self.translation.unwrap_or((0.0, 0.0));
+            let finite = translation.0.is_finite() && translation.1.is_finite();
+            let now = if finite { translation } else { last };
+            self.translation = keep(phase, now);
+            (now.0 - last.0, now.1 - last.1)
+        }
+
+        /// A pinch's change in `phase` to `scale`, as a ratio; a scale that
+        /// is not positive and finite changes nothing.
+        pub(crate) fn scale(&mut self, phase: GesturePhase, scale: f64) -> f64 {
+            let last = self.scale.unwrap_or(1.0);
+            let now = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                last
+            };
+            self.scale = keep(phase, now);
+            now / last
+        }
+
+        /// A rotation's change in `phase` to `radians`, clockwise.
+        pub(crate) fn rotate(&mut self, phase: GesturePhase, radians: f64) -> f64 {
+            let last = self.rotation.unwrap_or(0.0);
+            let now = if radians.is_finite() { radians } else { last };
+            self.rotation = keep(phase, now);
+            now - last
+        }
+    }
+
+    /// The value a gesture keeps after `phase`: none once it is over.
+    fn keep<T>(phase: GesturePhase, value: T) -> Option<T> {
+        matches!(phase, GesturePhase::Began | GesturePhase::Changed).then_some(value)
+    }
+
+    /// The button an indirect press is, from its event's `buttonMask`.
+    pub(crate) fn button(mask: isize) -> flui_platform::pointer::PointerButton {
+        use flui_platform::pointer::PointerButton;
+        // UIEventButtonMask: primary 1 << 0, secondary 1 << 1.
+        if mask & 0b10 != 0 && mask & 0b01 == 0 {
+            PointerButton::SECONDARY
+        } else {
+            PointerButton::PRIMARY
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{IndirectGestures, button, phase};
+        use crate::input::assembly::GesturePhase::{Began, Cancelled, Changed, Ended};
+        use flui_platform::pointer::PointerButton;
+
+        #[test]
+        fn cumulative_recognizer_values_become_changes() {
+            let mut gestures = IndirectGestures::default();
+            assert_eq!(gestures.translate(Began, (2.0, -1.0)), (2.0, -1.0));
+            assert_eq!(gestures.translate(Changed, (5.0, -1.0)), (3.0, 0.0));
+            assert_eq!(
+                gestures.translate(Changed, (f64::NAN, 0.0)),
+                (0.0, 0.0),
+                "no reading"
+            );
+            assert_eq!(gestures.translate(Ended, (6.0, 1.0)), (1.0, 2.0));
+            assert_eq!(
+                gestures.translate(Began, (1.0, 1.0)),
+                (1.0, 1.0),
+                "the next pan starts from rest"
+            );
+
+            assert_eq!(gestures.scale(Began, 2.0), 2.0);
+            assert_eq!(gestures.scale(Changed, 3.0), 1.5);
+            assert_eq!(gestures.scale(Changed, 0.0), 1.0, "no reading");
+            assert_eq!(gestures.scale(Cancelled, 1.5), 0.5);
+            assert_eq!(gestures.scale(Began, 1.25), 1.25);
+
+            assert_eq!(gestures.rotate(Began, 0.5), 0.5);
+            assert_eq!(gestures.rotate(Changed, 0.25), -0.25);
+            assert_eq!(gestures.rotate(Ended, 0.25), 0.0);
+            assert_eq!(gestures.rotate(Began, 0.1), 0.1);
+        }
+
+        #[test]
+        fn recognizer_states_and_buttons_read_as_uikit_documents_them() {
+            let phases = [0, 1, 2, 3, 4, 5].map(phase);
+            assert_eq!(
+                phases,
+                [
+                    None,
+                    Some(Began),
+                    Some(Changed),
+                    Some(Ended),
+                    Some(Cancelled),
+                    None
+                ]
+            );
+            assert_eq!(button(0b01), PointerButton::PRIMARY);
+            assert_eq!(button(0b10), PointerButton::SECONDARY);
+            assert_eq!(
+                button(0b11),
+                PointerButton::PRIMARY,
+                "the first press leads"
+            );
+            assert_eq!(button(0), PointerButton::PRIMARY, "no mask: a tap");
         }
     }
 }
@@ -1303,10 +1451,14 @@ pub(crate) mod ios {
     // which has no safe wrapper.
     #![expect(unsafe_code)]
 
+    use std::num::NonZeroU64;
     use std::time::Duration;
 
     use flui_platform::EventTime;
-    use flui_platform::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
+    use flui_platform::pointer::{
+        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerPosition, PointerRole, ScrollEvent,
+    };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
     use objc2_foundation::NSProcessInfo;
@@ -1315,17 +1467,25 @@ pub(crate) mod ios {
         UITouchType, UITraitEnvironment, UIView,
     };
 
+    use crate::input::apple::indirect::IndirectGestures;
     use crate::input::assembly::{
-        ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
-        NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+        ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
+        GestureReading, NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface,
+        NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading,
+        decode,
     };
-    use crate::owner::apple::ios::{TouchPhase, ViewTouches};
+    use crate::owner::apple::ios::{TouchPhase, TrackpadGesture, ViewTouches};
     use flui_platform::PlatformInput;
 
     /// The view's touches are its input's: each view keeps its own contacts.
     impl ViewTouches for TouchInputState {
-        fn touch(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
-            self.convert(touch, phase)
+        fn touch(
+            &mut self,
+            touch: &UITouch,
+            phase: TouchPhase,
+            buttons: isize,
+        ) -> Vec<PlatformInput> {
+            self.convert(touch, phase, buttons)
         }
 
         fn hover(
@@ -1336,6 +1496,16 @@ pub(crate) mod ios {
         ) -> Vec<PlatformInput> {
             TouchInputState::hover(self, recognizer, view, stamp)
         }
+
+        fn trackpad(
+            &mut self,
+            gesture: TrackpadGesture,
+            state: isize,
+            location: (f64, f64),
+            stamp: Option<f64>,
+        ) -> Vec<PlatformInput> {
+            TouchInputState::trackpad(self, gesture, state, location, stamp)
+        }
     }
 
     /// The primary Pencil: its hover and its contact are one contact, which keeps
@@ -1344,12 +1514,21 @@ pub(crate) mod ios {
     /// The indirect pointer (a trackpad or mouse cursor): one contact for every
     /// `UITouch` UIKit makes for it.
     const CURSOR: NativeContact = NativeContact(1);
+    /// The trackpad's pinch and rotation, one session. A touch's contact is
+    /// its address, which is never 2.
+    const TRACKPAD: NativeContact = NativeContact(2);
 
     /// Contacts admitted by one UIKit view; no address arithmetic mints identities.
     pub(crate) struct TouchInputState {
         contacts: ContactRegistry,
         /// The touch the primary Pencil's contact is, while its tip is down.
         pencil_touch: Option<usize>,
+        /// The button the indirect pointer holds, from its press to its release.
+        cursor_button: Option<PointerButton>,
+        /// The trackpad's two-finger scrolls.
+        scrolling: ScrollPhases,
+        /// The last value each indirect gesture reported.
+        indirect: IndirectGestures,
     }
 
     impl Default for TouchInputState {
@@ -1365,6 +1544,9 @@ pub(crate) mod ios {
             Self {
                 contacts: ContactRegistry::new(clock).with_reserved_contact(PENCIL),
                 pencil_touch: None,
+                cursor_button: None,
+                scrolling: ScrollPhases::default(),
+                indirect: IndirectGestures::default(),
             }
         }
     }
@@ -1438,7 +1620,131 @@ pub(crate) mod ios {
             events
         }
 
-        pub(crate) fn convert(&mut self, touch: &UITouch, phase: TouchPhase) -> Vec<PlatformInput> {
+        /// An indirect gesture: a two-finger scroll is phased scroll, a pinch
+        /// and a rotation are one trackpad session, and the cursor's hover
+        /// enters, moves and leaves while no button is held.
+        pub(crate) fn trackpad(
+            &mut self,
+            gesture: TrackpadGesture,
+            state: isize,
+            (x, y): (f64, f64),
+            stamp: Option<f64>,
+        ) -> Vec<PlatformInput> {
+            let Some(phase) = crate::input::apple::indirect::phase(state) else {
+                return Vec::new();
+            };
+            let reading_time = match stamp {
+                Some(uptime) => ReadingTime::coarse(NativeTime::UptimeSeconds(uptime)),
+                None => {
+                    ReadingTime::epoch(EventTime::from_nanos(crate::input::event_timestamp_ns()))
+                }
+            };
+            let placed = |reading: NativeReading| {
+                if x.is_finite() && y.is_finite() {
+                    reading.at(x, y, 1.0)
+                } else {
+                    reading
+                }
+            };
+            let (component, delta) = match gesture {
+                TrackpadGesture::Scroll { translation } => {
+                    let (dx, dy) = self.indirect.translate(phase, translation);
+                    return self.trackpad_scroll(phase, (dx, dy), (x, y), reading_time);
+                }
+                TrackpadGesture::Pinch { scale } => (
+                    GestureComponent::Scale,
+                    GestureDelta::Scale(self.indirect.scale(phase, scale)),
+                ),
+                TrackpadGesture::Rotation { radians } => (
+                    GestureComponent::Rotation,
+                    GestureDelta::Rotation(self.indirect.rotate(phase, radians)),
+                ),
+                TrackpadGesture::Hover => {
+                    // A held button makes the cursor's moves the press's own.
+                    if self.cursor_button.is_some() {
+                        return Vec::new();
+                    }
+                    let cursor = |action| {
+                        placed(
+                            NativeReading::new(CURSOR, PointerKind::Mouse, action, reading_time)
+                                .with_primary(true),
+                        )
+                    };
+                    return match phase {
+                        GesturePhase::Began => {
+                            let mut events = self.assemble(&cursor(ReadingAction::Enter));
+                            events.extend(self.assemble(&cursor(ReadingAction::Move)));
+                            events
+                        }
+                        GesturePhase::Changed => self.assemble(&cursor(ReadingAction::Move)),
+                        GesturePhase::Ended | GesturePhase::Cancelled => {
+                            self.assemble(&cursor(ReadingAction::Leave))
+                        }
+                    };
+                }
+            };
+            let reading = placed(
+                NativeReading::new(
+                    TRACKPAD,
+                    PointerKind::Trackpad,
+                    ReadingAction::Gesture(GestureReading {
+                        component,
+                        phase,
+                        delta,
+                    }),
+                    reading_time,
+                )
+                .with_primary(true),
+            );
+            self.assemble(&reading)
+        }
+
+        /// One step of a two-finger scroll, `delta` in view points the
+        /// content moves.
+        fn trackpad_scroll(
+            &mut self,
+            phase: GesturePhase,
+            (dx, dy): (f64, f64),
+            (x, y): (f64, f64),
+            reading_time: ReadingTime,
+        ) -> Vec<PlatformInput> {
+            let Some(owned) = self.scrolling.phase(
+                NativeSurface::default(),
+                None,
+                ScrollReading::fingers(phase, true),
+            ) else {
+                return Vec::new();
+            };
+            let Ok(position) =
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+            else {
+                return Vec::new();
+            };
+            let time = self
+                .contacts
+                .clock()
+                .stamp(reading_time, ClockChoice::Coarse)
+                .unwrap_or_else(|| EventTime::from_nanos(crate::input::event_timestamp_ns()));
+            let pointer = self
+                .contacts
+                .pointer(NativeSurface::default(), None, CURSOR)
+                .unwrap_or_else(|| {
+                    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+                        .with_role(PointerRole::Primary)
+                });
+            let (delta, precision) = crate::input::apple::wheel::step(true, dx, dy);
+            let scroll = ScrollEvent::new(pointer, time, position, delta)
+                .with_precision(precision)
+                .with_phase(owned);
+            vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
+        }
+
+        pub(crate) fn convert(
+            &mut self,
+            touch: &UITouch,
+            phase: TouchPhase,
+            buttons: isize,
+        ) -> Vec<PlatformInput> {
             let address = std::ptr::from_ref(touch) as usize;
             let kind = pointer_kind(touch);
             let contact = if kind == PointerKind::Mouse {
@@ -1456,10 +1762,27 @@ pub(crate) mod ios {
             if contact == PENCIL && matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
                 self.pencil_touch = None;
             }
+            // An indirect press is the button its event names; a finger or a
+            // Pencil is the primary one.
+            let pressed = if contact == CURSOR {
+                match phase {
+                    TouchPhase::Down => {
+                        let button = crate::input::apple::indirect::button(buttons);
+                        self.cursor_button = Some(button);
+                        button
+                    }
+                    TouchPhase::Up | TouchPhase::Cancel => {
+                        self.cursor_button.take().unwrap_or(PointerButton::PRIMARY)
+                    }
+                    TouchPhase::Move => PointerButton::PRIMARY,
+                }
+            } else {
+                PointerButton::PRIMARY
+            };
             let action = match phase {
-                TouchPhase::Down => ReadingAction::Press(PointerButton::PRIMARY),
+                TouchPhase::Down => ReadingAction::Press(pressed),
                 TouchPhase::Move => ReadingAction::Move,
-                TouchPhase::Up => ReadingAction::Release(PointerButton::PRIMARY),
+                TouchPhase::Up => ReadingAction::Release(pressed),
                 TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
             };
             let view = touch.view();
