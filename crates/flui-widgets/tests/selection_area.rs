@@ -837,3 +837,135 @@ pub(crate) fn span_overrides_keep_their_reading_in_a_selection_area() {
         "the override is still the label"
     );
 }
+
+/// The `selection` property of every paragraph, sorted so the rows read
+/// independently of render-tree order.
+fn painted_selections(laid: &LaidOut) -> Vec<String> {
+    let mut selections: Vec<String> = laid
+        .find_all_by_render_type("RenderParagraph")
+        .into_iter()
+        .map(|id| {
+            laid.render_property(id, "selection")
+                .expect("a paragraph reports its selection")
+        })
+        .collect();
+    selections.sort();
+    selections
+}
+
+/// The selection highlights each text it covers, a text between its ends
+/// whole, and moves off the texts a later selection leaves.
+///
+/// Red-check: never hand the paragraphs their parts (every paragraph
+/// reports `None`).
+pub(crate) fn a_selection_highlights_the_parts_it_covers() {
+    let (area, _seen) = recorded_area(Column::new((
+        Text::new("Alpha beta"),
+        Text::new("Gamma delta"),
+        Text::new("Omega"),
+    )));
+    let mut laid = mounted(area);
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 6), at(last[0], 2)))
+        .expect("a selection across three texts is accepted");
+    laid.tick();
+    assert_eq!(
+        painted_selections(&laid),
+        ["Some(0..11)", "Some(0..2)", "Some(6..10)"],
+        "each text paints its part, the middle one whole"
+    );
+    laid.invoke_semantics_action(selection_request(last[0], at(last[0], 1), at(last[0], 4)))
+        .expect("a selection in one text is accepted");
+    laid.tick();
+    assert_eq!(
+        painted_selections(&laid),
+        ["None", "None", "Some(1..4)"],
+        "the texts the selection left paint nothing"
+    );
+}
+
+/// A text edited while selected highlights what it holds now: a text between
+/// the selection's ends stays covered whole, and the text the selection
+/// starts in stays covered to its end.
+///
+/// Red-check: hand the paragraphs parts bounded by their text at selection
+/// time (the edited texts keep `0..11` and `6..10`).
+pub(crate) fn an_edited_text_keeps_its_highlight_current() {
+    let view = |first: &str, middle: &str| {
+        SelectionArea::new(Column::new((
+            Text::new(first.to_owned()),
+            Text::new(middle.to_owned()),
+            Text::new("Omega"),
+        )))
+    };
+    let mut laid = mounted(view("Alpha beta", "Gamma delta"));
+    let (first, last) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        (
+            runs_of(&paragraph(state, "Alpha beta")),
+            runs_of(&paragraph(state, "Omega")),
+        )
+    };
+    laid.invoke_semantics_action(selection_request(first[0], at(first[0], 6), at(last[0], 2)))
+        .expect("a selection across three texts is accepted");
+    laid.tick();
+    laid.pump_widget(view("Alpha beta gamma", "Gamma delta epsilon"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["Some(0..19)", "Some(0..2)", "Some(6..16)"],
+        "the edited texts highlight their new text"
+    );
+    laid.pump_widget(view("Alpha", "Gamma"));
+    assert_eq!(
+        painted_selections(&laid),
+        ["None", "Some(0..2)", "Some(0..5)"],
+        "a text shrunk under the selection's start highlights nothing"
+    );
+}
+
+/// The highlight takes the area's own style, else the nearest
+/// `DefaultSelectionStyle`'s, else the default.
+///
+/// Red-check: ignore the area's own style (the first case paints the
+/// inherited colour).
+pub(crate) fn the_highlight_colour_follows_the_area_style() {
+    use flui_painting::styling::Color;
+    use flui_widgets::{DefaultSelectionStyle, SelectionStyle};
+
+    let own = SelectionStyle::new(Color::RED, Color::BLACK);
+    let inherited = SelectionStyle::new(Color::GREEN, Color::BLACK);
+    for (wrap, own_style, expected) in [
+        (true, true, own.active),
+        (true, false, inherited.active),
+        (false, false, SelectionStyle::default().active),
+    ] {
+        let area = SelectionArea::new(Text::new("Alpha"));
+        let area = if own_style { area.style(own) } else { area };
+        let mut laid = if wrap {
+            mounted(DefaultSelectionStyle::new(inherited, area))
+        } else {
+            mounted(area)
+        };
+        let runs = {
+            let tree = consumer(&laid);
+            runs_of(&paragraph(tree.state(), "Alpha"))
+        };
+        laid.invoke_semantics_action(selection_request(runs[0], at(runs[0], 0), at(runs[0], 3)))
+            .expect("a selection is accepted");
+        laid.tick();
+        let paragraph = laid.find_all_by_render_type("RenderParagraph")[0];
+        assert_eq!(
+            laid.render_property(paragraph, "selection_color"),
+            Some(format!("{expected:?}")),
+            "own style {own_style}, inherited {wrap}"
+        );
+    }
+}

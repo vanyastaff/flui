@@ -25,10 +25,12 @@ pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
-use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_interaction::CursorIcon;
+use flui_painting::styling::Color;
+use flui_painting::text_boundaries;
 use flui_painting::typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition};
-use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
+use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
     RenderResult,
@@ -69,6 +71,10 @@ pub struct RenderParagraph {
     /// The anchor a selection area registered this text under, while it is
     /// selectable: it then publishes its runs (ADR-0214).
     selectable: Option<SemanticsAnchor>,
+    /// The bytes of the text to highlight as selected, if any.
+    selection: Option<std::ops::Range<usize>>,
+    /// The highlight behind the selected glyphs.
+    selection_color: Color,
 }
 
 impl RenderParagraph {
@@ -86,6 +92,8 @@ impl RenderParagraph {
             shown_links_listener: None,
             shown_links: Vec::new(),
             selectable: None,
+            selection: None,
+            selection_color: Color::TRANSPARENT,
         }
     }
 
@@ -143,6 +151,85 @@ impl RenderParagraph {
     /// The anchor the text is selectable under, if it is.
     pub fn selectable(&self) -> Option<&SemanticsAnchor> {
         self.selectable.as_ref()
+    }
+
+    /// Highlights `selection`, bytes of the text, behind its glyphs, or no
+    /// part of it with `None`. The range is clamped to the laid-out text and
+    /// its ends moved to grapheme boundaries when painted; an empty range
+    /// paints nothing.
+    pub fn set_selection(
+        &mut self,
+        selection: Option<std::ops::Range<usize>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.selection == selection {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.selection = selection;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
+
+    /// The highlighted bytes, if any.
+    pub fn selection(&self) -> Option<std::ops::Range<usize>> {
+        self.selection.clone()
+    }
+
+    /// Sets the colour of the selection highlight; a transparent colour
+    /// paints none.
+    pub fn set_selection_color(&mut self, color: Color) -> flui_rendering::RenderUpdateImpact {
+        if self.selection_color == color {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.selection_color = color;
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|range| !range.is_empty())
+        {
+            flui_rendering::RenderUpdateImpact::PAINT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    /// The colour of the selection highlight.
+    pub fn selection_color(&self) -> Color {
+        self.selection_color
+    }
+
+    /// Paints the selection's boxes behind the glyphs, each once: with a
+    /// translucent colour an overlap would read darker.
+    fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let Some(range) = self.selection.as_ref() else {
+            return;
+        };
+        if range.is_empty() || self.selection_color.is_transparent() {
+            return;
+        }
+        let Some(span) = self.painter.text() else {
+            return;
+        };
+        let text = span.to_plain_text();
+        let snap = |byte: usize| {
+            let byte = byte.min(text.len());
+            if text_boundaries::is_grapheme_boundary(&text, byte) {
+                byte
+            } else {
+                text_boundaries::previous_grapheme_boundary(&text, byte)
+            }
+        };
+        let (start, end) = (snap(range.start), snap(range.end));
+        if start >= end {
+            return;
+        }
+        let paint = Paint::fill(self.selection_color);
+        let mut drawn: Vec<Rect> = Vec::new();
+        for text_box in self.painter.get_boxes_for_selection(start, end) {
+            if text_box.rect.is_empty() || drawn.contains(&text_box.rect) {
+                continue;
+            }
+            drawn.push(text_box.rect);
+            ctx.canvas().draw_rect(text_box.rect, &paint);
+        }
     }
 
     /// The laid-out text as runs, or `None` before layout. A run the
@@ -440,6 +527,8 @@ impl Diagnosticable for RenderParagraph {
                 .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
         );
         properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
+        properties.add("selection", format!("{:?}", self.selection));
+        properties.add("selection_color", format!("{:?}", self.selection_color));
         properties.add(
             "max_lines",
             self.painter
@@ -589,6 +678,7 @@ impl RenderBox for RenderParagraph {
         if !self.painter.has_layout() {
             return;
         }
+        self.paint_selection(ctx);
         self.painter.paint(ctx.canvas(), Offset::ZERO);
         // The ring follows each line of the focused link, just outside its
         // glyphs, so it covers none of them.
