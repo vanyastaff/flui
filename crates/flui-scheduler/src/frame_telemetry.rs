@@ -26,7 +26,7 @@
 //! allocates — a `Vec` built on the *consumer's* call, never on the frame
 //! path.
 
-use flui_foundation::PresentationId;
+use flui_foundation::PresentationAddress;
 use web_time::{Duration, Instant};
 
 use crate::frame::{FrameId, FramePhase};
@@ -67,7 +67,7 @@ pub const FRAME_HISTORY_CAPACITY: usize = 120;
 /// Scoped to the presentation whose clock minted it — two different
 /// presentations' `InputEpochId(0)` are not the same event. A consumer that
 /// needs process-wide uniqueness pairs this with the [`FrameSnapshot`] it
-/// was pulled alongside, whose own [`FrameSnapshot::presentation`] field
+/// was pulled alongside, whose own [`FrameSnapshot::address`] field
 /// names that presentation explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InputEpochId(u64);
@@ -218,15 +218,18 @@ pub enum PresentOutcome {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct FrameSnapshot {
-    /// Which presentation produced this frame. A UI runtime can host more than
-    /// one presentation, each with its own `FrameClock` and therefore its
-    /// own `frame_id` sequence — two different presentations' `frame_id`
-    /// values collide (both start counting from 1), so a consumer that
-    /// pulls snapshots across presentations (or exports them into one trace
-    /// file, as `flui-devtools`' `Timeline::record_frame_snapshots` does)
-    /// needs this to tell them apart. [`InputEpochId`]'s own doc makes the
+    /// Which UI runtime and presentation produced this frame. Each
+    /// presentation has its own `FrameClock` and therefore its own
+    /// `frame_id` sequence, so two presentations' `frame_id` values collide
+    /// (both start counting from 1); a `PresentationId` alone collides too,
+    /// across UI runtimes and their incarnations. The address's
+    /// `ui_runtime_id` is generational, unique per UI runtime incarnation,
+    /// so a consumer that pulls snapshots across windows (or exports them
+    /// into one trace file, as `flui-devtools`' `Timeline::record_frame_snapshots`
+    /// does) tells every frame's producer apart, and sees which UI runtime
+    /// made a frame slow (ADR-0266 §3). [`InputEpochId`]'s own doc makes the
     /// same point about pairing an epoch id with its presentation.
-    pub presentation: PresentationId,
+    pub address: PresentationAddress,
     /// This presentation's own produce-count-derived frame identity (see
     /// [`FrameClock::record_frame`](crate::frame_clock::FrameClock::record_frame)'s
     /// doc for why it is derived from `produced_count()` rather than a

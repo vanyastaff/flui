@@ -87,6 +87,9 @@ fn scoped_diagnostics_observes_a_callsite_first_used_without_a_subscriber() {
     );
 }
 
+#[path = "contracts/frame_telemetry.rs"]
+mod frame_telemetry;
+
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 

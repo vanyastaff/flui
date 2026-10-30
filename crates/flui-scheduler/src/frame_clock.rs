@@ -102,7 +102,7 @@ use crate::frame_telemetry::{
     FrameHistory, FramePhaseDurations, FrameSnapshot, InputEpochId, InputEpochs,
     PendingInputEpochs, PresentOutcome,
 };
-use flui_foundation::{ManualClock, MonotonicClock, PresentationId};
+use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress};
 use web_time::{Duration, Instant};
 
 bitflags::bitflags! {
@@ -907,12 +907,12 @@ impl FrameClock {
     /// caller can reach a submit point at all.
     pub fn record_frame(
         &self,
-        presentation: PresentationId,
+        address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow_mut().drain();
-        self.record_frame_with_epochs(presentation, times, present_outcome, input_epochs)
+        self.record_frame_with_epochs(address, times, present_outcome, input_epochs)
     }
 
     /// Like [`Self::record_frame`], but for a submit attempt that FAILED on
@@ -936,12 +936,12 @@ impl FrameClock {
     /// Same panic precondition as [`Self::record_frame`].
     pub fn record_frame_retaining_epochs(
         &self,
-        presentation: PresentationId,
+        address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow().peek();
-        self.record_frame_with_epochs(presentation, times, present_outcome, input_epochs)
+        self.record_frame_with_epochs(address, times, present_outcome, input_epochs)
     }
 
     /// Shared core of [`Self::record_frame`]/[`Self::record_frame_retaining_epochs`]:
@@ -957,7 +957,7 @@ impl FrameClock {
     /// that precondition always holds by the time either is reached.
     fn record_frame_with_epochs(
         &self,
-        presentation: PresentationId,
+        address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
         input_epochs: InputEpochs,
@@ -968,7 +968,7 @@ impl FrameClock {
              already incremented produced_count",
         );
         let snapshot = FrameSnapshot {
-            presentation,
+            address,
             frame_id,
             clock_timestamp: times.clock_timestamp,
             segment_start: times.segment_start,

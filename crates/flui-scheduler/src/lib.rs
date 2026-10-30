@@ -157,12 +157,12 @@ pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
 pub use config::TimingsCallback;
-/// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
-/// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
-/// can name it without an extra, redundant direct dependency on
-/// `flui-foundation` just to construct/match one of this crate's own public
-/// field types.
-pub use flui_foundation::PresentationId;
+/// [`FrameSnapshot::address`]'s type and the two ids it pairs — re-exported
+/// so a consumer of this crate's frame telemetry (e.g. `flui-devtools`'
+/// `timeline` feature) can name them without an extra, redundant direct
+/// dependency on `flui-foundation` just to construct/match one of this
+/// crate's own public field types.
+pub use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 pub use frame_clock::{
     ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PollDecision, SkipReason,
 };

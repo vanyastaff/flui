@@ -1,7 +1,6 @@
 # ADR-0266: One owner thread hosts every UI runtime; a UI runtime is a unit of isolation, not of parallelism
 
-- **Status:** Accepted (2026-10-30). Not implemented: frame telemetry does not name the UI runtime
-  that produced a frame (§3).
+- **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md), the verdict's sentence "Multiple
   UI runtimes may execute concurrently" and §1's sentence on runtime count per owner thread only
@@ -79,11 +78,12 @@ delays every other runtime's next frame, because they share the owner thread.
 
 A delay from §2 is diagnosable only when frame telemetry names the runtime that produced the frame.
 Telemetry carries a `PresentationAddress` (`ui_runtime_id`, `presentation_id`), never a bare
-`PresentationId`, which repeats across runtime incarnations (`FrameStamp`'s rule). Today only the
-frame-failure events carry the address; `FrameTiming`, `FrameSnapshot`, the `flui.frame`
-`frame_telemetry` event and the build, layout, paint and compositing spans name the presentation
-or nothing. Moving them to the address is the implementation of ADR-0242 decision 8's runtime
-partition, and that is when this section is implemented.
+`PresentationId`, which repeats across runtime incarnations (`FrameStamp`'s rule). The
+frame-failure events, `FrameSnapshot::address`, the `flui.frame` `frame_telemetry` event's
+`ui_runtime_id` field and the devtools timeline's frame names carry it. `FrameTiming` and
+`TimingsCallback` are unchanged: the callback is registered on one runtime's `UpdateScheduler`, so the
+runtime is known where they are read. The build, layout, paint and compositing spans get their
+runtime partition with ADR-0242 decision 8.
 
 ### §4. Parallelism is where the work is parallel
 
@@ -108,7 +108,7 @@ public API's only `Send` positions, held by `cargo xtask send-positions`.
   explicitly not one of them.
 - Bad, because one slow window delays every other window of the process, until a later
   thread-per-runtime policy exists for the hosts that can have it.
-- Bad, because until §3 lands, telemetry cannot attribute a slow frame to a runtime by itself.
+- Good, because telemetry attributes a slow frame to its runtime (§3).
 - Neutral, because a host with a single window, the common case, behaves the same under every
   option.
 
@@ -121,7 +121,8 @@ public API's only `Send` positions, held by `cargo xtask send-positions`.
   runtime's frame request redraws its own window and not its sibling's;
   `frame_waker_wakes_the_ui_runtime_from_a_worker` (`flui-runtime`): a worker's wake reaches its
   runtime only; `two_ui_runtimes_via_isolated_policy_share_nothing` (`flui-app` owner dispatch).
-- §3, once implemented: a test that two runtimes' frames are told apart by their telemetry address.
+- `frames_of_two_ui_runtimes_name_their_runtime` (`flui-runtime` frame telemetry): two runtimes' first
+  frames, both `frame_id` 1, name their own runtimes (§3).
 
 ## Pros and cons of the options
 
