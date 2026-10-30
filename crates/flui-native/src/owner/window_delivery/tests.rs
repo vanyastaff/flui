@@ -424,6 +424,39 @@ fn a_frame_counts_when_the_handler_runs() {
     assert_eq!(counted(), 1, "no handler, no frame");
 }
 
+/// A frame the handler answered `Failed` (it contained its own panic) is
+/// counted as one that ran, as a panicking one is, and nothing unwinds into
+/// whatever asked for it.
+fn a_failed_frame_counts_and_does_not_unwind() {
+    struct FailedFrames;
+    impl flui_platform::WindowHandler for FailedFrames {
+        fn input(&self, _: PlatformInput) -> DispatchEventResult {
+            DispatchEventResult::default()
+        }
+        fn state_changed(&self) {}
+        fn frame_requested(&self, _: FrameRequest) -> flui_platform::FrameOutcome {
+            flui_platform::FrameOutcome::Failed
+        }
+        fn close_requested(&self) -> CloseDecision {
+            CloseDecision::Close
+        }
+        fn closed(&self) {}
+        fn surface_changed(&self, _: SurfaceChange) {}
+    }
+    let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let delivery = WindowDelivery::counting_frames(
+        Rc::new(FailedFrames),
+        InputCapabilities::UNAVAILABLE,
+        Arc::clone(&frames),
+    );
+    delivery.dispatch_frame(FrameRequest::new(EventTime::from_nanos(1)));
+    assert_eq!(
+        frames.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "a failed frame had its chance at what was due"
+    );
+}
+
 /// A delivery raised on another thread (a command applied from a worker
 /// publishes there) is kept in order and reaches the handler in the owner
 /// turn it asks for, never on the raising thread and never lost.
@@ -468,6 +501,10 @@ fn window_handler_obligation_table() {
         (
             "a delivery raised off the owner thread waits for an owner turn",
             a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn,
+        ),
+        (
+            "a failed frame counts and does not unwind",
+            a_failed_frame_counts_and_does_not_unwind,
         ),
         (
             "the capability snapshot is the first input",

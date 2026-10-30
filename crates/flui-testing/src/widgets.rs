@@ -507,6 +507,12 @@ impl LaidOut {
         self.host.ui_runtime().set_system_preferences(values);
     }
 
+    /// Report the window focused or not; see
+    /// [`HeadlessHost::set_window_focused`](crate::HeadlessHost::set_window_focused).
+    pub fn set_window_focused(&self, focused: bool) {
+        self.host.ui_runtime().set_window_focused(focused);
+    }
+
     /// Ask to close the tree's presentation for `reason`, as its platform
     /// does. The presentation's close guard is asked first: a close it
     /// refuses is recorded and nothing changes, and the pump after its last

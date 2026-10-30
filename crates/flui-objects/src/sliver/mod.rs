@@ -1,4 +1,5 @@
 mod carousel;
+mod pinned;
 mod placement;
 mod sliver_animated_opacity;
 mod sliver_constrained_cross_axis;

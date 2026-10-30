@@ -1,10 +1,9 @@
 # ADR-0086: Signal writes go through `EventCx` opened by a `WriterSource`
 
-- **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Implemented:
-  `EventCx`, `Writer`, `WriterSource`, lifecycle and render-context writer acquisition,
-  callback inference helpers, typed `Signal` writes, and the owner-local catalog migration
-  described below, including `Draggable`,
-  `PageView::on_page_changed` (delivered on the local post-frame lane), the
+- **Status:** Accepted (2026-10-30), with §5 amended. Implemented: `EventCx`, `Writer`,
+  `WriterSource`, lifecycle and render-context writer acquisition, callback inference helpers,
+  typed `Signal` writes, and the owner-local catalog migration described below, including
+  `Draggable`, `PageView::on_page_changed` (delivered on the local post-frame lane), the
   `Action::invoke`/`CallbackAction`/`CallbackShortcuts` family, and `DragTarget`'s and
   `Semantics`' callbacks through owner-local interaction-lane payloads (§3, amended
   2026-09-30). §8 step 3 is implemented: `Reactive` is no longer a write target,
@@ -13,15 +12,14 @@
   `FnMut(&mut EventCx)` envelope inside an `EventCx` opened by the minting presentation's
   `WriterSource` (the ADR-0074 §5.8 amendment). A `LocalHistoryEntry::on_remove` owed by a
   pop inside a navigator flush is delivered on the navigator's post-frame queue, after the
-  frame, so its write is never refused by the build guard. The rollback trigger was evaluated
-  and not met (§9). Outstanding, named again before the `!Send` flip of ADR-0091 §1:
-  - `LocalHistoryEntry` as a public surface (the module is crate-private until its first
-    catalog consumer);
-  - listener, animation-status and post-frame `cx` (§5), `TabController::add_listener`
-    included.
-  Bound `StateCell`/`StateHandle` mutation refusal during `build` (§7) is implemented;
-  it is not an outstanding schedule-method migration.
+  frame, so its write is never refused by the build guard. Bound `StateCell`/`StateHandle`
+  mutation refusal during `build` (§7) is implemented. The UI callback surface lost `Send`
+  (ADR-0091 §1), and listener, animation-status and post-frame callbacks write through a
+  captured `WriterSource` (§5 as amended). The rollback trigger was evaluated and not met
+  (§9). `LocalHistoryEntry` stays crate-private until its first catalog consumer.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-30 — §5: listener, animation-status and post-frame callbacks lost `Send`
+  without gaining `cx`; they write through a captured `WriterSource`.
 - **Amended:** 2026-10-11 — implemented local-state write refusal and current method names are distinguished from outstanding proposal items.
 - **Superseded-by:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
   only §4's gesture extension signature compatibility promise; the signal write
@@ -30,10 +28,10 @@
   envelope invoked at most once; success disposes captures after redraw demand is durable, while
   callback panic retains the opaque bundle because aggregate drop glue cannot be made
   recovery-safe. The planned `WriterSource` migration preserves that ownership contract.
-- **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
+- **Amends:** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the
-  UI runtime's `WriterSource`; pending, see Status); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
+  UI runtime's `WriterSource`); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
   `LifecycleContext` capability, `writer_source`)
 - **Amends:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md) §2 and §3 (`CallbackShortcuts`
   callbacks and `Action::invoke` receive the key event's `EventCx`; `Actions::maybe_invoke` is
@@ -228,12 +226,19 @@ depend on the reactive graph; gesture callbacks do not receive an `EventCx`.
 
 ### 5. Listener, animation-status and post-frame callbacks
 
-These receive `cx` only in the change that removes their `Send` bound. Until then a write from
-them goes through a `SignalSender` and `UiCommand::SignalWrite`. Platform hooks write only
-through `SignalSender`. This record does not schedule the removal of `Send` from the UI callback
-surface — [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1 does, before
-the first crates.io publication, together with the setter signature change of §8 step 4; it
-requires only that the two happen together, per callback family.
+*Amended 2026-10-30.* These callbacks lost their `Send` bound
+([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1) but receive no `cx`:
+`Listenable` lives in `flui-foundation`, below the signal graph. A write from one goes through
+a `WriterSource` captured in `init_state`, `did_change_dependencies` or a `RenderObjectContext`.
+Opening an `EventCx` inside another is allowed and is not transactional: each write applies at
+once, in call order, and writes made before a panic stay applied. A controller mutated during
+`build` refuses the mutation. A listener's panic is held until the notification round ends and
+then reaches the UI runtime's frame-failure report
+([ADR-0178](ADR-0178-notification-first-failure-custody.md)). Platform hooks write only through
+`SignalSender`.
+
+The text replaced: these callbacks were to receive `cx` in the change that removed their `Send`
+bound, writing through `SignalSender` and `UiCommand::SignalWrite` until then.
 
 ### 6. Query callbacks get no writer
 
@@ -518,11 +523,10 @@ ready for the owner to accept.
 Marked **(exists)** where the item is in the repository.
 
 - `compile_fail` checks: `signal.set(..)` through the `build` context does not compile
-  **(partly exists**: `tests/ui/signal_write_through_build_context.rs` refuses
-  `s.set(ctx, 1)`; `s.set(&ctx.reactive(), 1)` still compiles until step 3 of §8 removes the
-  `&Reactive` target and the accessor**)**; a
+  **(exists**: `crates/flui-view/tests/ui/signal_write_through_build_context.rs`; §8 step 3
+  removed the `&Reactive` target and the accessor**)**; a
   `&mut Writer` does not escape into a `'static` closure **(exists**: the E0521 doctest on
-  `WriterSource`, `tests/ui/writer_escapes_the_dispatch.rs`**)**; `build` has no method
+  `WriterSource`, `crates/flui-view/tests/ui/writer_escapes_the_dispatch.rs`**)**; `build` has no method
   returning a `Writer` **(exists**: the E0599 and E0624 doctests on
   `LifecycleContext::writer_source`**)**; `WriterSource`, `Writer` and `EventCx` are `!Send`
   **(exists**: `static_assertions` in `reactive/writer.rs`**)**.
@@ -532,6 +536,14 @@ Marked **(exists)** where the item is in the repository.
 - A test that `AnimatedSize` no longer calls `on_end` from `build` **(exists**:
   `crates/flui-widgets/tests/animated_size.rs::animated_size_completion_writes_a_signal_after_build`**)**.
 - `bound_local_state_refuses_build_mutation_then_recovers` covers bound local-state mutation refusal through the public writer-source family.
+- §5 as amended: `owner_local_write_paths` in `crates/flui-testing/tests/` writes through a
+  captured `WriterSource` from a listener, an animation-status listener and a post-frame
+  callback (`listener_writes_through_a_captured_writer_source` and its two siblings), and
+  nests one `EventCx` in another (`nested_writer_source_inside_an_event_cx`,
+  `nested_write_panics_inside_an_event_cx`); `listener_panic_reaches_the_realm_report` in
+  `crates/flui-runtime/tests/contracts/owner_delivery.rs`; `tests/wasm_consumer.rs`, compiled
+  for wasm32 by `cargo xtask wasm-check`, captures `Rc` in both callback kinds;
+  `event_setters_infer_cx_through_the_facade` keeps every setter family inferring `cx`.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter
   signatures; `flui migrate` applied to `examples/` with the pre-PR checks green.

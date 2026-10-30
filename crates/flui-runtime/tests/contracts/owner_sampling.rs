@@ -638,11 +638,11 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     }));
     drop(diagnostics);
     if fail_operation {
-        let payload = delivered.expect_err("the original owner operation still propagates");
+        // The operation's own panic is contained (ADR-0258 §1), and it is the
+        // one reported: query, tracing and handler failures cannot replace it.
         assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"primary owner operation"),
-            "query, tracing and handler failures cannot replace the owner cause"
+            delivered.expect("the owner operation's panic is contained"),
+            Ok(Delivery::Driven)
         );
         assert_eq!(
             *probe.callback_observations.borrow(),
@@ -651,8 +651,8 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
                 PanicText::Verbatim("primary owner operation".into())
             )]
         );
-        // The failed callback owes the work admitted by its sampling report.
-        // A real next native opportunity supplies the normal FIFO budget.
+        // What its sampling report admitted runs at the next native
+        // opportunity, with the normal FIFO budget.
         let callback = owner
             .begin_callback(effects.as_ref())
             .expect("next callback");

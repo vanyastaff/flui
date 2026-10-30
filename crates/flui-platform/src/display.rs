@@ -775,3 +775,145 @@ mod tests {
         assert_eq!(unchanged.revision(), at_last.revision());
     }
 }
+
+/// The fields of a [`DisplayInfo`] other than its id, public: the boundary
+/// every serialization and mirror of a display goes through (a recording's
+/// schema).
+///
+/// Deliberately not `#[non_exhaustive]`, unlike [`DisplayInfo`]: a mirror
+/// builds and destructures this struct exhaustively, so a field added to a
+/// display breaks every mirror at compile time until it carries the field,
+/// instead of dropping it from a recording. The id stays apart because it is
+/// issued by a [`DisplayRegistry`] and means nothing outside it: a mirror
+/// writes a label for it and the reader mints its own
+/// ([`DisplayInfo::into_parts`], [`Self::into_info`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayParts {
+    /// [`DisplayInfo::name`].
+    pub name: String,
+    /// [`DisplayInfo::bounds`].
+    pub bounds: Bounds<i32>,
+    /// [`DisplayInfo::usable_bounds`].
+    pub usable_bounds: Bounds<i32>,
+    /// [`DisplayInfo::scale_factor`].
+    pub scale_factor: f64,
+    /// [`DisplayInfo::refresh_period`].
+    pub refresh_period: Option<RefreshPeriod>,
+    /// [`DisplayInfo::is_primary`].
+    pub is_primary: bool,
+    /// [`DisplayInfo::persistent_key`].
+    pub persistent_key: Option<String>,
+    /// [`DisplayInfo::color`], taken apart.
+    pub color: Result<ColorParts, CapabilityAbsence>,
+}
+
+/// The fields of a [`DisplayColor`] and its [`SurfaceColorSpace`], public, for
+/// the same mirrors and for the same reason as [`DisplayParts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColorParts {
+    /// [`SurfaceColorSpace::gamut`].
+    pub gamut: ColorGamut,
+    /// [`SurfaceColorSpace::dynamic_range`].
+    pub dynamic_range: DynamicRange,
+    /// [`DisplayColor::headroom`].
+    pub headroom: Result<Headroom, CapabilityAbsence>,
+}
+
+impl DisplayInfo {
+    /// Take the display apart into its id and the rest of its fields.
+    #[must_use]
+    pub fn into_parts(self) -> (DisplayId, DisplayParts) {
+        let Self {
+            id,
+            name,
+            bounds,
+            usable_bounds,
+            scale_factor,
+            refresh_period,
+            is_primary,
+            persistent_key,
+            color,
+        } = self;
+        (
+            id,
+            DisplayParts {
+                name,
+                bounds,
+                usable_bounds,
+                scale_factor,
+                refresh_period,
+                is_primary,
+                persistent_key,
+                color: color.map(DisplayColor::into_parts),
+            },
+        )
+    }
+}
+
+impl DisplayParts {
+    /// The display these fields describe, under `id`; every field is valid by
+    /// its type.
+    #[must_use]
+    pub fn into_info(self, id: DisplayId) -> DisplayInfo {
+        let Self {
+            name,
+            bounds,
+            usable_bounds,
+            scale_factor,
+            refresh_period,
+            is_primary,
+            persistent_key,
+            color,
+        } = self;
+        DisplayInfo {
+            id,
+            name,
+            bounds,
+            usable_bounds,
+            scale_factor,
+            refresh_period,
+            is_primary,
+            persistent_key,
+            color: color.map(ColorParts::into_color),
+        }
+    }
+}
+
+impl DisplayColor {
+    /// Take the colour apart into its fields.
+    #[must_use]
+    pub const fn into_parts(self) -> ColorParts {
+        let Self {
+            color_space:
+                SurfaceColorSpace {
+                    gamut,
+                    dynamic_range,
+                },
+            headroom,
+        } = self;
+        ColorParts {
+            gamut,
+            dynamic_range,
+            headroom,
+        }
+    }
+}
+
+impl ColorParts {
+    /// The colour these fields describe; every field is valid by its type.
+    #[must_use]
+    pub const fn into_color(self) -> DisplayColor {
+        let Self {
+            gamut,
+            dynamic_range,
+            headroom,
+        } = self;
+        DisplayColor {
+            color_space: SurfaceColorSpace {
+                gamut,
+                dynamic_range,
+            },
+            headroom,
+        }
+    }
+}

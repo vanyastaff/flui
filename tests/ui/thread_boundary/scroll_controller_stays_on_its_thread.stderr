@@ -1,0 +1,64 @@
+error[E0277]: `Rc<RefCell<scroll::scroll_controller::CommandSlot>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<scroll::scroll_controller::CommandSlot>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `ScrollController`, the trait `Send` is not implemented for `Rc<RefCell<scroll::scroll_controller::CommandSlot>>`
+note: required because it appears within the type `ScrollController`
+ --> crates/flui-widgets/src/scroll/scroll_controller.rs
+  |
+  | pub struct ScrollController {
+  |            ^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<RefCell<Option<Rc<scroll::scroll_controller::ScrollableHooks>>>>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<Option<Rc<scroll::scroll_controller::ScrollableHooks>>>>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `ScrollController`, the trait `Send` is not implemented for `Rc<RefCell<Option<Rc<scroll::scroll_controller::ScrollableHooks>>>>`
+note: required because it appears within the type `ScrollController`
+ --> crates/flui-widgets/src/scroll/scroll_controller.rs
+  |
+  | pub struct ScrollController {
+  |            ^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<flui_rendering::view::scroll_position::Inner>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:6:30
+  |
+6 |     require_thread_spawnable(controller);
+  |     ------------------------ ^^^^^^^^^^ `Rc<flui_rendering::view::scroll_position::Inner>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `ScrollController`, the trait `Send` is not implemented for `Rc<flui_rendering::view::scroll_position::Inner>`
+note: required because it appears within the type `ScrollPosition`
+ --> crates/flui-rendering/src/view/scroll_position.rs
+  |
+  | pub struct ScrollPosition {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `ScrollController`
+ --> crates/flui-widgets/src/scroll/scroll_controller.rs
+  |
+  | pub struct ScrollController {
+  |            ^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+ --> tests/ui/thread_boundary/scroll_controller_stays_on_its_thread.rs:3:32
+  |
+3 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+  |                                ^^^^ required by this bound in `require_thread_spawnable`

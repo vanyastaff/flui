@@ -2942,14 +2942,17 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             .update_preferences(SystemPreferences::default(), &effects)
             .expect("panicking query barrier");
     }))
-    .expect_err("getter failure remains authoritative");
+    .expect_err("the completion hook's own failure leaves the turn");
+    // The getter's failure is the operation's: contained and reported
+    // (ADR-0258 §1). The host's completion hook failing after it is the one
+    // that leaves.
     assert_eq!(
         failure.downcast_ref::<&str>(),
-        Some(&"scripted geometry query failure")
+        Some(&"owner completion failure")
     );
     assert!(
         !effects.fail_tail.get(),
-        "competing owner completion failure was reached without replacing the native query failure"
+        "the owner completion ran after the contained query failure"
     );
     *window.answer.lock().expect("recovery") = Ok(geometry(2.0, 2.0));
     let before_recovery = window.calls.load(Ordering::Relaxed);
@@ -3040,16 +3043,11 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         })));
         let wake_before = wakes.load(Ordering::SeqCst);
         window.panic_next.store(true, Ordering::Relaxed);
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            background
-                .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
-                .expect("actual host background pump");
-        }))
-        .expect_err("native preparation failure propagates");
-        assert_eq!(
-            failure.downcast_ref::<&str>(),
-            Some(&"scripted geometry query failure")
-        );
+        // The native preparation's failure is the operation's, contained
+        // by the owner (ADR-0258 §1).
+        background
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            .expect("actual host background pump");
         assert_eq!(
             polls.get(),
             0,
@@ -3767,18 +3765,16 @@ fn preference_fanout_survives_a_failing_runtime() {
                 .expect("accept fanout");
         }));
         fail_wake.store(false, Ordering::Release);
-        if wake_fails || tail_fails {
-            let failure = result.expect_err("first failure remains authoritative");
+        // A recipient's wake failing is its operation's failure, contained
+        // (ADR-0258 §1); the host's completion hook failing leaves the turn.
+        if tail_fails {
+            let failure = result.expect_err("the completion hook's failure leaves the turn");
             assert_eq!(
                 failure.downcast_ref::<&str>(),
-                Some(&if wake_fails {
-                    "preference wake failure"
-                } else {
-                    "owner completion failure"
-                })
+                Some(&"owner completion failure")
             );
         } else {
-            result.expect("healthy preference fanout");
+            result.expect("a failing recipient's wake is contained");
         }
         owner.continue_work(&recipients[0].0);
         for (effects, observed, wakes) in &recipients {
@@ -4289,20 +4285,16 @@ fn resize_failure_preserves_other_batched_window_state() {
             wake_fails,
             "the failing wake path was reached"
         );
-        if resize_fails || wake_fails || tail_fails {
-            let failure = result.expect_err("preserve the first failure");
+        // The resize and the wake fail inside the window-state operation and
+        // are contained (ADR-0258 §1); the completion hook failing leaves.
+        if tail_fails {
+            let failure = result.expect_err("the completion hook's failure leaves the turn");
             assert_eq!(
                 failure.downcast_ref::<&str>(),
-                Some(&if resize_fails {
-                    "native resize failure"
-                } else if wake_fails {
-                    "window wake failure"
-                } else {
-                    "owner completion failure"
-                })
+                Some(&"owner completion failure")
             );
         } else {
-            result.expect("healthy state batch");
+            result.expect("the window-state operation's failures are contained");
         }
         frame
             .surface_restored(&effects)
@@ -4499,26 +4491,14 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                     "input must wait for the owner turn"
                 );
             }
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                owner.continue_work(&effects);
-            }));
-            if move_fails || key_fails {
-                let failure = result.expect_err("callback failure escapes after input settlement");
-                assert_eq!(
-                    failure.downcast_ref::<&str>(),
-                    Some(&if move_fails {
-                        "motion failure"
-                    } else {
-                        "keyboard failure"
-                    })
-                );
+            // An input callback's failure is its operation's, contained
+            // (ADR-0258 §1); the input behind it is delivered in the same turn.
+            owner.continue_work(&effects);
+            if move_fails {
                 assert!(
                     events.borrow().contains(&"key"),
                     "accepted keyboard input survives a prior motion callback failure"
                 );
-                owner.continue_work(&effects);
-            } else {
-                result.expect("healthy input batch");
             }
             let expected: &[&str] = if resampling {
                 &[

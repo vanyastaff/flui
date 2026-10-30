@@ -41,8 +41,9 @@ use flui_rendering::{
     virtualization::Virtualizer,
 };
 
+use super::pinned::{PinnedChildren, PinnedPlace};
 use super::placement::{Placed, Placement, PlacementTrack};
-use super::virtualized_band::walk_virtualizer_band;
+use super::virtualized_band::{item_extent_from_virtualizer, walk_virtualizer_band};
 
 // ============================================================================
 // RENDER OBJECT
@@ -77,6 +78,8 @@ pub struct RenderSliverList {
     /// the child manager learns the real count from the data source).
     item_count: usize,
     collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    /// The collection's accessible name, published on its list or grid node.
+    collection_label: Option<std::sync::Arc<str>>,
 
     /// Estimate currently assigned to unmeasured children.
     default_extent_estimate: f64,
@@ -107,6 +110,8 @@ pub struct RenderSliverList {
     placement: PlacementTrack,
     /// The children the last pass positioned. Kept to reuse the allocation.
     placed: Vec<Placed>,
+    /// The pinned residents outside the band (`set_pinned_indices`).
+    pinned: PinnedChildren,
 }
 
 impl RenderSliverList {
@@ -128,6 +133,7 @@ impl RenderSliverList {
         Self {
             item_count,
             collection: None,
+            collection_label: None,
             default_extent_estimate,
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
@@ -136,6 +142,7 @@ impl RenderSliverList {
             warned_unbounded: None,
             placement: PlacementTrack::default(),
             placed: Vec::new(),
+            pinned: PinnedChildren::default(),
         }
     }
 
@@ -143,6 +150,19 @@ impl RenderSliverList {
     #[must_use]
     pub fn item_count(&self) -> usize {
         self.item_count
+    }
+
+    /// Names the collection for assistive technology: the label of the list
+    /// or grid node this sliver publishes.
+    pub fn set_collection_label(
+        &mut self,
+        label: Option<&std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.collection_label.as_ref() == label {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection_label = label.cloned();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Overrides the declared accessible member count independently of logical
@@ -197,6 +217,17 @@ impl RenderSliverList {
     ) -> flui_rendering::RenderUpdateImpact {
         self.placement.set(placement)
     }
+
+    /// The logical indices of pinned residents outside the band. Each is laid
+    /// out after the band at its estimated offset, adds nothing to the
+    /// geometry, the anchor or the measured extents, and is skipped by paint
+    /// and hit testing; semantics keeps it.
+    pub fn set_pinned_indices(
+        &mut self,
+        pinned: &std::collections::BTreeSet<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.pinned.set(pinned)
+    }
 }
 
 impl fmt::Debug for RenderSliverList {
@@ -214,6 +245,7 @@ impl Clone for RenderSliverList {
         Self {
             item_count: self.item_count,
             collection: self.collection,
+            collection_label: self.collection_label.clone(),
             default_extent_estimate: self.default_extent_estimate,
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -222,6 +254,7 @@ impl Clone for RenderSliverList {
             warned_unbounded: None,
             placement: self.placement.clone(),
             placed: Vec::new(),
+            pinned: self.pinned.clone(),
         }
     }
 }
@@ -258,6 +291,9 @@ impl RenderSliver for RenderSliverList {
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));
+        if let Some(label) = &self.collection_label {
+            config.set_label(label.as_ref());
+        }
     }
 
     fn perform_layout(
@@ -297,6 +333,25 @@ impl RenderSliver for RenderSliverList {
                     );
                 });
         }
+        let item_count = self.item_count;
+        let virtualizer = &self.virtualizer;
+        let pinned_constraints = constraints.as_box_constraints(0.0, f64::INFINITY, None);
+        self.pinned.lay_out(cache_first..cache_last, ctx, |index| {
+            (index < item_count).then(|| {
+                let layout_offset = virtualizer.offset_of(index);
+                let extent = item_extent_from_virtualizer(virtualizer, index);
+                PinnedPlace {
+                    constraints: pinned_constraints,
+                    layout_offset,
+                    paint_offset: child_paint_offset(
+                        &constraints,
+                        &geometry,
+                        layout_offset,
+                        extent,
+                    ),
+                }
+            })
+        })?;
         // Signal the retained band to the element tree via the pending_retain_bands
         // channel.  The binding layer forwards this to `SparseChildren::retain_band`
         // between layout passes of this frame's fixpoint, evicting everything
@@ -306,7 +361,12 @@ impl RenderSliver for RenderSliverList {
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        ctx.paint_children();
+        // A pinned child is placed, so only this skip keeps it off screen.
+        for slot in 0..ctx.child_count() {
+            if !self.pinned.is_pinned_slot(slot) {
+                ctx.paint_child(slot);
+            }
+        }
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
@@ -319,7 +379,7 @@ impl RenderSliver for RenderSliverList {
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
         for slot in (0..self.attached_child_count).rev() {
-            if ctx.hit_test_child_at_layout_offset(slot) {
+            if !self.pinned.is_pinned_slot(slot) && ctx.hit_test_child_at_layout_offset(slot) {
                 return true;
             }
         }

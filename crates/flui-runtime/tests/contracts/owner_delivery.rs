@@ -242,7 +242,7 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
     );
 }
 
-fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
+fn a_failed_frame_is_contained_and_the_fifo_tail_runs() {
     struct Effects {
         first: FrameDispatcher,
         second: FrameDispatcher,
@@ -337,26 +337,117 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
         requests: Cell::new(0),
         fail: Cell::new(true),
     };
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        effects
-            .first
-            .deliver(crate::VSYNC, &effects)
-            .expect("frame admitted");
-    }))
-    .expect_err("frame panic propagates");
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"frame failed"));
+    // ADR-0258 §1: the frame's panic is contained, not resumed, and the FIFO
+    // tail queued behind it runs in the same turn.
+    assert_eq!(
+        effects.first.deliver(crate::VSYNC, &effects),
+        Ok(Delivery::Driven),
+        "a contained frame panic does not leave the delivery"
+    );
     assert_eq!(
         *failures.lock().expect("reports"),
         [first],
         "the production owner boundary reports its contained failure exactly once"
     );
-    assert_eq!(*effects.delivered.borrow(), [first]);
-    assert_eq!(effects.requests.get(), 1);
-    owner.continue_work(&effects);
     assert_eq!(*effects.delivered.borrow(), [first, second, first]);
     owner.continue_work(&effects);
-    assert_eq!(*effects.delivered.borrow(), [first, second, first]);
-    assert_eq!(effects.requests.get(), 1);
+    assert_eq!(
+        *effects.delivered.borrow(),
+        [first, second, first],
+        "nothing is left over for the next opportunity"
+    );
+}
+
+/// A listener that panics during owner work finishes its notification round
+/// (the next listener still runs) and reaches the UI runtime's failure report
+/// as one contained callback panic, with its own message.
+fn listener_panic_reaches_the_realm_report() {
+    struct Effects {
+        notifier: flui_foundation::ChangeNotifier,
+    }
+    impl OwnerEffects for Effects {
+        fn finish_install(
+            &self,
+            _: PresentationAddress,
+            _: flui_runtime::owner::InitializationOutcome,
+            _: flui_runtime::owner::RecoveryState,
+        ) {
+        }
+        fn runtime_lifecycle(
+            &self,
+            _: flui_foundation::UiRuntimeId,
+            _: flui_scheduler::AppLifecycleState,
+        ) {
+        }
+        fn runtimes_stopped(&self, _: flui_runtime::owner::RecoveryState) {}
+        fn frame(&self, _: PresentationAddress, _: &mut UiRuntime) {
+            self.notifier.notify_listeners();
+        }
+        fn commit_install(
+            &self,
+            _: flui_runtime::owner::InstallToken,
+            _: flui_runtime::owner::RecoveryState,
+        ) -> Option<flui_runtime::owner::InstallInitialization> {
+            panic!("no pending install");
+        }
+        fn retire_host(&self, _: &[PresentationAddress], _: flui_runtime::owner::RecoveryState) {}
+        fn cancel_install(
+            &self,
+            _: flui_runtime::owner::InstallToken,
+            _: flui_runtime::owner::RecoveryState,
+        ) {
+            panic!("no pending install");
+        }
+        fn resize_surface(
+            &self,
+            _: PresentationAddress,
+            _: flui_foundation::geometry::WindowMetrics,
+        ) {
+        }
+        fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+        fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
+        fn request_continuation(&self) -> bool {
+            false
+        }
+    }
+    use flui_foundation::Listenable as _;
+
+    let owner = OwnerHost::new();
+    let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = std::sync::Arc::clone(&reports);
+    let ui_runtime = runtime();
+    ui_runtime.set_frame_failure_detail(flui_runtime::frame_failure::FrameFailureDetail::Verbatim);
+    ui_runtime.set_frame_failure_handler(Some(
+        flui_runtime::frame_failure::FrameFailureHandler::new(move |report| {
+            let message = match &report.kind {
+                flui_runtime::frame_failure::FrameFailureKind::CallbackPanic {
+                    message, ..
+                } => Some(message.to_string()),
+                _ => None,
+            };
+            seen.lock().expect("reports").push(message);
+        }),
+    ));
+    let address = install(&owner, ui_runtime);
+    let notifier = flui_foundation::ChangeNotifier::new();
+    let later = Rc::new(Cell::new(0));
+    notifier.add_listener(Rc::new(|| panic!("listener failed")));
+    let counted = Rc::clone(&later);
+    notifier.add_listener(Rc::new(move || counted.set(counted.get() + 1)));
+    let effects = Effects { notifier };
+    let dispatcher = owner.frame_dispatcher(address).expect("dispatcher");
+
+    // ADR-0258 §1: the owner turn contains the panic instead of unwinding.
+    dispatcher
+        .deliver(crate::VSYNC, &effects)
+        .expect("frame admitted");
+
+    assert_eq!(later.get(), 1, "the round finished: the next listener ran");
+    assert_eq!(
+        *reports.lock().expect("reports"),
+        [Some("listener failed".to_owned())],
+        "one contained callback panic, one report, with the listener's message"
+    );
 }
 
 fn bounded_opportunities_preserve_every_frame_when_waking_fails() {
@@ -1286,8 +1377,12 @@ fn owner_delivery_contract() {
                 shutdown_withdraws_admission_before_leased_runtime_retires as fn(),
             ),
             (
-                "failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity",
-                failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity as fn(),
+                "a_failed_frame_is_contained_and_the_fifo_tail_runs",
+                a_failed_frame_is_contained_and_the_fifo_tail_runs as fn(),
+            ),
+            (
+                "listener_panic_reaches_the_realm_report",
+                listener_panic_reaches_the_realm_report as fn(),
             ),
         ],
     );

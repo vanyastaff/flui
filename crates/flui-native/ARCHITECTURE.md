@@ -2001,7 +2001,7 @@ the instant alone names an answer; observing no deadline permits later
 admission of the same absolute instant. The count of the frames the handlers
 produced at delivery is the delivery generation: the same instant re-arms
 after every frame
-produced since its delivery (`FrameOutcome::Produced`, or a `frame_requested`
+produced since its delivery (`FrameOutcome::Produced` or `Failed`, or a `frame_requested`
 that panicked), and never when none was. A frame request no handler runs a
 frame for (no window, a window that has let go of its handler, or a handler
 that answers `FrameOutcome::Declined`, visible or hidden) is not counted, so
@@ -3969,34 +3969,54 @@ A recording journals one stream, which its header names: a registry's (the
 default, the only one with a clock), a loop's application delivery (`app`:
 system notices, session-end phases and reopens, reported by `AppDelivery`
 before it delivers them), a window's delivery (`window`: the input method's
-events, reported by `WindowDelivery::dispatch_input`) or a platform's reads of
-the system (`platform`: what each `Platform::preferences` read returned, an
-observation or a failure, reported by `HostPlatform` after the host's source
-answers). Each delivery, and each platform, opens its stream when it is made,
-numbered with the registries in creation order. The `preferences` row is the
-schema `flui-testing`'s `HostInput` recordings write their preferences rows in
+events, reported by `WindowDelivery::dispatch_input`), a platform's reads of
+the system (`platform`: what each `Platform::preferences` and
+`Platform::display_snapshot` read returned, an observation or a failure,
+reported by `HostPlatform` after the host's source answers) or a window's
+snapshots (`window_state`: the one it opened with and each one its
+`WindowStateCell` published as changed, whole, reported after the cell's lock
+is released; every host publishes through the cell, so no host reports them
+itself). Each delivery, platform and cell opens its stream when it is made,
+numbered with the registries in creation order. The `preferences` row is the schema
+`flui-testing`'s `HostInput` recordings write their preferences rows in
 (`flui-protocol`'s `native_recording::Preferences`), and both mirrors convert
 through `flui_platform::PreferenceParts`, whose public fields make a new
-preference a compile error in each until it is mirrored. The
-recorder redacts input method text by default (ADR-0215 §5) and marks each row
-that lost it. `NativeRecording::replay_into` replays every row, in order, into
+preference a compile error in each until it is mirrored; a display converts
+through `DisplayParts` and `ColorParts` the same way, and a snapshot through
+`WindowStateParts` and `CapabilityParts`. A display's id is issued
+by its platform's registry and means nothing outside it, so a recording writes
+its number as a label, a snapshot names its display by the same label, and a
+replay issues one id of its own for each label across all its streams
+(`DisplayKey::Injected`). A snapshot's revision is written as a fact; a replay
+publishes the snapshot through `WindowState::successor`, so the replaying
+window earns its own revisions and the successor's rules hold as they did live.
+The recorder redacts input method text and window titles by default (ADR-0215
+§5) and marks each row that lost it, and it replaces a display's name and gives
+its persistent key a pseudonym counted within the recording, a row that stays
+replayable. `NativeRecording::replay_into` replays every row, in order, into
 a `ReplayTarget`, which takes the kinds of row it reproduces: a registry's rows
 as the input the registry assembles, each other row as itself. A row the target
-refuses, or a redacted one, stops the replay with a `ReplayError` that names
+refuses, or one that lost its text, stops the replay with a `ReplayError` that names
 the row and its line, never a skipped row; `replay` is the target that takes a
 registry's input alone. The headless host is the target of the other streams
 in the tests: its host events take the `app` rows, a headless window takes
-the `window` rows and its preference source the `platform` rows, answering the
-application's next read as the recorded one returned. A failed read is the
-kind of `PlatformError` it returned and its message; the headless source fails
-a read only as a preference source does, so a failure of another kind is refused
+the `window` rows and, through `MockWindow::simulate_state`, the `window_state`
+rows, and its
+preference source and display controls take the
+`platform` rows, answering the application's next read as the recorded one
+returned. A failed read is the kind of `PlatformError` it returned and its
+message; a headless source fails a read only as its own kind of source does,
+so a failure of another kind is refused
 (`app_recordings_replay_on_the_headless_host`,
 `window_recordings_replay_on_the_headless_host`,
 `platform_recordings_replay_on_the_headless_host`,
+`window_state_recordings_replay_on_the_headless_host`,
 `captured_streams_replay_to_what_the_session_delivered`). An input method that
 edits the focused text store directly (TSF, the Android and web mirrors)
 delivers no event and is not journaled yet; the `ime` row's payload is tagged
-so a store edit can join it.
+so a store edit can join it. A window's `close_request` and `closed` are not
+journaled yet: their rows will carry the vetoable reason and whether the close
+guard vetoed or delivered it.
 
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch

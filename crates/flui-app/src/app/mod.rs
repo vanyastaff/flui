@@ -63,6 +63,7 @@ pub use lifecycle::{
     TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
     service_events,
 };
+pub use runner::EXIT_CODE_HUNG;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
