@@ -44,8 +44,8 @@ const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
 /// - a resumed turn blocks until the next deadline or preference sample, and
 ///   with neither until it is woken;
 /// - a paused turn blocks until a deadline that is still ahead, and with none
-///   until it is woken. A deadline already behind was offered to the owner this
-///   turn and is left waiting for a frame, which nothing delivers before the
+///   until it is woken. A deadline already behind was offered to the owner
+///   once and is left waiting for a frame, which nothing delivers before the
 ///   Activity resumes; preferences are read again on `Resume`.
 pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     if turn.should_render {
