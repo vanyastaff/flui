@@ -18,7 +18,7 @@ use flui_interaction::{
 };
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
-use flui_painting::typography::{LineMetrics, TextPosition};
+use flui_painting::typography::{LineMetrics, TextAffinity, TextPosition};
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
@@ -72,6 +72,18 @@ pub(super) struct CaretMemory {
     /// The horizontal place, in render-root coordinates, that consecutive
     /// line steps keep to across shorter lines.
     column: Option<f64>,
+}
+
+impl CaretMemory {
+    /// What a line step that landed at `at` (a hit test at `column`)
+    /// leaves: the column, and the hit's affinity, which places an end at
+    /// a soft wrap on the line it ends.
+    fn after_step(column: f64, at: TextPosition) -> Self {
+        Self {
+            upstream: at.affinity == TextAffinity::Upstream,
+            column: Some(column),
+        }
+    }
 }
 
 /// What the pointer is doing in the area.
@@ -410,8 +422,8 @@ impl SelectionModel {
             Key::Named(NamedKey::ArrowDown | NamedKey::ArrowUp) => {
                 let down = matches!(event.key, Key::Named(NamedKey::ArrowDown));
                 self.line_step(&ordered, index, byte, down, memory)
-                    .map(|(focus, column)| {
-                        next_memory.column = Some(column);
+                    .map(|(focus, memory)| {
+                        next_memory = memory;
                         focus
                     })
             }
@@ -450,8 +462,8 @@ impl SelectionModel {
 
     /// The position a line below (or above) `byte`, at the horizontal place
     /// the previous line steps kept to (else the caret's), crossing into the
-    /// next (or previous) text from its last (or first) line; with that
-    /// place in render-root coordinates.
+    /// next (or previous) text from its last (or first) line; with what the
+    /// step leaves the keys to remember.
     fn line_step(
         &self,
         ordered: &[Ordered],
@@ -459,7 +471,7 @@ impl SelectionModel {
         byte: usize,
         down: bool,
         memory: CaretMemory,
-    ) -> Option<(DocumentPosition, f64)> {
+    ) -> Option<(DocumentPosition, CaretMemory)> {
         let entry = &ordered[index].entry;
         // The horizontal place in root coordinates, and the next line
         // within this text, if any.
@@ -482,15 +494,15 @@ impl SelectionModel {
                     .checked_sub(1)
                     .and_then(|number| lines.get(number))
             };
-            let within = next.map(|next| {
-                painter
-                    .get_position_for_offset(Offset::new(local_x, next.baseline))
-                    .offset
-            });
+            let within = next
+                .map(|next| painter.get_position_for_offset(Offset::new(local_x, next.baseline)));
             Some((column, within))
         })?;
         if let Some(within) = within {
-            return Some((DocumentPosition::new(entry.anchor.clone(), within), column));
+            return Some((
+                DocumentPosition::new(entry.anchor.clone(), within.offset),
+                CaretMemory::after_step(column, within),
+            ));
         }
         let neighbour = if down {
             ordered.get(index + 1)?
@@ -503,10 +515,10 @@ impl SelectionModel {
             let line = if down { lines.first()? } else { lines.last()? };
             let (_, baseline) = to_root.transform_point(0.0, line.baseline);
             let (x, y) = to_root.try_inverse()?.transform_point(column, baseline);
-            let byte = painter.get_position_for_offset(Offset::new(x, y)).offset;
+            let at = painter.get_position_for_offset(Offset::new(x, y));
             Some((
-                DocumentPosition::new(neighbour.entry.anchor.clone(), byte),
-                column,
+                DocumentPosition::new(neighbour.entry.anchor.clone(), at.offset),
+                CaretMemory::after_step(column, at),
             ))
         })
     }

@@ -606,7 +606,9 @@ pub(crate) fn a_panicking_blur_listener_keeps_the_clicked_selection() {
 ///
 /// Red-check: take each line step's column from the current caret (the
 /// second step lands near the start of the third line); resolve a line end
-/// downstream (the second Shift+End selects the next line).
+/// downstream (the second Shift+End selects the next line); drop a line
+/// step's hit affinity (Shift+Home after landing on a wrapped line's end
+/// stays put).
 pub(crate) fn line_keys_keep_their_column_and_their_line() {
     let mut scene = Scene::over(Column::new((Text::new("abcdefghij\nx\nabcdefghij"),)).boxed());
     // Near the top left, on the first line.
@@ -641,6 +643,31 @@ pub(crate) fn line_keys_keep_their_column_and_their_line() {
         scene.heard.borrow().last(),
         Some(&None),
         "back to the line's start"
+    );
+
+    // Shift+Down onto the end of a shorter wrapped line keeps the end on
+    // that line, so Shift+Home returns to its start.
+    // A box as wide as "aaaa" wraps "aaaa b aaaa" into three lines, the
+    // middle one short.
+    let measured = Scene::over(Column::new((Text::new("aaaa"),)).boxed());
+    let width = measured.laid.size(measured.paragraphs()[0]).width + 1.0;
+    let mut scene =
+        Scene::over(Column::new((SizedBox::width(width).child(Text::new("aaaa b aaaa")),)).boxed());
+    scene.clicks(corner(&scene), 2);
+    assert!(scene.key(Key::Named(NamedKey::End), Code::End, Modifiers::SHIFT));
+    let first = scene.selected().expect("the first line");
+    assert!(scene.key(
+        Key::Named(NamedKey::ArrowDown),
+        Code::ArrowDown,
+        Modifiers::SHIFT
+    ));
+    let two = scene.selected().expect("two lines");
+    assert_eq!(two, "aaaa b ", "{first:?} then {two:?}");
+    assert!(scene.key(Key::Named(NamedKey::Home), Code::Home, Modifiers::SHIFT));
+    assert_eq!(
+        scene.selected(),
+        Some(first),
+        "back to the second line's start"
     );
 }
 
