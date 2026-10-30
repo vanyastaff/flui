@@ -496,6 +496,17 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
+    /// The presentation's announcer: speaks a message through assistive
+    /// technology without a visible change (ADR-0204 §4).
+    ///
+    /// A declarative live region is the primary way to make a change heard;
+    /// announce what has no node of its own. The handle is `Send`, so a
+    /// completion on another thread can announce. `None` on a bare owner (an
+    /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), the same rule
+    /// `clipboard_handle` follows.
+    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer>;
+
     /// The presentation's haptics (ADR-0210 §10): semantic feedback and
     /// patterns, immediate or aligned with the next presented frame.
     ///

@@ -20,7 +20,7 @@ use crate::{
         TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::{Assertiveness, SemanticsRole},
+    role::{LiveSetting, SemanticsRole},
     states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled},
 };
 
@@ -644,17 +644,45 @@ impl SemanticsConfiguration {
 
     /// Makes this node a live region, whose changes assistive technology
     /// announces without the user moving to it: politely, after what is being
-    /// read, or assertively, interrupting it. `None` makes it an ordinary node.
-    pub fn set_live_region(&mut self, politeness: Option<Assertiveness>) {
-        self.attributes.live = politeness;
+    /// read, or assertively, interrupting it; `Off` keeps it silent inside an
+    /// enclosing region.
+    pub fn set_live_region(&mut self, setting: LiveSetting) {
+        self.attributes.live = Some(setting);
         self.mark_annotated();
     }
 
-    /// How this live region's changes are announced, or `None` when it is
-    /// not one.
+    /// How this live region's changes are announced, or `None` when the node
+    /// declares no setting: then its role's ARIA default applies, else the
+    /// enclosing region's.
     #[must_use]
-    pub fn live_region(&self) -> Option<Assertiveness> {
+    pub fn live_region(&self) -> Option<LiveSetting> {
         self.attributes.live
+    }
+
+    /// Declares whether a change announces the whole region rather than only
+    /// what changed (`aria-atomic`). Undeclared, an `Alert` or `Status` is
+    /// atomic and anything else is not.
+    pub fn set_live_atomic(&mut self, atomic: bool) {
+        self.attributes.live_atomic = Some(atomic);
+        self.mark_annotated();
+    }
+
+    /// Whether a change announces the whole region, `None` when not declared.
+    #[must_use]
+    pub fn live_atomic(&self) -> Option<bool> {
+        self.attributes.live_atomic
+    }
+
+    /// Declares whether this node is being updated (`aria-busy`): a screen
+    /// reader holds back the announcements of its subtree until it is not.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.declare(|states| states.busy = Some(busy));
+    }
+
+    /// Whether this node is being updated, `None` when not declared.
+    #[inline]
+    pub fn busy(&self) -> Option<bool> {
+        self.attributes.states.busy
     }
 
     // ========================================================================
@@ -1470,6 +1498,7 @@ impl SemanticsConfiguration {
         let SemanticsAttributes {
             states,
             live,
+            live_atomic,
             label: _,
             value,
             numeric_range,
@@ -1525,7 +1554,11 @@ impl SemanticsConfiguration {
             || both(scrolls, their_scrolls)
             // A collection group is one entry's place in one set.
             || collection.conflicts(&theirs.collection)
-            || both(live.is_some(), theirs.live.is_some())
+            // A live group is one region's setting and atomicity.
+            || both(
+                live.is_some() || live_atomic.is_some(),
+                theirs.live.is_some() || theirs.live_atomic.is_some(),
+            )
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), theirs.numeric_range.is_some())
             || both(
@@ -1600,6 +1633,7 @@ impl SemanticsConfiguration {
         let SemanticsAttributes {
             states,
             live,
+            live_atomic,
             label,
             value,
             numeric_range,
@@ -1693,7 +1727,11 @@ impl SemanticsConfiguration {
             mine.scroll_extent_min = *scroll_extent_min;
             mine.scroll_index = *scroll_index;
         }
-        keep(&mut mine.live, live.as_ref());
+        // A live group is copied whole, never mixed from two regions.
+        if mine.live.is_none() && mine.live_atomic.is_none() {
+            mine.live = *live;
+            mine.live_atomic = *live_atomic;
+        }
         keep(&mut mine.numeric_range, numeric_range.as_ref());
         keep(&mut mine.value, value.as_ref());
         keep(&mut mine.increased_value, increased_value.as_ref());
@@ -1935,9 +1973,9 @@ mod tests {
         assert_compatibility_is_symmetric(&unfocused, &unrelated, true);
 
         let mut live_a = SemanticsConfiguration::new();
-        live_a.set_live_region(Some(Assertiveness::Polite));
+        live_a.set_live_region(LiveSetting::Polite);
         let mut live_b = SemanticsConfiguration::new();
-        live_b.set_live_region(Some(Assertiveness::Assertive));
+        live_b.set_live_region(LiveSetting::Assertive);
         assert_compatibility_is_symmetric(&live_a, &live_b, false);
 
         let mut tooltip_a = SemanticsConfiguration::new();
