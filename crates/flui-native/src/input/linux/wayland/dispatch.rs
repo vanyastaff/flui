@@ -83,7 +83,8 @@ use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_leng
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::activation::UserInput;
 use crate::owner::linux::wayland::{
-    FramePointer, LastInput, SeatWindow, WaylandInput, WaylandState,
+    FramePointer, LastInput, SeatText, SeatWindow, TextRecorder, TextWire, WaylandInput,
+    WaylandState,
 };
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
@@ -167,6 +168,9 @@ enum Wire {
         group: u32,
         time: WireTime,
     },
+    /// A seat's text input reported something, delivered in order with the
+    /// keys around it.
+    Text(TextWire),
     /// A keyboard's repeat settings.
     RepeatInfo {
         seat: SeatKey,
@@ -457,6 +461,12 @@ impl Shared {
     }
 }
 
+impl TextRecorder for Shared {
+    fn record_text(&self, wire: TextWire) {
+        self.record(Wire::Text(wire));
+    }
+}
+
 /// The surface key of window `id`.
 fn surface_key(id: WindowId) -> NativeSurface {
     NativeSurface(id.as_u64())
@@ -465,12 +475,15 @@ fn surface_key(id: WindowId) -> NativeSurface {
 /// The Wayland seats' input: the loop's input hook. See the module docs.
 pub(crate) struct SeatInput {
     shared: Arc<Shared>,
+    /// The seats' text inputs, whose events the seats' queue carries.
+    texts: Arc<dyn SeatText>,
 }
 
 impl SeatInput {
     /// The input of a loop on the calling thread, with no global bound yet,
-    /// recording each user input in `last_input`.
-    pub(crate) fn new(last_input: LastInput) -> Self {
+    /// recording each user input in `last_input`; the seats' text inputs are
+    /// `texts`.
+    pub(crate) fn new(last_input: LastInput, texts: Arc<dyn SeatText>) -> Self {
         let clock = NativeClock::new(
             EventTime::from_nanos(event_timestamp_ns()),
             monotonic(),
@@ -492,7 +505,7 @@ impl SeatInput {
         shared.delivering.with(|delivering| {
             *delivering = Some(Delivering::new(clock));
         });
-        Self { shared }
+        Self { shared, texts }
     }
 
     /// Bind seat `name` and make what its capabilities and the managers
@@ -523,6 +536,7 @@ impl SeatInput {
                 seat: key,
             },
         );
+        self.texts.seat_added(&seat, queue, &self.recorder());
         self.shared.objects.with(|objects| {
             let tablet = objects
                 .tablet
@@ -540,6 +554,12 @@ impl SeatInput {
                 tools: Vec::new(),
             });
         });
+    }
+
+    /// The queue the seats' text inputs record into: the seats' own.
+    fn recorder(&self) -> Weak<dyn TextRecorder> {
+        let shared: Weak<Shared> = Arc::downgrade(&self.shared);
+        shared
     }
 
     /// The input's answer to `wire`, each input with the deliveries it goes
@@ -882,7 +902,8 @@ impl Delivering {
                 self.keyboards.configure(seat, rate, delay);
                 Vec::new()
             }
-            Wire::Seat(_) => Vec::new(),
+            // Assembled elsewhere, and delivered to the text inputs.
+            Wire::Seat(_) | Wire::Text(_) => Vec::new(),
         }
     }
 
@@ -963,6 +984,17 @@ impl WaylandInput for SeatInput {
             });
         } else if interface == WlSeat::interface().name {
             self.bind_seat(registry, name, version, queue);
+        } else if self.texts.speaks(interface) {
+            if self.texts.holds_manager() {
+                tracing::debug!(
+                    interface,
+                    "a second Wayland global of one kind was not bound"
+                );
+            } else {
+                let seats = self.seats();
+                self.texts
+                    .bind(registry, name, version, queue, &self.recorder(), &seats);
+            }
         } else if interface == ZwpTabletManagerV2::interface().name {
             let manager = registry.bind::<ZwpTabletManagerV2, (), WaylandState>(
                 name,
@@ -1059,7 +1091,9 @@ impl WaylandInput for SeatInput {
                 Some(objects.seats.remove(index))
             })
             .flatten();
+        self.texts.global_removed(name);
         if let Some(seat) = removed {
+            self.texts.seat_removed(&seat.seat);
             release_seat(seat, &self.shared, arrival(None));
         }
     }
@@ -1073,6 +1107,12 @@ impl WaylandInput for SeatInput {
                 break;
             }
             for wire in wires {
+                if let Wire::Text(text) = wire {
+                    // A field's store is application code: a panic there
+                    // costs that one event, never the rest of the batch.
+                    contain_owner_callback(|| self.texts.deliver(text));
+                    continue;
+                }
                 let inputs = self.assemble(wire);
                 self.refresh_capabilities();
                 self.hand_out(inputs);
@@ -1098,6 +1138,9 @@ impl WaylandInput for SeatInput {
             .flatten()
             .unwrap_or_else(|| availability::wayland(self.shared.globals()));
         window.delivery.set_input_capabilities(capabilities);
+        if let Some(text) = &window.text {
+            self.texts.attach(window.id, &window.surface, text);
+        }
         self.shared.windows.with(|windows| {
             windows.retain(|held| held.id != window.id);
             windows.push(Attached {
@@ -1112,6 +1155,7 @@ impl WaylandInput for SeatInput {
     }
 
     fn detach(&self, id: WindowId) {
+        self.texts.detach(id);
         let removed = self
             .shared
             .windows
@@ -1233,6 +1277,7 @@ impl WaylandInput for SeatInput {
     }
 
     fn release(&self) {
+        self.texts.release();
         let windows = self.shared.windows.with(std::mem::take).unwrap_or_default();
         let callbacks = self
             .shared
