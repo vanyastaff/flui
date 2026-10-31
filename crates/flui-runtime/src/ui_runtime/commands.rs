@@ -683,12 +683,12 @@ impl UiRuntime {
     fn fail_agent_job<T>(
         &self,
         reply: &super::agent::ReplySender<T>,
-        element: flui_protocol::ElementId,
+        element: Option<flui_protocol::ElementId>,
         failure: super::AgentError,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {
         let answered = catch_unwind(AssertUnwindSafe(|| {
-            super::agent::send_reply(reply, Some(element), Err(failure));
+            super::agent::send_reply(reply, element, Err(failure));
         }))
         .err();
         let mut first_panic = Some(payload);
@@ -911,7 +911,7 @@ impl UiRuntime {
                             } else {
                                 super::AgentError::ResolvePanicked { element }
                             };
-                            self.fail_agent_job(&reply, element, failure, payload);
+                            self.fail_agent_job(&reply, Some(element), failure, payload);
                         }
                     }
                 }
@@ -958,7 +958,7 @@ impl UiRuntime {
                             } else {
                                 super::AgentError::ResolvePanicked { element }
                             };
-                            self.fail_agent_job(&reply, element, failure, payload);
+                            self.fail_agent_job(&reply, Some(element), failure, payload);
                         }
                     }
                 }
@@ -991,7 +991,22 @@ impl UiRuntime {
                     params,
                     reply,
                 } => {
-                    let result = self.serve_agent_inspect(presentation_id, target, &params);
+                    // A render object's `debug_name` or an `inspect` override is app code: a
+                    // panic in it answers the request, then continues on the owner thread.
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        self.serve_agent_inspect(presentation_id, target, &params)
+                    }));
+                    let result = match served {
+                        Ok(result) => result,
+                        Err(payload) => {
+                            self.fail_agent_job(
+                                &reply,
+                                None,
+                                super::AgentError::InspectPanicked,
+                                payload,
+                            );
+                        }
+                    };
                     if result == Err(super::AgentError::PresentationGone) {
                         report.dropped_stale += 1;
                     } else {
@@ -1044,7 +1059,7 @@ impl UiRuntime {
                         } else {
                             super::AgentError::ResolvePanicked { element }
                         };
-                        self.fail_agent_job(&reply, element, failure, payload);
+                        self.fail_agent_job(&reply, Some(element), failure, payload);
                     }
                     let result = result.expect("BUG: no panic leaves the served result");
                     if result == Err(super::AgentError::PresentationGone) {

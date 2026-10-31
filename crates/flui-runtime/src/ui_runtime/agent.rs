@@ -124,6 +124,10 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
     },
+    /// A render object or view panicked while its tree was being read; the panic continues on
+    /// the owner thread. A read changes nothing.
+    #[error("reading the tree panicked")]
+    InspectPanicked,
     /// The presentation already holds as many waits as it admits; one ends before another is
     /// taken.
     #[error("the window already holds as many waits as it admits")]
@@ -182,7 +186,8 @@ impl AgentError {
             Self::Malformed
             | Self::HandlerPanicked { .. }
             | Self::ResolvePanicked { .. }
-            | Self::HitTestPanicked { .. } => ErrorCode::Platform,
+            | Self::HitTestPanicked { .. }
+            | Self::InspectPanicked => ErrorCode::Platform,
         }
     }
 

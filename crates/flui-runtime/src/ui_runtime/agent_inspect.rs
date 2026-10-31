@@ -46,12 +46,13 @@ impl UiRuntime {
                 .transpose()?,
             max_depth: params.max_depth,
             max_nodes: Some(
-                params
-                    .max_nodes
-                    .and_then(NonZeroU32::new)
-                    .map_or(MAX_NODES, |nodes| nodes.get().min(MAX_NODES))
-                    .try_into()
-                    .expect("BUG: the node limit is clamped to a non-zero count"),
+                NonZeroU32::try_from(
+                    params
+                        .max_nodes
+                        .and_then(NonZeroU32::new)
+                        .map_or(MAX_NODES, |nodes| nodes.get().min(MAX_NODES)),
+                )
+                .expect("BUG: the node limit is clamped to a non-zero count"),
             ),
             level: level_of(params.level),
         };

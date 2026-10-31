@@ -240,3 +240,102 @@ fn a_window_that_closed_answers_gone() {
     .expect_err("the window is gone");
     assert_eq!(error, AgentError::PresentationGone);
 }
+
+/// A render object's `debug_name` is app code the read calls: its panic answers the request with
+/// `InspectPanicked` before the panic continues on the owner thread, so the agent is not told
+/// the runtime is gone.
+#[test]
+fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use flui_foundation::geometry::Size;
+    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+    use flui_view::{IntoView, RenderView, View};
+    use flui_widgets::{Stack, Text};
+
+    #[derive(Debug)]
+    struct PanicsWhenNamedBox(Arc<AtomicBool>);
+    impl flui_foundation::Diagnosticable for PanicsWhenNamedBox {}
+    impl RenderBox for PanicsWhenNamedBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(Size::new(10.0, 10.0))
+        }
+        fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+        fn debug_name(&self) -> &'static str {
+            assert!(
+                !self.0.load(Ordering::SeqCst),
+                "a render object that cannot be named"
+            );
+            "PanicsWhenNamed"
+        }
+    }
+
+    #[derive(Clone)]
+    struct PanicsWhenNamed(Arc<AtomicBool>);
+    impl RenderView for PanicsWhenNamed {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = PanicsWhenNamedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> PanicsWhenNamedBox {
+            PanicsWhenNamedBox(Arc::clone(&self.0))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            _render_object: &mut PanicsWhenNamedBox,
+        ) -> flui_rendering::RenderUpdateImpact {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+    impl View for PanicsWhenNamed {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
+    let panics = Arc::new(AtomicBool::new(false));
+    let ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .enter(|ui_runtime| {
+            ui_runtime.attach_root_widget_to_for_test(
+                ui_runtime.presentation_id(),
+                &Stack::new(vec![
+                    Text::new("Press").into_view().boxed(),
+                    PanicsWhenNamed(Arc::clone(&panics)).into_view().boxed(),
+                ]),
+            )
+        })
+        .expect("the stack attaches");
+    let agent = ui_runtime
+        .semantics_agent(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut sink = ScriptedSink::always_presents();
+    frame(&ui_runtime, &mut sink);
+
+    panics.store(true, Ordering::SeqCst);
+    let mut reply = agent
+        .inspect(
+            InspectTarget::Render,
+            InspectParams::new(window(&ui_runtime)),
+        )
+        .expect("the inbox has room");
+    let unwound = catch_unwind(AssertUnwindSafe(|| ui_runtime.drain_commands()));
+    panics.store(false, Ordering::SeqCst);
+    assert!(unwound.is_err(), "the panic continues on the owner");
+    let failed = reply
+        .try_take()
+        .expect("the reply was answered before unwinding")
+        .expect_err("the panic is the answer");
+    assert_eq!(failed, AgentError::InspectPanicked);
+    assert_eq!(failed.code(), ErrorCode::Platform);
+    assert!(!failed.may_have_run(), "a read changes nothing");
+}

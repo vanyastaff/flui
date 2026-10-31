@@ -941,7 +941,7 @@ a handle of another tree is `invalid_argument`. A root that left its tree is `No
 (`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` answers
 `LayersNotKept` (`not_supported`): the sink takes the scene a frame paints, and the window keeps
 no copy to read between frames. Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
-reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`.
+reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render object or view that panics while the tree is read (`debug_name`, `inspect`) answers `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does; pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
