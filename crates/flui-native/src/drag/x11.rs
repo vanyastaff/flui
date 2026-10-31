@@ -805,8 +805,18 @@ impl X11Drag {
         }
     }
 
-    /// Do what a step left, with no lock held, and flush what it sent.
+    /// Do what a step left, with no lock held, and flush what it sent; a
+    /// panic of the window's handler resumes once the step's completions
+    /// are made.
     fn finish(&self, after: After) {
+        if let Err(failure) = self.try_finish(after) {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
+    /// [`Self::finish`], handing back the handler's panic, so a step that
+    /// owes the source an answer sends it before the panic goes on.
+    fn try_finish(&self, after: After) -> std::thread::Result<()> {
         if let Err(error) = self.connection.xcb().flush() {
             tracing::debug!(%error, "cannot send the XDND transfer's requests");
         }
@@ -814,14 +824,18 @@ impl X11Drag {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
         }
-        if let Some((target, event)) = after.dispatch {
-            target
-                .delivery
-                .dispatch_input(PlatformInput::DragDrop(event));
-        }
+        let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some((target, event)) = after.dispatch {
+                target
+                    .delivery
+                    .dispatch_input(PlatformInput::DragDrop(event));
+            }
+        }));
+        // A request accepted before the handler failed is still answered.
         for (completer, result) in after.completions {
             completer.complete(result);
         }
+        dispatched
     }
 
     /// What the server names `atoms` that the transfer has not asked about
@@ -1066,10 +1080,12 @@ impl X11Drag {
                 None => None,
             }
         };
-        self.finish(after);
+        let dispatched = self.try_finish(after);
         // The window may have concluded the offer, or closed, from inside its
-        // callback: the answer is what is cached now.
-        let answer = over.and_then(|id| {
+        // callback: the answer is what is cached now. A handler that panicked
+        // gave none, and the source still waits for one: it hears a refusal
+        // before the panic goes on.
+        let answer = over.filter(|_| dispatched.is_ok()).and_then(|id| {
             let state = self.state.lock();
             let hovering = state
                 .hover
@@ -1081,6 +1097,9 @@ impl X11Drag {
         let action = answer.map(|action| self.atoms.actions.atom_of(action));
         self.send(source, self.atoms.status, model::status(window, action));
         self.flush();
+        if let Err(failure) = dispatched {
+            std::panic::resume_unwind(failure);
+        }
     }
 
     /// Refuse a drag over `window`.

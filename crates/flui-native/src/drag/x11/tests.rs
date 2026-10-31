@@ -1101,3 +1101,53 @@ fn a_type_unnamed_or_named_past_a_media_type_is_refused_once() {
     };
     assert_eq!(offer.representations().len(), 1, "only the text offers");
 }
+
+/// A window whose handler panics as it hears of a drag still answers the
+/// source, with a refusal, before the panic goes on: at the enter and at a
+/// later movement.
+#[test]
+fn a_failing_drag_handler_still_answers_the_source() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.handler.react_to_input(|input| {
+        if let PlatformInput::DragDrop(event) = input {
+            panic!("the handler fails at {event:?}");
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    for (time, x) in [(10, 50), (11, 60)] {
+        source.position(target.xid, (x, 60), time, atoms.copy);
+        let deadline = Instant::now() + STEP;
+        let mut failed = false;
+        let status = loop {
+            failed |= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                target.deliver_events();
+            }))
+            .is_err();
+            if let Some(Event::ClientMessage(message)) = source.poll()
+                && message.type_ == atoms.status
+            {
+                assert!(failed, "the handler's panic went on");
+                break message.data.as_data32();
+            }
+            assert!(Instant::now() < deadline, "the source heard no status");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(status, model::status(target.xid, None));
+    }
+    let heard = target.heard();
+    assert!(
+        matches!(
+            heard.as_slice(),
+            [DragDropEvent::Entered { .. }, DragDropEvent::Moved { .. }]
+        ),
+        "the window heard {heard:?}"
+    );
+}
