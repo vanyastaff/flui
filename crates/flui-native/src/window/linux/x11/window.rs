@@ -1375,10 +1375,9 @@ impl PlatformWindow for X11Window {
         Some(Arc::clone(&self.facets.chrome))
     }
 
-    /// No OS drag session starts from an X11 window yet; its input
-    /// capabilities say so.
+    /// Its sessions run over XDND on the loop's transfer.
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        None
+        Some(Arc::clone(&self.drag).drag_source(self.window_ref()))
     }
 }
 

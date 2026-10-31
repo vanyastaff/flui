@@ -43,7 +43,7 @@ pub enum DragError {
     /// The session already concluded, or its owner is gone.
     #[error("the drag session is closed")]
     SessionClosed,
-    /// This backend cannot start an OS drag session (X11, a window without a
+    /// This backend cannot start an OS drag session (winit on X11, a window without a
     /// drag source), or not for this contact. The session stays in-window.
     #[error("no OS drag session can start: {0}")]
     Unsupported(#[from] Unsupported),
