@@ -1157,7 +1157,7 @@ impl X11Drag {
     /// source hears at once.
     fn drop_on(&self, source: xproto::Window, time: xproto::Timestamp) {
         let mut after = After::default();
-        let refused = {
+        let (refused, dropped) = {
             let mut state = self.state.lock();
             let Some(hover) = state.hover.as_ref().filter(|hover| hover.source == source) else {
                 return;
@@ -1191,16 +1191,51 @@ impl X11Drag {
                         position: offer.position,
                     },
                 ));
-                None
+                (None, Some(id))
             } else {
                 state.end_hover(&self.wire(), &mut after);
-                Some(window)
+                (Some(window), None)
             }
         };
         if let Some(window) = refused {
             self.send(source, self.atoms.finished, model::finished(window, None));
         }
-        self.finish(after);
+        let dispatched = self.try_finish(after);
+        if let (Err(_), Some(id)) = (&dispatched, dropped) {
+            // A handler that panicked as it heard the drop will not conclude
+            // it: the source, which waits for the finish, hears it refused.
+            self.abandon_drop(id);
+        }
+        if let Err(failure) = dispatched {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
+    /// Retire the dropped offer `id` the window will not conclude, and
+    /// finish it unaccepted; an offer the window concluded already is gone.
+    /// A failure on the way is retained: the window's goes on.
+    fn abandon_drop(&self, id: DataTransferId) {
+        let mut after = After::default();
+        let finished = {
+            let mut state = self.state.lock();
+            if state
+                .offers
+                .get(&id)
+                .is_some_and(|offer| offer.dropped.is_some())
+            {
+                state
+                    .retire(id, &self.wire(), &mut after)
+                    .map(|offer| (offer.source, offer.window))
+            } else {
+                None
+            }
+        };
+        if let Some((source, window)) = finished {
+            self.send(source, self.atoms.finished, model::finished(window, None));
+        }
+        if let Err(failure) = self.try_finish(after) {
+            std::mem::forget(failure);
+        }
     }
 
     /// The fetch converting into `requestor` read `read`, or failed.

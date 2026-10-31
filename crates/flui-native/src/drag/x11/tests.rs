@@ -1245,3 +1245,69 @@ fn requests_are_answered_though_the_handler_and_a_waker_fail() {
         );
     }
 }
+
+/// A window whose handler panics as it hears the drop it accepted, before
+/// concluding it, finishes the drop unaccepted before the panic goes on: the
+/// source does not wait for a finish no one will send, and the offer is
+/// stale.
+#[test]
+fn a_drop_whose_handler_fails_finishes_unaccepted() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let drag = Arc::downgrade(&target.drag);
+    target.handler.react_to_input(move |input| {
+        match &input {
+            PlatformInput::DragDrop(DragDropEvent::Dropped { .. }) => {
+                panic!("the handler fails at the drop")
+            }
+            PlatformInput::DragDrop(DragDropEvent::Entered { offer, .. }) => {
+                if let Some(drag) = drag.upgrade() {
+                    drag.update_drop_feedback(
+                        offer.id(),
+                        DropFeedback {
+                            accept: Some(TransferActions::COPY),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let id = entered(&target.heard());
+
+    source.send(target.xid, atoms.drop, [source.window, 0, 11, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    let mut failed = false;
+    let finished = loop {
+        failed |= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            target.deliver_events();
+        }))
+        .is_err();
+        if let Some(Event::ClientMessage(message)) = source.poll()
+            && message.type_ == atoms.finished
+        {
+            break message.data.as_data32();
+        }
+        assert!(Instant::now() < deadline, "the source heard no finish");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert!(failed, "the handler's panic went on");
+    assert_eq!(finished, model::finished(target.xid, None));
+    let mut request = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    assert!(matches!(
+        std::pin::Pin::new(&mut request).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(TransferError::StaleOffer(_)))
+    ));
+}
