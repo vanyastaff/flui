@@ -332,10 +332,19 @@ fn acceptance_app_runs_through_the_facade() {
     // The application encodes its documents with the consumer's own codec.
     let mut dependencies = table(&["material"]);
     let mut serde = toml::Table::new();
-    serde.insert("version".into(), "1".into());
-    serde.insert("features".into(), toml::Value::Array(vec!["derive".into()]));
-    dependencies.insert("serde".into(), serde.into());
-    dependencies.insert("serde_json".into(), "1".into());
+    serde.insert(
+        String::from("version"),
+        toml::Value::String(String::from("1")),
+    );
+    serde.insert(
+        String::from("features"),
+        toml::Value::Array(vec![toml::Value::String(String::from("derive"))]),
+    );
+    dependencies.insert(String::from("serde"), toml::Value::Table(serde));
+    dependencies.insert(
+        String::from("serde_json"),
+        toml::Value::String(String::from("1")),
+    );
     let project = consumer_project(dependencies, Some(table(&["material", "testing"])), "");
     let fixture = root.join("tests/fixtures/acceptance_app");
     copy_tree(&fixture, &project.path().join("src"));
