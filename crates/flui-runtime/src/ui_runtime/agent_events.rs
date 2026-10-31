@@ -257,9 +257,11 @@ impl PresentationState {
                 self.emit_agent_event(Event::Frame(FrameEvent::new(window, number, presented)));
             }
         }
-        let revision = self
-            .pipeline()
-            .with(|pipeline| pipeline.semantics_owner().map(|owner| owner.revision()));
+        let revision = self.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(flui_semantics::SemanticsOwner::revision)
+        });
         if let Some(revision) = revision {
             let changed = {
                 let mut hub = self.agent_events.borrow_mut();

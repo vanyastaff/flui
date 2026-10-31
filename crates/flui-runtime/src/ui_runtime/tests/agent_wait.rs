@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use flui_foundation::ManualClock;
 use flui_protocol::{
-    ActionName, ActionRequest, Condition, ErrorCode, EventFilter, EventKind, Locator, Retry,
-    UnsettledReason, WaitOutcome, WaitParams, WindowId,
+    ActionName, ActionRequest, Condition, ErrorCode, Locator, Retry, UnsettledReason, WaitOutcome,
+    WaitParams, WindowId,
 };
 
 use super::agent_semantics::{counter, find, frame, read};
