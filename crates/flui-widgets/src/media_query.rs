@@ -4,12 +4,12 @@
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
 //! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
-//! `preferred_locales`, `motion` — presentation and
+//! `preferred_locales`, `regional_formats`, `motion` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
-//! 24-hour-format preference, accessible navigation, inverted colors, display features, and
+//! Accessible navigation, inverted colors, display features, and
 //! navigation mode. Text-weight observation
 //! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
@@ -17,7 +17,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{EdgeInsets, Edges};
-use flui_platform::{Brightness, Locale};
+use flui_platform::{Brightness, Locale, RegionalFormats};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use std::sync::Arc;
@@ -51,6 +51,7 @@ use std::sync::Arc;
 /// - [`high_contrast`](Self::high_contrast)
 /// - [`motion`](Self::motion)
 /// - [`preferred_locales`](Self::preferred_locales)
+/// - [`regional_formats`](Self::regional_formats)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -112,6 +113,14 @@ pub struct MediaQueryData {
     /// `MediaQuery` replaces this value; copy parent data to preserve it when
     /// overriding another field.
     pub preferred_locales: Option<Arc<[Locale]>>,
+
+    /// The user's regional formats observed by the host: first weekday,
+    /// hour cycle, measurement, numbering system and region override
+    /// (ADR-0278). Empty when the host reported none. A date, time or number
+    /// formatter takes the resolved locale through
+    /// [`RegionalFormats::apply_to`]; the locale [`Localizations`](crate::Localizations)
+    /// resolves stays without these keys, so delegates match it as declared.
+    pub regional_formats: RegionalFormats,
 }
 
 impl Default for MediaQueryData {
@@ -128,6 +137,7 @@ impl Default for MediaQueryData {
             high_contrast: false,
             motion: flui_animation::MotionPolicy::Full,
             preferred_locales: None,
+            regional_formats: RegionalFormats::default(),
         }
     }
 }
@@ -335,6 +345,13 @@ impl MediaQuery {
     pub fn high_contrast_of(ctx: &dyn BuildContext) -> Option<bool> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_HIGH_CONTRAST, |d| {
             d.high_contrast
+        })
+    }
+
+    /// The user's regional formats, depending on `regional_formats` only.
+    pub fn regional_formats_of(ctx: &dyn BuildContext) -> Option<RegionalFormats> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_REGIONAL_FORMATS, |d| {
+            d.regional_formats.clone()
         })
     }
 }

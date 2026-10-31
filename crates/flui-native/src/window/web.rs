@@ -166,15 +166,108 @@ fn sample_state(
         metrics,
         appearance: page_appearance(),
         // The page owns the viewport; the canvas has no safe area of its own.
-        insets: flui_platform::WindowInsets::ZERO,
+        insets: flui_platform::WindowInsets::ZERO.with_keyboard(keyboard_over(canvas, size.height)),
         execution,
         occluded: hidden,
         hovered,
         // A page has no activation apart from the canvas's focus.
         active: focused,
-        capabilities: window_capabilities(),
+        capabilities: page_capabilities(),
     }
     .onto(state)
+}
+
+/// The soft keyboard over `canvas`, at rest where it is: the browser names
+/// no motion. Where the browser has `navigator.virtualKeyboard`, which the
+/// window asks to overlay the page's content, the keyboard's own
+/// rectangle; otherwise the layout viewport below the visual viewport, which
+/// the keyboard takes when it shrinks only the visual viewport (Safari and
+/// Firefox). A page zoomed in by a pinch has a smaller
+/// visual viewport with no keyboard, so it reports none; a keyboard that
+/// resizes the layout viewport resizes the canvas instead and covers none of
+/// it. The occlusion is in the logical pixels of a window `logical_height`
+/// tall, whatever transform scales the canvas on screen.
+fn keyboard_over(
+    canvas: &web_sys::HtmlCanvasElement,
+    logical_height: f64,
+) -> flui_platform::KeyboardInset {
+    let Some(frame) = web_sys::window().and_then(|window| {
+        overlaid_keyboard(&window).or_else(|| viewport_keyboard(&window))
+    })
+    // A keyboard with no area covers nothing, and the canvas is not laid out
+    // again to say so.
+    .filter(|frame| frame.width > 0.0 && frame.height > 0.0) else {
+        return flui_platform::KeyboardInset::HIDDEN;
+    };
+    // Both frames are in client coordinates: into the canvas's.
+    let bounds = canvas.get_bounding_client_rect();
+    let target = crate::window::keyboard::occlusion(
+        Size::new(bounds.width(), bounds.height()),
+        crate::window::keyboard::Frame {
+            x: frame.x - bounds.left(),
+            y: frame.y - bounds.top(),
+            ..frame
+        },
+    );
+    // The box a transform scales is measured scaled, and the window's size
+    // is not: the occlusion goes out in the window's logical pixels.
+    let scale = logical_height / bounds.height();
+    let target = if scale.is_finite() && scale > 0.0 {
+        flui_foundation::geometry::EdgeInsets::new(0.0, 0.0, target.bottom * scale, 0.0)
+    } else {
+        flui_foundation::geometry::EdgeInsets::ZERO
+    };
+    flui_platform::KeyboardInset::try_at_rest(target)
+        .unwrap_or(flui_platform::KeyboardInset::HIDDEN)
+}
+
+/// `navigator.virtualKeyboard`, where the browser has it.
+fn virtual_keyboard(window: &web_sys::Window) -> Option<web_sys::EventTarget> {
+    js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
+        .ok()?
+        .dyn_into::<web_sys::EventTarget>()
+        .ok()
+}
+
+/// The keyboard's rectangle from `navigator.virtualKeyboard`, which the
+/// browser reports only while the page has the keyboard overlay its content;
+/// an empty one while it is hidden.
+fn overlaid_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
+    let keyboard = virtual_keyboard(window)?;
+    let overlays = js_sys::Reflect::get(&keyboard, &JsValue::from_str("overlaysContent"))
+        .ok()?
+        .as_bool()?;
+    if !overlays {
+        return None;
+    }
+    // The API gives a `DOMRect`; only its four sides are read.
+    let rect = js_sys::Reflect::get(&keyboard, &JsValue::from_str("boundingRect"))
+        .ok()
+        .filter(JsValue::is_object)?
+        .unchecked_into::<web_sys::DomRect>();
+    Some(crate::window::keyboard::Frame {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    })
+}
+
+/// The layout viewport below the visual viewport, in client coordinates;
+/// `None` while the page is zoomed in.
+fn viewport_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
+    let visual = window.visual_viewport()?;
+    if visual.scale() > 1.0 + 1e-3 {
+        return None;
+    }
+    let layout = window.document()?.document_element()?;
+    let bottom = visual.offset_top() + visual.height();
+    Some(crate::window::keyboard::Frame {
+        x: 0.0,
+        y: bottom,
+        width: f64::from(layout.client_width()),
+        height: f64::from(layout.client_height()) - bottom,
+    })
 }
 
 /// The user's color scheme as the page sees it (`prefers-color-scheme`).
@@ -517,6 +610,7 @@ impl WebWindow {
         self.register_appearance_events(&mut registration)?;
         self.register_page_lifecycle_events(&mut registration)?;
         self.register_fullscreen_events(&mut registration)?;
+        self.register_keyboard_events(&mut registration)?;
         self.register_context_loss_events(&mut registration)?;
         // Host registration calls can change native state before its listeners
         // exist. Reconcile after successful installation, before Created.
@@ -658,6 +752,50 @@ impl WebWindow {
                 publisher.publish();
             }),
         )
+    }
+
+    /// The keyboard moving over the canvas: `navigator.virtualKeyboard`'s
+    /// `geometrychange` where the browser has it, which the page then asks to
+    /// overlay its content until the window retires, and whatever moves the
+    /// canvas in the viewport without a layout of its own (the page or an
+    /// ancestor scrolling, the visual viewport resizing or panning as the
+    /// browser scrolls the focused field into view).
+    fn register_keyboard_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let browser =
+            web_sys::window().expect("BUG: window construction verified browser environment");
+        let overlays = JsValue::from_str("overlaysContent");
+        if let Some(keyboard) = virtual_keyboard(&browser) {
+            // The window lays its content out around the keyboard itself
+            // (ADR-0277 §4): the browser keeps the viewport whole and does not
+            // scroll the canvas, and names the keyboard's rectangle instead.
+            // The setting is the page's, so the page gets back what it had
+            // when the window retires or fails to install; a browser that
+            // refuses keeps reporting through the viewport.
+            let previous = js_sys::Reflect::get(&keyboard, &overlays).unwrap_or(JsValue::FALSE);
+            let _ = js_sys::Reflect::set(&keyboard, &overlays, &JsValue::TRUE);
+            let restored = keyboard.clone();
+            registration.on_retire(Box::new(move || {
+                let _ = js_sys::Reflect::set(&restored, &overlays, &previous);
+            }));
+            let publisher = self.publisher();
+            registration.listen(
+                &keyboard,
+                "geometrychange",
+                Rc::new(move |_: web_sys::Event| {
+                    publisher.publish();
+                }),
+            )?;
+        }
+        let publisher = self.publisher();
+        let moved = crate::owner::web::listener::viewport_listeners(
+            &Accepting::reading(&registration.accepting),
+            move || publisher.publish(),
+        )?;
+        registration.listeners.extend(moved);
+        Ok(())
     }
 
     /// Tell the presentation when the canvas's WebGL context goes and comes back,
@@ -1021,11 +1159,24 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // A browser names when an animation frame starts (the
     // `requestAnimationFrame` timestamp), never when the frame it painted
     // reached the screen.
-    // A page has no system gesture edges; the virtual keyboard
-    // (`navigator.virtualKeyboard`, `visualViewport`) is not read yet.
+    // A page has no system gesture edges. Every browser can tell the keyboard
+    // from its visual viewport (`keyboard_over`), which is an estimate;
+    // `page_capabilities` says where it names the keyboard itself.
+    capabilities.reports_keyboard_inset = flui_platform::Availability::Emulated;
+    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+}
+
+/// What this page's window honours: [`window_capabilities`], with the
+/// keyboard reported natively where the browser has `navigator.virtualKeyboard`.
+fn page_capabilities() -> WindowCapabilities {
+    let mut capabilities = window_capabilities();
+    if web_sys::window()
+        .and_then(|window| virtual_keyboard(&window))
+        .is_some()
+    {
+        capabilities.reports_keyboard_inset = flui_platform::Availability::Native;
+    }
     capabilities
-        .without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
-        .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
 }
 
 impl std::fmt::Debug for WebWindow {

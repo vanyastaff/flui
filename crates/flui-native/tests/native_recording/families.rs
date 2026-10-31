@@ -430,6 +430,17 @@ fn platform_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(full.wheel().horizontal_characters(), Some(2));
     assert_eq!(
+        full.regional().hour_cycle(),
+        Some(flui_platform::HourCycle::H11),
+        "the regional formats survive the read"
+    );
+    assert_eq!(
+        full.regional()
+            .region()
+            .map(|region| region.code().to_owned()),
+        Some("GB".to_owned())
+    );
+    assert_eq!(
         target.reads[1],
         Read::Preferences(Err(ReadFailure {
             kind: FailureKind::Preferences,

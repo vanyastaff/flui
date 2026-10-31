@@ -13,9 +13,10 @@
 //!   lane and decoding on the compute lane. [`MemoryImage`] and
 //!   [`FileImage`] take this way, so neither decodes on the owner thread.
 //! - [`resolve_async`](ImageProvider::resolve_async): a future of the
-//!   provider's own, for a source with its own loader. `AssetImage` (behind
-//!   the `asset-images` feature) and `NetworkImage` (behind
-//!   `network-images`) take this way.
+//!   provider's own, for a source with its own loader, handed the same
+//!   background lanes. `AssetImage` (behind the `asset-images` feature) and
+//!   `NetworkImage` (behind `network-images`) take this way: their registry
+//!   reads and decodes on those lanes.
 //!
 //! A provider with no key, such as [`DirectImageProvider`], resolves inline
 //! on every build.
@@ -41,6 +42,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use flui_painting::paint::Image as PixelImage;
+use flui_view::background::Background;
 
 use super::cache_key::ImageCacheKey;
 
@@ -82,10 +84,17 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// thread; a provider that does so should also override
     /// [`cache_key`](Self::cache_key) to return `Some`, or [`Image`](crate::Image)
     /// never calls this method at all.
+    ///
+    /// `background` is the UI runtime's background lanes, for a provider
+    /// whose loader runs its own work on them; [`Image`](crate::Image) passes
+    /// `None` on a host without them, and a caller outside a widget passes
+    /// what it has.
     fn resolve_async(
         &self,
+        background: Option<&Background>,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
+        let _ = background;
         Box::pin(std::future::ready(self.resolve()))
     }
 
@@ -180,7 +189,7 @@ impl DecodeJob {
     /// Dropping the future cancels the step in flight.
     pub(super) fn run(
         self,
-        background: Option<flui_view::background::Background>,
+        background: Option<Background>,
     ) -> Pin<Box<dyn Future<Output = StepResult<PixelImage>>>> {
         let Some(background) = background else {
             return Box::pin(async move {

@@ -1819,6 +1819,33 @@ and writes only what changed between two specs.
   feed) and maps its offsets to the store's
   (`FieldValue`), so an edit next to a unit it cannot show keeps it; its
   selection keeps its direction.
+- **Static text that publishes runs is selected as the page's selection**
+  (ADR-0214). Its element's text is the runs' text joined, not its value
+  (which may join a label to it), so an offset in the page's selection is a
+  position in the runs: `selection::position_at` and `selection::offset_of`
+  convert UTF-16 offsets to (run, character) and back, a character being as
+  many UTF-8 bytes as the run's `character_lengths` says; an offset inside a
+  surrogate pair or a cluster moves back to the character's start. The last
+  selection static text published (`Op::Select`) is set as the page's
+  selection, again when the text it lies in is written or its element moved,
+  but only while the page's selection is empty, a caret or already in the
+  host: a selection of the page's own text stays. A `selectionchange` with
+  both ends in such text asks `SetTextSelection` of the nearest node over both that takes it (the
+  paragraph, or the selection area), and the page shows the published
+  selection again until the node publishes the new one; the published
+  selection itself asks for nothing.
+- **A live region enters the page empty.** A browser reads out a change to
+  a live region it has seen, not one inserted with its text, so an element
+  that is `aria-live` polite or assertive and created or replaced with text
+  is created without it (`hold_live_text`) and given the text its node holds
+  then once the page has rendered it: each region counts two animation
+  frames of its own (`FrameWait`, `count_frame`), whichever callback of its
+  frame created it, and a published selection in its text is shown again
+  once it is written. That covers an announcement published before the host
+  existed (the announcer nodes of ADR-0204 §4 are live regions) and a live
+  region the tree adds with its content. A region removed before then is not
+  written; a background tab runs no frame, so its regions are given their
+  text when it is shown again.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
@@ -1826,6 +1853,10 @@ and writes only what changed between two specs.
 `a_node_is_described_as_its_element`,
 `a_node_the_browser_must_act_on_is_its_native_element`,
 `a_text_field_is_a_native_field_of_its_kind`,
+`an_offset_in_the_text_is_a_run_and_a_character`,
+`a_paragraph_s_text_is_its_runs_and_its_offsets_their_positions`,
+`the_page_shows_the_published_selection`,
+`a_live_node_is_a_live_region`,
 `each_update_becomes_the_dom_operations_it_needs`,
 `a_scroller_scrolling_replaces_its_children`,
 `an_update_that_cannot_stand_is_refused_and_changes_nothing`,
@@ -1844,7 +1875,9 @@ Linux. In headless Chrome,
 `a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
 `a_field_keeps_the_line_breaks_it_cannot_show`,
 `a_textarea_s_line_feed_is_the_store_s_crlf`,
-`a_field_s_selection_keeps_its_direction` and
+`a_field_s_selection_keeps_its_direction`,
+`the_page_s_selection_is_the_selection_of_static_text`,
+`a_live_region_is_given_its_text_once_rendered` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 
