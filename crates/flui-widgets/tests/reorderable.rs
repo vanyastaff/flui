@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
@@ -56,6 +56,11 @@ struct Log {
     selected: RefCell<Vec<Option<String>>>,
     /// Whether each row's text sits in a `SelectionArea`.
     selectable: std::cell::Cell<bool>,
+    /// The rows the item builder built, by index.
+    built: RefCell<Vec<usize>>,
+    /// Whether the list has a feedback builder, and the rows it built.
+    with_feedback: std::cell::Cell<bool>,
+    fed: RefCell<Vec<usize>>,
 }
 
 /// The shelf: its model, what it recorded and whether the list is shown.
@@ -63,6 +68,8 @@ struct Log {
 struct Shelf {
     items: StateHandle<Vec<String>>,
     shown: StateHandle<bool>,
+    /// Whether the list scrolls horizontally.
+    horizontal: StateHandle<bool>,
     log: Rc<Log>,
 }
 
@@ -71,6 +78,7 @@ impl Shelf {
         Self {
             items: StateHandle::new(items.iter().map(|item| (*item).to_owned()).collect()),
             shown: StateHandle::new(true),
+            horizontal: StateHandle::new(false),
             log: Rc::default(),
         }
     }
@@ -81,6 +89,7 @@ impl Shelf {
         Self {
             items: StateHandle::new(names),
             shown: StateHandle::new(true),
+            horizontal: StateHandle::new(false),
             log: Rc::default(),
         }
     }
@@ -135,6 +144,8 @@ impl View for ShelfList {
 struct ShelfListState {
     items: StateHandle<Vec<String>>,
     shown: StateHandle<bool>,
+    /// Whether the list scrolls horizontally.
+    horizontal: StateHandle<bool>,
 }
 
 impl StatefulView for ShelfList {
@@ -144,6 +155,7 @@ impl StatefulView for ShelfList {
         ShelfListState {
             items: self.0.items.clone(),
             shown: self.0.shown.clone(),
+            horizontal: self.0.horizontal.clone(),
         }
     }
 }
@@ -152,6 +164,7 @@ impl ViewState<ShelfList> for ShelfListState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.items.bind(ctx);
         self.shown.bind(ctx);
+        self.horizontal.bind(ctx);
     }
 
     fn build(&self, view: &ShelfList, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -159,6 +172,13 @@ impl ViewState<ShelfList> for ShelfListState {
             return SizedBox::shrink().into_view().boxed();
         }
         let shelf = &view.0;
+        let horizontal = self.horizontal.with(|horizontal| *horizontal);
+        // A row is `ROW` along the list, the rest of the cross axis beside its handle.
+        let (width, height) = if horizontal {
+            (ROW, 152.0)
+        } else {
+            (352.0, ROW)
+        };
         let count = self.items.with(Vec::len);
         let (keys, rows, labels, model) = (
             self.items.clone(),
@@ -166,19 +186,21 @@ impl ViewState<ShelfList> for ShelfListState {
             self.items.clone(),
             self.items.clone(),
         );
+        let (fed, with_feedback) = (Rc::clone(&shelf.log), shelf.log.with_feedback.get());
         let (moved, previewed, selecting) = (
             Rc::clone(&shelf.log),
             Rc::clone(&shelf.log),
             Rc::clone(&shelf.log),
         );
-        ReorderableList::builder(
+        let list = ReorderableList::builder(
             count,
             move |index| keys.with(|items| items[index].clone()),
             move |item| {
+                selecting.built.borrow_mut().push(item.index());
                 let name = rows.with(|items| items[item.index()].clone());
                 let text = Text::new(name);
                 if !selecting.selectable.get() {
-                    return SizedBox::new(352.0, ROW).child(text).into_view().boxed();
+                    return SizedBox::new(width, height).child(text).into_view().boxed();
                 }
                 let record = Rc::clone(&selecting);
                 let area = SelectionArea::new(text).on_selection_changed(move |_cx, change| {
@@ -189,7 +211,7 @@ impl ViewState<ShelfList> for ShelfListState {
                             .map(|selected| selected.text.clone()),
                     );
                 });
-                SizedBox::new(352.0, ROW).child(area).into_view().boxed()
+                SizedBox::new(width, height).child(area).into_view().boxed()
             },
             move |_cx, change| {
                 moved
@@ -205,8 +227,20 @@ impl ViewState<ShelfList> for ShelfListState {
         .item_label(move |index| labels.with(|items| items[index].clone()))
         .on_reorder_preview(move |_cx, preview| previewed.previews.borrow_mut().push(preview))
         .item_extent_estimate(ROW)
-        .into_view()
-        .boxed()
+        .scroll_direction(if horizontal {
+            Axis::Horizontal
+        } else {
+            Axis::Vertical
+        });
+        let list = if with_feedback {
+            list.feedback(move |item| {
+                fed.fed.borrow_mut().push(item.index());
+                SizedBox::new(120.0, ROW)
+            })
+        } else {
+            list
+        };
+        list.into_view().boxed()
     }
 }
 
@@ -413,27 +447,98 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
 }
 
 /// While a drag runs, the preview reports each row it moves over, once per
-/// change, from the dragged item's index.
+/// change, from the dragged item's index: none between two rows, "over none"
+/// once the drag leaves the list, and once more when a drag ends over a row.
 pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    let seen = || -> Vec<(usize, Option<usize>)> {
+        shelf
+            .log
+            .previews
+            .borrow()
+            .iter()
+            .map(|preview| (preview.from, preview.over))
+            .collect()
+    };
     let mut laid = shelf.mount();
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(1, HANDLE_X));
     laid.pump();
     laid.dispatch_pointer_move(row_at(1, HANDLE_X).0, row_at(1, HANDLE_X).1 + 2.0);
     laid.dispatch_pointer_move(row_at(3, HANDLE_X).0, row_at(3, HANDLE_X).1);
     laid.pump();
+    assert_eq!(seen(), [(0, Some(0)), (0, Some(1)), (0, Some(3))]);
+    laid.dispatch_pointer_move(450.0, row_at(1, HANDLE_X).1);
+    laid.pump();
+    assert_eq!(
+        seen(),
+        [(0, Some(0)), (0, Some(1)), (0, Some(3)), (0, None)],
+        "a drag that left the list is over no row"
+    );
+    laid.dispatch_pointer_move(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    laid.pump();
     press(&laid, &SingleActivator::named(NamedKey::Escape));
+    laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(
+        seen(),
+        [
+            (0, Some(0)),
+            (0, Some(1)),
+            (0, Some(3)),
+            (0, None),
+            (0, Some(2)),
+            (0, None)
+        ],
+        "a cancelled drag ends over no row"
+    );
+    assert_eq!(shelf.moves(), []);
+}
+
+/// A drag shows the list's feedback under the pointer, the row's label by
+/// default; the item builder builds each row once, so what a row owns alone
+/// (a field's focus node, a controller) is never mounted twice.
+pub(crate) fn a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row() {
+    let built = |shelf: &Shelf| shelf.log.built.borrow().iter().filter(|i| **i == 0).count();
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    let mut laid = shelf.mount();
+    let before = built(&shelf);
+    assert_eq!(before, 1, "a row is built once");
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    laid.pump();
+    assert_eq!(built(&shelf), before, "the drag builds no copy of the row");
+    laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    settle(&mut laid);
+
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    let mut laid = shelf.mount();
+    mouse_drag(&laid, row_at(1, HANDLE_X), row_at(3, HANDLE_X));
+    laid.pump();
+    assert!(
+        shelf.log.fed.borrow().contains(&1),
+        "the dragged row's feedback comes from the list's builder"
+    );
     laid.dispatch_pointer_up(row_at(3, HANDLE_X).0, row_at(3, HANDLE_X).1);
     settle(&mut laid);
-    let seen: Vec<(usize, Option<usize>)> = shelf
-        .log
-        .previews
-        .borrow()
-        .iter()
-        .map(|preview| (preview.from, preview.over))
-        .collect();
-    assert_eq!(seen, [(0, Some(0)), (0, Some(1)), (0, Some(3))]);
-    assert_eq!(shelf.moves(), []);
+    assert_eq!(shelf.moves(), [(1, 3, ReorderCause::Drag)]);
+}
+
+/// A list turned horizontal after it mounted drags its rows by a handle
+/// moved along the new axis: the handles' recognizers follow the list's axis.
+pub(crate) fn a_list_that_turns_horizontal_drags_along_its_new_axis() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    let mut laid = shelf.mount();
+    shelf.horizontal.update(|horizontal| *horizontal = true);
+    settle(&mut laid);
+    // A horizontal row is a column `ROW` wide, its handle band on top.
+    let handle = |index: f64| (index * ROW + ROW / 2.0, HANDLE_X);
+    laid.dispatch_pointer_down(handle(0.0).0, handle(0.0).1);
+    laid.dispatch_pointer_move(handle(0.0).0 + 15.0, handle(0.0).1);
+    laid.dispatch_pointer_move(handle(3.0).0, handle(3.0).1);
+    laid.pump();
+    laid.dispatch_pointer_up(handle(3.0).0, handle(3.0).1);
+    settle(&mut laid);
+    assert_eq!(shelf.moves(), [(0, 3, ReorderCause::Drag)]);
 }
 
 /// The move commands: Alt+Down with focus in a row and assistive

@@ -210,6 +210,7 @@ pub struct ReorderableList {
     item_count: usize,
     key_of: KeyFn,
     item: ItemFn,
+    feedback: Option<ItemFn>,
     on_reorder: ReorderFn,
     on_reorder_preview: Option<PreviewFn>,
     item_label: Option<LabelFn>,
@@ -250,6 +251,7 @@ impl ReorderableList {
             item_count,
             key_of: Rc::new(move |index| Rc::new(ValueKey::new(key(index))) as Rc<dyn ViewKey>),
             item: Rc::new(move |row| item(row).into_view().boxed()),
+            feedback: None,
             on_reorder: Rc::new(move |cx, change| on_reorder(cx, change).report()),
             on_reorder_preview: None,
             item_label: None,
@@ -259,6 +261,21 @@ impl ReorderableList {
             scroll_direction: Axis::Vertical,
             item_extent_estimate: 56.0,
         }
+    }
+
+    /// What a drag of a row shows under the pointer; the row's label
+    /// ([`item_label`](Self::item_label)) by default, nothing without one.
+    ///
+    /// `feedback` builds a second view beside the row, which stays mounted
+    /// while it is dragged: it must not reuse what the row owns alone, such
+    /// as a text field's focus node or a controller.
+    #[must_use]
+    pub fn feedback<V: IntoView>(
+        mut self,
+        feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static,
+    ) -> Self {
+        self.feedback = Some(Rc::new(move |row| feedback(row).into_view().boxed()));
+        self
     }
 
     /// Called as a drag of a row moves over the rows: where a drop would put
@@ -467,7 +484,8 @@ impl ViewState<ReorderableList> for ReorderableListState {
         let _prev = self.shared.view.replace(view.clone());
         let shared = Rc::clone(&self.shared);
         let list = view.clone();
-        Scrollable::new()
+        let left = Rc::clone(&self.shared);
+        let scrollable = Scrollable::new()
             .scroll_direction(view.scroll_direction)
             .viewport_builder(Rc::new(move |position| {
                 let shared = Rc::clone(&shared);
@@ -489,6 +507,16 @@ impl ViewState<ReorderableList> for ReorderableListState {
                 .position(position)
                 .boxed()
             }))
+            .boxed();
+        // The rows report where a drag is; the list as a whole reports that it
+        // left. A row's own leave would report "over none" between two rows.
+        DropTarget::bare(|_drag| None, move |_hover| scrollable.clone()).on_leave(move |drag| {
+            if let Some(payload) = drag.value::<RowPayload>()
+                && Rc::ptr_eq(&payload.list, &left)
+            {
+                left.hover(&*payload.key, None);
+            }
+        })
     }
 }
 
@@ -512,7 +540,7 @@ impl HandleSource {
         let list = Rc::clone(&self.list);
         let key = Rc::clone(&self.key);
         let started = Rc::clone(&self.list);
-        let ended = Rc::clone(&self.list);
+        let (ended, ended_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
         let feedback = self.feedback.clone();
         Draggable::bare(
             move || {
@@ -527,7 +555,8 @@ impl HandleSource {
         .reach(DragReach::Window)
         .feedback(move || feedback.clone())
         .on_drag_started(move |_cx| started.over.set(None))
-        .on_drag_end(move |_cx, _outcome| ended.over.set(None))
+        // A drag that ends anywhere, dropped or not, is over no row now.
+        .on_drag_end(move |_cx, _outcome| ended.hover(&*ended_key, None))
     }
 
     fn handle(&self, child: BoxedView) -> BoxedView {
@@ -682,8 +711,9 @@ impl StatelessView for ReorderRow {
                 handle,
             })
         };
-        // The content the drag shows under the pointer: the row without a
-        // handle of its own.
+        // What the drag shows under the pointer. Never the row's own content
+        // built again: that would mount a second copy of whatever the row
+        // owns alone (a field's focus node, a controller).
         let bare_source = HandleSource {
             list: Rc::clone(&self.list),
             key: Rc::clone(&self.key),
@@ -691,7 +721,17 @@ impl StatelessView for ReorderRow {
             menu,
             axis: view.scroll_direction,
         };
-        let feedback = item(&bare_source);
+        let feedback = match &view.feedback {
+            Some(feedback) => feedback(&ReorderableItem {
+                index,
+                key: &*self.key,
+                handle: &bare_source,
+            }),
+            None => match view.item_label.as_ref().map(|label| label(index)) {
+                Some(label) => Text::new(label).boxed(),
+                None => SizedBox::shrink().boxed(),
+            },
+        };
         let source = HandleSource {
             feedback,
             ..bare_source

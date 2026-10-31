@@ -60,6 +60,9 @@ pub enum DropHover {
 type AcceptFn = Rc<dyn Fn(&DragView<'_>) -> Option<TransferActions>>;
 /// Called with the drop.
 type DropFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>, DragPoint, TransferActions)>;
+/// Told that a drag left the target without dropping, as the drag machinery
+/// reports it, outside any write.
+type LeaveFn = Rc<dyn Fn(&DragView<'_>)>;
 /// Called when a hover spring-loads the target.
 type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
 
@@ -83,6 +86,7 @@ pub struct DropTarget {
     accept: AcceptFn,
     builder: Rc<dyn Fn(DropHover) -> BoxedView>,
     on_drop: Option<DropFn>,
+    on_leave: Option<LeaveFn>,
     spring_loading: Option<SpringLoading>,
     on_spring_loaded: Option<SpringFn>,
 }
@@ -146,6 +150,7 @@ impl DropTarget {
             accept: Rc::new(accept),
             builder: Rc::new(builder),
             on_drop: None,
+            on_leave: None,
             spring_loading: None,
             on_spring_loaded: None,
         })
@@ -162,6 +167,7 @@ impl DropTarget {
             accept: Rc::new(accept),
             builder: Rc::new(builder),
             on_drop: None,
+            on_leave: None,
             spring_loading: None,
             on_spring_loaded: None,
         }
@@ -200,6 +206,14 @@ impl DropTarget {
         self
     }
 
+    /// Told when a drag leaves the target without dropping on it, or ends
+    /// while over it: for a widget that tracks which of its targets a drag is
+    /// over (a reorderable row's preview).
+    pub(crate) fn on_leave(mut self, callback: impl Fn(&DragView<'_>) + 'static) -> Self {
+        self.on_leave = Some(Rc::new(callback));
+        self
+    }
+
     /// Spring-load: once a drag has hovered the target for `policy`'s delay,
     /// `callback` runs, once per hover (it opens a folder, switches a tab).
     #[must_use]
@@ -219,6 +233,7 @@ impl DropTarget {
 struct TargetConfig {
     accept: AcceptFn,
     on_drop: Option<DropFn>,
+    on_leave: Option<LeaveFn>,
     spring_loading: Option<SpringLoading>,
     on_spring_loaded: Option<SpringFn>,
 }
@@ -228,6 +243,7 @@ impl TargetConfig {
         Self {
             accept: Rc::clone(&view.accept),
             on_drop: view.on_drop.clone(),
+            on_leave: view.on_leave.clone(),
             spring_loading: view.spring_loading,
             on_spring_loaded: view.on_spring_loaded.clone(),
         }
@@ -312,6 +328,10 @@ impl DropReceiver for TargetReceiver {
 
     fn drag_left(&self, drag: &DragView<'_>) {
         self.forget(drag);
+        let on_leave = self.config.borrow().on_leave.clone();
+        if let Some(on_leave) = on_leave {
+            on_leave(drag);
+        }
     }
 
     fn dropped(&self, drag: &DragView<'_>, at: DragPoint, action: TransferActions) {

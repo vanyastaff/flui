@@ -6,7 +6,8 @@
   end") are assistive-technology actions on the row, Alt with the arrows, Home and End while focus
   is in the row, and a context menu opened from the handle, or visible controls with
   `visible_controls`. Every move is announced with the row's new position
-  (`WidgetsLocalizations::reorder_item_moved`), and a moved row keeps its focus.
+  (`WidgetsLocalizations::reorder_item_moved`), and a moved row keeps its focus. The drag shows
+  the row's label under the pointer, or what `feedback` builds.
 
 ### Changed
 

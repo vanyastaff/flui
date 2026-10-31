@@ -205,16 +205,16 @@ impl Draggable {
         }
     }
 
-    /// Only contacts of `devices` start a drag; read when the draggable mounts.
+    /// Only contacts of `devices` start a drag; a change replaces the recognizers.
     pub(crate) fn devices(mut self, devices: PointerKindSet) -> Self {
         self.devices = devices;
         self
     }
 
-    /// The axis a contact must move along to start the drag, fixed at mount: a
+    /// The axis a contact must move along to start the drag: a
     /// list's handle takes its list's axis, so the drag, deeper than the
     /// list's scroll on the same axis, wins the contact (ADR-0208 §2). The
-    /// drag then follows the pointer freely.
+    /// drag then follows the pointer freely. A change replaces the recognizers.
     pub(crate) fn axis(mut self, axis: MultiDragAxis) -> Self {
         self.axis = axis;
         self
@@ -724,9 +724,9 @@ pub struct DraggableState {
     hold: Option<Rc<LongPressGestureRecognizer>>,
     /// The trigger the view asks for, and the scope's arena and settings.
     trigger: DragTrigger,
-    /// The devices whose contacts start a drag, fixed at mount.
+    /// The devices whose contacts start a drag; a change replaces the recognizers.
     devices: PointerKindSet,
-    /// The axis a contact must move along to start a drag, fixed at mount.
+    /// The axis a contact must move along to start a drag; a change replaces the recognizers.
     axis: MultiDragAxis,
     policy: Option<GesturePolicy>,
     /// The hold of an enclosing context menu, and whether the widget's own
@@ -787,6 +787,8 @@ struct BuiltFor {
     trigger: DragTrigger,
     enclosing_hold: Option<Rc<SequencedBranch>>,
     own_menu: bool,
+    devices: PointerKindSet,
+    axis: MultiDragAxis,
 }
 
 impl BuiltFor {
@@ -800,6 +802,8 @@ impl BuiltFor {
         self.policy == wanted.policy
             && self.trigger == wanted.trigger
             && self.own_menu == wanted.own_menu
+            && self.devices == wanted.devices
+            && self.axis == wanted.axis
             && same_hold
     }
 }
@@ -832,6 +836,8 @@ impl DraggableState {
             trigger,
             enclosing_hold: self.enclosing_hold.clone(),
             own_menu: self.own_menu,
+            devices: self.devices,
+            axis: self.axis,
         };
         if self
             .built_for
@@ -946,17 +952,23 @@ impl ViewState<Draggable> for DraggableState {
         self.rebuild_recognizers();
     }
 
-    /// A new trigger, or alternatives that turn into a menu or out of one,
-    /// replace the recognizers; a drag already running keeps going until the
-    /// replaced ones cancel it.
+    /// A new trigger, device set or axis, or alternatives that turn into a
+    /// menu or out of one, replace the recognizers; a drag already running
+    /// keeps going until the replaced ones cancel it.
     fn did_update_view(&mut self, _old_view: &Draggable, new_view: &Draggable) {
         let own_menu = new_view
             .alternatives
             .as_ref()
             .is_some_and(GestureAlternatives::is_menu);
-        if new_view.trigger != self.trigger || own_menu != self.own_menu {
+        if new_view.trigger != self.trigger
+            || own_menu != self.own_menu
+            || new_view.devices != self.devices
+            || new_view.axis != self.axis
+        {
             self.trigger = new_view.trigger;
             self.own_menu = own_menu;
+            self.devices = new_view.devices;
+            self.axis = new_view.axis;
             if self.built_for.is_some() {
                 self.rebuild_recognizers();
             }
