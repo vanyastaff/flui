@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use flui::platform::StorageError;
 use flui::testing::DropLedger;
 use flui::view::ErrorView;
 
@@ -85,4 +86,36 @@ fn a_panicking_note_build_shows_error_view_and_other_screens_work() {
     run.tap("Back");
     run.tap("Compact rows: off");
     assert!(run.shows("Compact rows: on"), "Home takes input");
+}
+
+/// R23: a close held by a failed save drops nothing, kept open or asked
+/// again; the user's Close without saving then closes the window, and the
+/// exit drops every value the application kept.
+#[test]
+fn a_held_close_drops_nothing_until_the_user_decides() {
+    let ledgers = Ledgers::default();
+    let mut run = AppRun::start(AcceptanceApp::new(Faults::NONE).with_planter(ledgers.planter()));
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.storage().fail_next(StorageError::Full);
+    run.tap("Save note");
+    let before = ledgers.live();
+    for (kind, live) in before {
+        assert!(live > 0, "the note's screen keeps no {kind}");
+    }
+
+    run.request_close();
+    assert!(!run.is_closed(), "the failed save holds the close");
+    assert_eq!(ledgers.live(), before, "a held close drops nothing");
+    run.tap("Keep open");
+    assert_eq!(ledgers.live(), before, "nor does keeping the window open");
+    run.request_close();
+    assert_eq!(ledgers.live(), before, "nor a close asked again");
+
+    run.tap("Close without saving");
+    assert!(run.is_closed(), "the user's decision closes the window");
+    drop(run);
+    for (kind, live) in ledgers.live() {
+        assert_eq!(live, 0, "{live} {kind} outlived the exit");
+    }
 }
