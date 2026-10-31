@@ -1,10 +1,3 @@
-### Changed
+### Security
 
-- **`flui-app`**: when the first locale of the system preferences changes, the host font feed's
-  thread asks the platform again which faces fall back and installs the new order, so text in
-  Han and other locale-sensitive scripts follows the new locale
-  ([ADR-0271](/docs/adr/ADR-0271-the-host-feed-asks-the-platform-which-faces-fall-back.md) §4).
-
-### Added
-
-- **`flui-painting`**: `FallbackOrder::locale`, the locale of the fallback order installed last.
+- macOS: a focused protected text field holds the process's secure event input (`EnableSecureEventInput`), as `NSSecureTextField` does, so other processes' event taps do not see the password being typed. The hold is given back when the field loses focus or protection, and when its view goes away.

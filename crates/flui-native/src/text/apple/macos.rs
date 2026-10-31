@@ -81,6 +81,17 @@ impl Drop for TextView {
     }
 }
 
+// HIToolbox's secure event input, which `NSSecureTextField` turns on while it
+// edits; the Carbon umbrella framework exports it.
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    /// Take one hold on the process's secure event input; `noErr` (0) on
+    /// success.
+    fn EnableSecureEventInput() -> i32;
+    /// Give one hold back; `noErr` (0) on success.
+    fn DisableSecureEventInput() -> i32;
+}
+
 /// A content view's `NSTextInputContext`, reached through the view.
 struct ViewInputContext {
     /// The view, alive while the client holds this: the client drops it as
@@ -125,6 +136,28 @@ impl InputContext for ViewInputContext {
                 let _: () = msg_send![context, invalidateCharacterCoordinates];
             }
         }
+    }
+
+    fn set_secure_input(&self, secure: bool) -> bool {
+        // SAFETY: both functions take no arguments and only move the
+        // process's hold count; the client pairs each hold it took with one
+        // give-back, so the count never goes below what others hold.
+        let status = unsafe {
+            if secure {
+                EnableSecureEventInput()
+            } else {
+                DisableSecureEventInput()
+            }
+        };
+        if status != 0 {
+            tracing::warn!(
+                target: "flui.text.macos",
+                status,
+                secure,
+                "the system refused to change secure event input"
+            );
+        }
+        status == 0
     }
 }
 
