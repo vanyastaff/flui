@@ -264,14 +264,22 @@ impl Mirror {
                 ops.push(Op::Focus(focus));
             }
         }
-        self.select(selected, rewritten, &mut ops);
+        // An element moved or replaced takes the page's selection in it
+        // along: shown again like text written again.
+        let moved = ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::Replace { .. } | Op::Children { .. } | Op::Root(_) | Op::Detach(_)
+            )
+        });
+        self.select(selected, rewritten || moved, &mut ops);
         Ok(ops)
     }
 
     /// Follow the selections `selected` names, as (node, published
     /// selection): the last one published is the page's. The one shown is
     /// dropped when its node left the tree or published none, and shown
-    /// again when text it may lie in was `rewritten`.
+    /// again when text it may lie in was `rewritten` or moved.
     fn select(
         &mut self,
         selected: Vec<(NodeId, Option<TextSelection>)>,
@@ -909,7 +917,7 @@ mod tests {
     }
 
     /// The page shows the selection static text last published, again when
-    /// the text it lies in is written, and none once it is cleared or its
+    /// the text it lies in is written or moved, and none once it is cleared or its
     /// node goes.
     #[test]
     fn the_page_shows_the_published_selection() {
@@ -933,10 +941,23 @@ mod tests {
             vec!["update 22".to_owned(), select(Some(across))],
             "the rewritten text drops the page's selection, so it is shown again"
         );
+        let mut reordered = area(Some(across));
+        reordered.set_children(vec![SECOND, FIRST]);
+        let ops = mirror
+            .apply(partial(vec![(AREA, reordered)], ROOT))
+            .expect("the paragraphs swap");
+        assert_eq!(
+            kinds(&ops).last(),
+            Some(&select(Some(across))),
+            "moved elements drop the page's selection in them, so it is shown again"
+        );
         let ops = mirror
             .apply(partial(vec![(AREA, area(None))], ROOT))
-            .expect("the selection is cleared");
-        assert_eq!(kinds(&ops), vec![select(None)]);
+            .expect("the selection is cleared, the paragraphs back in order");
+        assert_eq!(
+            kinds(&ops),
+            vec!["children 20 [21, 22]".to_owned(), select(None)]
+        );
         assert_eq!(mirror.selection(), None);
 
         mirror
