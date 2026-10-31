@@ -9,9 +9,10 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::notifier::ChangeNotifier;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, BuildContextExt};
+use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
@@ -260,6 +261,7 @@ impl<R: Routable> StatefulView for Router<R> {
             transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
+            announcer: StackAnnouncer::default(),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
             shared: Rc::downgrade(&shared),
@@ -326,12 +328,16 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// this router's handle, the facade, a back gesture or a barrier — reaches
     /// the stack; then seed the initial pages, which the navigator flushes
     /// once when it mounts.
-    fn init_state(&mut self, _cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
         self.shared
             .navigator
             .add_observer(Arc::clone(&self.observer));
         self.seed_initial_pages();
+        // The stack it opens on is not a change.
+        let announcer = &self.shared.announcer;
+        *announcer.driver.borrow_mut() = cx.async_driver();
+        *announcer.told.borrow_mut() = self.shared.page_ids();
     }
 
     fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
@@ -423,6 +429,23 @@ pub(super) struct RouterShared<R: Routable> {
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
+    /// Tells the listeners of every [`RouterHandle`] of stack changes.
+    pub(super) announcer: StackAnnouncer,
+}
+
+/// Tells a router's listeners of committed stack changes, one delivery at a
+/// time on the UI runtime's tasks.
+#[derive(Default)]
+pub(super) struct StackAnnouncer {
+    pub(super) notifier: ChangeNotifier,
+    /// The pages the listeners were last told of, bottom to top.
+    told: RefCell<Vec<RouteId>>,
+    /// Whether a delivery is queued and has not started yet.
+    queued: Cell<bool>,
+    /// Where deliveries run; set when the router mounts.
+    driver: RefCell<Option<AsyncDriver>>,
+    /// The latest delivery's task.
+    delivery: RefCell<Option<TaskToken>>,
 }
 
 impl<R: Routable> Drop for RouterShared<R> {
@@ -432,7 +455,8 @@ impl<R: Routable> Drop for RouterShared<R> {
         let stack = RetiredValues(std::mem::take(self.stack.get_mut()));
         let page = self.page.withdraw();
         let transitions = self.transitions.withdraw();
-        drop((navigator, stack, page, transitions));
+        let delivery = self.announcer.delivery.get_mut().take();
+        drop((navigator, stack, page, transitions, delivery));
     }
 }
 
@@ -502,7 +526,7 @@ impl<R: Routable> RouterShared<R> {
     }
 
     /// Drop the page `id` names, if it is one of this router's.
-    fn forget(&self, id: RouteId) {
+    fn forget(self: &Rc<Self>, id: RouteId) {
         let retired = {
             let mut stack = self.stack.borrow_mut();
             stack
@@ -511,6 +535,50 @@ impl<R: Routable> RouterShared<R> {
                 .map(|index| stack.remove(index))
         };
         drop(RouterRetiredValues(retired.into_iter().collect()));
+        self.announce();
+    }
+
+    /// The ids of the pages on the stack, bottom to top.
+    fn page_ids(&self) -> Vec<RouteId> {
+        self.stack.borrow().iter().map(|entry| entry.id).collect()
+    }
+
+    /// Queue a delivery to the listeners if the stack is no longer the one
+    /// they were told of and none is queued. Runs no listener: they run in
+    /// the delivery, on a later turn of the runtime's tasks.
+    pub(super) fn announce(self: &Rc<Self>) {
+        let announcer = &self.announcer;
+        if announcer.queued.get() || *announcer.told.borrow() == self.page_ids() {
+            return;
+        }
+        let Some(driver) = announcer.driver.borrow().clone() else {
+            return;
+        };
+        announcer.queued.set(true);
+        let shared = Rc::downgrade(self);
+        let token = driver.spawn_local(Box::pin(async move { deliver(&shared) }));
+        // The task it replaces has run, or is the delivery running now,
+        // whose cancellation is honoured once its poll returns.
+        let finished = announcer.delivery.borrow_mut().replace(token);
+        drop(finished);
+    }
+}
+
+/// Tell `shared`'s listeners of the stack, if it still differs from the one
+/// they were last told of.
+fn deliver<R: Routable>(shared: &Weak<RouterShared<R>>) {
+    let Some(shared) = shared.upgrade() else {
+        return;
+    };
+    let announcer = &shared.announcer;
+    announcer.queued.set(false);
+    let now = shared.page_ids();
+    let changed = *announcer.told.borrow() != now;
+    *announcer.told.borrow_mut() = now;
+    // Recorded before the listeners run: a navigation they make queues the
+    // next delivery, and a panic in one leaves the next delivery to come.
+    if changed && shared.mounted.get() {
+        announcer.notifier.notify_listeners();
     }
 }
 

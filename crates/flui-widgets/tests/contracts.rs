@@ -980,6 +980,8 @@ fn router_and_widgets_app() {
             ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
             ("router::from_stack_restores_back_order", crate::router::from_stack_restores_back_order),
             ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
+            ("router::stack_listeners_hear_each_committed_change_once", crate::router::stack_listeners_hear_each_committed_change_once),
+            ("router::a_stack_listener_may_navigate", crate::router::a_stack_listener_may_navigate),
             ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
             ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
             ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),

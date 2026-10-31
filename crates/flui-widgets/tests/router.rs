@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
+use flui_foundation::notifier::Listenable;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
@@ -1894,5 +1895,130 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
         covered,
         Some(last_entering + 1),
         "the lower page is added, covering Home, in the frame the top's entrance settles"
+    );
+}
+
+/// Record the stack each time `router` tells its listeners.
+fn listen(router: &RouterHandle<AppRoute>) -> Rc<RefCell<Vec<Vec<AppRoute>>>> {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&heard);
+    let reader = router.clone();
+    router.add_listener(Rc::new(move || log.borrow_mut().push(reader.stack())));
+    heard
+}
+
+/// A router's listeners hear each committed stack change once, on the next
+/// turn and before any transition ends: never from inside the navigation,
+/// once for the edits of one turn, and not at all for a stack that stands.
+pub(crate) fn stack_listeners_hear_each_committed_change_once() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    settle(&mut laid);
+    assert!(
+        heard.borrow().is_empty(),
+        "the opening stack is not a change"
+    );
+
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    assert!(heard.borrow().is_empty(), "never told from inside a push");
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [vec![AppRoute::Home, AppRoute::Note { id: 1 }]],
+        "told on the next turn, while the page is still entering"
+    );
+
+    router
+        .push(AppRoute::Tag { name: "x".into() })
+        .expect("mounted router");
+    router
+        .replace(AppRoute::NoteEdit { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow()[1..],
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 1 },
+            AppRoute::NoteEdit { id: 1 }
+        ]],
+        "two edits in one turn are told once"
+    );
+
+    router.go("/note/2/edit").expect("a known location");
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[2..],
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 2 },
+            AppRoute::NoteEdit { id: 2 }
+        ]],
+        "a navigation that removes and adds pages is one change"
+    );
+    settle(&mut laid);
+
+    assert_eq!(router.pop(), Ok(true));
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[3..],
+        [vec![AppRoute::Home, AppRoute::Note { id: 2 }]],
+        "a pop is told once it commits, before its exit transition ends"
+    );
+
+    settle(&mut laid);
+    router.go("/note/2").expect("a known location");
+    assert_eq!(router.pop(), Ok(true));
+    router
+        .push(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow()[4..],
+        [vec![AppRoute::Home, AppRoute::Note { id: 2 }]],
+        "a page replaced by an equal one is a new page"
+    );
+    let told = heard.borrow().len();
+    router.go("/note/2").expect("a known location");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow().len(),
+        told,
+        "a stack that stands is not told"
+    );
+}
+
+/// A listener may navigate: what it does is told in the next delivery, and
+/// nothing recurses.
+pub(crate) fn a_stack_listener_may_navigate() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    let driver = router.clone();
+    router.add_listener(Rc::new(move || {
+        if driver.current() == (AppRoute::Note { id: 1 }) {
+            driver
+                .push(AppRoute::NoteEdit { id: 1 })
+                .expect("mounted router");
+        }
+    }));
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        *heard.borrow(),
+        [
+            vec![AppRoute::Home, AppRoute::Note { id: 1 }],
+            vec![
+                AppRoute::Home,
+                AppRoute::Note { id: 1 },
+                AppRoute::NoteEdit { id: 1 }
+            ],
+        ],
+        "the listener's push is the next delivery"
     );
 }

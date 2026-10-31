@@ -3,6 +3,9 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::ListenerId;
+use flui_foundation::notifier::{Listenable, ListenerObserver};
+
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
 use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
@@ -16,6 +19,14 @@ use crate::navigator::RouteId;
 /// and inert once the router unmounts: every edit then answers
 /// [`RouterError::Disposed`]. Each edit takes effect on the router's navigator
 /// at once; the pages it adds build on the next frame.
+///
+/// It is [`Listenable`]: its listeners are told when the [`stack`](Self::stack)
+/// changes, by an edit through any handle or a pop the navigator makes itself
+/// (a Back key, a back gesture, a barrier). They are told on a later turn of
+/// the UI runtime's tasks, before any transition ends and never from inside
+/// the navigation, and once for all the edits since they were last told; a
+/// popup is not a change, and neither is a stack that stands. A listener may
+/// navigate: that is told in the next delivery.
 pub struct RouterHandle<R: Routable> {
     shared: Rc<RouterShared<R>>,
 }
@@ -82,6 +93,7 @@ impl<R: Routable> RouterHandle<R> {
                 .borrow_mut()
                 .push(RouterEntry::new(id, route));
         });
+        self.shared.announce();
         Ok(())
     }
 
@@ -109,6 +121,7 @@ impl<R: Routable> RouterHandle<R> {
                 RouterRetiredValues(retired.into_iter().collect())
             });
         drop(retired);
+        self.shared.announce();
         Ok(())
     }
 
@@ -182,6 +195,7 @@ impl<R: Routable> RouterHandle<R> {
                 let keep = self.shared.stack.borrow()[shared_len - 1].id;
                 self.shared.navigator.pop_until(|id| id == keep);
             }
+            self.shared.announce();
             return Ok(());
         }
 
@@ -215,6 +229,7 @@ impl<R: Routable> RouterHandle<R> {
                 RouterRetiredValues(retired)
             });
         drop(retired);
+        self.shared.announce();
         Ok(())
     }
 
@@ -256,6 +271,20 @@ impl<R: Routable> RouterHandle<R> {
     #[must_use]
     pub fn can_pop(&self) -> bool {
         self.shared.stack.borrow().len() > 1
+    }
+}
+
+impl<R: Routable> Listenable for RouterHandle<R> {
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.shared.announcer.notifier.add_observer(observer)
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.shared.announcer.notifier.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.shared.announcer.notifier.remove_all_listeners();
     }
 }
 
