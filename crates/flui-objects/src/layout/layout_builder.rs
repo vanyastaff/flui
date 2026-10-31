@@ -112,37 +112,25 @@ impl flui_foundation::inspect::Inspect for RenderLayoutBuilder {
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         let constraints = self.cell.constraints();
         let unit = flui_foundation::inspect::Unit::LogicalPx;
-        // An unbounded bound is absent, not infinite: a published size is finite.
+        // Absent before the first layout; an unbounded bound is infinity.
         out.field(
             "published_min_width",
-            &constraints
-                .as_ref()
-                .map(|c| c.min_width)
-                .filter(|w| w.is_finite()),
+            &constraints.as_ref().map(|c| c.min_width),
         )
         .unit(unit);
         out.field(
             "published_min_height",
-            &constraints
-                .as_ref()
-                .map(|c| c.min_height)
-                .filter(|h| h.is_finite()),
+            &constraints.as_ref().map(|c| c.min_height),
         )
         .unit(unit);
         out.field(
             "published_max_width",
-            &constraints
-                .as_ref()
-                .map(|c| c.max_width)
-                .filter(|w| w.is_finite()),
+            &constraints.as_ref().map(|c| c.max_width),
         )
         .unit(unit);
         out.field(
             "published_max_height",
-            &constraints
-                .as_ref()
-                .map(|c| c.max_height)
-                .filter(|h| h.is_finite()),
+            &constraints.as_ref().map(|c| c.max_height),
         )
         .unit(unit);
         out.field("needs_build", &self.cell.needs_build());

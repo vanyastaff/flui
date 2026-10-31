@@ -2931,28 +2931,16 @@ fn harness_constrained_box_enforces_minimums() {
         "RenderConstrainedBox",
         &["additional_min_width", "additional_max_height"],
     );
-    // The unbounded maximum is absent from the description, not published as infinity: the
-    // protocol's numbers are finite.
+    // The unbounded maximum is described as infinity, which differs from "no field".
     let snapshot = run.render_snapshot();
-    let mut stack = vec![&snapshot];
-    while let Some(node) = stack.pop() {
-        for field in node.facts.iter().chain(&node.fields) {
-            let finite = match &field.value {
-                OwnedValue::Float(v) => v.is_finite(),
-                OwnedValue::Size(s) => s.width.is_finite() && s.height.is_finite(),
-                _ => true,
-            };
-            assert!(finite, "{} {} is not finite", node.kind, field.name);
-        }
-        stack.extend(&node.children);
-    }
     let constrained = snapshot
         .find_by_kind("RenderConstrainedBox")
         .unique()
         .expect("one constrained box");
-    assert!(
-        constrained.get::<f64>("additional_max_width").is_err(),
-        "an unbounded maximum is absent"
+    assert_eq!(
+        constrained.get::<f64>("additional_max_width"),
+        Ok(f64::INFINITY),
+        "an unbounded maximum is infinite"
     );
     assert_eq!(
         constrained.get::<f64>("additional_min_width"),
@@ -2960,7 +2948,7 @@ fn harness_constrained_box_enforces_minimums() {
         "a finite minimum is published"
     );
 
-    // `expand()` makes the stored minimum itself infinite; it is absent too, not `Size(inf, inf)`.
+    // `expand()` makes the stored minimum itself infinite, and the description says so.
     let run = RenderTester::mount(
         box_node(RenderConstrainedBox::new(BoxConstraints::expand()))
             .child(box_node(RenderColoredBox::red(10.0, 10.0))),
@@ -2972,10 +2960,13 @@ fn harness_constrained_box_enforces_minimums() {
         .find_by_kind("RenderConstrainedBox")
         .unique()
         .expect("one constrained box");
-    assert!(
-        expanded.get::<f64>("additional_min_width").is_err()
-            && expanded.get::<f64>("additional_min_height").is_err(),
-        "an unbounded minimum is absent"
+    assert_eq!(
+        expanded.get::<f64>("additional_min_width"),
+        Ok(f64::INFINITY)
+    );
+    assert_eq!(
+        expanded.get::<f64>("additional_min_height"),
+        Ok(f64::INFINITY)
     );
 }
 
@@ -14094,10 +14085,10 @@ fn harness_intrinsic_width_rounds_up_to_ordinary_step() {
     assert_eq!(run.max_intrinsic_width(root, 100.0), 60.0);
 }
 
-/// An override of infinity lets the child overflow; the description leaves it out instead of
-/// publishing a number no wire format carries.
+/// An override of infinity lets the child overflow, which differs from no override: the
+/// description keeps infinity and leaves only the missing override absent.
 #[test]
-fn an_unbounded_overflow_override_is_absent_from_the_description() {
+fn an_unbounded_overflow_override_is_described_as_infinite() {
     let run = RenderTester::mount(
         box_node(RenderConstrainedOverflowBox::new(
             Alignment::CENTER,
@@ -14117,10 +14108,16 @@ fn an_unbounded_overflow_override_is_absent_from_the_description() {
         .unique()
         .expect("one overflow box");
     assert_eq!(overflow.get::<f64>("min_width"), Ok(10.0));
-    assert!(overflow.get::<f64>("max_width").is_err(), "unbounded width");
+    assert_eq!(overflow.get::<f64>("max_width"), Ok(f64::INFINITY));
+    assert_eq!(overflow.get::<f64>("max_height"), Ok(f64::INFINITY));
+    let min_height = overflow
+        .fields
+        .iter()
+        .find(|field| field.name == "min_height")
+        .expect("listed");
     assert!(
-        overflow.get::<f64>("max_height").is_err(),
-        "unbounded height"
+        matches!(min_height.value, OwnedValue::None),
+        "no override stays absent"
     );
 }
 
@@ -14149,9 +14146,9 @@ fn viewports_over_different_offsets_report_different_kind_arguments() {
     assert_eq!(arguments(&position).len(), 1);
 }
 
-/// An infinite preferred extent clamps at layout; the description leaves it out.
+/// An infinite preferred extent clamps at layout; the description still says infinity.
 #[test]
-fn an_unbounded_preferred_size_is_absent_from_the_description() {
+fn an_unbounded_preferred_size_is_described_as_infinite() {
     let run = RenderTester::mount(box_node(RenderCustomPaint::new(
         None,
         None,
@@ -14164,13 +14161,13 @@ fn an_unbounded_preferred_size_is_absent_from_the_description() {
         .find_by_kind("RenderCustomPaint")
         .unique()
         .expect("one custom paint");
-    assert!(paint.get::<f64>("preferred_width").is_err(), "unbounded");
+    assert_eq!(paint.get::<f64>("preferred_width"), Ok(f64::INFINITY));
     assert_eq!(paint.get::<f64>("preferred_height"), Ok(30.0));
 }
 
-/// A requested dimension of infinity clamps at layout; no object's description carries it.
+/// A requested dimension of infinity clamps at layout; the description still says infinity.
 #[test]
-fn a_sized_box_describes_an_infinite_dimension_as_absent() {
+fn a_sized_box_describes_an_infinite_dimension_as_infinite() {
     let run = RenderTester::mount(box_node(RenderSizedBox::fixed(f64::INFINITY, 30.0)))
         .with_constraints(loose(200.0))
         .run_layout();
@@ -14179,6 +14176,6 @@ fn a_sized_box_describes_an_infinite_dimension_as_absent() {
         .find_by_kind("RenderSizedBox")
         .unique()
         .expect("one sized box");
-    assert!(sized.get::<f64>("width").is_err(), "unbounded width");
+    assert_eq!(sized.get::<f64>("width"), Ok(f64::INFINITY));
     assert_eq!(sized.get::<f64>("height"), Ok(30.0));
 }

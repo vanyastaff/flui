@@ -843,7 +843,7 @@ graph LR
   - `DebugPaintConfig` was deleted rather than moved: nothing used it.
   - Consumers read typed fields; the facade exports `flui::Inspect` and `render_snapshot`. Explained field
     changes: `selection` and `composing_range` are start/end pairs, `selection_handles` is
-    `start_handle`/`end_handle`, `constraints` is `constraints_min_width`/`constraints_min_height` with `constraints_max_width`/`constraints_max_height` (each absent when unbounded), string-valued flags
+    `start_handle`/`end_handle`, `constraints` is `constraints_min_width`/`constraints_min_height` with `constraints_max_width`/`constraints_max_height` (an unbounded maximum is infinity, carried on the wire as a typed non-finite value), string-valued flags
     are bools or `Option`s.
 
 ### FD29. Tracing conventions and one span stream
