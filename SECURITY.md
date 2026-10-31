@@ -34,7 +34,6 @@ Security-sensitive areas include platform backends, hot reload and dynamic
 library loading, asset/network loading, GPU resource management, unsafe blocks,
 and build tooling that executes external commands.
 
-
 On X11, every client on the same display is inside the trust boundary: the
 protocol lets it inject input (XTest), send events to any window and read the
 keyboard. The native X11 host bounds the memory a selection or drag request
