@@ -246,3 +246,103 @@ fn a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits() {
         "the window has not closed, so the wait on it holds out"
     );
 }
+
+#[test]
+fn a_reader_that_fell_behind_still_sees_the_window_close() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let second = ui_runtime.install_second_presentation_for_test();
+    let agent = ui_runtime
+        .semantics_agent(second)
+        .expect("the ui_runtime hosts the second presentation");
+    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Frame, EventKind::Window]);
+    let state = ui_runtime
+        .presentations
+        .get(second)
+        .expect("the second presentation is open");
+    let second_window = WindowId::from_u64(second.as_u64()).expect("a generation");
+    for number in 1..=300 {
+        state.emit_agent_event(Event::Frame(flui_protocol::FrameEvent::new(
+            second_window,
+            number,
+            true,
+        )));
+    }
+
+    assert!(ui_runtime.close_presentation_entered(second));
+    let events = drain(&mut stream);
+    let tail = &events[events.len() - 2..];
+    assert!(
+        matches!(tail, [Event::Gap(_), Event::Window(closed)] if !closed.opened),
+        "the gap, then the close: {tail:?}"
+    );
+    assert!(stream.is_finished());
+}
+
+#[test]
+fn a_window_that_has_published_no_tree_reports_none() {
+    let clock = ManualClock::new();
+    let ui_runtime = manual_clock_ui_runtime(&clock);
+    let agent = ui_runtime
+        .semantics_agent(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
+
+    frame(&ui_runtime, &mut ScriptedSink::always_presents());
+    assert!(
+        drain(&mut stream).is_empty(),
+        "an owner with no root has published nothing"
+    );
+}
+
+#[test]
+fn a_subscription_to_semantics_keeps_the_window_collecting_them() {
+    let (ui_runtime, agent, mut sink) = shown();
+    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
+    drop(agent);
+    let collecting = || {
+        ui_runtime
+            .presentations
+            .get(ui_runtime.presentation_id())
+            .expect("the primary presentation is open")
+            .pipeline()
+            .with(|pipeline| pipeline.semantics_enabled())
+    };
+
+    frame(&ui_runtime, &mut sink);
+    assert!(collecting(), "the stream holds the window collecting");
+    drop(stream);
+    // The hub forgets a dropped stream when it next publishes, and the window stops collecting
+    // at the frame after.
+    ui_runtime.publish_agent_events();
+    frame(&ui_runtime, &mut sink);
+    assert!(!collecting(), "a dropped stream no longer holds it");
+}
+
+#[test]
+fn a_frame_that_unwound_in_a_callback_is_still_reported() {
+    let (ui_runtime, agent, mut sink) = shown();
+    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Frame]);
+    tap(&ui_runtime, &agent);
+    ui_runtime
+        .scheduler()
+        .add_post_frame_callback(Box::new(|_| panic!("a post-frame callback panics")));
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&ui_runtime, &mut sink);
+    }));
+    assert!(unwound.is_err(), "the callback's panic leaves the frame");
+    let events = drain(&mut stream);
+    assert_eq!(
+        kinds(&events),
+        [EventKind::Frame],
+        "the frame was presented"
+    );
+}
+
+fn subscribe_to(
+    ui_runtime: &UiRuntime,
+    agent: &SemanticsAgent,
+    kinds: &[EventKind],
+) -> EventStream {
+    subscribe(ui_runtime, agent, kinds).expect("the window admits it")
+}

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use flui_foundation::PresentationId;
 use flui_protocol::{
-    Event, EventFilter, FrameEvent, GapEvent, SemanticsEvent, WindowEvent, WindowId,
+    Event, EventFilter, EventKind, FrameEvent, GapEvent, SemanticsEvent, WindowEvent, WindowId,
 };
 use flui_view::__runtime::EventSource;
 use parking_lot::{Condvar, Mutex};
@@ -24,6 +24,7 @@ use parking_lot::{Condvar, Mutex};
 use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
 use crate::presentation::PresentationState;
+use crate::semantics_host::SemanticsHandle;
 
 /// The most live subscriptions one presentation admits. A subscription past it is refused with
 /// [`AgentError::TooManySubscriptions`]; one whose stream was dropped no longer counts.
@@ -75,14 +76,16 @@ impl Queue {
         self.arrived.notify_one();
     }
 
-    /// The window closed. A gap still owed is queued past the bound, so the stream never ends
-    /// shorter than it says.
-    fn end(&self) {
+    /// The window closed. A gap still owed, and the event that says so, are queued past the
+    /// bound: the stream never ends shorter than it says, and a reader that fell behind still
+    /// sees the window close.
+    fn end(&self, last: Option<Event>) {
         let mut state = self.state.lock();
         if state.missed > 0 {
             let missed = std::mem::take(&mut state.missed);
             state.events.push_back(Event::Gap(GapEvent::new(missed)));
         }
+        state.events.extend(last);
         state.ended = true;
         drop(state);
         self.arrived.notify_all();
@@ -163,6 +166,18 @@ impl EventSource for EventStream {
 struct Subscriber {
     filters: Vec<EventFilter>,
     queue: Arc<Queue>,
+    /// Keeps the window collecting semantics while a subscription to `semantics` events lives,
+    /// whoever else holds an agent.
+    _semantics: Option<SemanticsHandle>,
+}
+
+impl Subscriber {
+    fn selects(&self, window: WindowId, event: &Event) -> bool {
+        let kind = event.kind();
+        self.filters
+            .iter()
+            .any(|filter| filter.kind == kind && filter.window.is_none_or(|w| w == window))
+    }
 }
 
 /// What a presentation keeps to emit its events: its subscribers, and how far it has reported.
@@ -183,7 +198,11 @@ impl EventHub {
             .retain(|subscriber| Arc::strong_count(&subscriber.queue) > 1);
     }
 
-    fn subscribe(&mut self, filters: Vec<EventFilter>) -> Result<EventStream, AgentError> {
+    fn subscribe(
+        &mut self,
+        filters: Vec<EventFilter>,
+        semantics: Option<SemanticsHandle>,
+    ) -> Result<EventStream, AgentError> {
         if filters.is_empty() {
             return Err(AgentError::InvalidArgument {
                 reason: "a subscription names at least one event",
@@ -197,27 +216,25 @@ impl EventHub {
         self.subscribers.push(Subscriber {
             filters,
             queue: Arc::clone(&queue),
+            _semantics: semantics,
         });
         Ok(EventStream { queue })
     }
 
     fn publish(&mut self, window: WindowId, event: &Event) {
         self.prune();
-        let kind = event.kind();
         for subscriber in &self.subscribers {
-            let selected = subscriber
-                .filters
-                .iter()
-                .any(|filter| filter.kind == kind && filter.window.is_none_or(|w| w == window));
-            if selected {
+            if subscriber.selects(window, event) {
                 subscriber.queue.push(event.clone());
             }
         }
     }
 
-    fn end(&mut self) {
+    /// Ends every stream; `last` goes to the ones that select it, past their bound.
+    fn end(&mut self, window: WindowId, last: &Event) {
         for subscriber in self.subscribers.drain(..) {
-            subscriber.queue.end();
+            let last = subscriber.selects(window, last).then(|| last.clone());
+            subscriber.queue.end(last);
         }
     }
 }
@@ -241,6 +258,8 @@ impl PresentationState {
     /// Emits what a frame left to report: the frames presented or skipped since the last report,
     /// and the tree revision when it changed.
     pub(crate) fn publish_frame_events(&self) {
+        // A dropped stream stops holding the window collecting semantics from here.
+        self.agent_events.borrow_mut().prune();
         let window = self.agent_window();
         let (rendered, dropped) = (self.frames_rendered(), self.frames_dropped());
         let (seen_rendered, seen_dropped) = {
@@ -257,10 +276,12 @@ impl PresentationState {
                 self.emit_agent_event(Event::Frame(FrameEvent::new(window, number, presented)));
             }
         }
+        // Revision 0 is an owner that has published nothing yet: not a tree to report.
         let revision = self.pipeline().with(|pipeline| {
             pipeline
                 .semantics_owner()
                 .map(flui_semantics::SemanticsOwner::revision)
+                .filter(|revision| revision.0 != 0)
         });
         if let Some(revision) = revision {
             let changed = {
@@ -276,8 +297,11 @@ impl PresentationState {
     /// The window closes: its last event says so, and every stream ends after it.
     pub(crate) fn end_agent_events(&self) {
         let window = self.agent_window();
-        self.emit_agent_event(Event::Window(WindowEvent::new(window, false)));
-        self.agent_events.borrow_mut().end();
+        let closed = Event::Window(WindowEvent::new(window, false));
+        for wait in self.agent_waits.borrow_mut().iter_mut() {
+            wait.note_event(closed.kind());
+        }
+        self.agent_events.borrow_mut().end(window, &closed);
     }
 }
 
@@ -295,7 +319,19 @@ impl UiRuntime {
             send_reply(reply, None, Err(AgentError::PresentationGone));
             return false;
         };
-        let result = state.agent_events.borrow_mut().subscribe(filters);
+        let semantics = filters
+            .iter()
+            .any(|filter| filter.kind == EventKind::Semantics)
+            .then(|| state.semantics_host().ensure_semantics());
+        let wants_tree = semantics.is_some();
+        let result = state
+            .agent_events
+            .borrow_mut()
+            .subscribe(filters, semantics);
+        if wants_tree && result.is_ok() {
+            // Collection starts at the next frame: ask for one, as vending an agent does.
+            self.request_redraw_for(state);
+        }
         send_reply(reply, None, result);
         true
     }

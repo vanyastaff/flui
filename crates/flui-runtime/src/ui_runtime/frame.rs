@@ -381,9 +381,11 @@ impl UiRuntime {
         // Owed until the anchor below completes: a drive that unwinds leaves
         // it to the next owner turn (ADR-0142 item 5).
         self.anchor_owed.set(true);
-        let result = self
-            .owner_frame
-            .drive_frame(
+        // A callback that panics after the frame presented unwinds out of the drive, but the
+        // frame happened: what an agent is owed for it is still delivered below, and the panic
+        // continues after.
+        let driven = catch_unwind(AssertUnwindSafe(|| {
+            self.owner_frame.drive_frame(
                 now,
                 deadline,
                 move || {
@@ -392,7 +394,7 @@ impl UiRuntime {
                 },
                 pipeline,
             )
-            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
+        }));
         drop(commits_closed);
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
         // left, the events it produced are emitted, and the waits an agent parked see the window as
@@ -402,6 +404,11 @@ impl UiRuntime {
         }
         self.publish_agent_events();
         self.evaluate_agent_waits(true);
+        let result = match driven {
+            Ok(result) => result
+                .expect("BUG: the runtime's live frame owner must admit its frame transaction"),
+            Err(payload) => resume_unwind(payload),
+        };
         self.run_commit_anchor();
         result
     }
