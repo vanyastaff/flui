@@ -48,15 +48,15 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 /// commands, and observes nothing; the app may only ask the system to destroy
 /// its scene session, and the display link takes a refresh-rate request.
 /// UIKit draws a material behind a view (`UIVisualEffectView`), which this
-/// host does not place yet.
+/// host does not place yet. The window reports the keyboard's occlusion from
+/// `UIKeyboardWillChangeFrameNotification`; UIKit names no system gesture
+/// insets, only edges an app may defer.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE
         .unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(PRESENTATION)
-        // `UIKeyboardWillChangeFrameNotification` is not read yet; UIKit names
-        // no system gesture insets, only edges an app may defer.
-        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
+        .without_presentation_feedback(PRESENTATION);
+    capabilities.reports_keyboard_inset = Availability::Native;
     capabilities.closes = Availability::Native;
     capabilities.frame_rate_hint = Availability::Native;
     capabilities
@@ -305,7 +305,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 22] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 23] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -360,6 +360,11 @@ mod tests {
                 "Activity material, API 31 with cross-window blur",
                 material(&activity_capabilities(activity(31, true))),
                 Some(NotYetOnThisHost),
+            ),
+            (
+                "UIKit keyboard inset",
+                report(scene_capabilities().keyboard_inset()),
+                None,
             ),
             (
                 "UIKit presentation report",
