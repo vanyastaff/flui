@@ -15,6 +15,8 @@ use super::PortalError;
 
 pub(super) const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 pub(super) const PATH: &str = "/org/freedesktop/portal/desktop";
+/// The bus driver's own name, the sender of its notices.
+const BUS: &str = "org.freedesktop.DBus";
 
 /// How the user ended a request.
 pub(super) enum Response {
@@ -71,7 +73,8 @@ where
         responses = subscribe(connection, &owner, handle.as_str()).await?;
     }
 
-    let message = match select(responses.next(), departures.next()).await {
+    let departed = std::pin::pin!(departure(&mut departures, owner.as_str()));
+    let message = match select(responses.next(), departed).await {
         Either::Left((message, _)) => message.ok_or(PortalError::Failed)??,
         Either::Right(_) => return Err(PortalError::Unavailable(UnsupportedReason::Unavailable)),
     };
@@ -106,12 +109,40 @@ async fn subscribe(
 async fn subscribe_departures(connection: &zbus::Connection) -> Result<MessageStream, PortalError> {
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .sender("org.freedesktop.DBus")
+        .sender(BUS)
         .interface("org.freedesktop.DBus")
         .member("NameOwnerChanged")
         .arg(0, DESTINATION)
         .build()?;
     Ok(MessageStream::for_match_rule(rule, connection, None).await?)
+}
+
+/// Wait until the bus says `owner` no longer owns the portal's name, or the
+/// connection ends.
+async fn departure(departures: &mut MessageStream, owner: &str) {
+    while let Some(message) = departures.next().await {
+        if message.is_ok_and(|message| owner_left(&message, owner)) {
+            return;
+        }
+    }
+}
+
+/// Whether `message` is the bus's notice that `owner` gave up the portal's
+/// name.
+///
+/// Checked here rather than left to the bus's match rule: a client can send
+/// a signal to this connection directly, and whether a broker holds such a
+/// signal to the rule is the broker's choice. The bus's own sender is one no
+/// client can claim, and a notice about an earlier owner says nothing about
+/// the one asked.
+fn owner_left(message: &zbus::Message, owner: &str) -> bool {
+    let header = message.header();
+    if header.sender().map(zbus::names::UniqueName::as_str) != Some(BUS) {
+        return false;
+    }
+    let body = message.body();
+    body.deserialize::<(&str, &str, &str)>()
+        .is_ok_and(|(name, old, _new)| name == DESTINATION && old == owner)
 }
 
 /// The local path a `file://` URI names, or `None` for any other URI: one
@@ -173,6 +204,35 @@ mod tests {
                 Path::new(std::ffi::OsStr::from_bytes(bytes)).to_path_buf()
             });
             assert_eq!(file_path(uri), expected, "{uri}");
+        }
+    }
+
+    #[test]
+    fn only_the_bus_saying_the_asked_owner_left_is_a_departure() {
+        let notice = |sender: &str, name: &str, old: &str| {
+            zbus::Message::signal(
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "NameOwnerChanged",
+            )
+            .sender(sender)
+            .build(&(name, old, ""))
+            .expect("the notice is well formed")
+        };
+        let cases = [
+            ("org.freedesktop.DBus", super::DESTINATION, ":1.7", true),
+            // Another client sends the bus's words to this connection.
+            (":1.9", super::DESTINATION, ":1.7", false),
+            // A notice about an earlier owner, or another name.
+            ("org.freedesktop.DBus", super::DESTINATION, ":1.3", false),
+            ("org.freedesktop.DBus", "org.example.Other", ":1.7", false),
+        ];
+        for (sender, name, old, left) in cases {
+            assert_eq!(
+                super::owner_left(&notice(sender, name, old), ":1.7"),
+                left,
+                "{sender} says {old} left {name}"
+            );
         }
     }
 }
