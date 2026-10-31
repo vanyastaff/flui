@@ -239,6 +239,16 @@ impl SpanRuns {
         self.has_cursor
     }
 
+    /// The bytes where the text enters or leaves a link, in order: where a
+    /// selectable paragraph's runs are cut, so each link holds its own.
+    pub(super) fn link_edges(&self) -> Vec<usize> {
+        self.runs
+            .windows(2)
+            .filter(|pair| pair[0].link != pair[1].link)
+            .map(|pair| pair[1].range.start)
+            .collect()
+    }
+
     /// The run whose glyphs are under `position`, in the painter's committed
     /// layout.
     ///
@@ -312,7 +322,8 @@ impl SpanRuns {
     /// ellipsis cut publishes nothing, as it paints nothing. A stretch that
     /// is only a semantics label (a textless span's) has no glyphs of its
     /// own: it is bounded by the paragraph, `bounds`, so it is still read in
-    /// its place.
+    /// its place. A selectable paragraph passes its runs' bytes as
+    /// `run_ranges`, and each region holds the runs in its bytes ([`host_runs`]).
     pub(super) fn semantics_regions(
         &self,
         painter: &TextPainter,
@@ -320,8 +331,10 @@ impl SpanRuns {
         focused: Option<usize>,
         direction: Option<TextDirection>,
         bounds: Rect<f64>,
+        run_ranges: &[Range<usize>],
     ) -> Vec<SemanticsRegion> {
         let mut regions = Vec::new();
+        let mut spans = Vec::new();
         let (mut text_ordinal, mut continued_ordinal) = (0, 0);
         let mut keyed = vec![false; routes.len()];
         let mut runs = self.runs.iter().peekable();
@@ -377,7 +390,11 @@ impl SpanRuns {
                 config.add_action(SemanticsAction::Click, std::rc::Rc::clone(handler));
                 config.add_action(SemanticsAction::Focus, std::rc::Rc::clone(handler));
             }
+            spans.push(range);
             regions.push(SemanticsRegion::new(key, rect, config));
+        }
+        if !run_ranges.is_empty() {
+            host_runs(&mut regions, &spans, run_ranges);
         }
         regions
     }
@@ -403,5 +420,38 @@ impl RegionIdentity {
             Self::LinkContinued(ordinal_in_links) => (ordinal(ordinal_in_links), 2),
         };
         SemanticsRegionKey(value.min(VALUE_LIMIT) << 2 | space)
+    }
+}
+
+/// Gives each region the paragraph's runs that lie in its bytes, when every
+/// run lies whole in one and each region's are consecutive in run order:
+/// `run_ranges` holds each run's bytes, `spans` each region's, in order.
+/// Otherwise the regions hold none and the paragraph keeps its runs: in
+/// bidirectional text whose runs leave byte order, where a run crosses a
+/// link edge (a grapheme cluster a link starts inside), or where a region
+/// publishes nothing.
+fn host_runs(regions: &mut [SemanticsRegion], spans: &[Range<usize>], run_ranges: &[Range<usize>]) {
+    let Some(last) = spans.len().checked_sub(1) else {
+        return;
+    };
+    let region_of = |run: &Range<usize>| {
+        spans
+            .iter()
+            .position(|span| span.contains(&run.start) && run.end <= span.end)
+            // An empty run at the text's end belongs to the last region.
+            .or_else(|| (run.is_empty() && run.start >= spans[last].end).then_some(last))
+    };
+    let owners: Option<Vec<usize>> = run_ranges.iter().map(region_of).collect();
+    let Some(owners) = owners else {
+        return;
+    };
+    // Consecutive in run order, region by region, so each holds a range.
+    if owners.windows(2).any(|pair| pair[1] < pair[0]) {
+        return;
+    }
+    for (index, region) in regions.iter_mut().enumerate() {
+        let first = owners.partition_point(|&owner| owner < index);
+        let end = owners.partition_point(|&owner| owner <= index);
+        region.config.set_hosted_runs(Some(first..end));
     }
 }
