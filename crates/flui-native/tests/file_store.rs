@@ -461,6 +461,28 @@ fn file_store_contract() {
     run_table("file_store_contract", &cases);
 }
 
+/// A stored value and a copy of it are readable and writable by their owner
+/// only, whatever the umask leaves to others.
+#[cfg(unix)]
+fn stored_values_and_their_copies_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    store
+        .write(&NOTES, b"private", WriteMode::Replace)
+        .expect("the value is stored");
+    let copied = store.copy_aside(&NOTES).expect("the value is copied");
+    for file in ["notes", copied.kept_as.as_str()] {
+        let mode = std::fs::metadata(dirs.roaming.join(file))
+            .expect("the file exists")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{file}");
+    }
+}
+
 /// The rows only this platform can run.
 #[cfg(windows)]
 fn platform_cases() -> Vec<(&'static str, fn())> {
@@ -483,8 +505,14 @@ fn platform_cases() -> Vec<(&'static str, fn())> {
 /// The rows only this platform can run.
 #[cfg(unix)]
 fn platform_cases() -> Vec<(&'static str, fn())> {
-    vec![(
-        "a_stale_base_is_refused_without_reading_a_long_value",
-        a_stale_base_is_refused_without_reading_a_long_value,
-    )]
+    vec![
+        (
+            "a_stale_base_is_refused_without_reading_a_long_value",
+            a_stale_base_is_refused_without_reading_a_long_value,
+        ),
+        (
+            "stored_values_and_their_copies_are_owner_only",
+            stored_values_and_their_copies_are_owner_only,
+        ),
+    ]
 }

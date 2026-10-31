@@ -7,3 +7,8 @@
 - `Persisted::start_over` keeps a stored document the application cannot read with `copy_aside`,
   then writes `Document::initial` over exactly those bytes; `retry` resumes a failed fresh start
   without a second copy.
+
+### Security
+
+- On Unix, `FileStore` creates every stored value and every copy aside readable and writable by
+  its owner only (`0600`), whatever the umask.

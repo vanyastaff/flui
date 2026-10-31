@@ -192,9 +192,7 @@ impl FileStore {
             // `std` opens the file: it takes paths past 260 characters on
             // Windows, and marks nothing temporary on the file that becomes
             // the value.
-            .make_in(root, |path| {
-                OpenOptions::new().write(true).create_new(true).open(path)
-            })
+            .make_in(root, create_owner_only)
             .map_err(|error| storage_error(&error))?;
         if self.reach(Step::Staged).is_break() {
             return Err(interrupted(staged.into_temp_path()));
@@ -334,11 +332,7 @@ fn lock_root(root: &Path) -> Result<File, StorageError> {
 fn claim_copy(root: &Path, name: &StorageName) -> Result<(String, File), StorageError> {
     for n in 1_u64.. {
         let kept_as = format!("{}{COPY_INFIX}{n}", name.as_str());
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(root.join(&kept_as))
-        {
+        match create_owner_only(&root.join(&kept_as)) {
             Ok(file) => return Ok((kept_as, file)),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => return Err(storage_error(&error)),
@@ -403,6 +397,17 @@ fn sweep_stale_staged_files(root: &Path) {
             tracing::debug!(%error, path = %entry.path().display(), "removing a stale staged file failed");
         }
     }
+}
+
+/// Create `path`, which must not exist, for writing; on Unix readable and
+/// writable by its owner only, whatever the umask, as a value or a copy of
+/// one is the user's data.
+fn create_owner_only(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
 }
 
 /// Make the rename itself durable where the file system needs the
