@@ -944,9 +944,9 @@ the press. On touch and pen a long press on the row drags it too; the row's
 menu hold hands the contact to the drag, and anything deeper that wants the
 long press (a `SelectionArea`) wins it. The default handle sits at the reading
 start, because keyboard focus reveals the row's menu control at the trailing
-edge. The handle is laid out in a `Stack`, not a `Row`: a `Row` in a lazy
-list's row currently lays out a first child that holds a gesture consumer
-last. Once that is fixed, the handle goes back to a `Row`.
+edge. A drag shows the row's label, a plate of the row's size when it has
+none, or what `feedback` builds, never the row's content built again: that
+would mount a second copy of what the row owns alone.
 
 The moves are commands on the row (ADR-0216 §2): a context menu that the
 handle's tap and every menu trigger open, or visible controls when the list

@@ -40,7 +40,6 @@ use crate::{DecoratedBox, DefaultFocusRingStyle};
 use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::keyboard::NamedKey;
-use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
@@ -57,8 +56,8 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, Directionality, WidgetsLocalizations,
 };
 use crate::{
-    Center, ColoredBox, Column, ConstrainedBox, ContextMenuArea, Draggable, DropTarget,
-    GestureDetector, ListView, Listener, Padding, Positioned, Scrollable, SizedBox, Stack, Text,
+    Center, ColoredBox, Column, ContextMenuArea, Draggable, DropTarget, Expanded, GestureDetector,
+    ListView, Listener, Row, Scrollable, SizedBox, Text,
 };
 
 /// A row's move, as [`ReorderableList`] reports it once: the item at `from`
@@ -646,56 +645,20 @@ fn default_handle() -> BoxedView {
         .boxed()
 }
 
-/// `content` with `handle` in a band `side` wide along its reading start (a
-/// vertical list) or its top (a horizontal one), the band at least as long
-/// as the touch minimum.
+/// `content` after `handle`, which sits in a square `side` wide (the touch
+/// minimum) at the row's reading start in a vertical list, or on top in a
+/// horizontal one.
 ///
 /// The handle comes before the content because keyboard focus in the row
 /// reveals the row's menu control at the trailing edge, where it would
-/// cover a handle. It is the stack's last layer, so it takes a press on the
-/// band before anything the content lays out beneath it.
-fn beside_handle(
-    content: BoxedView,
-    handle: BoxedView,
-    side: f64,
-    axis: Axis,
-    rtl: bool,
-) -> BoxedView {
-    let (content, band) = match (axis, rtl) {
-        (Axis::Vertical, false) => (
-            Padding::only(side, 0.0, 0.0, 0.0).child(content),
-            Positioned::new(handle)
-                .left(0.0)
-                .top(0.0)
-                .bottom(0.0)
-                .width(side),
-        ),
-        (Axis::Vertical, true) => (
-            Padding::only(0.0, 0.0, side, 0.0).child(content),
-            Positioned::new(handle)
-                .right(0.0)
-                .top(0.0)
-                .bottom(0.0)
-                .width(side),
-        ),
-        (Axis::Horizontal, _) => (
-            Padding::only(0.0, side, 0.0, 0.0).child(content),
-            Positioned::new(handle)
-                .top(0.0)
-                .left(0.0)
-                .right(0.0)
-                .height(side),
-        ),
-    };
-    let floor = match axis {
-        Axis::Vertical => BoxConstraints::new(0.0, f64::INFINITY, side, f64::INFINITY),
-        Axis::Horizontal => BoxConstraints::new(side, f64::INFINITY, 0.0, f64::INFINITY),
-    };
-    Stack::new(vec![
-        ConstrainedBox::new(floor).child(content).boxed(),
-        band.boxed(),
-    ])
-    .boxed()
+/// cover a handle.
+fn beside_handle(content: BoxedView, handle: BoxedView, side: f64, axis: Axis) -> BoxedView {
+    let handle = SizedBox::new(side, side).child(handle).boxed();
+    let content = Expanded::new(content).boxed();
+    match axis {
+        Axis::Vertical => Row::new(vec![handle, content]).boxed(),
+        Axis::Horizontal => Column::new(vec![handle, content]).boxed(),
+    }
 }
 
 /// One row: its moves, its menu or controls, the drop target it is and the
@@ -766,7 +729,7 @@ impl StatelessView for ReorderRow {
                 let side = GestureArenaScope::settings_or_default_of(ctx)
                     .min_target_for(flui_interaction::PointerKind::Touch);
                 let handle = source.handle(default_handle());
-                beside_handle(content, handle, side, view.scroll_direction, rtl)
+                beside_handle(content, handle, side, view.scroll_direction)
             }
             ReorderHandles::Custom => content,
         };
