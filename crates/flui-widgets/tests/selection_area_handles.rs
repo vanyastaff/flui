@@ -932,9 +932,10 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     assert_eq!(scene.handles(), 0);
 }
 
-/// Frame requests that fail both as the focus leaves the area (taking its
-/// handles away) and as the area then asks to rebuild are reported, not
-/// raised into the code that moved the focus, and the handles still go.
+/// Every frame request failing as the focus leaves the area (the focus
+/// nodes' own, the area's as it takes its handles away, and its rebuild) is
+/// reported, not raised into the code that moved the focus, and the handles
+/// still go.
 ///
 /// Red-check: let a failing frame request unwind into its caller (the
 /// focus move raises the failure).
@@ -950,11 +951,9 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
-            // The focus nodes' own rebuild requests come first and pass; the
-            // area's, as it hears the focus leave, fail.
             if arm.load(Ordering::SeqCst) {
                 let request = count.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(request <= 2, "frame request {request} failed");
+                panic!("frame request {request} failed");
             }
         });
     });
