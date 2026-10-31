@@ -178,8 +178,9 @@ impl std::fmt::Debug for ContentViewRef {
 ///
 /// [`MacOSPlatform`](crate::MacOSPlatform) is its platform.
 pub struct MacOSLoop {
-    /// The process-wide `NSApplication` singleton, retained.
-    pub(crate) app: Retained<NSApplication>,
+    /// The process-wide `NSApplication` singleton, retained, reached only on
+    /// the main thread a marker proves.
+    pub(crate) app: NativeOwner<Retained<NSApplication>>,
 
     /// Open windows (keyed by NSWindow pointer as u64)
     pub(crate) windows: WindowRegistry,
@@ -250,19 +251,17 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
     }
 }
 
-// SAFETY: the NSApplication pointer is a process-wide singleton only messaged
-// from the main thread (AppKit convention); the screen observer is a
-// `NativeOwner`, which only the main thread reads and which releases its value
-// there wherever the loop is dropped; the preference source and the notice
-// sources are read and started on the main thread only, and what they hold of
-// AppKit is notification-centre tokens, which any thread may remove; the
-// window map is reached by the owner thread alone; every other field is
-// `Arc`/`Mutex`-protected. `host::Loop: Send + Sync` requires the wrapper to be
-// shareable.
+// SAFETY: the application and the screen observer are `NativeOwner`s, which
+// only a main-thread marker reads and which release their value there wherever
+// the loop is dropped; the preference source and the notice sources are read
+// and started on the main thread only, and what they hold of AppKit is
+// notification-centre tokens, which any thread may remove; the window map is
+// reached by the owner thread alone; every other field is `Arc`/`Mutex`-
+// protected. `host::Loop: Send + Sync` requires the wrapper to be shareable.
 unsafe impl Send for MacOSLoop {}
-// SAFETY: see `Send` above — interior mutability is Mutex-guarded, the
-// screen observer is reached only through a main-thread marker, and the raw
-// pointer is main-thread-affine by AppKit convention.
+// SAFETY: see `Send` above: interior mutability is Mutex-guarded, and the
+// application and the screen observer are reached only through a main-thread
+// marker.
 unsafe impl Sync for MacOSLoop {}
 
 impl std::fmt::Debug for MacOSLoop {
@@ -339,7 +338,7 @@ impl MacOSLoop {
                 loop_control,
                 preferences,
                 notice_sources,
-                app,
+                app: NativeOwner::new(app, mtm),
                 windows,
                 app_delivery,
                 wake_pump,
@@ -368,7 +367,11 @@ impl host::Loop for MacOSLoop {
         // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
-        debug_assert_appkit_main_thread("MacOSPlatform::run");
+        // The loop is shareable, so only AppKit can say this is the main
+        // thread the application runs on, in a release build too.
+        let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
+            message: "MacOSPlatform::run must run on the AppKit main thread".to_string(),
+        })?;
 
         // The delivery holds the platform and the hooks weakly: they live in
         // this frame, past the ownership guard that tells the handler of the
@@ -377,8 +380,10 @@ impl host::Loop for MacOSLoop {
             Arc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
         ));
-        let ownership =
-            loop_control::LoopOwnership::acquire(&self.app, Arc::clone(&self.loop_control))?;
+        let ownership = loop_control::LoopOwnership::acquire(
+            self.app.get(main),
+            Arc::clone(&self.loop_control),
+        )?;
         self.app_delivery.bind(handler, &platform, &hooks);
         self.app_delivery
             .resume_through_signal(&self.loop_control.owner_signal);
