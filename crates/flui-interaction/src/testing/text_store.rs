@@ -23,8 +23,9 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
@@ -44,6 +45,7 @@ pub struct InMemoryTextStore {
     /// was held or the gate was shut when they happened.
     pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
+    purpose: Cell<TextInputPurpose>,
     owner_notifications: Cell<usize>,
     /// A session changed the committed text and its owner notification is
     /// not delivered yet: it is, once the session's lock is released.
@@ -115,6 +117,7 @@ impl InMemoryTextStore {
             observer: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
+            purpose: Cell::new(TextInputPurpose::Text),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
             generation: Cell::new(EditGeneration::FIRST),
@@ -147,6 +150,14 @@ impl InMemoryTextStore {
         }
     }
 
+    /// Give the store `purpose` (an address, a query, …) and tell the
+    /// observer.
+    pub fn set_purpose(&self, purpose: TextInputPurpose) {
+        if self.purpose.replace(purpose) != purpose {
+            self.report(Notice::Status);
+        }
+    }
+
     /// An edit the application makes: `range` becomes `text` under the same
     /// rules as [`TextStoreEdit::replace`], and the observer hears of it
     /// afterwards — at once, or, inside a frame transaction, once the gate
@@ -169,6 +180,25 @@ impl InMemoryTextStore {
         generation.advance();
         self.generation.set(generation);
         self.pending.borrow_mut().push(Notice::Text(change));
+        self.report(Notice::Selection);
+    }
+
+    /// A selection the application makes, its direction kept; the observer
+    /// hears of it at once, or, inside a frame transaction, once the gate
+    /// opens.
+    ///
+    /// # Panics
+    ///
+    /// When `selection` names an offset outside the text, or inside a
+    /// scalar: the calling test's bug.
+    pub fn app_select(&self, selection: Selection) {
+        {
+            let mut doc = self.doc.borrow_mut();
+            doc.check(selection.anchor)
+                .and_then(|()| doc.check(selection.active))
+                .expect("BUG: app_select was given an offset outside the text");
+            doc.selection = selection;
+        }
         self.report(Notice::Selection);
     }
 
@@ -295,7 +325,9 @@ impl InMemoryTextStore {
 
 impl TextStore for InMemoryTextStore {
     fn status(&self) -> TextStoreStatus {
-        TextStoreStatus::EDITABLE_SINGLE_LINE.with_protected(self.protected.get())
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+            .with_protected(self.protected.get())
+            .with_purpose(self.purpose.get())
     }
 
     fn request_lock(

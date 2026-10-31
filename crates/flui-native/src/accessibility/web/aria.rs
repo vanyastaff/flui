@@ -25,6 +25,13 @@ pub(crate) enum Tag {
     /// NVDA's arrows in browse mode), which it does for no ARIA slider, and
     /// the adjusted value is the node's action.
     Range,
+    /// `<input>`, for a single-line text field: a screen reader reads its
+    /// value, caret and selection and edits it as a native field. While the
+    /// window's text input serves the field's store, it edits the store
+    /// through this element, and the store's text is its value.
+    Line,
+    /// `<textarea>`, for a multi-line text field, as [`Tag::Line`].
+    Area,
 }
 
 impl Tag {
@@ -32,8 +39,15 @@ impl Tag {
         match self {
             Self::Node => "flui-node",
             Self::Link => "a",
-            Self::Range => "input",
+            Self::Range | Self::Line => "input",
+            Self::Area => "textarea",
         }
+    }
+
+    /// Whether the element is a text field the window's text input can edit
+    /// through.
+    pub(crate) const fn is_field(self) -> bool {
+        matches!(self, Self::Line | Self::Area)
     }
 }
 
@@ -58,8 +72,9 @@ pub(crate) struct ElementSpec {
     /// The element's own text, for a node whose name is its content: a text
     /// node before its children's elements.
     pub(crate) text: Option<String>,
-    /// A [`Tag::Range`]'s value, written to the `value` property: the
-    /// attribute stops counting once the browser adjusts the input.
+    /// A [`Tag::Range`]'s or a text field's value, written to the `value`
+    /// property: the attribute stops counting once the browser adjusts the
+    /// input.
     pub(crate) value: Option<String>,
     pub(crate) placement: Placement,
     /// A node a platform can scroll to an offset is a scroller.
@@ -221,8 +236,10 @@ pub(crate) fn describe(
     ids: &ElementIds,
 ) -> ElementSpec {
     let role = aria_role(node.role());
+    let field = text_field(node);
     let mut attributes = vec![("id", ids.of(id))];
-    if let Some(role) = role {
+    // A text field's own element says what it is.
+    if let Some(role) = role.filter(|_| field.is_none()) {
         attributes.push(("role", role.to_owned()));
     }
     // Static text is its content, children or not (a labelled `Semantics`
@@ -260,6 +277,8 @@ pub(crate) fn describe(
     let slider = movable_slider(node);
     let tag = if slider.is_some() {
         Tag::Range
+    } else if let Some((tag, _)) = field {
+        tag
     } else if node.role() == Role::Link && node.url().is_some() {
         Tag::Link
     } else {
@@ -288,6 +307,17 @@ pub(crate) fn describe(
             attributes.extend(node.url().map(|url| ("href", url.to_owned())));
             range(node, &mut attributes);
         }
+        (Tag::Line | Tag::Area, _) => {
+            attributes.extend(
+                field
+                    .and_then(|(_, kind)| kind)
+                    .map(|kind| ("type", kind.to_owned())),
+            );
+            if node.is_read_only() {
+                attributes.push(("readonly", String::new()));
+            }
+            value = Some(node.value().unwrap_or_default().to_owned());
+        }
         _ => range(node, &mut attributes),
     }
     live(node, &mut attributes);
@@ -302,7 +332,8 @@ pub(crate) fn describe(
     ElementSpec {
         tag,
         attributes,
-        text: text.filter(|_| tag != Tag::Range),
+        // A text field's text would be its default value.
+        text: text.filter(|_| tag == Tag::Node || tag == Tag::Link),
         value,
         placement,
         scroll: scroll(node, (placement.width, placement.height)),
@@ -312,6 +343,25 @@ pub(crate) fn describe(
 /// How far from a whole number of steps a value may be and still be on its
 /// slider's step, relative to the count: the division rounds.
 const STEP_TOLERANCE: f64 = 1e-9;
+
+/// The element a text field is mirrored as, and an `<input>`'s `type`: one
+/// whose caret and selection a script can set, so the window's text input can
+/// edit through it (an `email` or `number` input has neither), and that keeps
+/// the value it is given (a `url` input strips the whitespace around it, which
+/// the store holds; the editor's `inputmode` and `autocomplete` still say it
+/// is an address). A field of dates or times, a combo box and a spin button
+/// stay ARIA ones, served on the canvas.
+fn text_field(node: &Node) -> Option<(Tag, Option<&'static str>)> {
+    let kind = match node.role() {
+        Role::MultilineTextInput => return Some((Tag::Area, None)),
+        Role::TextInput | Role::EmailInput | Role::NumberInput | Role::UrlInput => "text",
+        Role::SearchInput => "search",
+        Role::PasswordInput => "password",
+        Role::PhoneNumberInput => "tel",
+        _ => return None,
+    };
+    Some((Tag::Line, Some(kind)))
+}
 
 /// A slider's range as an `<input type="range">` holds it; `step` is `None`
 /// where the input takes any value.
@@ -403,10 +453,11 @@ fn relations(node: &Node, ids: &ElementIds, attributes: &mut Vec<(&'static str, 
     }
 }
 
-/// Whether `node` takes text from the keyboard or an input method. The
-/// window's text input serves it on the canvas (an `EditContext` or the
-/// hidden editor), so the page's focus stays there rather than on the
-/// node's element, which has no input surface.
+/// Whether `node` takes text from the keyboard or an input method. One
+/// mirrored as a text field ([`Tag::is_field`]) is edited through its
+/// element; the window's text input serves any other on the canvas (an
+/// `EditContext` or the hidden editor), so the page's focus stays there
+/// rather than on the node's element, which has no input surface.
 pub(crate) fn takes_text(node: &Node) -> bool {
     matches!(
         node.role(),
@@ -1177,6 +1228,67 @@ mod tests {
                 height: 500.0
             })
         );
+    }
+
+    /// A text field is the native field of its kind, named and valued as
+    /// published, with no ARIA role and no text of its own; one whose caret
+    /// a script cannot set, or a field of dates, stays an ARIA textbox.
+    #[test]
+    fn a_text_field_is_a_native_field_of_its_kind() {
+        let field = |role: Role| {
+            let mut node = Node::new(role);
+            node.set_label("Name");
+            node.set_value("Ada");
+            node.add_action(Action::Focus);
+            describe(
+                NodeId(7),
+                &node,
+                ParentFrame::default(),
+                false,
+                &ElementIds::new("t"),
+            )
+        };
+        for (role, tag, kind) in [
+            (Role::TextInput, "input", Some("text")),
+            (Role::EmailInput, "input", Some("text")),
+            (Role::NumberInput, "input", Some("text")),
+            (Role::SearchInput, "input", Some("search")),
+            (Role::PasswordInput, "input", Some("password")),
+            (Role::PhoneNumberInput, "input", Some("tel")),
+            (Role::UrlInput, "input", Some("text")),
+            (Role::MultilineTextInput, "textarea", None),
+        ] {
+            let spec = field(role);
+            assert_eq!(spec.tag.name(), tag, "{role:?}");
+            assert!(spec.tag.is_field(), "{role:?}");
+            assert_eq!(attribute(&spec, "type"), kind, "{role:?}");
+            assert_eq!(
+                attribute(&spec, "role"),
+                None,
+                "{role:?}: the element says it"
+            );
+            assert_eq!(attribute(&spec, "aria-label"), Some("Name"), "{role:?}");
+            assert_eq!(attribute(&spec, "tabindex"), Some("-1"), "{role:?}");
+            assert_eq!(spec.value.as_deref(), Some("Ada"), "{role:?}");
+            assert_eq!(spec.text, None, "{role:?}: no default value");
+        }
+        for role in [Role::DateInput, Role::SpinButton, Role::EditableComboBox] {
+            let spec = field(role);
+            assert_eq!(spec.tag, super::Tag::Node, "{role:?}");
+            assert!(!spec.tag.is_field(), "{role:?}");
+        }
+
+        let mut read_only = Node::new(Role::TextInput);
+        read_only.set_read_only();
+        let spec = describe(
+            NodeId(7),
+            &read_only,
+            ParentFrame::default(),
+            false,
+            &ElementIds::new("t"),
+        );
+        assert_eq!(attribute(&spec, "readonly"), Some(""));
+        assert_eq!(spec.value.as_deref(), Some(""), "an empty field is emptied");
     }
 
     /// What the browser moving a range input or scrolling a scroller asks
