@@ -397,7 +397,7 @@ pub struct EditableText {
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
     /// How the selection is highlighted; `None` takes the nearest
-    /// [`DefaultSelectionStyle`](crate::DefaultSelectionStyle)'s.
+    /// [`DefaultSelectionStyle`]'s.
     pub(super) selection_style: Option<SelectionStyle>,
     /// Whether this field accepts focus and input. `true` by default.
     ///
