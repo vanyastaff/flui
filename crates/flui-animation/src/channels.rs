@@ -74,9 +74,9 @@ impl Channels {
     }
 
     /// Remove a value listener. A failure either channel's delivery already
-    /// holds retains the capture now; otherwise a round either channel is
-    /// delivering keeps it until that round ends, so a failure later in the
-    /// round still retains it. Outside any round it retires at once.
+    /// holds drops the capture now under that failure; otherwise a round either
+    /// channel is delivering keeps it until that round ends, even when the round
+    /// fails. Outside any round it retires at once.
     pub(crate) fn remove_listener(&self, id: ListenerId) {
         self.retire_values(self.values.take_listener(id));
     }

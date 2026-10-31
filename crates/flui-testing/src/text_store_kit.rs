@@ -165,7 +165,7 @@ impl Case {
                     .unwrap_or_else(|| "a non-string panic payload".to_owned());
                 // The kit borrows the fixture, but owns the caught opaque payload.
                 // An aggregate's Drop may panic twice before any catch can regain control.
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 format!("panicked: {text}")
             }
         };

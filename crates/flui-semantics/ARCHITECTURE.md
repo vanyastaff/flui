@@ -18,7 +18,7 @@ shape.
 existing `RecoveryScope`. Configuration attributes and storage buffers are
 ordinary destruction; opaque handler ownership follows ADR-0127. Rendering
 uses this operation after a draft validation failure, whose typed error stays
-authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
 in flui-objects checks single and competing capture risks, forced merge, overwritten
 receiver actions, blocked/custom actions, unchanged publication and subsequent
 retry through the real frame pipeline. `registered_action_handlers` lends all raw

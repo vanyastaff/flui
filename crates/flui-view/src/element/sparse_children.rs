@@ -636,7 +636,10 @@ fn try_build_item(
 pub(crate) fn item_exists(builder: &dyn Fn(usize) -> Option<BoxedView>, index: usize) -> bool {
     match try_build_item(builder, index) {
         Ok(view) => view.is_some(),
-        Err(_) => true,
+        Err(payload) => {
+            flui_foundation::panic::discard_payload(payload);
+            true
+        }
     }
 }
 
