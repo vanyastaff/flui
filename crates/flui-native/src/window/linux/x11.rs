@@ -441,6 +441,9 @@ pub(crate) mod support {
             // completion to that connection alone: no other client learns when
             // the window's frames reached the screen.
             .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform)
+            // The window manager draws the title bar; one of the
+            // application's, moved through `_NET_WM_MOVERESIZE`, is not yet here.
+            .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
             // X11 has no on-screen keyboard protocol and no system gesture
             // edges.
             .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
