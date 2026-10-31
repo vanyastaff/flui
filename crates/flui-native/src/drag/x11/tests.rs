@@ -1122,6 +1122,11 @@ struct Foreign {
 
 impl Foreign {
     fn open(source: &Source) -> Self {
+        Self::open_speaking(source, 5)
+    }
+
+    /// A window that speaks XDND `version`.
+    fn open_speaking(source: &Source, version: u32) -> Self {
         let connection = &source.connection;
         let window = connection.generate_id().expect("an X id");
         let root = connection.setup().roots[0].root;
@@ -1147,7 +1152,7 @@ impl Foreign {
             .expect("interned")
             .atom;
         connection
-            .change_property32(PropMode::REPLACE, window, aware, AtomEnum::ATOM, &[5])
+            .change_property32(PropMode::REPLACE, window, aware, AtomEnum::ATOM, &[version])
             .expect("the window is aware");
         connection.map_window(window).expect("the window is mapped");
         connection.flush().expect("the requests are sent");
@@ -1165,8 +1170,18 @@ impl Foreign {
 struct Held<'a>(&'a RustConnection);
 
 impl<'a> Held<'a> {
+    /// Button 1 held with the pointer away from every window.
     fn press(connection: &'a RustConnection) -> Self {
+        Self::press_at(connection, (1, 1))
+    }
+
+    /// Button 1 held with the pointer at `root`.
+    fn press_at(connection: &'a RustConnection, root: (i16, i16)) -> Self {
         use x11rb::protocol::xtest::ConnectionExt as _;
+        let screen = connection.setup().roots[0].root;
+        connection
+            .xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, screen, root.0, root.1, 0)
+            .expect("the motion is sent");
         connection
             .xtest_fake_input(xproto::BUTTON_PRESS_EVENT, 1, 0, NONE, 0, 0, 0)
             .expect("the press is sent");
@@ -1608,4 +1623,167 @@ fn an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops() {
     assert!(released.is_ok(), "the provider's failure is contained");
     heard_by(&other, &target, atoms.leave);
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A target speaking an older XDND hears the session in its own version, as
+/// XDND asks, or it would ignore it.
+#[test]
+fn a_session_enters_an_older_target_in_its_version() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let _foreign = Foreign::open_speaking(&other, 4);
+    let _held = Held::press(&other.connection);
+    target
+        .start(request(&Rc::new(Cell::new(None))))
+        .expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    let enter = heard_by(&other, &target, other.atoms.enter);
+    assert_eq!(enter[1] >> 24, 4);
+}
+
+/// A session that starts with the pointer already over a target enters it
+/// at once, so a release in place drops there.
+#[test]
+fn a_session_started_over_a_target_enters_it_at_once() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press_at(&other.connection, (450, 350));
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+    heard_by(&other, &target, atoms.enter);
+    let position = heard_by(&other, &target, atoms.position);
+    assert_eq!(
+        position[2],
+        model::position(target.xid, (450, 350), 0, atoms.copy)[2],
+        "where the pointer is"
+    );
+    other.send(
+        target.xid,
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    target.deliver_events();
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+}
+
+/// A window unmapped mid-drag loses the grab its release would come by: the
+/// session leaves its target and ends cancelled, and the next one starts.
+#[test]
+fn a_session_whose_window_unmaps_ends_cancelled() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+    let unmap = xproto::UnmapNotifyEvent {
+        event: target.xid,
+        window: target.xid,
+        ..xproto::UnmapNotifyEvent::default()
+    };
+    assert!(
+        !target.drag.event(&Event::UnmapNotify(unmap)),
+        "the window hears its unmap too"
+    );
+    heard_by(&other, &target, other.atoms.leave);
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    target
+        .start(request(&Rc::new(Cell::new(None))))
+        .expect("the next session starts");
+}
+
+/// Convert `XdndSelection` to UTF-8 text into `requestor` at `time` through
+/// `connection`, and the property the answer names.
+fn convert(
+    target: &Target,
+    connection: &RustConnection,
+    atoms: &SourceAtoms,
+    requestor: xproto::Window,
+    time: u32,
+) -> xproto::Atom {
+    connection
+        .convert_selection(requestor, atoms.selection, atoms.utf8, atoms.utf8, time)
+        .expect("the conversion is asked");
+    connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) =
+            connection.poll_for_event().expect("the connection holds")
+            && notify.requestor == requestor
+        {
+            return notify.property;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The session's data is the drop's: a target hovered over, or another
+/// client after the drop, converts nothing; the target's client after its
+/// drop does.
+#[test]
+fn only_the_dropped_on_client_reads_the_session_data() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    accepted(
+        &target,
+        &other,
+        &foreign,
+        request(&Rc::new(Cell::new(None))),
+    );
+
+    assert_eq!(
+        convert(&target, &other.connection, atoms, foreign.window, 100),
+        NONE,
+        "a hovered target reads nothing"
+    );
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+    // A client of its own, which owns no selection.
+    let (bystander, _) = RustConnection::connect(None).expect("the X server answers");
+    let window = bystander.generate_id().expect("an X id");
+    bystander
+        .create_window(
+            COPY_DEPTH_FROM_PARENT,
+            window,
+            bystander.setup().roots[0].root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .expect("the window is asked for");
+    assert_eq!(
+        convert(&target, &bystander, atoms, window, 101),
+        NONE,
+        "another client reads nothing"
+    );
+    assert_eq!(
+        convert(&target, &other.connection, atoms, foreign.window, 101),
+        atoms.utf8,
+        "the target reads the drop"
+    );
 }

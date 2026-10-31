@@ -364,10 +364,11 @@ pub(crate) mod model {
         offered
     }
 
-    /// `XdndEnter`'s data from `source`, which speaks [`VERSION`] and offers
-    /// `types`: the first three in the message, all of them in
-    /// `XdndTypeList` when there are more.
-    pub(crate) fn enter(source: Window, types: &[Atom]) -> [u32; 5] {
+    /// `XdndEnter`'s data from `source`, speaking `version` (the lower of
+    /// [`VERSION`] and the target's, as XDND asks) and offering `types`: the
+    /// first three in the message, all of them in `XdndTypeList` when there
+    /// are more.
+    pub(crate) fn enter(source: Window, version: u32, types: &[Atom]) -> [u32; 5] {
         let listed = types.len() > 3;
         let mut inline = [NONE; 3];
         for (slot, atom) in inline.iter_mut().zip(types) {
@@ -375,7 +376,7 @@ pub(crate) mod model {
         }
         [
             source,
-            (VERSION << 24) | u32::from(listed),
+            (version << 24) | u32::from(listed),
             inline[0],
             inline[1],
             inline[2],

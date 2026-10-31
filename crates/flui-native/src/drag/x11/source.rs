@@ -130,7 +130,7 @@ impl X11Drag {
             .ok_or_else(|| refused(UnsupportedReason::Unavailable))?;
         // One session at a time; and a session no button holds would never
         // hear its release.
-        let button = (!busy)
+        let (button, root) = (!busy)
             .then(|| self.button_held())
             .flatten()
             .ok_or_else(|| refused(UnsupportedReason::Unavailable))?;
@@ -193,28 +193,31 @@ impl X11Drag {
         // has the input end it, as the compositor's leave does on Wayland.
         self.taken.with(|taken| taken.push(window));
         self.flush();
+        // The pointer may already be over a target: it hears the session
+        // there, before any movement, so a release in place can drop.
+        self.moved(root, self.time());
         Ok(())
     }
 
-    /// The button held down now, the lowest of the three a drag can hold;
-    /// buttons 4 and 5 are a wheel's notches.
-    fn button_held(&self) -> Option<u32> {
-        let mask = self
+    /// The button held down now, the lowest of the three a drag can hold
+    /// (buttons 4 and 5 are a wheel's notches), and where the pointer is on
+    /// the root window.
+    fn button_held(&self) -> Option<(u32, (i16, i16))> {
+        let pointer = self
             .connection
             .xcb()
             .query_pointer(self.connection.root())
             .ok()?
             .reply()
-            .ok()?
-            .mask;
+            .ok()?;
         [
             (KeyButMask::BUTTON1, 1),
             (KeyButMask::BUTTON2, 2),
             (KeyButMask::BUTTON3, 3),
         ]
         .into_iter()
-        .find(|(held, _)| mask.contains(*held))
-        .map(|(_, button)| button)
+        .find(|(held, _)| pointer.mask.contains(*held))
+        .map(|(_, button)| (button, (pointer.root_x, pointer.root_y)))
     }
 
     /// The windows whose press a session took since the last call.
@@ -329,6 +332,12 @@ impl X11Drag {
                 self.serve(request);
                 true
             }
+            // Unmapped, the window loses the grab, and the release may never
+            // come to it.
+            Event::UnmapNotify(unmap) if unmap.window == window => {
+                self.cancel();
+                false
+            }
             Event::SelectionClear(clear)
                 if clear.owner == window && clear.selection == self.atoms.selection =>
             {
@@ -401,7 +410,7 @@ impl X11Drag {
                 self.send(
                     target,
                     self.atoms.messages.enter,
-                    model::enter(session.window, &types),
+                    model::enter(session.window, version, &types),
                 );
                 session.over = Some(Over {
                     target,
@@ -573,7 +582,8 @@ impl X11Drag {
         self.finish_step(session, then);
     }
 
-    /// Escape: leave the target and end.
+    /// Escape, or the window unmapped: leave the target and end; a drop is
+    /// the target's already.
     fn cancel(&self) {
         let Some(mut session) = self.take_session() else {
             return;
@@ -712,6 +722,11 @@ impl X11Drag {
                     &atoms,
                 )
                 .is_ok()
+        } else if !self.dropped_on_client_of(request.requestor) {
+            // The data is the drop's: no window hovered over, and no client
+            // but the target's, reads it before the target took the drop.
+            // The types stay listed, as `XdndTypeList` lists them anyway.
+            false
         } else {
             self.provide(request.target).is_some_and(|bytes| {
                 // An answer past one request would need `INCR`, which the
@@ -754,6 +769,23 @@ impl X11Drag {
             tracing::debug!(%error, "cannot answer a drag's conversion");
         }
         self.flush();
+    }
+
+    /// Whether the session dropped on a target of the client that made
+    /// `requestor`: a client's windows share the base of their X ids.
+    fn dropped_on_client_of(&self, requestor: xproto::Window) -> bool {
+        let mask = self.connection.xcb().setup().resource_id_mask;
+        self.session
+            .with(|session| {
+                session.as_ref().is_some_and(|session| {
+                    matches!(session.phase, Phase::Dropped { .. })
+                        && session
+                            .over
+                            .as_ref()
+                            .is_some_and(|over| over.target & !mask == requestor & !mask)
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// The bytes the session's provider serves for `target`, asked with no

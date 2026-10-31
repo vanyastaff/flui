@@ -3759,17 +3759,21 @@ click starts afresh. The window owns `XdndSelection` and lists the session's
 types in `XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other
 format as its media type, the private identity included). Each movement finds
 the `XdndAware` window under the pointer, FLUI's own among them, entering and
-leaving targets as it crosses them; one position waits for its status at a
-time, the newest held meanwhile, and a release while one waits sends the held
+leaving targets as it crosses them, the first where the pointer is as the
+session starts, each in the lower of the two XDND versions; one position
+waits for its status at a time, the newest held meanwhile, and a release while one waits sends the held
 one and waits for its answer, so the drop is decided where the button was let
 go. Only the release of the button the drag holds ends it, never a wheel's
 notch or another button. The release drops on a target that accepted with an
-action the runtime allows and leaves one that refused, Escape leaves and
-cancels, and a drop ends at `XdndFinished` with the target's action if the
+action the runtime allows and leaves one that refused, Escape or the window
+unmapping (which ends its grab) leaves and cancels, and a drop ends at `XdndFinished` with the target's action if the
 runtime allows it, cancelled otherwise or after five seconds without one. A
 session whose `XdndSelection` another client takes ends cancelled and lets go
 of nothing, a stale clear from its own earlier release told apart by the
-server's current owner. A target's conversion is served from the session's
+server's current owner. The data goes only to the client whose target took
+the drop, once it took it (a client's windows share the base of their X
+ids); a target hovered over, or any other client, reads nothing but the types
+`XdndTypeList` lists anyway. A conversion is served from the session's
 provider on the owner thread, with no cell borrowed, in one property: a
 payload past one request is refused, since the source writes no `INCR` yet.
 The session lives in an owner-thread cell; its provider and end hook run
@@ -3792,8 +3796,12 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_session_drops_at_its_own_buttons_release`,
 `a_release_waits_for_the_answer_where_it_let_go`,
 `a_finish_with_an_action_not_allowed_is_cancelled`,
-`a_session_whose_selection_is_taken_ends_and_keeps_off_it` and
-`an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`.
+`a_session_whose_selection_is_taken_ends_and_keeps_off_it`,
+`an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`,
+`a_session_enters_an_older_target_in_its_version`,
+`a_session_started_over_a_target_enters_it_at_once`,
+`a_session_whose_window_unmaps_ends_cancelled` and
+`only_the_dropped_on_client_reads_the_session_data`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 
