@@ -77,7 +77,9 @@ type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
 #[doc(alias = "DragTarget")]
 #[derive(Clone, StatefulView)]
 pub struct DropTarget {
-    alternatives: GestureAlternatives,
+    /// `None` only for the crate's own targets, whose commands the widget
+    /// around them mounts.
+    alternatives: Option<GestureAlternatives>,
     accept: AcceptFn,
     builder: Rc<dyn Fn(DropHover) -> BoxedView>,
     on_drop: Option<DropFn>,
@@ -140,7 +142,7 @@ impl DropTarget {
         builder: impl Fn(DropHover) -> BoxedView + 'static,
     ) -> Result<Self, GestureAlternativesError> {
         Ok(Self {
-            alternatives: commands.alternatives()?,
+            alternatives: Some(commands.alternatives()?),
             accept: Rc::new(accept),
             builder: Rc::new(builder),
             on_drop: None,
@@ -149,18 +151,36 @@ impl DropTarget {
         })
     }
 
+    /// A target without commands of its own: the widget around it mounts the
+    /// alternatives its drops need (a reorderable row's moves).
+    pub(crate) fn bare(
+        accept: impl Fn(&DragView<'_>) -> Option<TransferActions> + 'static,
+        builder: impl Fn(DropHover) -> BoxedView + 'static,
+    ) -> Self {
+        Self {
+            alternatives: None,
+            accept: Rc::new(accept),
+            builder: Rc::new(builder),
+            on_drop: None,
+            spring_loading: None,
+            on_spring_loaded: None,
+        }
+    }
+
     /// Name what receives the drop ("Done"), for the labels the alternatives
     /// make themselves, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.alternatives = self.alternatives.target(name);
+        self.alternatives = self.alternatives.map(|alternatives| alternatives.target(name));
         self
     }
 
     /// The alternatives the widget built from its [`DropCommands`].
     #[must_use]
     pub fn alternatives(&self) -> &GestureAlternatives {
-        &self.alternatives
+        self.alternatives
+            .as_ref()
+            .expect("BUG: every public constructor builds a drop target's alternatives")
     }
 
     /// Called with a drop this target accepted: the drag, where it was
@@ -407,15 +427,20 @@ impl ViewState<DropTarget> for DropTargetState {
         let paste = Paste {
             place: Rc::clone(&self.paste),
         };
-        Actions::new(view.alternatives.clone().child(ReceiverAnchor {
+        let anchor = ReceiverAnchor {
             receiver: Rc::clone(&self.receiver),
             ticket: Rc::clone(&self.paste),
             child: Child::some(PasteProbe {
                 place: Rc::clone(&self.paste),
                 child: (view.builder)(self.receiver.hover()),
             }),
-        }))
-        .action(paste)
+        };
+        match &view.alternatives {
+            Some(alternatives) => Actions::new(alternatives.clone().child(anchor))
+                .action(paste)
+                .boxed(),
+            None => anchor.boxed(),
+        }
     }
 }
 

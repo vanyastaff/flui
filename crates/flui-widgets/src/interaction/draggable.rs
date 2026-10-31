@@ -21,6 +21,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::drag::{
+    DragReach,
     AllowedActions, DragAndDrop, DragItem, DragObserver, DragOutcome, DragPoint, DragSession,
     DragTrigger, MoveOutcome,
 };
@@ -28,7 +29,7 @@ use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
     GestureRecognizer, HapticsHandle, HitTestHandle, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    PointerEvent, PointerId,
+    PointerEvent, PointerId, PointerKindSet,
 };
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
@@ -124,7 +125,9 @@ impl DragCommands {
 /// cut and copy keys reach the same intent while it is focused.
 #[derive(Clone, StatefulView)]
 pub struct Draggable {
-    alternatives: GestureAlternatives,
+    /// `None` only for the crate's own drag handles, whose commands the
+    /// widget around them mounts.
+    alternatives: Option<GestureAlternatives>,
     items: Rc<dyn Fn() -> Vec<DragItem>>,
     child: BoxedView,
     allowed: AllowedActions,
@@ -134,6 +137,8 @@ pub struct Draggable {
     child_when_dragging: Option<ViewFn>,
     on_drag_started: Option<EventCallback>,
     on_drag_end: Option<ValueCallback<DragOutcome>>,
+    devices: PointerKindSet,
+    reach: Option<DragReach>,
 }
 
 impl std::fmt::Debug for Draggable {
@@ -164,7 +169,7 @@ impl Draggable {
         child: impl IntoView,
     ) -> Result<Self, GestureAlternativesError> {
         Ok(Self {
-            alternatives: commands.alternatives()?,
+            alternatives: Some(commands.alternatives()?),
             items: Rc::new(items),
             child: child.into_view().boxed(),
             allowed: AllowedActions::within(TransferActions::MOVE | TransferActions::COPY),
@@ -174,14 +179,47 @@ impl Draggable {
             child_when_dragging: None,
             on_drag_started: None,
             on_drag_end: None,
+            devices: PointerKindSet::all(),
+            reach: None,
         })
+    }
+
+    /// A drag handle without commands of its own: the widget around it mounts
+    /// the alternatives its drag needs (a reorderable row's moves).
+    pub(crate) fn bare(items: impl Fn() -> Vec<DragItem> + 'static, child: impl IntoView) -> Self {
+        Self {
+            alternatives: None,
+            items: Rc::new(items),
+            child: child.into_view().boxed(),
+            allowed: AllowedActions::within(TransferActions::MOVE),
+            trigger: DragTrigger::default(),
+            feedback: None,
+            anchor: DragAnchor::default(),
+            child_when_dragging: None,
+            on_drag_started: None,
+            on_drag_end: None,
+            devices: PointerKindSet::all(),
+            reach: None,
+        }
+    }
+
+    /// Only contacts of `devices` start a drag; read when the draggable mounts.
+    pub(crate) fn devices(mut self, devices: PointerKindSet) -> Self {
+        self.devices = devices;
+        self
+    }
+
+    /// How far the drag may go, instead of what its allowed actions derive.
+    pub(crate) fn reach(mut self, reach: DragReach) -> Self {
+        self.reach = Some(reach);
+        self
     }
 
     /// Name what is dragged ("Alice"), for the labels the alternatives make
     /// themselves, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.alternatives = self.alternatives.target(name);
+        self.alternatives = self.alternatives.map(|alternatives| alternatives.target(name));
         self
     }
 
@@ -189,7 +227,9 @@ impl Draggable {
     /// then the copy, and the single-pointer alternative.
     #[must_use]
     pub fn alternatives(&self) -> &GestureAlternatives {
-        &self.alternatives
+        self.alternatives
+            .as_ref()
+            .expect("BUG: every public constructor builds a draggable's alternatives")
     }
 
     /// What targets may do with the drag inside the app and outside it. A drag
@@ -271,6 +311,7 @@ struct SourceConfig {
     anchor: DragAnchor,
     on_drag_started: Option<EventCallback>,
     on_drag_end: Option<ValueCallback<DragOutcome>>,
+    reach: Option<DragReach>,
 }
 
 impl SourceConfig {
@@ -282,6 +323,7 @@ impl SourceConfig {
             anchor: view.anchor,
             on_drag_started: view.on_drag_started.clone(),
             on_drag_end: view.on_drag_end.clone(),
+            reach: view.reach,
         }
     }
 }
@@ -410,6 +452,9 @@ impl Source {
             .drag((config.items)(), config.allowed)
             .pointer(info)
             .observer(observer);
+        if let Some(reach) = config.reach {
+            start = start.reach(reach);
+        }
         if let Some(hit_test) = hit_test {
             start = start.hit_test(hit_test);
         }
@@ -666,6 +711,8 @@ pub struct DraggableState {
     hold: Option<Rc<LongPressGestureRecognizer>>,
     /// The trigger the view asks for, and the scope's arena and settings.
     trigger: DragTrigger,
+    /// The devices whose contacts start a drag, fixed at mount.
+    devices: PointerKindSet,
     policy: Option<GesturePolicy>,
     /// The hold of an enclosing context menu, and whether the widget's own
     /// alternatives are a menu: a long-press drag succeeds a menu's long press
@@ -703,9 +750,10 @@ impl StatefulView for Draggable {
             drag: None,
             hold: None,
             trigger: self.trigger,
+            devices: self.devices,
             policy: None,
             enclosing_hold: None,
-            own_menu: self.alternatives.is_menu(),
+            own_menu: self.alternatives.as_ref().is_some_and(GestureAlternatives::is_menu),
             own_hold: None,
             built_for: None,
             drag_attachment: Rc::new(RecognizerAttachment::default()),
@@ -811,6 +859,7 @@ impl DraggableState {
                     let hand_off = Rc::clone(&branch);
                     let hold = LongPressGestureRecognizer::builder(branch.hold())
                         .settings(settings.clone())
+                        .allowed_devices(self.devices)
                         .on_long_press_start(move |_| {
                             // The hold won one of the pressed contacts; only
                             // that one is handed to the drag.
@@ -840,6 +889,7 @@ impl DraggableState {
         };
         let drag = MultiDragGestureRecognizer::builder(drag_arena, MultiDragAxis::Free)
             .settings(settings)
+            .allowed_devices(self.devices)
             .on_start(on_start)
             .build();
         self.drag_attachment.attach(&drag);
@@ -881,7 +931,10 @@ impl ViewState<Draggable> for DraggableState {
     /// replace the recognizers; a drag already running keeps going until the
     /// replaced ones cancel it.
     fn did_update_view(&mut self, _old_view: &Draggable, new_view: &Draggable) {
-        let own_menu = new_view.alternatives.is_menu();
+        let own_menu = new_view
+            .alternatives
+            .as_ref()
+            .is_some_and(GestureAlternatives::is_menu);
         if new_view.trigger != self.trigger || own_menu != self.own_menu {
             self.trigger = new_view.trigger;
             self.own_menu = own_menu;
@@ -924,17 +977,20 @@ impl ViewState<Draggable> for DraggableState {
         let transfers = DragTransfer {
             source: Rc::clone(&self.source),
         };
-        Actions::new(
-            view.alternatives
-                .clone()
-                .with_hold(self.own_hold.clone())
-                .child(
-                    MouseRegion::new()
-                        .cursor(CursorIcon::Grab)
-                        .child(listener.child(content)),
-                ),
-        )
-        .action(transfers)
+        let grab = MouseRegion::new()
+            .cursor(CursorIcon::Grab)
+            .child(listener.child(content));
+        match &view.alternatives {
+            Some(alternatives) => Actions::new(
+                alternatives
+                    .clone()
+                    .with_hold(self.own_hold.clone())
+                    .child(grab),
+            )
+            .action(transfers)
+            .boxed(),
+            None => grab.boxed(),
+        }
     }
 
     /// Cancels every drag of this widget, its held transfer included: the
