@@ -231,6 +231,38 @@ impl ExternalBuildInbox {
             .cloned()
     }
 
+    /// [`request_frame_if_needed`](Self::request_frame_if_needed) for a
+    /// request made on behalf of user code (a listener, a callback, an event
+    /// handler) that has accepted work and goes on after it: a failing wake
+    /// never unwinds into that caller, which would lose what it does next.
+    /// The work stays queued, the wake stays owed for the next request to
+    /// retry, and the failure is reported, as the runtime reports a contained
+    /// application callback.
+    pub(crate) fn request_frame_contained(
+        &self,
+        has_fresh_work: bool,
+        request_frame: Option<&(dyn Fn() + Send + Sync)>,
+    ) {
+        let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.request_frame_if_needed(has_fresh_work, request_frame);
+        }));
+        if let Err(payload) = wake {
+            // A panicking log is contained too, so the report never unwinds
+            // into the caller either.
+            let report = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tracing::error!(
+                    panic_message = flui_foundation::panic::payload_text(payload.as_ref())
+                        .unwrap_or("<opaque>"),
+                    "a frame request failed; the work stays queued and the wake owed"
+                );
+            }));
+            flui_foundation::panic::retain_opaque_payload(payload);
+            if let Err(diagnostic) = report {
+                flui_foundation::panic::retain_opaque_payload(diagnostic);
+            }
+        }
+    }
+
     /// Request a frame for fresh work or retry a wake that previously
     /// panicked after work was committed.
     ///

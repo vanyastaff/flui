@@ -128,7 +128,7 @@ impl ExternalBuildScheduler {
             .inbox
             .admit_batch(&ids, RebuildReasons::from_reason(reason));
         self.inbox
-            .request_frame_if_needed(any_newly_queued, self.request_frame.as_deref());
+            .request_frame_contained(any_newly_queued, self.request_frame.as_deref());
     }
 
     /// Build a scheduler from the shared inbox + frame-request handle. Used by
@@ -1018,7 +1018,7 @@ impl BuildOwner {
             }
         };
         self.external_inbox
-            .request_frame_if_needed(newly_queued, self.on_build_scheduled.as_deref());
+            .request_frame_contained(newly_queued, self.on_build_scheduled.as_deref());
     }
 
     /// Capture accepted local and external build input for a suspended segment.
@@ -3038,10 +3038,8 @@ mod tests {
         let recovered = ExternalBuildScheduler::from_parts(Arc::clone(&inbox), Some(callback));
         let element = ElementId::new(1);
 
-        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            failing.schedule(element, RebuildReason::SignalChange);
-        }));
-        assert!(first.is_err());
+        // The failed wake is reported, not unwound into the scheduling code.
+        failing.schedule(element, RebuildReason::SignalChange);
         no_hook.schedule(element, RebuildReason::StateChange);
 
         wake_panics.store(false, Ordering::Relaxed);
@@ -3082,10 +3080,8 @@ mod tests {
         let scheduler = ExternalBuildScheduler::from_parts(inbox, Some(callback));
         let element = ElementId::new(1);
 
-        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.schedule(element, RebuildReason::SignalChange);
-        }));
-        assert!(first.is_err());
+        // The failed wake is reported, not unwound into the scheduling code.
+        scheduler.schedule(element, RebuildReason::SignalChange);
 
         let retrying_scheduler = scheduler.clone();
         let retrying = std::thread::spawn(move || {
@@ -3100,7 +3096,10 @@ mod tests {
             racing_scheduler.schedule(element, RebuildReason::DependencyChange);
         });
         release_second_wake.wait();
-        assert!(retrying.join().expect("retry thread joins").is_err());
+        assert!(
+            retrying.join().expect("retry thread joins").is_ok(),
+            "a failed retry is reported, not unwound into the scheduling code"
+        );
         racing.join().expect("racing thread joins");
         assert_eq!(
             wake_calls.load(Ordering::Relaxed),
@@ -3148,11 +3147,18 @@ mod tests {
                     _ => panic!("unexpected extra wake"),
                 },
             );
-        let scheduler = ExternalBuildScheduler::from_parts(inbox, Some(callback));
-        *scheduler_slot.lock() = Some(scheduler.clone());
+        let scheduler =
+            ExternalBuildScheduler::from_parts(Arc::clone(&inbox), Some(Arc::clone(&callback)));
+        *scheduler_slot.lock() = Some(scheduler);
 
+        // The wake itself, as a scheduler requests it before containing it:
+        // the first panic resumes, the retry's payload is retained.
+        let fresh = inbox.admit_batch(
+            &[ElementId::new(1)],
+            RebuildReasons::from_reason(RebuildReason::StateChange),
+        );
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.schedule(ElementId::new(1), RebuildReason::StateChange);
+            inbox.request_frame_if_needed(fresh, Some(&*callback));
         }))
         .expect_err("the primary wake panic must resume");
         scheduler_slot.lock().take();
@@ -3176,15 +3182,49 @@ mod tests {
         });
         let element = ElementId::new(1);
 
-        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner.schedule_build_for(element, 0, RebuildReason::StateChange);
-        }));
-        assert!(first.is_err());
+        // The failed wake is reported, not unwound into the scheduling code.
+        owner.schedule_build_for(element, 0, RebuildReason::StateChange);
 
         wake_panics.store(false, Ordering::Relaxed);
         owner.schedule_build_for(element, 0, RebuildReason::DependencyChange);
         owner.schedule_build_for(element, 0, RebuildReason::StateChange);
         assert_eq!(wake_calls.load(Ordering::Relaxed), 2);
+    }
+
+    /// A log subscriber that panics on every owner event, as a faulty one does.
+    struct PanicsOnOwnerEvent;
+
+    impl tracing::Subscriber for PanicsOnOwnerEvent {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert!(
+                !event.metadata().target().starts_with("flui_view::owner"),
+                "log subscriber failed"
+            );
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn a_panicking_report_of_a_failed_wake_does_not_unwind() {
+        let mut owner = BuildOwner::new();
+        owner.set_on_build_scheduled(|| panic!("wake probe"));
+        tracing::subscriber::with_default(PanicsOnOwnerEvent, || {
+            owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
+        });
     }
 
     impl crate::RenderView for TestView {
@@ -3903,6 +3943,7 @@ mod tests {
                 ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
                 ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),
                 ("direct_build_scheduling_retries_a_failed_wake", direct_build_scheduling_retries_a_failed_wake as fn()),
+                ("a_panicking_report_of_a_failed_wake_does_not_unwind", a_panicking_report_of_a_failed_wake_does_not_unwind),
                 ("nested_scope_quarantines_work_until_its_own_drain", nested_scope_quarantines_work_until_its_own_drain as fn()),
                 ("queued_work_follows_a_live_global_key_reparent_across_build_scopes", queued_work_follows_a_live_global_key_reparent_across_build_scopes as fn()),
                 ("duplicate_global_key_across_owners_sharing_a_scope_fails_eagerly_and_leaves_first_tree_undisturbed", duplicate_global_key_across_owners_sharing_a_scope_fails_eagerly_and_leaves_first_tree_undisturbed as fn()),

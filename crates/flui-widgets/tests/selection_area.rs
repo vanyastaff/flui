@@ -591,7 +591,7 @@ pub(crate) fn offstage_text_is_left_out_of_the_selection() {
     );
 }
 
-/// A wake that panics after the selection is committed still lets the
+/// listener hear of it, and the failure is reported, not unwound into it.
 /// listener hear of it, and the failure is not swallowed.
 ///
 /// Red-check: call the listener after the wake without containment (the
@@ -618,10 +618,15 @@ pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
         runs_of(&paragraph(tree.state(), "Alpha beta"))
     };
     armed.store(true, Ordering::SeqCst);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         laid.invoke_semantics_action(selection_request(runs[0], at(runs[0], 0), at(runs[0], 5)))
-    }));
-    assert!(outcome.is_err(), "the wake's failure reaches the caller");
+            .expect("the selection is accepted");
+    });
+    armed.store(false, Ordering::SeqCst);
+    assert!(
+        log.contains("a frame request failed"),
+        "the wake's failure is reported: {log}"
+    );
     assert_eq!(
         *seen.borrow(),
         vec![Some("Alpha".to_owned())],

@@ -368,6 +368,10 @@ pub struct PresentationState {
     /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
     /// the frame's time and idle deadline from it (ADR-0257).
     pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
+    /// The soft keyboard's occlusion as the window last reported it: sampled
+    /// at each frame's vsync into `MediaQueryData::view_insets` while it moves
+    /// (ADR-0277 §3).
+    pub(super) keyboard: Cell<flui_platform::KeyboardInset>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -1023,6 +1027,7 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             frame_request: Cell::new(None),
+            keyboard: Cell::new(snapshot.insets.keyboard()),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1151,6 +1156,7 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             frame_request: Cell::new(None),
+            keyboard: Cell::new(snapshot.insets.keyboard()),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),

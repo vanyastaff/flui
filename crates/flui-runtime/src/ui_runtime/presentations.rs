@@ -480,6 +480,46 @@ impl UiRuntime {
             .map(|presentation| &presentation.media_query)
     }
 
+    /// Hold `keyboard` as presentation `id`'s soft-keyboard inset: each frame
+    /// samples it at its vsync while it moves (ADR-0277 §3); the window-state
+    /// operation that holds it asks for the first of those frames. Nothing when
+    /// this UI runtime no longer hosts `id`.
+    pub(crate) fn hold_keyboard_inset_for(
+        &self,
+        id: PresentationId,
+        keyboard: flui_platform::KeyboardInset,
+    ) {
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.keyboard.set(keyboard);
+        }
+    }
+
+    /// Write `presentation`'s moving keyboard into its `view_insets` at
+    /// `vsync`, the time of the frame being built, and ask for the next frame
+    /// until the motion ends: the frame that reaches the end publishes the
+    /// target and asks for no more.
+    pub(super) fn sample_keyboard_inset(
+        &self,
+        presentation: &PresentationState,
+        vsync: flui_platform::EventTime,
+    ) {
+        let keyboard = presentation.keyboard.get();
+        if keyboard.motion().is_none() {
+            return;
+        }
+        let occlusion = keyboard.at(vsync);
+        let settled = keyboard.settles_at().is_none_or(|end| vsync >= end);
+        if settled {
+            presentation.keyboard.set(keyboard.settled());
+        }
+        presentation
+            .media_query
+            .update(|data| data.view_insets = occlusion);
+        if !settled {
+            self.request_redraw_for(presentation);
+        }
+    }
+
     /// The primary presentation's gesture binding.
     #[must_use]
     pub fn gestures(&self) -> &GestureBinding {

@@ -20,9 +20,10 @@
 //!   ([`LayerTree::new`]) and grown pre-order through
 //!   [`LayerTree::push_child`]; the
 //!   tree also indexes every [`LeaderLayer`] by its [`LayerLink`].
-//! - [`resolve_follower_offset`]: the leader/follower chain math over
-//!   [`Layer::local_translation`], the one place the set of translating
-//!   variants is written down.
+//! - [`resolve_follower_transform`]: the leader/follower chain math, each
+//!   chain layer contributing its matrix, a nested follower's resolved
+//!   transform or [`Layer::local_translation`], the one place the set of
+//!   translating variants is written down.
 //! - [`SceneBuilder`]: push/pop construction for hand-authored scenes.
 //! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: the frozen tree and
 //!   the per-frame package that crosses the raster boundary.
@@ -69,12 +70,12 @@ pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,
     ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
-    FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer,
     PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample, PictureLayer,
     PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer,
     TextureLayer, TransformLayer,
 };
-pub use link::{LayerLink, resolve_follower_offset};
+pub use link::{LayerLink, resolve_follower_transform};
 pub use scene::Scene;
 pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
 pub use texture_registry::{

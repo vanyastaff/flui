@@ -3,13 +3,14 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
-//! `padding`, `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales`, `motion` — presentation and
+//! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
+//! `preferred_locales`, `motion` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
-//! System gesture insets, 24-hour-format preference,
-//! accessible navigation, inverted colors, display features, and navigation mode. Text-weight observation
+//! 24-hour-format preference, accessible navigation, inverted colors, display features, and
+//! navigation mode. Text-weight observation
 //! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
@@ -45,6 +46,7 @@ use std::sync::Arc;
 /// - [`view_padding`](Self::view_padding)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
+/// - [`system_gesture_insets`](Self::system_gesture_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
 /// - [`motion`](Self::motion)
@@ -80,9 +82,15 @@ pub struct MediaQueryData {
     /// Insets occupied by system UI that fully obscures part of the window,
     /// such as the software keyboard when it is visible. Unlike
     /// [`padding`](Self::padding), these areas are hidden, not just reserved.
-    /// The runtime does not publish keyboard insets yet; widgets honour the
-    /// value once a platform producer does.
+    /// While the keyboard moves, each frame carries its occlusion at that
+    /// frame's time.
     pub view_insets: EdgeInsets,
+
+    /// Edges where a system gesture (back, home, the notification shade)
+    /// takes precedence over the application's own drag: a horizontal drag or
+    /// an edge slider pads itself away from them. Zero where the platform
+    /// reports none.
+    pub system_gesture_insets: EdgeInsets,
 
     /// The OS-level light/dark preference as reported by the platform.
     /// An app-level `Theme` (e.g. `flui_material::Theme`) may override this
@@ -115,6 +123,7 @@ impl Default for MediaQueryData {
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
+            system_gesture_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
             motion: flui_animation::MotionPolicy::Full,
@@ -303,6 +312,14 @@ impl MediaQuery {
     #[must_use]
     pub fn view_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
+    }
+
+    /// The system-gesture edges, depending on `system_gesture_insets` only.
+    #[must_use]
+    pub fn system_gesture_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SYSTEM_GESTURE_INSETS, |d| {
+            d.system_gesture_insets
+        })
     }
 
     /// The platform brightness, depending on `platform_brightness` only.

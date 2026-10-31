@@ -5,7 +5,7 @@ use std::{any::Any, sync::Arc};
 use flui_foundation::{LayerId, geometry::Point};
 use flui_painting::paint::Clip;
 
-use crate::{Layer, LayerTree, link::resolve_follower_offset};
+use crate::{Layer, LayerTree, link::resolve_follower_transform};
 
 impl LayerTree {
     /// Every `T` an [`AnnotatedRegionLayer`](crate::AnnotatedRegionLayer)
@@ -60,21 +60,22 @@ impl LayerTree {
     /// `point` in this layer's own coordinates, or `None` when the layer's
     /// placement cannot be inverted or resolved.
     fn point_in_layer(&self, id: LayerId, layer: &Layer, point: Point<f64>) -> Option<Point<f64>> {
-        let offset = match layer {
-            Layer::Transform(transform) => {
-                let inverse = transform.transform().try_inverse()?;
-                let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
-                return Some(Point::new(x, y));
+        let transform = match layer {
+            Layer::Transform(transform) => *transform.transform(),
+            Layer::Follower(_) => resolve_follower_transform(self, id)?,
+            _ => {
+                let offset = layer.local_translation();
+                return Some(Point::new(point.x - offset.dx, point.y - offset.dy));
             }
-            Layer::Follower(_) => resolve_follower_offset(self, id)?,
-            _ => layer.local_translation(),
         };
-        Some(Point::new(point.x - offset.dx, point.y - offset.dy))
+        let inverse = transform.try_inverse()?;
+        let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
+        Some(Point::new(x, y))
     }
 }
 
 /// Whether a clipping layer keeps `point`; non-clipping layers keep it.
-fn clip_admits(layer: &Layer, point: Point<f64>) -> bool {
+pub(crate) fn clip_admits(layer: &Layer, point: Point<f64>) -> bool {
     let clips = |behavior: Clip| behavior != Clip::None;
     match layer {
         Layer::ClipRect(clip) => !clips(clip.clip_behavior()) || clip.clip_rect().contains(point),
