@@ -1,0 +1,48 @@
+[package]
+publish = ["crates-io"]
+name = "flui-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "FLUI's OS shell services: open a URI or a file, reveal it, move it to the trash, and the file dialogs"
+repository.workspace = true
+keywords = ["ui", "flui", "dialog", "launcher"]
+categories = ["gui"]
+autotests = false
+
+# A capability crate (ADR-0154 §1): the contract crate and external crates
+# only, and its own OS code. Nothing but the facade names it.
+[dependencies]
+flui-platform = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+flui-platform = { workspace = true, features = ["testing"] }
+flui-sdk = { workspace = true }
+flui-testing = { workspace = true }
+
+[features]
+default = []
+# The scripted providers a scenario registers instead of the OS's (ADR-0154
+# §10, ADR-0243).
+testing = ["flui-platform/testing"]
+
+[lints]
+workspace = true
+
+[[test]]
+name = "system_it"
+path = "tests/main.rs"
+harness = true
+required-features = ["testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.flui]
+layer = 6
+tier = "pkg"
+tier-kind = "capability"
+order = 5
