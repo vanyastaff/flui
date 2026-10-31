@@ -14136,3 +14136,18 @@ fn an_unbounded_preferred_size_is_absent_from_the_description() {
     assert!(paint.get::<f64>("preferred_width").is_err(), "unbounded");
     assert_eq!(paint.get::<f64>("preferred_height"), Ok(30.0));
 }
+
+/// A requested dimension of infinity clamps at layout; no object's description carries it.
+#[test]
+fn a_sized_box_describes_an_infinite_dimension_as_absent() {
+    let run = RenderTester::mount(box_node(RenderSizedBox::fixed(f64::INFINITY, 30.0)))
+        .with_constraints(loose(200.0))
+        .run_layout();
+    let snapshot = run.render_snapshot();
+    let sized = snapshot
+        .find_by_kind("RenderSizedBox")
+        .unique()
+        .expect("one sized box");
+    assert!(sized.get::<f64>("width").is_err(), "unbounded width");
+    assert_eq!(sized.get::<f64>("height"), Ok(30.0));
+}

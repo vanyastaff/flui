@@ -218,6 +218,12 @@ which the workspace has left. Invariants:
   target, because it installs a counting allocator) walks every value kind, a sequence and a
   `Debug` field with a counting sink and requires zero allocations; the snapshot sink is its
   positive control.
+- **A description carries finite numbers only.** `Fields` hands the sink a float, size, offset,
+  rectangle or inset that holds infinity or NaN as `Value::None`, so an unbounded bound (an
+  `expand()` minimum, an unconstrained maximum) is an absent field and no object can put a number on
+  the wire that JSON cannot carry. An object that wants the other axis of a pair keeps it by
+  describing each axis as its own `Option<f64>`. `a_non_finite_number_is_described_as_absent` pins
+  it; sequence elements are not checked.
 - **The value set is closed.** A consumer that handles every `Value` handles every description,
   which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
   colour type lives in `flui-painting`, so a description carries `Rgba` channels.

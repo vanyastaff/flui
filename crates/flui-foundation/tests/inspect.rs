@@ -982,6 +982,40 @@ fn the_diff_tells_kinds_apart_by_their_type_arguments() {
     );
 }
 
+/// A number the protocol cannot carry is published as an absent value, so no object can put
+/// infinity or NaN on the wire by holding one.
+///
+/// Fails when `Fields` hands the sink the raw float.
+#[test]
+fn a_non_finite_number_is_described_as_absent() {
+    for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let padding = whole(&sample(bad));
+        let padding = padding
+            .find_by_kind("RenderPadding")
+            .unique()
+            .expect("the padding");
+        assert!(padding.get::<f64>("left").is_err(), "{bad} is published");
+        let left = padding
+            .fields
+            .iter()
+            .find(|field| field.name == "left")
+            .expect("the field is still listed");
+        assert!(
+            matches!(left.value, OwnedValue::None),
+            "{bad} reads as absent"
+        );
+    }
+    let finite = whole(&sample(8.0));
+    assert_eq!(
+        finite
+            .find_by_kind("RenderPadding")
+            .unique()
+            .expect("the padding")
+            .get::<f64>("left"),
+        Ok(8.0)
+    );
+}
+
 fn with_attached_field(value: f64) -> Tree {
     let mut tree = sample(8.0);
     tree.nodes

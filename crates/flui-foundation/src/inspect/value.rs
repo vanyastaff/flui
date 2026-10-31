@@ -62,6 +62,24 @@ pub enum Value<'a> {
 }
 
 impl Value<'_> {
+    /// Whether every number the value carries is finite. A matrix is not checked: its entries
+    /// are not published one by one.
+    pub(crate) fn is_finite(&self) -> bool {
+        match self {
+            Self::Float(value) => value.is_finite(),
+            Self::Size(size) => size.is_finite(),
+            Self::Offset(offset) => offset.is_finite(),
+            Self::Rect(rect) => rect.is_finite(),
+            Self::EdgeInsets(insets) => {
+                insets.top.is_finite()
+                    && insets.right.is_finite()
+                    && insets.bottom.is_finite()
+                    && insets.left.is_finite()
+            }
+            _ => true,
+        }
+    }
+
     /// The variant's name, as a field error names what it found.
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {

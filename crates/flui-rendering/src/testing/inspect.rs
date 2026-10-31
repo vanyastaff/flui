@@ -14,9 +14,7 @@
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::inspect::{
-    Level, OwnedValue, Plain, SnapshotNode, SnapshotQuery, render, snapshot,
-};
+use flui_foundation::inspect::{Level, Plain, SnapshotNode, SnapshotQuery, render, snapshot};
 use flui_interaction::events::PointerKind;
 
 use crate::{
@@ -147,28 +145,8 @@ pub fn localize_hit_point(transform: Matrix4, global_x: f64, global_y: f64) -> O
 ///
 /// Read it by type: `node.get::<f64>("width")`, `node.get_fact::<Size>("size")`.
 pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNode {
-    let tree = snapshot(&owner.inspect(), SnapshotQuery::default())
-        .expect("BUG: a mounted harness tree always has a root");
-    assert_all_finite(&tree);
-    tree
-}
-
-/// Panics on a number the description publishes as infinite or NaN: the protocol carries finite
-/// numbers only, so an unbounded bound is an absent field.
-fn assert_all_finite(tree: &SnapshotNode) {
-    let mut stack = vec![tree];
-    while let Some(node) = stack.pop() {
-        for field in node.facts.iter().chain(&node.fields) {
-            let finite = match &field.value {
-                OwnedValue::Float(v) => v.is_finite(),
-                OwnedValue::Size(s) => s.width.is_finite() && s.height.is_finite(),
-                OwnedValue::Offset(o) => o.dx.is_finite() && o.dy.is_finite(),
-                _ => true,
-            };
-            assert!(finite, "{} {} is not finite", node.kind, field.name);
-        }
-        stack.extend(&node.children);
-    }
+    snapshot(&owner.inspect(), SnapshotQuery::default())
+        .expect("BUG: a mounted harness tree always has a root")
 }
 
 /// Takes the snapshot of the one node `id`, without its children.
