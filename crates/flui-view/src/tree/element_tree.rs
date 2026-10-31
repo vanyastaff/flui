@@ -21,6 +21,19 @@ use crate::view::{ElementBase, View};
 
 use super::containment::ChildHookPanic;
 
+/// The render-parent edge the post-build reorder pass wants for one render
+/// node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderEdge {
+    /// The nearest render ancestor in the element graph, or `None` for a
+    /// render root.
+    Parent(Option<RenderId>),
+    /// The first render node of a lazy sliver child: its edge and its place
+    /// in the sliver's list belong to the child manager and the sliver's
+    /// parent data, so the pass leaves both and settles only its children.
+    Sparse,
+}
+
 fn append_sparse_sliver_children(
     render_tree: &flui_rendering::storage::RenderTree,
     parent_render: RenderId,
@@ -1307,12 +1320,15 @@ impl ElementTree {
     /// exactly the invariant the root-hop parent-link defect violated: a
     /// child recorded in its parent's children list while its own `parent`
     /// link disagreed).
-    pub(crate) fn reorder_render_children_after_build(&mut self) -> usize {
+    pub(crate) fn reorder_render_children_after_build(
+        &mut self,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) -> usize {
         if !self.needs_render_reorder {
             return 0;
         }
         self.needs_render_reorder = false;
-        self.synchronize_render_children()
+        self.synchronize_render_children(registry)
     }
 
     pub(super) fn mark_render_reorder_needed(&mut self) {
@@ -1397,49 +1413,66 @@ impl ElementTree {
         visited
     }
 
-    fn synchronize_render_children(&mut self) -> usize {
+    fn synchronize_render_children(
+        &mut self,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) -> usize {
         // Depth-first in slot order, tracking each node's nearest render
         // ancestor. A render node is appended to that ancestor's target order,
         // then becomes the render ancestor for its own subtree.
-        let mut target: HashMap<flui_foundation::RenderId, Vec<flui_foundation::RenderId>> =
-            HashMap::new();
+        //
+        // The walk also descends into a lazy sliver's resident children. They
+        // stay out of `child_ids`, and the sliver's own child list is ordered
+        // by its parent data (`append_sparse_sliver_children`), so the first
+        // render node of each such child keeps its edge to the sliver as the
+        // child manager left it; only the render parents inside it are
+        // synchronized. A row built in a sliver's layout-time build has the
+        // same component-deferred attach order as one built anywhere else.
+        let mut target: HashMap<RenderId, Vec<RenderId>> = HashMap::new();
         // Every render node with its desired render parent, in depth-first
         // pre-order: a parent's own edge is settled before its children
         // move under it, so no step of the sync closes a cycle.
-        let mut desired_parent: Vec<(
-            flui_foundation::RenderId,
-            Option<flui_foundation::RenderId>,
-        )> = Vec::new();
+        let mut desired_parent: Vec<(flui_foundation::RenderId, RenderEdge)> = Vec::new();
         let mut pipeline_owner: Option<PipelineCell> = None;
         let mut visited = 0;
 
         // Children are pushed reversed so siblings pop in ascending slot order.
-        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>)> = self
+        // The third field is `RenderEdge::Sparse` from a lazy child down to its
+        // first render node.
+        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>, RenderEdge)> = self
             .iter_nodes()
             .filter(|(_, node)| node.parent.is_none())
-            .map(|(id, _)| (id, None))
+            .map(|(id, _)| (id, None, RenderEdge::Parent(None)))
             .collect();
         stack.reverse();
-        while let Some((element_id, render_ancestor)) = stack.pop() {
+        while let Some((element_id, render_ancestor, edge)) = stack.pop() {
             visited += 1;
             let Some(node) = self.get(element_id) else {
                 continue;
             };
-            let child_ancestor = if let Some(render_id) = node.element().render_id() {
-                desired_parent.push((render_id, render_ancestor));
-                if let Some(parent_render) = render_ancestor {
-                    target.entry(parent_render).or_default().push(render_id);
+            let (child_ancestor, child_edge) = if let Some(render_id) = node.element().render_id() {
+                match edge {
+                    RenderEdge::Sparse => desired_parent.push((render_id, RenderEdge::Sparse)),
+                    RenderEdge::Parent(_) => {
+                        desired_parent.push((render_id, RenderEdge::Parent(render_ancestor)));
+                        if let Some(parent_render) = render_ancestor {
+                            target.entry(parent_render).or_default().push(render_id);
+                        }
+                    }
                 }
                 if pipeline_owner.is_none() {
                     pipeline_owner = node.element().pipeline_owner();
                 }
-                Some(render_id)
+                (Some(render_id), RenderEdge::Parent(Some(render_id)))
             } else {
-                render_ancestor
+                (render_ancestor, edge)
             };
+            for child in self.sparse_children(element_id, registry).into_iter().rev() {
+                stack.push((child, child_ancestor, RenderEdge::Sparse));
+            }
             let children = node.child_ids();
             for &child in children.iter().rev() {
-                stack.push((child, child_ancestor));
+                stack.push((child, child_ancestor, child_edge));
             }
         }
 
@@ -1462,7 +1495,7 @@ impl ElementTree {
                     }
                     // A render root in the element graph leaves the render
                     // parent it still holds.
-                    if desired.is_none()
+                    if desired == RenderEdge::Parent(None)
                         && let Some(current) = render_tree.parent(render_id)
                     {
                         render_tree.drop_child(current, render_id);
@@ -1493,6 +1526,9 @@ impl ElementTree {
 
                 #[cfg(debug_assertions)]
                 for &(render_id, desired) in &desired_parent {
+                    let RenderEdge::Parent(desired) = desired else {
+                        continue;
+                    };
                     if !render_tree.contains(render_id) {
                         continue;
                     }
@@ -1728,18 +1764,34 @@ impl ElementTree {
             return Vec::new();
         };
         let mut children = node.child_ids().to_vec();
-        let manager = node
-            .element()
-            .render_id()
+        children.extend(self.sparse_children(id, registry));
+        children
+    }
+
+    /// The lazy children a child manager registered under `id`'s render
+    /// object holds, which stay out of `child_ids`. Only children whose
+    /// element parent is still `id` count: a child the manager has not yet
+    /// forgotten after a GlobalKey move belongs to its new parent.
+    fn sparse_children(
+        &self,
+        id: ElementId,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) -> Vec<ElementId> {
+        let manager = self
+            .get(id)
+            .and_then(|node| node.element().render_id())
             .and_then(|render_id| registry.lock().get(&render_id).cloned());
-        if let Some(manager) = manager {
-            let sparse = manager.lock().snapshot_children();
-            children.extend(sparse.into_iter().filter(|child| {
+        let Some(manager) = manager else {
+            return Vec::new();
+        };
+        let sparse = manager.lock().snapshot_children();
+        sparse
+            .into_iter()
+            .filter(|child| {
                 self.get(*child)
                     .is_some_and(|node| node.parent() == Some(id))
-            }));
-        }
-        children
+            })
+            .collect::<Vec<ElementId>>()
     }
 
     pub(crate) fn preflight_unmount(&self, ids: &[ElementId]) {

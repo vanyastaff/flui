@@ -104,6 +104,19 @@ pub struct FrameEvent {
     pub time_us: Option<u64>,
 }
 
+impl FrameEvent {
+    /// Frame `frame` of `window`, with no time recorded.
+    #[must_use]
+    pub const fn new(window: WindowId, frame: u64, presented: bool) -> Self {
+        Self {
+            window,
+            frame,
+            presented,
+            time_us: None,
+        }
+    }
+}
+
 /// `input`: one delivered input.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -128,6 +141,14 @@ pub struct SemanticsEvent {
     pub revision: TreeRevision,
 }
 
+impl SemanticsEvent {
+    /// `window`'s tree published at `revision`.
+    #[must_use]
+    pub const fn new(window: WindowId, revision: TreeRevision) -> Self {
+        Self { window, revision }
+    }
+}
+
 /// `window`: a window opened or closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -140,6 +161,14 @@ pub struct WindowEvent {
     pub opened: bool,
 }
 
+impl WindowEvent {
+    /// `window` opened (`opened`) or closed.
+    #[must_use]
+    pub const fn new(window: WindowId, opened: bool) -> Self {
+        Self { window, opened }
+    }
+}
+
 /// `gap`: the subscriber's queue overflowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -148,6 +177,14 @@ pub struct WindowEvent {
 pub struct GapEvent {
     /// Events dropped.
     pub missed: u64,
+}
+
+impl GapEvent {
+    /// `missed` events dropped.
+    #[must_use]
+    pub const fn new(missed: u64) -> Self {
+        Self { missed }
+    }
 }
 
 /// One event line: `{"event": "frame", "params": {…}}`.

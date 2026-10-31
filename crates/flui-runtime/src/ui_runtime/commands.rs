@@ -145,6 +145,16 @@ pub enum UiCommand {
         /// Where the outcome goes.
         reply: super::agent::ReplySender<flui_protocol::WaitOutcome>,
     },
+    /// Register a subscription to the addressed presentation's events and answer with its
+    /// stream.
+    SemanticsAgentSubscribe {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The events to stream.
+        filters: Vec<flui_protocol::EventFilter>,
+        /// Where the stream goes.
+        reply: super::agent::ReplySender<super::agent_events::EventStream>,
+    },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
     SemanticsLocate {
@@ -263,6 +273,15 @@ impl std::fmt::Debug for UiCommand {
             } => f
                 .debug_struct("UiCommand::SemanticsAgentWait")
                 .field("presentation_id", presentation_id)
+                .finish_non_exhaustive(),
+            UiCommand::SemanticsAgentSubscribe {
+                presentation_id,
+                filters,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentSubscribe")
+                .field("presentation_id", presentation_id)
+                .field("filters", &filters.len())
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -930,6 +949,17 @@ impl UiRuntime {
                 } => {
                     // It answers itself: now if it holds, else after a frame or its deadline.
                     if self.park_agent_wait(presentation_id, *params, reply) {
+                        report.invoked += 1;
+                    } else {
+                        report.dropped_stale += 1;
+                    }
+                }
+                UiCommand::SemanticsAgentSubscribe {
+                    presentation_id,
+                    filters,
+                    reply,
+                } => {
+                    if self.subscribe_agent_events(presentation_id, filters, &reply) {
                         report.invoked += 1;
                     } else {
                         report.dropped_stale += 1;

@@ -445,6 +445,9 @@ pub struct PresentationState {
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
+    /// The subscriptions an agent holds to this presentation's events, and how far they have
+    /// been reported. Ended when the presentation closes. Owner thread only.
+    pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
     /// The window this presentation is shown in, as the host controls it, once
     /// `UiRuntime::install_window` has attached it. Closed before the
     /// presentation's terminal notification, so a handle held past the close
@@ -1069,6 +1072,7 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1198,6 +1202,7 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
             widgets,
@@ -1910,8 +1915,10 @@ impl PresentationState {
     }
 
     /// Answers every job an agent parked on this presentation when it closes before a frame
-    /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`.
+    /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`,
+    /// and every event stream ends after a last `window` event.
     pub(crate) fn abandon_agent_jobs(&self) {
+        self.end_agent_events();
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         for pending in owed {
             pending.abandon();
