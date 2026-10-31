@@ -8,7 +8,7 @@ use flui_foundation::geometry::Point;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, Selection, TextStore, TextStoreHost,
-    TextStoreHostError, commit_composition_in_place,
+    TextStoreHostError, TextStoreObserver, TextStoreStatus, commit_composition_in_place,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
@@ -24,6 +24,8 @@ struct Context {
     /// The holds on secure event input the client has taken and not given
     /// back.
     secure_holds: Cell<isize>,
+    /// Whether the view's window has resigned key status.
+    resigned: Cell<bool>,
     /// Whether the system refuses the next change of secure event input.
     refuse_secure: Cell<bool>,
 }
@@ -49,6 +51,10 @@ impl InputContext for Context {
         assert!(holds >= 0, "a hold was given back that was never taken");
         self.secure_holds.set(holds);
         true
+    }
+
+    fn is_key_window(&self) -> bool {
+        !self.resigned.get()
     }
 }
 
@@ -418,4 +424,93 @@ fn secure_input_follows_the_bind_and_the_systems_refusal() {
     assert_eq!(context.secure_holds.get(), 0, "the system refused the hold");
     client.focus_store(None);
     assert_eq!(context.secure_holds.get(), 0, "nothing to give back");
+}
+
+/// The hold follows the window's key status: another application's keyboard
+/// utilities work while this window is in the background.
+#[test]
+fn secure_input_is_given_back_while_the_window_is_not_key() {
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    let (client, context) = serving(&password);
+    assert_eq!(context.secure_holds.get(), 1);
+
+    context.resigned.set(true);
+    client.key_window_changed();
+    assert_eq!(context.secure_holds.get(), 0, "the window resigned key");
+    password.set_protected(false);
+    password.set_protected(true);
+    assert_eq!(
+        context.secure_holds.get(),
+        0,
+        "no hold outside the key window"
+    );
+
+    context.resigned.set(false);
+    client.key_window_changed();
+    assert_eq!(context.secure_holds.get(), 1, "the window became key again");
+}
+
+/// A store whose `status` moves focus: the hold follows the focus it gives,
+/// not the answer the outer call read before the move.
+struct MovesFocusOnStatus {
+    inner: Rc<InMemoryTextStore>,
+    on_status: RefCell<Option<Box<dyn FnOnce()>>>,
+}
+
+impl TextStore for MovesFocusOnStatus {
+    fn status(&self) -> TextStoreStatus {
+        let on_status = self.on_status.borrow_mut().take();
+        if let Some(on_status) = on_status {
+            on_status();
+        }
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+#[test]
+fn a_focus_moved_by_a_status_query_is_held_for() {
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    let client = TextClient::new();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    let plain = Rc::new(MovesFocusOnStatus {
+        inner: InMemoryTextStore::new(""),
+        on_status: RefCell::new(Some(Box::new({
+            let client = Rc::clone(&client);
+            let password = as_store(&password);
+            move || client.focus_store(Some(password))
+        }))),
+    });
+
+    client.focus_store(Some(Rc::clone(&plain) as Rc<dyn TextStore>));
+    assert_eq!(
+        context.secure_holds.get(),
+        1,
+        "the protected field the status query focused is held"
+    );
+    client.focus_store(None);
+    assert_eq!(context.secure_holds.get(), 0);
 }

@@ -96,6 +96,9 @@ pub(crate) trait ViewText {
     /// the input method.
     fn reports_key_release(&self) -> bool;
 
+    /// The view's window became or stopped being the key window.
+    fn key_window_changed(&self);
+
     /// `insertText:replacementRange:`.
     fn insert_text(&self, text: String, replacement: Option<Utf16Range>);
 

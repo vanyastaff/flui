@@ -159,6 +159,22 @@ impl InputContext for ViewInputContext {
         }
         status == 0
     }
+
+    fn is_key_window(&self) -> bool {
+        // SAFETY: as for `discard_marked_text`; `window` is NSView's own
+        // getter, answering the window the view is in or nil, and
+        // `isKeyWindow` is NSWindow's.
+        unsafe {
+            let window: *mut AnyObject = msg_send![self.view, window];
+            match window.as_ref() {
+                Some(window) => {
+                    let key: objc2::runtime::Bool = msg_send![window, isKeyWindow];
+                    key.as_bool()
+                }
+                None => false,
+            }
+        }
+    }
 }
 
 impl ViewText for TextView {
@@ -176,6 +192,10 @@ impl ViewText for TextView {
 
     fn reports_key_release(&self) -> bool {
         self.client.reports_key_release()
+    }
+
+    fn key_window_changed(&self) {
+        self.client.key_window_changed();
     }
 
     fn insert_text(&self, text: String, replacement: Option<Utf16Range>) {
