@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_platform::data_transfer::RepresentationDescriptor;
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(target_os = "android", target_arch = "wasm32", x11_host, test))]
 use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
 
 // ============================================================================
@@ -399,7 +399,7 @@ mod uri_list {
 /// (the browser's `Files`, a browser's private types, names that are not
 /// media types). FLUI's identity reads as itself: a custom type with its
 /// parameters.
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(target_os = "android", target_arch = "wasm32", x11_host, test))]
 #[must_use]
 pub(crate) fn format_of(media_type: &str) -> Option<TransferFormat> {
     match media_type {
@@ -432,7 +432,7 @@ pub(crate) fn format_of(media_type: &str) -> Option<TransferFormat> {
 /// for `format`: the bytes of an image's container, as announced, and of the
 /// type's essence otherwise (`application/octet-stream` for a format a file
 /// never announces).
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(target_os = "android", target_arch = "wasm32", x11_host, test))]
 #[must_use]
 pub(crate) fn payload_of_bytes(format: &TransferFormat, bytes: Vec<u8>) -> TransferPayload {
     let mime = match format {

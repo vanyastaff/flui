@@ -13,6 +13,7 @@
 //! - `android`: `FluiView`'s drag events and system drags;
 //! - `web`: HTML drag and drop;
 //! - `winit`: the files winit reports dragged and dropped;
+//! - `x11`: XDND drops on the native X11 host's windows;
 //! - `headless`: a double that plays the operating system's side.
 //!
 //! What the first three decide with no OS call (what crosses OLE, what a
@@ -21,7 +22,8 @@
 //! `cfg(any(<os>, test))` with its OS side under `cfg(<os>)`, so every host
 //! checks it.
 //!
-//! macOS and iOS have no drag and drop yet: their table names `Absent<Drag>`.
+//! macOS, iOS and the native Wayland host have no drag and drop yet: their
+//! table names `Absent<Drag>`.
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
@@ -36,3 +38,5 @@ pub(crate) mod windows;
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 pub(crate) mod winit;
+#[cfg(x11_host)]
+pub(crate) mod x11;

@@ -46,7 +46,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 use web_time::Instant;
 
 use super::owners::Owners;
-use super::text::TextForm;
+use crate::clipboard::text::TextForm;
 use crate::host::{NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;

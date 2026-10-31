@@ -166,9 +166,12 @@ mod x11 {
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
+    use crate::drag::x11::X11Drag;
     use crate::host::SharedClipboard;
     use crate::input::linux::x11::X11Input;
-    use crate::owner::linux::x11::{HostDisplays, LoopInput, X11Connection, X11Host, X11Loop};
+    use crate::owner::linux::x11::{
+        Doorbell, HostDisplays, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
+    };
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
     /// The X11 host's table.
@@ -186,7 +189,7 @@ mod x11 {
         type Accessibility = UnixAccessibility;
         type Clipboard = X11Loop;
         type PrimarySelection = Absent<position::PrimarySelection>;
-        type Drag = Absent<position::Drag>;
+        type Drag = X11Loop;
         // A desktop has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
         type Preferences = X11Loop;
@@ -229,6 +232,20 @@ mod x11 {
         /// The `CLIPBOARD` selection on a connection and a thread of its own.
         fn clipboard() -> Result<Arc<dyn SharedClipboard>, PlatformError> {
             Ok(Arc::new(X11Clipboard::start()?))
+        }
+
+        /// XDND drops on the windows, on the platform's connection.
+        fn drag(
+            connection: &Arc<X11Connection>,
+            doorbell: &Doorbell,
+        ) -> Result<Arc<dyn LoopDrag>, PlatformError> {
+            let doorbell = doorbell.clone();
+            let wake = Box::new(move || {
+                if let Err(error) = doorbell.ring() {
+                    tracing::debug!(%error, "cannot wake the X11 loop for a drop's transfer");
+                }
+            });
+            Ok(X11Drag::try_new(connection, wake)?)
         }
     }
 
