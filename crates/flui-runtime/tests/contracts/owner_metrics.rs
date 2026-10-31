@@ -981,6 +981,10 @@ fn owner_metrics_contract() {
                 preferred_locales_select_resources_and_direction as fn(),
             ),
             (
+                "regional_formats_reach_media_query",
+                regional_formats_reach_media_query as fn(),
+            ),
+            (
                 "native_geometry_controls_admission_and_retries_without_a_frame",
                 native_geometry_controls_admission_and_retries_without_a_frame as fn(),
             ),
@@ -1392,6 +1396,73 @@ fn bold_text_changes_the_painted_glyphs() {
         }
         owner.shutdown(&effects);
     }
+}
+
+/// The user's regional formats reach `MediaQuery::regional_formats_of` with
+/// the accepted snapshot (ADR-0278), and a reader of them rebuilds only when
+/// they change. Fails if the runtime's commit drops the formats, or the
+/// field is not its own dependency.
+fn regional_formats_reach_media_query() {
+    use flui_platform::{HourCycle, RegionalFormats, SystemPreferences, Weekday};
+
+    #[derive(Clone, StatelessView)]
+    struct RegionalReader(Rc<RefCell<Vec<RegionalFormats>>>);
+
+    impl StatelessView for RegionalReader {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            let formats = flui_widgets::MediaQuery::regional_formats_of(ctx)
+                .expect("runtime root preference");
+            self.0.borrow_mut().push(formats);
+            flui_widgets::Text::new("Formats")
+        }
+    }
+
+    let owner = OwnerHost::new();
+    let runtime = crate::owner_publication::runtime();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(&RegionalReader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("mount regional reader");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish regional reader")
+        .commit();
+    let effects = Effects::new(address, &owner);
+    let frames = owner.frame_dispatcher(address).expect("reader frames");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial frame");
+    assert_eq!(*observed.borrow(), [RegionalFormats::default()]);
+
+    let formats = RegionalFormats::default()
+        .with_first_weekday(Weekday::Monday)
+        .with_hour_cycle(HourCycle::H23);
+    let with_formats = SystemPreferences::default().with_regional(formats.clone());
+    owner
+        .update_preferences(with_formats.clone(), &effects)
+        .expect("publish regional formats");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("formats frame");
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&formats),
+        "the accepted formats reach the reader"
+    );
+
+    let builds = observed.borrow().len();
+    owner
+        .update_preferences(with_formats.with_high_contrast(true), &effects)
+        .expect("publish contrast");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("contrast frame");
+    assert_eq!(
+        observed.borrow().len(),
+        builds,
+        "another preference does not rebuild a reader of the formats"
+    );
+    owner.shutdown(&effects);
 }
 
 fn preferred_locales_select_resources_and_direction() {

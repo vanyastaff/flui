@@ -108,8 +108,9 @@ graph LR
   `Storage::copy_aside` (копия в первое свободное `<name>.corrupt-<n>`, `StorageError::NotFound`;
   `FileStore` — `create_new`, IndexedDB — одна транзакция) — сделано: строки
   `corrupt_bytes_are_kept_until_start_over` (R17) и
-  `copy_aside_keeps_the_value_under_the_first_free_name`. Остаток P5: R15
-  `drop_before_commit_loses_only_that_edit`.
+  `copy_aside_keeps_the_value_under_the_first_free_name`. R15 — сделано: строка
+  `drop_before_commit_loses_only_that_edit` (снятие дерева до барьера фиксации теряет только
+  удержанную правку). P5 закрыта.
 
 ## Устаревшие задачи
 

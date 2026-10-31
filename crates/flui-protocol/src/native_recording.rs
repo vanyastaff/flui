@@ -742,6 +742,28 @@ pub struct Gestures {
     pub native_touch_geometry: Option<TouchGeometry>,
 }
 
+/// The user's regional formats, each as the value of its Unicode `u` extension key (UTS #35); an
+/// absent field was not observed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Regional {
+    /// The first day of the week, as an `fw` value such as `mon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_weekday: Option<String>,
+    /// The hour cycle, as an `hc` value such as `h23`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_cycle: Option<String>,
+    /// The measurement system, as an `ms` value such as `metric`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement: Option<String>,
+    /// The numbering system, as an `nu` value such as `arab`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<String>,
+    /// The region override, as its region code such as `GB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+}
+
 /// The host's system preferences (ADR-0172); an absent field was not observed.
 ///
 /// The same object is a native `platform` recording's `preferences` row and, beside its
@@ -768,6 +790,10 @@ pub struct Preferences {
     /// The preferred UI locales as BCP 47 tags, in priority order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locales: Option<Vec<String>>,
+    /// The regional formats; absent when none was observed. Boxed, since a preferences read is
+    /// carried by value and most hosts observe none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regional: Option<Box<Regional>>,
     /// Gesture timing and geometry; always written, empty when nothing was observed.
     #[serde(default)]
     pub gestures: Gestures,

@@ -135,6 +135,7 @@ mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
+mod regional;
 mod storage;
 mod surface_target;
 mod system_chrome;
@@ -188,6 +189,10 @@ pub use preferences::{
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
     PreferenceQueryError, SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences,
     WheelStep,
+};
+pub use regional::{
+    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
+    RegionalFormats, RegionalParts, Weekday,
 };
 pub use storage::{
     AppDataDir, CopiedAside, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName,

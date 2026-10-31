@@ -156,6 +156,29 @@ export function selectField(id, start, end, direction) {
     field.dispatchEvent(new Event("select", { bubbles: true }));
 }
 export function fieldComposition(id, type) { byId(id).dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
+// Select as a screen reader does: the page's selection between two offsets of the text leading two
+// mirrored elements.
+export function selectText(anchor, anchorOffset, focus, focusOffset) {
+    getSelection().setBaseAndExtent(byId(anchor).firstChild, anchorOffset, byId(focus).firstChild,
+        focusOffset);
+}
+// The page's selection as [element, offset] ends, an element named by its identifier or "page".
+export function pageSelection() {
+    const selection = getSelection();
+    if (!selection.rangeCount) return JSON.stringify(null);
+    const end = (node, offset) => [node.parentElement.getAttribute('data-flui-id') ?? 'page', offset];
+    return JSON.stringify([end(selection.anchorNode, selection.anchorOffset),
+        end(selection.focusNode, selection.focusOffset)]);
+}
+// Select some of the page's own text, outside the host.
+export function selectPageText() {
+    const text = document.createElement('p');
+    text.id = 'page-text';
+    text.textContent = 'Page text';
+    document.body.append(text);
+    getSelection().setBaseAndExtent(text.firstChild, 0, text.firstChild, 4);
+}
+export function removePageText() { document.getElementById('page-text')?.remove(); }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -219,6 +242,14 @@ extern "C" {
     fn field_composition(id: &str, kind: &str);
     #[wasm_bindgen(js_name = selectField)]
     fn select_field(id: &str, start: u32, end: u32, direction: &str);
+    #[wasm_bindgen(js_name = selectText)]
+    fn select_text(anchor: &str, anchor_offset: u32, focus: &str, focus_offset: u32);
+    #[wasm_bindgen(js_name = pageSelection)]
+    fn page_selection() -> String;
+    #[wasm_bindgen(js_name = selectPageText)]
+    fn select_page_text();
+    #[wasm_bindgen(js_name = removePageText)]
+    fn remove_page_text();
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -1246,4 +1277,192 @@ async fn the_store_goes_back_to_the_canvas_when_the_field_goes() {
     super::wait(0).await;
     type_into_field(None, "abz", 3, false);
     assert_eq!(store.text(), "ab", "nothing listens once the window closed");
+}
+
+const AREA: NodeId = NodeId(20);
+const FIRST: NodeId = NodeId(21);
+const SECOND: NodeId = NodeId(22);
+const FIRST_RUN: NodeId = NodeId(31);
+const SECOND_RUN: NodeId = NodeId(32);
+const THIRD_RUN: NodeId = NodeId(33);
+
+fn text_run(text: &str) -> Node {
+    let mut node = Node::new(Role::TextRun);
+    node.set_value(text);
+    node.set_character_lengths(
+        text.chars()
+            .map(|character| u8::try_from(character.len_utf8()).expect("one character"))
+            .collect::<Vec<u8>>(),
+    );
+    node
+}
+
+fn at(node: NodeId, character_index: usize) -> accesskit::TextPosition {
+    accesskit::TextPosition {
+        node,
+        character_index,
+    }
+}
+
+fn between(
+    anchor: accesskit::TextPosition,
+    focus: accesskit::TextPosition,
+) -> accesskit::TextSelection {
+    accesskit::TextSelection { anchor, focus }
+}
+
+/// A selection area of two paragraphs publishing runs, "Hi 😀" and
+/// " there", then "Bye", holding `selection`.
+fn selectable(selection: Option<accesskit::TextSelection>) -> TreeUpdate {
+    let mut area = Node::new(Role::Document);
+    area.set_children(vec![FIRST, SECOND]);
+    area.add_action(Action::SetTextSelection);
+    area.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    if let Some(selection) = selection {
+        area.set_text_selection(selection);
+    }
+    let paragraph = |author: &str, runs: Vec<NodeId>, top: f64| {
+        let mut node = Node::new(Role::Label);
+        node.set_author_id(author);
+        node.set_children(runs);
+        node.add_action(Action::SetTextSelection);
+        node.set_bounds(Rect::new(20.0, top, 220.0, top + 20.0));
+        node
+    };
+    under_root(vec![
+        (AREA, area),
+        (FIRST, paragraph("first", vec![FIRST_RUN, SECOND_RUN], 20.0)),
+        (SECOND, paragraph("second", vec![THIRD_RUN], 60.0)),
+        (FIRST_RUN, text_run("Hi 😀")),
+        (SECOND_RUN, text_run(" there")),
+        (THIRD_RUN, text_run("Bye")),
+    ])
+}
+
+fn page_selection_ends() -> serde_json::Value {
+    serde_json::from_str(&page_selection()).expect("the page's answer")
+}
+
+/// Static text that publishes runs is selected as the page's selection
+/// both ways. The tree's selection is shown in the page. A screen reader's
+/// selection is asked, in run positions, of the paragraph or of the area
+/// over both ends, an end inside an emoji moving back to its start, and the
+/// page shows the published selection until the node publishes the new
+/// one. The host's own selection asks for nothing, and the page's own
+/// selection outside the host is left alone.
+#[wasm_bindgen_test]
+async fn the_page_s_selection_is_the_selection_of_static_text() {
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    accessibility.publish(selectable(Some(between(
+        at(FIRST_RUN, 1),
+        at(THIRD_RUN, 2),
+    ))));
+    activate_placeholder();
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 1], ["second", 2]]),
+        "the tree's selection, across both paragraphs"
+    );
+    assert!(
+        actions.lock().expect("the record").is_empty(),
+        "shown, not asked"
+    );
+    let asked = || -> Vec<_> {
+        actions
+            .lock()
+            .expect("the record")
+            .drain(..)
+            .map(|request| (request.action, request.target_node, request.data))
+            .collect()
+    };
+
+    // From "Hi " to the end of the first run, which is where the second
+    // starts.
+    select_text("first", 3, "first", 5);
+    super::wait(50).await;
+    assert_eq!(
+        asked(),
+        [(
+            Action::SetTextSelection,
+            FIRST,
+            Some(accesskit::ActionData::SetTextSelection(between(
+                at(FIRST_RUN, 3),
+                at(SECOND_RUN, 0)
+            )))
+        )],
+        "asked of the paragraph"
+    );
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 1], ["second", 2]]),
+        "the published selection, until the node publishes another"
+    );
+    super::wait(50).await;
+    assert_eq!(asked(), [], "showing it again asks for nothing");
+
+    // Between the emoji's halves, then into the second paragraph.
+    select_text("first", 4, "second", 1);
+    super::wait(50).await;
+    assert_eq!(
+        asked(),
+        [(
+            Action::SetTextSelection,
+            AREA,
+            Some(accesskit::ActionData::SetTextSelection(between(
+                at(FIRST_RUN, 3),
+                at(THIRD_RUN, 1)
+            )))
+        )],
+        "asked of the area, from the emoji's start"
+    );
+
+    accessibility.publish(selectable(Some(between(
+        at(FIRST_RUN, 4),
+        at(SECOND_RUN, 3),
+    ))));
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 5], ["first", 8]]),
+        "the emoji is two offsets"
+    );
+    assert_eq!(asked(), [], "the host's own selection asks for nothing");
+
+    // The paragraphs swap, their text and the selection unchanged: moving
+    // the elements drops the page's selection in them.
+    let in_second = between(at(THIRD_RUN, 1), at(THIRD_RUN, 2));
+    accessibility.publish(selectable(Some(in_second)));
+    super::wait(50).await;
+    let mut swapped = selectable(Some(in_second));
+    for (id, node) in &mut swapped.nodes {
+        if *id == AREA {
+            node.set_children(vec![SECOND, FIRST]);
+        }
+    }
+    accessibility.publish(swapped);
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["second", 1], ["second", 2]]),
+        "shown again once moved"
+    );
+    assert_eq!(asked(), []);
+
+    select_page_text();
+    super::wait(50).await;
+    accessibility.publish(selectable(Some(between(
+        at(THIRD_RUN, 0),
+        at(THIRD_RUN, 3),
+    ))));
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["page", 0], ["page", 4]]),
+        "the page's own selection stays"
+    );
+    assert_eq!(asked(), []);
+    remove_page_text();
+    window.close_now();
 }
