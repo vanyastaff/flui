@@ -112,6 +112,18 @@ impl RouteTracker {
     pub(crate) fn commit(&mut self, published: PublishedRoutes) {
         self.published = Some(published);
     }
+
+    /// Records the routes the tree shows now as delivered, without a change:
+    /// a new adapter that received the whole tree holds them as its first.
+    pub(crate) fn reseed(&mut self, tree: &SemanticsTree) {
+        self.rescan(tree);
+        self.published = self.pending(tree).map(|pending| pending.next);
+    }
+
+    /// Forgets what was delivered: the next delivery is an adapter's first.
+    pub(crate) fn forget(&mut self) {
+        self.published = None;
+    }
 }
 
 /// Whether `config` declares a route: it scopes one, or it is a modal dialog.

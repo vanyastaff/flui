@@ -875,9 +875,12 @@ impl SemanticsOwner {
             self.focus_claimants = Self::scan_focus_claimants(&self.tree);
             self.relations = RelationIndex::scan(&self.tree);
             let _ = self.tree.take_removed_accessibility_ids();
+            // The new adapter holds this route, which raises nothing.
+            self.routes.reseed(&self.tree);
         } else {
             // The new adapter was told nothing.
             self.published = None;
+            self.routes.forget();
         }
         self.callback = Some(callback);
     }
@@ -1755,9 +1758,9 @@ impl SemanticsOwner {
                 && let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink(change)))
             {
-                // The sink is the adapter's: its panic is contained, and
+                // The sink is the adapter's: its panic, which the panic hook
+                // has reported, is contained before anything else runs, and
                 // nothing is announced in its place, which would speak twice.
-                tracing::error!("the route change sink panicked; the change is not told");
                 flui_foundation::panic::retain_opaque_payload(payload);
             }
         }

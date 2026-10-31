@@ -373,6 +373,32 @@ fn a_failed_sink_or_delivery_loses_no_change_and_speaks_once() {
     );
 }
 
+/// An adapter installed on a live owner is handed the tree with its route,
+/// which raises nothing, and later changes are told against that route.
+#[test]
+fn a_new_adapter_hears_changes_from_the_route_it_was_handed() {
+    let mut routes = Routes::new(true);
+    routes.page(2, Some("Home"));
+    routes.owner.flush();
+    routes.page(3, Some("Settings"));
+    let updates = Arc::clone(&routes.updates);
+    routes
+        .owner
+        .set_callback(Arc::new(move |update: &TreeUpdate| {
+            updates.lock().push(update.clone());
+        }));
+    assert_eq!(routes.told(), [], "the tree handed over raises nothing");
+
+    routes.drop_node(3);
+    routes.owner.flush();
+    let home = routes.published_id(2);
+    assert_eq!(
+        routes.told(),
+        [(home, Some("Home".into()), RouteChangeKind::Popped)],
+        "the new adapter held Settings"
+    );
+}
+
 /// A panic payload whose destructor panics.
 struct PanicsOnDrop;
 
