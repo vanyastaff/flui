@@ -400,6 +400,9 @@ pub(crate) struct AppRuntime {
     /// The locale the fallback order should follow, accepted before
     /// `services` resolved; handed to them when they do.
     fallback_locale: RefCell<Option<String>>,
+    /// How many preference reads have started, so a locale from a read that
+    /// a later, re-entrant one overtook is not sent after the newer one.
+    preference_reads: Cell<u64>,
     /// The loop-scoped background execution services (issue #557): both
     /// background work-class lanes, their bounded admission, and the
     /// shutdown protocol. Built at UI runtime install
@@ -574,6 +577,7 @@ impl AppRuntime {
             fonts: RefCell::new(FontRegistrations::default()),
             fonts_announced: Cell::new(0),
             fallback_locale: RefCell::new(None),
+            preference_reads: Cell::new(0),
             execution: OnceCell::new(),
             #[cfg(not(target_arch = "wasm32"))]
             service_registry: ServiceRegistry::new(),
@@ -691,10 +695,28 @@ impl AppRuntime {
         services
     }
 
+    /// Starts a preference read: what [`Self::follow_locale`] takes, so the
+    /// locale it accepted is dropped if a later read started meanwhile.
+    pub(super) fn begin_preference_read(&self) -> PreferenceRead {
+        let read = self
+            .preference_reads
+            .get()
+            .checked_add(1)
+            .expect("BUG: preference reads exhausted");
+        self.preference_reads.set(read);
+        PreferenceRead(read)
+    }
+
     /// Has the app's fallback order follow `tag`, the host's first preferred
-    /// locale now (ADR-0271 §4). An unchanged tag asks nothing; one equal to
-    /// the locale the order is already for is skipped where it is served.
-    pub(super) fn follow_locale(&self, tag: String) {
+    /// locale as `read` accepted it (ADR-0271 §4). A read that a later one
+    /// overtook, as when delivering its snapshot re-entered the owner and
+    /// accepted a newer one, sends nothing: the later read sends its own.
+    /// An unchanged tag asks nothing; one equal to the locale the order is
+    /// already for is skipped where it is served.
+    pub(super) fn follow_locale(&self, read: PreferenceRead, tag: String) {
+        if read.0 != self.preference_reads.get() {
+            return;
+        }
         let Some(services) = self.services.get() else {
             self.fallback_locale.replace(Some(tag));
             return;
@@ -1494,15 +1516,11 @@ fn spawn_host_feed(
         feed: HostFontFeed,
         wake: &(dyn Fn() + Send + Sync),
     ) -> Option<FallbackOrder> {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        let order = catch_unwind(AssertUnwindSafe(|| feed.run())).ok();
-        if order.is_none() {
-            tracing::error!("the host font feed panicked; the faces it added are kept");
-        }
-        if catch_unwind(AssertUnwindSafe(wake)).is_err() {
-            tracing::error!("the wake after the host font feed panicked");
-        }
+        let order =
+            fallback_rescan::contained("the host font feed (the faces it added are kept)", || {
+                feed.run()
+            });
+        fallback_rescan::contained("the wake after the host font feed", wake);
         order
     }
 
@@ -1541,6 +1559,10 @@ fn spawn_host_feed(
         }
     }
 }
+
+/// One preference read, as [`AppRuntime::begin_preference_read`] started it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PreferenceRead(u64);
 
 impl Drop for AppRuntime {
     /// The third, last-resort clipboard clear: the deterministic path is the explicit
@@ -1690,7 +1712,7 @@ mod font_collection_tests {
     fn a_new_locale_asks_the_host_again_once() {
         let _ = take_parked_host_feeds();
         let mut runtime = AppRuntime::new();
-        runtime.follow_locale("ja-JP".to_owned());
+        runtime.follow_locale(runtime.begin_preference_read(), "ja-JP".to_owned());
         let _ = runtime.font_collection();
         let ParkedHostFeed { feed, requests, .. } = take_parked_host_feeds()
             .pop()
@@ -1707,11 +1729,11 @@ mod font_collection_tests {
         assert!(runtime.take_font_change());
         runtime.needs_redraw.store(false, Ordering::Relaxed);
 
-        runtime.follow_locale("ja-JP".to_owned());
+        runtime.follow_locale(runtime.begin_preference_read(), "ja-JP".to_owned());
         assert_eq!(*asked.lock(), ["ja-JP"], "an unchanged locale is not asked");
         assert!(!runtime.take_font_change());
 
-        runtime.follow_locale("en-US".to_owned());
+        runtime.follow_locale(runtime.begin_preference_read(), "en-US".to_owned());
         assert_eq!(*asked.lock(), ["ja-JP", "en-US"], "a new locale is asked");
         assert!(
             runtime.needs_redraw.load(Ordering::Relaxed),
@@ -1784,6 +1806,63 @@ mod font_collection_tests {
         assert!(host_fed(&fonts));
     }
 
+    /// A wake that panics, with a payload whose own destructor panics, is
+    /// contained on the feed's thread: the payload is never dropped, and the
+    /// thread goes on serving locales. Fails if the thread drops a caught
+    /// payload, which ends it, so the next locale is never asked.
+    fn a_wake_that_panics_leaves_the_feed_thread_serving() {
+        struct PanicsWhenDropped;
+        impl Drop for PanicsWhenDropped {
+            fn drop(&mut self) {
+                panic!("the payload's destructor panics");
+            }
+        }
+
+        let (_fonts, feed) = FontCollection::with_host_feed();
+        let feed = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100]));
+        let (rescan, requests) = FallbackRescan::new();
+        let (ask, asked) = host_answering_ja();
+        let (send, woken) = std::sync::mpsc::channel();
+        let wakes = std::sync::atomic::AtomicUsize::new(0);
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = send.send(());
+            if wakes.fetch_add(1, Ordering::Relaxed) == 0 {
+                std::panic::panic_any(PanicsWhenDropped);
+            }
+        });
+
+        assert!(spawn_host_feed(feed, requests, ask, wake).is_none());
+        woken
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the landing's wake, which panics");
+        assert!(!rescan.follow("ja-JP".to_owned()));
+        woken
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the thread still serves, and wakes for ja-JP");
+        assert_eq!(*asked.lock(), ["ja-JP"]);
+    }
+
+    /// A preference read that a later one overtook sends nothing: when
+    /// delivering a snapshot re-enters the owner and a newer read accepts its
+    /// own, the newer locale stays the last one sent. Fails if the older
+    /// read's locale is sent after the newer one, which the feed's thread,
+    /// serving the newest request, would then install.
+    fn an_overtaken_preference_read_sends_nothing() {
+        let _ = take_parked_host_feeds();
+        let runtime = AppRuntime::new();
+        let _ = runtime.font_collection();
+        let ParkedHostFeed { requests, .. } = take_parked_host_feeds()
+            .pop()
+            .expect("the services launched their feed");
+
+        let outer = runtime.begin_preference_read();
+        let nested = runtime.begin_preference_read();
+        runtime.follow_locale(nested, "fr-FR".to_owned());
+        runtime.follow_locale(outer, "ja-JP".to_owned());
+
+        assert_eq!(requests.try_iter().collect::<Vec<String>>(), ["fr-FR"]);
+    }
+
     /// Two runtimes, as on two owner threads, each hold a collection of
     /// their own. Fails if the services share one collection between
     /// runtimes.
@@ -1822,6 +1901,14 @@ mod font_collection_tests {
                 (
                     "the_feed_thread_asks_only_for_the_newest_locale",
                     the_feed_thread_asks_only_for_the_newest_locale as fn(),
+                ),
+                (
+                    "a_wake_that_panics_leaves_the_feed_thread_serving",
+                    a_wake_that_panics_leaves_the_feed_thread_serving as fn(),
+                ),
+                (
+                    "an_overtaken_preference_read_sends_nothing",
+                    an_overtaken_preference_read_sends_nothing as fn(),
                 ),
                 (
                     "two_runtimes_hold_different_collections",

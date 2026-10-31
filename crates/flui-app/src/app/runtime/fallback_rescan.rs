@@ -110,8 +110,8 @@ pub(crate) fn serve(
 ) {
     while let Ok(first) = requests.recv() {
         let tag = requests.try_iter().last().unwrap_or(first);
-        if install(&mut order, &tag, ask) && catch_unwind(AssertUnwindSafe(wake)).is_err() {
-            tracing::error!("the wake after a fallback rescan panicked");
+        if install(&mut order, &tag, ask) {
+            contained("the wake after a fallback rescan", wake);
         }
     }
 }
@@ -125,15 +125,23 @@ fn install(order: &mut FallbackOrder, tag: &str, ask: &AskHost) -> bool {
     if order.locale() == tag {
         return false;
     }
-    match catch_unwind(AssertUnwindSafe(|| order.set_system_fallback(&ask(tag)))) {
-        Ok(changed) => changed,
+    contained(
+        "installing the fallback order for a new locale (the lists written before the panic are kept)",
+        || order.set_system_fallback(&ask(tag)),
+    )
+    .unwrap_or(true)
+}
+
+/// Runs `f`, containing a panic in it: the panic is logged as `what` and its
+/// payload is leaked rather than dropped, since the payload's destructor is
+/// the panicking code's too and could panic again outside any catch.
+pub(crate) fn contained<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => Some(value),
         Err(payload) => {
-            tracing::error!(
-                locale = tag,
-                "installing the fallback order for a new locale panicked; the lists written before the panic are kept"
-            );
+            tracing::error!("{what} panicked");
             std::mem::forget(payload);
-            true
+            None
         }
     }
 }

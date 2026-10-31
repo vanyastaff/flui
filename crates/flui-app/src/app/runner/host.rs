@@ -184,14 +184,22 @@ pub(super) fn refresh_preferences_with(
     }
     let values = observation?;
     // The fallback order follows the first locale the host prefers
-    // (ADR-0271 §4), once the snapshot carrying it is accepted.
+    // (ADR-0271 §4), once the snapshot carrying it is accepted. Delivery may
+    // re-enter the owner and accept a newer snapshot, or replace the host;
+    // the read started here then sends nothing.
     let locale = values
         .locales()
         .and_then(<[flui_platform::Locale]>::first)
         .map(flui_platform::Locale::to_language_tag);
+    let preference_read = APP_RUNTIME.with(|slot| slot.borrow().begin_preference_read());
     host.logical().update_preferences(values, host.effects())?;
     if let Some(tag) = locale {
-        APP_RUNTIME.with(|slot| slot.borrow().follow_locale(tag));
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            if state.installed_host.same_host(&host) {
+                state.follow_locale(preference_read, tag);
+            }
+        });
     }
     Ok(())
 }
