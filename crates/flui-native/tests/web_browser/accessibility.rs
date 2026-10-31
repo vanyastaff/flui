@@ -150,6 +150,8 @@ export function typeIntoField(id, value, caret, composing) {
         inputType: composing ? "insertCompositionText" : "insertText" }));
 }
 // The user selects in a field, from `start` to `end` in `direction`.
+// A promise settled in the next animation frame, in the order it was asked.
+export function nextFrame() { return new Promise((settle) => requestAnimationFrame(() => settle())); }
 export function selectField(id, start, end, direction) {
     const field = byId(id);
     field.setSelectionRange(start, end, direction);
@@ -179,6 +181,10 @@ export function selectPageText() {
     getSelection().setBaseAndExtent(text.firstChild, 0, text.firstChild, 4);
 }
 export function removePageText() { document.getElementById('page-text')?.remove(); }
+// A mirrored element's text, or null when there is none.
+export function textOf(id) { const element = byId(id); return element ? element.textContent : null; }
+// The text of the element `holdField` kept.
+export function heldText() { return held.textContent; }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -240,6 +246,8 @@ extern "C" {
     fn type_into_field(id: Option<&str>, value: &str, caret: u32, composing: bool);
     #[wasm_bindgen(js_name = fieldComposition)]
     fn field_composition(id: &str, kind: &str);
+    #[wasm_bindgen(js_name = nextFrame)]
+    fn next_frame() -> js_sys::Promise;
     #[wasm_bindgen(js_name = selectField)]
     fn select_field(id: &str, start: u32, end: u32, direction: &str);
     #[wasm_bindgen(js_name = selectText)]
@@ -250,6 +258,10 @@ extern "C" {
     fn select_page_text();
     #[wasm_bindgen(js_name = removePageText)]
     fn remove_page_text();
+    #[wasm_bindgen(js_name = textOf)]
+    fn text_of(id: &str) -> Option<String>;
+    #[wasm_bindgen(js_name = heldText)]
+    fn held_text() -> String;
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -1464,5 +1476,137 @@ async fn the_page_s_selection_is_the_selection_of_static_text() {
     );
     assert_eq!(asked(), []);
     remove_page_text();
+    window.close_now();
+}
+
+const STATUS: NodeId = NodeId(40);
+const ALERT: NodeId = NodeId(41);
+
+/// The window with a status line holding `text`, live where `live` says.
+fn status_line(text: Option<&str>, live: Option<accesskit::Live>) -> TreeUpdate {
+    let Some(text) = text else {
+        return under_root(vec![]);
+    };
+    let mut status = Node::new(Role::Label);
+    status.set_value(text);
+    status.set_author_id("status");
+    status.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+    if let Some(live) = live {
+        status.set_live(live);
+        status.set_live_atomic();
+    }
+    under_root(vec![(STATUS, status)])
+}
+
+/// A live region that enters the page with its text is created empty and
+/// given its text once the page has rendered it, since a region inserted
+/// with its text is not read out: a message published before the host
+/// existed, and a region the tree adds. The text it holds by then is the
+/// one written, a region removed before then is not written, and text that
+/// is not live is written at once. A region created while an earlier one
+/// waits counts its own frames, and a selection published in a region's
+/// text is shown once the text is written.
+#[wasm_bindgen_test]
+async fn a_live_region_is_given_its_text_once_rendered() {
+    let (_platform, window, accessibility) = open();
+    let polite = Some(accesskit::Live::Polite);
+    accessibility.publish(status_line(Some("Queued"), polite));
+    activate_placeholder();
+    assert_eq!(text_of("status").as_deref(), Some(""), "created empty");
+    super::wait(100).await;
+    assert_eq!(text_of("status").as_deref(), Some("Queued"), "then spoken");
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("One"), Some(accesskit::Live::Assertive)));
+    accessibility.publish(status_line(Some("Two"), Some(accesskit::Live::Assertive)));
+    assert_eq!(text_of("status").as_deref(), Some(""), "still waiting");
+    super::wait(100).await;
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Two"),
+        "the text it holds by then"
+    );
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("Gone"), polite));
+    hold_field("status");
+    accessibility.publish(status_line(None, None));
+    super::wait(100).await;
+    assert_eq!(text_of("status"), None, "removed");
+    assert_eq!(held_text(), "", "and never written");
+
+    accessibility.publish(status_line(Some("Plain"), None));
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Plain"),
+        "text that is not live is written at once"
+    );
+
+    // A region created in a frame whose wait for an earlier one has one
+    // frame to go waits two frames of its own: the frame callback before
+    // the page's takes the place of a region created there.
+    let regions = |lines: &[(NodeId, &str, &str)]| {
+        let mut nodes = Vec::new();
+        for &(id, author, text) in lines {
+            let mut node = Node::new(Role::Label);
+            node.set_value(text);
+            node.set_author_id(author);
+            node.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+            node.set_live(accesskit::Live::Polite);
+            nodes.push((id, node));
+        }
+        let children = nodes.iter().map(|(id, _)| *id).collect::<Vec<NodeId>>();
+        let mut update = under_root(nodes);
+        update.nodes[0].1.set_children(children);
+        update
+    };
+    accessibility.publish(status_line(None, None));
+    let first = next_frame();
+    accessibility.publish(regions(&[(STATUS, "status", "Saving")]));
+    wasm_bindgen_futures::JsFuture::from(first)
+        .await
+        .expect("a frame");
+    let second = next_frame();
+    wasm_bindgen_futures::JsFuture::from(second)
+        .await
+        .expect("a frame");
+    accessibility.publish(regions(&[
+        (STATUS, "status", "Saving"),
+        (ALERT, "alert", "Offline"),
+    ]));
+    let third = next_frame();
+    wasm_bindgen_futures::JsFuture::from(third)
+        .await
+        .expect("a frame");
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Saving"),
+        "the earlier region spoken"
+    );
+    assert_eq!(
+        text_of("alert").as_deref(),
+        Some(""),
+        "the later one not yet rendered"
+    );
+    super::wait(100).await;
+    assert_eq!(text_of("alert").as_deref(), Some("Offline"), "then spoken");
+
+    // A selection published in a live region's text is shown once the text
+    // is written.
+    accessibility.publish(status_line(None, None));
+    let mut update = selectable(Some(between(at(THIRD_RUN, 1), at(THIRD_RUN, 2))));
+    for (id, node) in &mut update.nodes {
+        if *id == SECOND {
+            node.set_live(accesskit::Live::Polite);
+        }
+    }
+    accessibility.publish(update);
+    super::wait(100).await;
+    assert_eq!(text_of("second").as_deref(), Some("Bye"), "spoken");
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["second", 1], ["second", 2]]),
+        "and selected"
+    );
     window.close_now();
 }

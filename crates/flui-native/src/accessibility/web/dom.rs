@@ -160,6 +160,9 @@ enum Work {
     /// The text input stopped serving a store through this field: it shows
     /// its published value again.
     Released(HtmlElement),
+    /// The page rendered the live regions created since the last time:
+    /// write their text.
+    Speak,
     /// The page's focus entered or left the host from outside the canvas's
     /// focus area.
     SyncFocus,
@@ -206,6 +209,12 @@ struct Page {
     /// Watches the canvas's own `style`, `class` and `hidden` for a change
     /// that shows or hides it; dropped when the window closes.
     canvas_style: RefCell<Option<StyleObserver>>,
+    /// Live regions created empty, whose text is written once the page has
+    /// rendered them: a region that enters the page with its text is not
+    /// read out.
+    unspoken: RefCell<Vec<Unspoken>>,
+    /// The frames that count how often the page rendered them.
+    rendered: FrameWait,
 }
 
 impl Page {
@@ -233,6 +242,26 @@ impl Page {
             asked_again: Cell::new(false),
             host_hidden: Cell::new(true),
             canvas_style: RefCell::new(None),
+            unspoken: RefCell::default(),
+            rendered: FrameWait::new({
+                let this = this.clone();
+                move || {
+                    let Some(this) = this.upgrade() else {
+                        return false;
+                    };
+                    // Busy only inside the page's own work, which no frame
+                    // interrupts: the frame is counted on the next one.
+                    let Ok(mut unspoken) = this.unspoken.try_borrow_mut() else {
+                        return true;
+                    };
+                    let (rendered, waiting) = count_frame(&mut unspoken);
+                    drop(unspoken);
+                    if rendered {
+                        this.submit(Work::Speak);
+                    }
+                    waiting
+                }
+            }),
         });
         let placeholder = page.placeholder()?;
         *page.stage.borrow_mut() = Stage::Placeholder(placeholder);
@@ -450,6 +479,7 @@ impl Page {
             Work::Place => self.place(),
             Work::SyncFocus => self.editor.sync(),
             Work::Released(element) => self.show_published(&element),
+            Work::Speak => self.speak(),
         }
     }
 
@@ -517,9 +547,12 @@ impl Page {
         let mut focus_moved = false;
         let mut scrolled = Vec::new();
         let mut shown = None;
+        let mut created_live = false;
         {
             let mut tree = self.tree.borrow_mut();
+            let mut unspoken = self.unspoken.borrow_mut();
             for op in ops {
+                let op = hold_live_text(op, &mut unspoken, &mut created_live);
                 if let Op::Select(selection) = &op {
                     shown = Some(*selection);
                 }
@@ -546,6 +579,9 @@ impl Page {
         // Once every element is written: the text it lies in is in place.
         if let Some(selection) = shown {
             self.show_selection(selection);
+        }
+        if created_live {
+            self.rendered.arm();
         }
         let field = self.focused_field();
         self.field.name(field.as_ref());
@@ -580,6 +616,42 @@ impl Page {
         };
         if let Some(value) = value {
             set_value(element, &value);
+        }
+    }
+
+    /// The page has rendered the live regions created empty: write the
+    /// text their nodes hold now, so it is read out as a change, and show
+    /// the published selection again, which may lie in that text. A region
+    /// removed in the meantime is no longer waiting, and one created since
+    /// waits for its own frames.
+    fn speak(&self) {
+        {
+            let Ok(tree) = self.tree.try_borrow() else {
+                return;
+            };
+            let mut unspoken = self.unspoken.borrow_mut();
+            let mut written = false;
+            unspoken.retain(|entry| {
+                if entry.frames < RENDERED {
+                    return true;
+                }
+                if let (Some(element), Some(spec)) =
+                    (tree.elements.get(&entry.id), tree.mirror.spec(entry.id))
+                {
+                    if let Err(error) = write_text(element, spec.text.as_deref()) {
+                        warn_failure("a live region's text could not be written", &error);
+                    }
+                    written = true;
+                }
+                false
+            });
+            if !written {
+                return;
+            }
+        }
+        let selection = self.tree.borrow().mirror.selection();
+        if selection.is_some() {
+            self.show_selection(selection);
         }
     }
 
@@ -1015,6 +1087,8 @@ impl Page {
         let stage = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Retired);
         self.work.borrow_mut().clear();
         self.field.on_release(None);
+        self.rendered.cancel();
+        self.unspoken.borrow_mut().clear();
         // The text input goes back to an editor of its own.
         self.field.name(None);
         match stage {
@@ -1038,6 +1112,136 @@ fn closest(event: &web_sys::Event, selector: &str) -> Option<Element> {
         .target()
         .and_then(|target| target.dyn_into::<Element>().ok())
         .and_then(|target| target.closest(selector).ok().flatten())
+}
+
+/// `op` as the host runs it while live regions wait to be rendered empty: a
+/// live region created or replaced with text is created without it and
+/// added to `unspoken` (`created` is then set), a waiting region's text is
+/// not written before then, and a removed one waits no longer. A region
+/// replaced while it waits is a new element, which waits from the start.
+fn hold_live_text(op: Op, unspoken: &mut Vec<Unspoken>, created: &mut bool) -> Op {
+    let hold = |id: NodeId, spec: ElementSpec, unspoken: &mut Vec<Unspoken>, created: &mut bool| {
+        unspoken.retain(|entry| entry.id != id);
+        if spec.is_live() && spec.text.is_some() {
+            unspoken.push(Unspoken { id, frames: 0 });
+            *created = true;
+            ElementSpec { text: None, ..spec }
+        } else {
+            spec
+        }
+    };
+    match op {
+        Op::Create { id, spec } => Op::Create {
+            id,
+            spec: hold(id, spec, unspoken, created),
+        },
+        Op::Replace { id, spec } => Op::Replace {
+            id,
+            spec: hold(id, spec, unspoken, created),
+        },
+        Op::Update { id, old, new } if unspoken.iter().any(|entry| entry.id == id) => Op::Update {
+            id,
+            old: ElementSpec { text: None, ..old },
+            new: ElementSpec { text: None, ..new },
+        },
+        Op::Remove(id) => {
+            unspoken.retain(|entry| entry.id != id);
+            Op::Remove(id)
+        }
+        op => op,
+    }
+}
+
+/// A live region created empty, and the animation frames that have run
+/// since: it has been rendered empty once two have, the page rendering in
+/// between, whichever callback of its frame created it.
+struct Unspoken {
+    id: NodeId,
+    frames: u8,
+}
+
+/// Count one animation frame for each region in `unspoken`: whether one has
+/// been rendered empty now, and whether one still waits.
+fn count_frame(unspoken: &mut [Unspoken]) -> (bool, bool) {
+    for entry in unspoken.iter_mut() {
+        entry.frames = entry.frames.saturating_add(1);
+    }
+    (
+        unspoken.iter().any(|entry| entry.frames >= RENDERED),
+        unspoken.iter().any(|entry| entry.frames < RENDERED),
+    )
+}
+
+/// The animation frames after which a region created before the first has
+/// been rendered.
+const RENDERED: u8 = 2;
+
+/// The closure a [`FrameWait`] hands the browser, which asks for its next
+/// frame from inside itself.
+type FrameSlot = RefCell<Option<Closure<dyn Fn()>>>;
+
+/// The body once each animation frame, for as long as it asks for another.
+/// A background tab renders no frame, so the body waits until the tab is
+/// shown again; nobody hears a live region of a hidden tab.
+struct FrameWait {
+    slot: Rc<FrameSlot>,
+    /// The frame requested and not yet run.
+    pending: Rc<Cell<Option<i32>>>,
+}
+
+impl FrameWait {
+    /// `body` runs in each frame and answers whether it waits for another.
+    fn new(body: impl Fn() -> bool + 'static) -> Self {
+        let slot: Rc<FrameSlot> = Rc::default();
+        let pending: Rc<Cell<Option<i32>>> = Rc::default();
+        let again = Rc::downgrade(&slot);
+        let requested = Rc::clone(&pending);
+        let closure = Closure::<dyn Fn()>::new(move || {
+            requested.set(None);
+            if body()
+                && let Some(slot) = again.upgrade()
+            {
+                request_frame(&slot, &requested);
+            }
+        });
+        *slot.borrow_mut() = Some(closure);
+        Self { slot, pending }
+    }
+
+    /// Run the body from the next frame, unless it runs in each already.
+    fn arm(&self) {
+        if self.pending.get().is_none() {
+            request_frame(&self.slot, &self.pending);
+        }
+    }
+
+    /// Drop the frame waited for, if any.
+    fn cancel(&self) {
+        if let (Some(id), Some(window)) = (self.pending.take(), web_sys::window()) {
+            let _ = window.cancel_animation_frame(id);
+        }
+    }
+}
+
+impl Drop for FrameWait {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn request_frame(slot: &FrameSlot, pending: &Cell<Option<i32>>) {
+    let (Some(window), Some(closure)) = (
+        web_sys::window(),
+        slot.borrow()
+            .as_ref()
+            .map(|closure| closure.as_ref().clone()),
+    ) else {
+        return;
+    };
+    match window.request_animation_frame(closure.unchecked_ref()) {
+        Ok(id) => pending.set(Some(id)),
+        Err(error) => warn_failure("no animation frame for the live regions", &error),
+    }
 }
 
 /// Whether both ends of the page's selection are in `host`.
