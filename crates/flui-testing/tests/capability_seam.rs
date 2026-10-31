@@ -74,7 +74,9 @@ fn acquire(host: &mut HeadlessHost) -> Result<ClipboardHandle, Unsupported> {
 }
 
 /// Mount an [`Acquirer`] of `C` on `host` and return what it was answered.
-fn acquire_capability<C: Capability>(host: &mut HeadlessHost) -> Result<C::Handle, Unsupported> {
+pub(crate) fn acquire_capability<C: Capability>(
+    host: &mut HeadlessHost,
+) -> Result<C::Handle, Unsupported> {
     let acquired = Acquired::<C>::default();
     host.attach(&Acquirer::<C> {
         acquired: Rc::clone(&acquired),

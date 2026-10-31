@@ -590,6 +590,23 @@ fn selection_area_text_runs() {
     );
 }
 
+/// A `SelectionController` reads and moves an area's selection, refuses ends the area
+/// does not present, and every change reaches the listener with what made it.
+#[test]
+fn selection_area_controller() {
+    run_cases(
+        "selection_area_controller",
+        &[
+            ("selection_area_controller::a_controller_selects_reads_and_clears", crate::selection_area_controller::a_controller_selects_reads_and_clears as fn()),
+            ("selection_area_controller::a_controller_selection_leaves_the_focus_where_it_is", crate::selection_area_controller::a_controller_selection_leaves_the_focus_where_it_is),
+            ("selection_area_controller::a_controller_refuses_ends_the_area_does_not_present", crate::selection_area_controller::a_controller_refuses_ends_the_area_does_not_present),
+            ("selection_area_controller::the_listener_hears_what_changed_the_selection", crate::selection_area_controller::the_listener_hears_what_changed_the_selection),
+            ("selection_area_controller::a_panicking_listener_still_lets_the_controller_notify", crate::selection_area_controller::a_panicking_listener_still_lets_the_controller_notify),
+            ("selection_area_controller::a_controller_refuses_a_change_during_a_build", crate::selection_area_controller::a_controller_refuses_a_change_during_a_build),
+        ],
+    );
+}
+
 /// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
 /// of a handle moves its end, and a tap, Esc or the mouse hides them.
 #[test]
@@ -617,6 +634,8 @@ fn selection_area_handles() {
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
             ("selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch", crate::selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch),
+            ("selection_area_handles::a_controller_selection_hides_the_handles", crate::selection_area_handles::a_controller_selection_hides_the_handles),
+            ("selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles", crate::selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles),
         ],
     );
 }
