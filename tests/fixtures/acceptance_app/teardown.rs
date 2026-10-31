@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use flui::platform::StorageError;
 use flui::testing::DropLedger;
 use flui::view::ErrorView;
 
@@ -41,7 +42,7 @@ impl Ledgers {
     }
 }
 
-/// R1: after a walk through Home, a note and Settings, closing the application
+/// After a walk through Home, a note and Settings, closing the application
 /// drops every state, every page the router kept and the draft's listener.
 #[test]
 fn acceptance_app_close_releases_every_owner_after_navigation() {
@@ -60,7 +61,7 @@ fn acceptance_app_close_releases_every_owner_after_navigation() {
     }
 }
 
-/// R8: a panic in the Note editor's `build` replaces the editor with an error
+/// A panic in the Note editor's `build` replaces the editor with an error
 /// view; the screen's header still takes input, its Back leaves the error
 /// with its page, and the other screens work.
 #[test]
@@ -85,4 +86,36 @@ fn a_panicking_note_build_shows_error_view_and_other_screens_work() {
     run.tap("Back");
     run.tap("Compact rows: off");
     assert!(run.shows("Compact rows: on"), "Home takes input");
+}
+
+/// A close held by a failed save drops nothing, kept open or asked
+/// again; the user's Close without saving then closes the window, and the
+/// exit drops every value the application kept.
+#[test]
+fn a_held_close_drops_nothing_until_the_user_decides() {
+    let ledgers = Ledgers::default();
+    let mut run = AppRun::start(AcceptanceApp::new(Faults::NONE).with_planter(ledgers.planter()));
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.storage().fail_next(StorageError::Full);
+    run.tap("Save note");
+    let before = ledgers.live();
+    for (kind, live) in before {
+        assert!(live > 0, "the note's screen keeps no {kind}");
+    }
+
+    run.request_close();
+    assert!(!run.is_closed(), "the failed save holds the close");
+    assert_eq!(ledgers.live(), before, "a held close drops nothing");
+    run.tap("Keep open");
+    assert_eq!(ledgers.live(), before, "nor does keeping the window open");
+    run.request_close();
+    assert_eq!(ledgers.live(), before, "nor a close asked again");
+
+    run.tap("Close without saving");
+    assert!(run.is_closed(), "the user's decision closes the window");
+    drop(run);
+    for (kind, live) in ledgers.live() {
+        assert_eq!(live, 0, "{live} {kind} outlived the exit");
+    }
 }
