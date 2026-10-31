@@ -1838,8 +1838,10 @@ and writes only what changed between two specs.
   a live region it has seen, not one inserted with its text, so an element
   that is `aria-live` polite or assertive and created or replaced with text
   is created without it (`hold_live_text`) and given the text its node holds
-  then once the page has rendered it, after two animation frames
-  (`FrameWait`). That covers an announcement published before the host
+  then once the page has rendered it: each region counts two animation
+  frames of its own (`FrameWait`, `count_frame`), whichever callback of its
+  frame created it, and a published selection in its text is shown again
+  once it is written. That covers an announcement published before the host
   existed (the announcer nodes of ADR-0204 §4 are live regions) and a live
   region the tree adds with its content. A region removed before then is not
   written; a background tab runs no frame, so its regions are given their
