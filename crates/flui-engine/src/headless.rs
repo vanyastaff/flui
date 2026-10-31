@@ -162,6 +162,13 @@ impl HeadlessRenderer {
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
     }
 
+    /// The device's largest 2D texture side, the largest target it captures.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn max_texture_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// Rasterize `tree` at `size` (device pixels) and return tightly-packed
     /// (no row padding) RGBA8 pixels, top row first — ready for
     /// `image::save_buffer(.., ColorType::Rgba8)`.

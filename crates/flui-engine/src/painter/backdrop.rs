@@ -344,9 +344,17 @@ impl GpuReplay {
                     )
                 };
                 // Output whose source lies past the readable attachment shows
-                // nothing: crop the output to what maps inside it.
+                // nothing: crop the output to what maps inside it, keeping
+                // the half texel past the edge where a bilinear sample still
+                // reads the edge texel.
+                let support = Rect::from_ltrb(
+                    readable.left() - 0.5,
+                    readable.top() - 0.5,
+                    readable.right() + 0.5,
+                    readable.bottom() + 0.5,
+                );
                 let Some(source) = to_source(output)
-                    .intersect(&readable)
+                    .intersect(&support)
                     .filter(|rect| !rect.is_empty())
                 else {
                     return Ok(());
@@ -410,6 +418,17 @@ impl GpuReplay {
                 .checked_add(pad[1] + pad[3])
                 .ok_or(EngineError::PreparedResourceOverflow)?,
         );
+        // The halo can take a copy of a full-size attachment past the
+        // device's texture limit.
+        let limit = device.limits().max_texture_dimension_2d;
+        let longest = texture_size.0.max(texture_size.1);
+        if longest > limit {
+            return Err(EngineError::PreparedResourceLimit {
+                resource: "backdrop copy dimension",
+                requested: longest as usize,
+                limit: limit as usize,
+            });
+        }
         let pixels = (texture_size.0 as usize)
             .checked_mul(texture_size.1 as usize)
             .ok_or(EngineError::PreparedResourceOverflow)?;

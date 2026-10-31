@@ -157,6 +157,52 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
     let [.., alpha] = pixel(&edged, 16, 32);
     assert!((170..=210).contains(&alpha), "pixel 16 has alpha {alpha}");
     expect_pixel(&edged, (24, 32), WHITE);
+    // A sample just past the attachment still reads the edge texel: moved
+    // 16.75 px right, pixel 16 shows source -0.25, a quarter of the white
+    // texel 0, so about 64 alpha where cropping it away leaves 255.
+    let past_edge = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 16.75, 0.0).expect("a translation"),
+        sampling: ImageSampling::Linear,
+    };
+    let mut fringe = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::WHITE));
+    fringe.push_child(
+        fringe.root(),
+        Layer::from(BackdropFilterLayer::new(
+            past_edge,
+            BlendMode::Src,
+            Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
+        )),
+    );
+    let [.., alpha] = pixel(&capture(renderer, &fringe), 16, 32);
+    assert!((40..=90).contains(&alpha), "pixel 16 has alpha {alpha}");
+
+    // On a target as wide as the device allows, the halo takes the copy past
+    // the texture limit: the frame fails with a typed limit, not a wgpu
+    // validation panic.
+    let widest = renderer.max_texture_dimension();
+    let mut wide = LayerTree::new(picture(
+        Rect::from_xywh(0.0, 0.0, f64::from(widest), 4.0),
+        Color::WHITE,
+    ));
+    wide.push_child(
+        wide.root(),
+        Layer::from(BackdropFilterLayer::new(
+            ImageFilter::Transform {
+                transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 0.25, 0.0)
+                    .expect("a translation"),
+                sampling: ImageSampling::Linear,
+            },
+            BlendMode::Src,
+            Rect::from_xywh(0.0, 0.0, f64::from(widest), 4.0),
+        )),
+    );
+    assert!(matches!(
+        renderer.render_layer_tree(&wide, (widest, 4)),
+        Err(crate::EngineError::PreparedResourceLimit {
+            resource: "backdrop copy dimension",
+            ..
+        })
+    ));
 
     // A magnifier's taps run per output pixel, not per texel it copies: 15
     // panes of 4096 x 4096 magnified 1024 times copy a few texels each but
