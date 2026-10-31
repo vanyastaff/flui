@@ -1,9 +1,11 @@
 //! `MemoryStorage`'s holds against the code a caller's waker runs.
 
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::task::{Context, RawWaker, RawWakerVTable, Waker};
+use std::task::{Context, RawWaker, RawWakerVTable, Wake, Waker};
 use std::thread;
 use std::time::Duration;
 
@@ -69,5 +71,61 @@ fn a_held_copy_polled_with_a_waker_that_reads_the_storage_answers() {
         answer.recv_timeout(Duration::from_secs(30)),
         Ok((true, true, vec![b"old".to_vec()])),
         "the held copy waits, then answers, without deadlocking"
+    );
+}
+
+/// A waker that panics when woken.
+struct PanicsOnWake;
+
+impl Wake for PanicsOnWake {
+    fn wake(self: Arc<Self>) {
+        panic!("the first waiting copy's waker panics");
+    }
+}
+
+/// A waker that records being woken.
+#[derive(Default)]
+struct Woken(AtomicBool);
+
+impl Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_panicking_waker_leaves_the_other_held_copies_woken() {
+    let storage = MemoryStorage::new();
+    storage.put(&NOTES, "old");
+    let held = storage.hold_copies();
+    let panics = Waker::from(Arc::new(PanicsOnWake));
+    let woken = Arc::new(Woken::default());
+    let told = Waker::from(Arc::clone(&woken));
+    let mut first = pin!(storage.copy_aside(&NOTES));
+    let mut second = pin!(storage.copy_aside(&NOTES));
+    assert!(
+        first
+            .as_mut()
+            .poll(&mut Context::from_waker(&panics))
+            .is_pending()
+    );
+    assert!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(&told))
+            .is_pending()
+    );
+
+    let released = catch_unwind(AssertUnwindSafe(|| drop(held)));
+    assert!(released.is_err(), "the waker's panic reaches the release");
+    assert!(
+        woken.0.load(Ordering::SeqCst),
+        "the second copy is woken all the same"
+    );
+    assert!(
+        second
+            .as_mut()
+            .poll(&mut Context::from_waker(&told))
+            .is_ready()
     );
 }

@@ -34,6 +34,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -135,9 +136,17 @@ impl State {
     }
 }
 
+/// Wake every waker, each under its own catch: a waker that panics leaves
+/// the rest woken, and the first panic resumes once they all are.
 fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
+    let mut first = None;
     for waker in wakers {
-        waker.wake();
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
+            first.get_or_insert(payload);
+        }
+    }
+    if let Some(payload) = first {
+        resume_unwind(payload);
     }
 }
 
