@@ -315,7 +315,10 @@ impl GpuReplay {
         // shows. A blur reads its kernel halo even outside the output/damage
         // clip; a resample reads the rect its map sends the output to. The
         // attachment edge is a transparent decal boundary.
-        let (read, shown, taps) = match op.effect {
+        // `pad` is the transparent texels a resample's copy keeps past the
+        // attachment edge, left, top, right and bottom, so a bilinear tap
+        // there blends with transparency instead of repeating the edge.
+        let (read, shown, taps, pad) = match op.effect {
             BackdropEffect::Blur(sigma) => {
                 let radius = sigma.map(|sigma| f64::from((sigma * 1.732_050_8).ceil()));
                 let read = Rect::from_ltrb(
@@ -329,7 +332,7 @@ impl GpuReplay {
                     .and_then(|radii| radii.checked_mul(2))
                     .and_then(|taps| taps.checked_add(2))
                     .ok_or(EngineError::PreparedResourceOverflow)?;
-                (read, output, taps)
+                (read, output, taps, [0_u32; 4])
             }
             BackdropEffect::Resample { scale, offset } => {
                 let to_source = |rect: Rect<f64>| {
@@ -360,15 +363,29 @@ impl GpuReplay {
                 output = cropped;
                 let shown = to_source(output);
                 // A bilinear sample at the shown rect's edge blends the texel
-                // half a texel past it, so the copy takes that halo too.
-                let read = Rect::from_ltrb(
-                    (shown.left() - 0.5).floor().max(readable.left()),
-                    (shown.top() - 0.5).floor().max(readable.top()),
-                    (shown.right() + 0.5).ceil().min(readable.right()),
-                    (shown.bottom() + 0.5).ceil().min(readable.bottom()),
+                // half a texel past it, so the copy takes that halo too;
+                // past the attachment the halo is transparent.
+                let halo = Rect::from_ltrb(
+                    (shown.left() - 0.5).floor(),
+                    (shown.top() - 0.5).floor(),
+                    (shown.right() + 0.5).ceil(),
+                    (shown.bottom() + 0.5).ceil(),
                 );
+                let read = Rect::from_ltrb(
+                    halo.left().max(readable.left()),
+                    halo.top().max(readable.top()),
+                    halo.right().min(readable.right()),
+                    halo.bottom().min(readable.bottom()),
+                );
+                let pad = [
+                    read.left() - halo.left(),
+                    read.top() - halo.top(),
+                    halo.right() - read.right(),
+                    halo.bottom() - read.bottom(),
+                ]
+                .map(|texels| texels.max(0.0) as u32);
                 // A bilinear read takes four texels per output pixel.
-                (read, shown, 4)
+                (read, shown, 4, pad)
             }
         };
         if read.is_empty() {
@@ -382,11 +399,33 @@ impl GpuReplay {
         if dimensions.0 == 0 || dimensions.1 == 0 {
             return Ok(());
         }
-        let pixels = (dimensions.0 as usize)
-            .checked_mul(dimensions.1 as usize)
+        // The copy, with a resample's transparent halo around it.
+        let texture_size = (
+            dimensions
+                .0
+                .checked_add(pad[0] + pad[2])
+                .ok_or(EngineError::PreparedResourceOverflow)?,
+            dimensions
+                .1
+                .checked_add(pad[1] + pad[3])
+                .ok_or(EngineError::PreparedResourceOverflow)?,
+        );
+        let pixels = (texture_size.0 as usize)
+            .checked_mul(texture_size.1 as usize)
             .ok_or(EngineError::PreparedResourceOverflow)?;
+        // A blur's taps run over its copy; a resample's run per output
+        // pixel, which a magnifier has far more of than texels it copies.
+        let sampled = match op.effect {
+            BackdropEffect::Blur(_) => pixels,
+            BackdropEffect::Resample { .. } => {
+                let covered = (output.width().ceil() as usize)
+                    .checked_mul(output.height().ceil() as usize)
+                    .ok_or(EngineError::PreparedResourceOverflow)?;
+                covered.max(pixels)
+            }
+        };
         op.context.budget.admit_effect_work(
-            pixels
+            sampled
                 .checked_mul(taps)
                 .ok_or(EngineError::PreparedResourceOverflow)?,
         )?;
@@ -402,10 +441,31 @@ impl GpuReplay {
             cpu_bytes: 0,
             objects: 14,
         })?;
-        let source =
-            resources
-                .layer_texture_pool_mut()
-                .acquire(dimensions.0, dimensions.1, surface_format);
+        let source = resources.layer_texture_pool_mut().acquire(
+            texture_size.0,
+            texture_size.1,
+            surface_format,
+        );
+        if pad.iter().any(|&texels| texels > 0) {
+            // A pooled texture holds an earlier frame's texels: clear the
+            // halo to transparent before the copy fills the rest.
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("FLUI Backdrop Resample Halo Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: source.view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: snapshot.unwrap_or(backing),
@@ -420,7 +480,11 @@ impl GpuReplay {
             wgpu::TexelCopyTextureInfo {
                 texture: source.texture(),
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d {
+                    x: pad[0],
+                    y: pad[1],
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
@@ -455,11 +519,14 @@ impl GpuReplay {
             // The composite's bilinear sampler does the resampling.
             BackdropEffect::Resample { .. } => source,
         };
+        // The texture's origin sits `pad` texels before the copied rect.
+        let origin_x = root_x + f64::from(left) - f64::from(pad[0]);
+        let origin_y = root_y + f64::from(top) - f64::from(pad[1]);
         let uv = [
-            ((shown.left() - root_x - f64::from(left)) / f64::from(dimensions.0)) as f32,
-            ((shown.top() - root_y - f64::from(top)) / f64::from(dimensions.1)) as f32,
-            ((shown.right() - root_x - f64::from(left)) / f64::from(dimensions.0)) as f32,
-            ((shown.bottom() - root_y - f64::from(top)) / f64::from(dimensions.1)) as f32,
+            ((shown.left() - origin_x) / f64::from(texture_size.0)) as f32,
+            ((shown.top() - origin_y) / f64::from(texture_size.1)) as f32,
+            ((shown.right() - origin_x) / f64::from(texture_size.0)) as f32,
+            ((shown.bottom() - origin_y) / f64::from(texture_size.1)) as f32,
         ];
         // A resampled backdrop is read between its texels, also where the
         // composite blends through the destination-reading path.

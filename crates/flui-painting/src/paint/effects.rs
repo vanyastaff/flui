@@ -774,16 +774,6 @@ pub enum InvalidImageTransform {
 }
 
 impl ImageTransform {
-    /// The identity transform.
-    pub const IDENTITY: Self = Self {
-        xx: 1.0,
-        yx: 0.0,
-        xy: 0.0,
-        yy: 1.0,
-        x0: 0.0,
-        y0: 0.0,
-    };
-
     /// The transform with these coefficients, in the order
     /// `(xx, yx, xy, yy, x0, y0)`.
     ///
@@ -857,13 +847,7 @@ impl ImageTransform {
         )
     }
 
-    /// The coefficients `(xx, yx, xy, yy, x0, y0)`.
-    #[must_use]
-    pub const fn coefficients(&self) -> [f64; 6] {
-        [self.xx, self.yx, self.xy, self.yy, self.x0, self.y0]
-    }
-
-    /// The inverse transform's coefficients, in [`Self::coefficients`]'s
+    /// The inverse transform's coefficients, in [`Self::try_new`]'s
     /// order: it maps a shown point back to the source point it shows.
     #[must_use]
     pub fn inverse_coefficients(&self) -> [f64; 6] {

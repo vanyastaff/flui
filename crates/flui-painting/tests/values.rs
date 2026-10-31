@@ -1475,13 +1475,12 @@ pub(crate) fn image_transforms_refuse_what_they_cannot_invert() {
         panic!("a valid magnifier");
     };
     assert_eq!(sampling, ImageSampling::Linear);
-    assert_eq!(transform.coefficients(), [2.0, 0.0, 0.0, 2.0, -10.0, -20.0]);
+    assert_eq!(
+        Ok(transform),
+        ImageTransform::try_new(2.0, 0.0, 0.0, 2.0, -10.0, -20.0)
+    );
     assert_eq!(
         transform.inverse_coefficients(),
         [0.5, 0.0, 0.0, 0.5, 5.0, 10.0]
-    );
-    assert_eq!(
-        ImageTransform::IDENTITY.inverse_coefficients(),
-        ImageTransform::IDENTITY.coefficients()
     );
 }

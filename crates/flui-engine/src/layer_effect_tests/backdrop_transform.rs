@@ -135,6 +135,52 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         ),
     );
     expect_pixel(&capture(renderer, &grouped), (28, 32), WHITE);
+
+    // Past the attachment the backdrop is transparent, and a tap there
+    // blends with it: moved 16.25 px right, pixel 16 shows source 0.25, three
+    // quarters of the white texel 0 and a quarter of the transparency left
+    // of it, so about 191 alpha where repeating the edge texel gives 255.
+    let moved_right = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 16.25, 0.0).expect("a translation"),
+        sampling: ImageSampling::Linear,
+    };
+    let mut edge = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::WHITE));
+    edge.push_child(
+        edge.root(),
+        Layer::from(BackdropFilterLayer::new(
+            moved_right,
+            BlendMode::Src,
+            Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
+        )),
+    );
+    let edged = capture(renderer, &edge);
+    let [.., alpha] = pixel(&edged, 16, 32);
+    assert!((170..=210).contains(&alpha), "pixel 16 has alpha {alpha}");
+    expect_pixel(&edged, (24, 32), WHITE);
+
+    // A magnifier's taps run per output pixel, not per texel it copies: 15
+    // panes of 4096 x 4096 magnified 1024 times copy a few texels each but
+    // sample about 67 million times each, past the billion the frame admits.
+    let side = 4096.0;
+    let mut zoomed = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, side, side), Color::WHITE));
+    for _ in 0..15 {
+        zoomed.push_child(
+            zoomed.root(),
+            Layer::from(BackdropFilterLayer::new(
+                ImageFilter::try_magnify(Point::new(side / 2.0, side / 2.0), 1024.0)
+                    .expect("a valid scale"),
+                BlendMode::SrcOver,
+                Rect::from_xywh(0.0, 0.0, side, side),
+            )),
+        );
+    }
+    assert!(matches!(
+        renderer.render_layer_tree(&zoomed, (4096, 4096)),
+        Err(crate::EngineError::PreparedResourceLimit {
+            resource: "cumulative effect sampling work",
+            ..
+        })
+    ));
     // A rotated map has no lowering: the frame fails instead of drawing the
     // backdrop untransformed.
     let rotated = Matrix4::translation(32.0, 32.0, 0.0)
