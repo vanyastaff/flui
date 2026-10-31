@@ -344,6 +344,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The full-workspace build, examples and benches included, outgrew the
+      # ubuntu-26.04 runner's free disk (a link failed with "No space left on
+      # device"). The same reclaim as weekly.yml, before the cache restores.
+      - name: Free disk space (ubuntu)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
@@ -423,8 +433,8 @@ jobs:
       - name: cargo xtask build-all-targets (links the examples and benches)
         run: cargo xtask build-all-targets
 
-      # The disk peak is the build above; if this trends toward 0, reclaim
-      # space before the build (measured 2026-09-03: ~72 GB free after it).
+      # The disk peak is the build above; the reclaim before the build is what
+      # keeps it above 0 (it failed without one on 2026-10-30).
       - name: Disk usage after build
         run: df -h /
 

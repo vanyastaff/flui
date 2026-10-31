@@ -96,7 +96,7 @@ pub(crate) fn parse(xml: &str, fonts_dir: &Path, locale: &str) -> SystemFallback
             }
             let index = face
                 .attribute("index")
-                .and_then(|index| index.parse().ok())
+                .and_then(|index| index.parse::<u32>().ok())
                 .unwrap_or(0);
             Some(Fallback {
                 face: FaceRef::File {
@@ -105,7 +105,12 @@ pub(crate) fn parse(xml: &str, fonts_dir: &Path, locale: &str) -> SystemFallback
                 },
                 langs: family
                     .attribute("lang")
-                    .map(|langs| langs.split([' ', ',']).filter(|l| !l.is_empty()).collect())
+                    .map(|langs| {
+                        langs
+                            .split([' ', ','])
+                            .filter(|l| !l.is_empty())
+                            .collect::<Vec<&str>>()
+                    })
                     .unwrap_or_default(),
             })
         })
@@ -148,7 +153,12 @@ pub(crate) fn parse(xml: &str, fonts_dir: &Path, locale: &str) -> SystemFallback
         // Stable: the locale's own Han family first, the file's order kept
         // otherwise.
         list.sort_by_key(|(first, _)| !first);
-        answer = answer.with_script(script, list.into_iter().map(|(_, face)| face).collect());
+        answer = answer.with_script(
+            script,
+            list.into_iter()
+                .map(|(_, face)| face)
+                .collect::<Vec<FaceRef>>(),
+        );
     }
     answer
 }
