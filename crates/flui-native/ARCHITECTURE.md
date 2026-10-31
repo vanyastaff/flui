@@ -3762,7 +3762,9 @@ each is held to its limit before a byte is read and to five seconds between
 answers. Nothing is dispatched or completed under the transfer's lock, so a
 handler may fetch or conclude while it hears the drop, and a handler that
 panics as it hears a position still answers the source with a refusal before
-the panic goes on. The drag source is not written yet.
+the panic goes on; the step's requests are answered whatever fails first, a
+waker's panic included, and the first failure goes on. The drag source is not
+written yet.
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
@@ -3771,7 +3773,8 @@ on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
 `a_drag_that_leaves_retires_its_offer`,
 `a_retired_offer_frees_its_fetches_for_the_requests_waiting`,
-`a_failing_drag_handler_still_answers_the_source` and
+`a_failing_drag_handler_still_answers_the_source`,
+`requests_are_answered_though_the_handler_and_a_waker_fail` and
 `an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine

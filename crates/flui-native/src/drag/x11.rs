@@ -831,11 +831,24 @@ impl X11Drag {
                     .dispatch_input(PlatformInput::DragDrop(event));
             }
         }));
-        // A request accepted before the handler failed is still answered.
+        // A request accepted before the handler failed is still answered,
+        // each in its own containment: a waker that panics leaves the rest
+        // answered, and the first failure goes on; a later one is retained
+        // rather than dropped (ADR-0127 §2).
+        let mut failure = dispatched.err();
         for (completer, result) in after.completions {
-            completer.complete(result);
+            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                completer.complete(result);
+            }));
+            if let Err(payload) = completed {
+                if failure.is_none() {
+                    failure = Some(payload);
+                } else {
+                    std::mem::forget(payload);
+                }
+            }
         }
-        dispatched
+        failure.map_or(Ok(()), Err)
     }
 
     /// What the server names `atoms` that the transfer has not asked about

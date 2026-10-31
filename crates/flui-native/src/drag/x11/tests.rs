@@ -1151,3 +1151,97 @@ fn a_failing_drag_handler_still_answers_the_source() {
         "the window heard {heard:?}"
     );
 }
+
+/// Fails as it is woken.
+struct FailsAsWoken;
+
+impl std::task::Wake for FailsAsWoken {
+    fn wake(self: Arc<Self>) {
+        panic!("the request's waker fails");
+    }
+}
+
+/// A window whose handler panics as the drag leaves still has every request
+/// on the retired offer answered, though the first request's waker panics as
+/// it is answered: the handler's panic is the one that goes on.
+#[test]
+fn requests_are_answered_though_the_handler_and_a_waker_fail() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let drag = Arc::downgrade(&target.drag);
+    target.handler.react_to_input(move |input| {
+        match &input {
+            PlatformInput::DragDrop(DragDropEvent::Exited { .. }) => {
+                panic!("the handler fails as the drag leaves")
+            }
+            PlatformInput::DragDrop(DragDropEvent::Entered { offer, .. }) => {
+                if let Some(drag) = drag.upgrade() {
+                    drag.update_drop_feedback(
+                        offer.id(),
+                        DropFeedback {
+                            accept: Some(TransferActions::COPY),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let id = entered(&target.heard());
+
+    let mut failing = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let mut other = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let waker = Waker::from(Arc::new(FailsAsWoken));
+    assert!(
+        std::pin::Pin::new(&mut failing)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert!(
+        std::pin::Pin::new(&mut other)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+
+    source.send(target.xid, atoms.leave, [source.window, 0, 0, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    let failure = loop {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            target.deliver_events();
+        })) {
+            break payload;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the handler never heard the leave"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("the handler fails as the drag leaves")
+    );
+    std::mem::forget(failure);
+    for request in [&mut failing, &mut other] {
+        assert!(
+            std::pin::Pin::new(request)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            "a request on the retired offer is answered"
+        );
+    }
+}
