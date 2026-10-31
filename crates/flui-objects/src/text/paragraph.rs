@@ -335,22 +335,30 @@ impl RenderParagraph {
     }
 
     /// The runs selectable text publishes (ADR-0214 §2 as amended): its
-    /// authored text, cut at its links' edges so each link holds its own.
-    /// `None` for text that is not selectable, not laid out, or that a
-    /// span's accessibility override reads differently from its glyphs.
+    /// authored text, cut where a link or an overridden span starts or ends
+    /// so each region holds its own. `None` for text that is not selectable,
+    /// not laid out, or silenced whole: such text publishes nothing.
     fn selectable_runs(&self) -> Option<TextContent> {
         self.selectable.as_ref()?;
         let span = self.painter.text()?;
-        let plain = span.to_plain_text();
-        if span.to_semantics_text() != plain {
+        if span.to_semantics_text().is_empty() {
             return None;
         }
-        let cuts = if self.routes_links() {
-            self.runs.link_edges()
+        let plain = span.to_plain_text();
+        let cuts = if self.reads_by_regions() {
+            self.runs.region_edges()
         } else {
             Vec::new()
         };
         self.semantics_text_content(&plain, &cuts)
+    }
+
+    /// Whether the text is read through regions of its own instead of one
+    /// label: when it routes links, or when it is selectable and a span's
+    /// accessibility override reads part of it differently from its glyphs
+    /// (ADR-0282, and its amendment for overrides).
+    fn reads_by_regions(&self) -> bool {
+        self.routes_links() || (self.selectable.is_some() && self.runs.override_count() > 0)
     }
 
     /// Names the link that holds the primary keyboard focus and the ring it
@@ -845,9 +853,10 @@ impl RenderBox for RenderParagraph {
 
     /// A paragraph with routed links publishes one region per link and per
     /// stretch of text between them, bounded by their glyphs. Selectable,
-    /// each region holds the paragraph's runs in its bytes.
+    /// each region holds the paragraph's runs in its bytes, and each span
+    /// whose accessibility override replaces its text is a region too.
     fn semantics_regions(&self, size: Size) -> SemanticsRegions {
-        if !self.routes_links() || !self.painter.has_layout() {
+        if !self.reads_by_regions() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
         let run_ranges: Vec<std::ops::Range<usize>> = self
@@ -878,9 +887,11 @@ impl RenderBox for RenderParagraph {
     /// each span's accessibility override in place of its own text,
     /// preserving children. The text direction is the paragraph's.
     ///
-    /// A paragraph with routed links is instead a boundary whose children
-    /// are its [`semantics_regions`](Self::semantics_regions): its links and
-    /// the text between them, read in order, so no text is read twice.
+    /// A paragraph with routed links, or selectable with a span's
+    /// accessibility override, is instead a boundary whose children are its
+    /// [`semantics_regions`](Self::semantics_regions): its links, overridden
+    /// spans and the text between them, read in order, so no text is read
+    /// twice.
     ///
     /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
     /// decisions"): an EMPTY plain-text span sets neither `label` nor
@@ -897,7 +908,7 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
-        if self.routes_links() {
+        if self.reads_by_regions() {
             config.set_semantics_boundary(true);
             config.set_explicit_child_nodes(true);
         } else {
@@ -905,17 +916,15 @@ impl RenderBox for RenderParagraph {
         }
         // Selectable text is a nested merger with its runs: a node of its own
         // inside any merge, read and selected by character (ADR-0214). Its
-        // runs are its authored text, so text a span's accessibility
-        // override replaces or silences keeps its label and publishes no
-        // runs until runs can carry overrides. With routed links it stays
-        // the boundary of its link regions, so each link keeps its own node
-        // and handler, and each region holds the runs in its bytes
-        // (`semantics_regions`). Either way it names its anchor.
+        // runs are its authored text. Read through regions (routed links, a
+        // span's accessibility override), it is a merge boundary instead, so
+        // each region keeps its own node and reading and holds the runs in
+        // its bytes (`semantics_regions`). Either way it names its anchor.
         if let Some(anchor) = &self.selectable {
             config.add_anchor(anchor.clone());
             config.set_semantics_boundary(true);
             if let Some(content) = self.selectable_runs() {
-                if self.routes_links() {
+                if self.reads_by_regions() {
                     // Kept out of an outer merge without merging its link
                     // regions into it (ADR-0282).
                     config.set_merge_boundary(true);

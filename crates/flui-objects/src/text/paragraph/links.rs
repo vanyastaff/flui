@@ -141,6 +141,10 @@ pub(super) struct SpanRun {
     pub(super) link: Option<usize>,
     /// The cursor of the innermost span that sets one.
     pub(super) cursor: Option<CursorIcon>,
+    /// The span whose accessibility override replaces the run's text, by
+    /// its index among the spans that set one, in document order; `None`
+    /// for text read as written.
+    overridden: Option<usize>,
     /// What assistive technology reads for the run: each span's semantics
     /// label in place of its own text.
     label: String,
@@ -151,16 +155,19 @@ pub(super) struct SpanRun {
 pub(super) struct SpanRuns {
     runs: Vec<SpanRun>,
     link_count: usize,
+    override_count: usize,
     has_cursor: bool,
 }
 
 impl SpanRuns {
     /// The runs of `text`, which a paragraph shapes as its plain text; none
-    /// when no span sets a link or a cursor, as for most text.
+    /// when no span sets a link, a cursor or an accessibility override, as
+    /// for most text.
     pub(super) fn of(text: &InlineSpan) -> Self {
         fn interactive(span: &TextSpan) -> bool {
             span.link.is_some()
                 || span.mouse_cursor.is_some()
+                || span.semantics_label.is_some()
                 || span.children.iter().any(interactive)
         }
         let mut runs = Self::default();
@@ -197,9 +204,15 @@ impl SpanRuns {
             .as_deref()
             .or(span.text.as_deref())
             .unwrap_or_default();
+        // An override replaces the span's own text only: its children keep
+        // their own reading.
+        let overridden = span.semantics_label.is_some().then(|| {
+            self.override_count += 1;
+            self.override_count - 1
+        });
         let start = *offset;
         *offset += text.len();
-        self.push(start..*offset, link, cursor, label);
+        self.push(start..*offset, link, cursor, overridden, label);
         for child in &span.children {
             self.walk(child, link, cursor, offset);
         }
@@ -210,13 +223,16 @@ impl SpanRuns {
         range: Range<usize>,
         link: Option<usize>,
         cursor: Option<CursorIcon>,
+        overridden: Option<usize>,
         label: &str,
     ) {
         if range.is_empty() && label.is_empty() {
             return;
         }
         match self.runs.last_mut() {
-            Some(last) if last.link == link && last.cursor == cursor => {
+            Some(last)
+                if last.link == link && last.cursor == cursor && last.overridden == overridden =>
+            {
                 last.range.end = range.end;
                 last.label.push_str(label);
             }
@@ -224,9 +240,15 @@ impl SpanRuns {
                 range,
                 link,
                 cursor,
+                overridden,
                 label: label.to_owned(),
             }),
         }
+    }
+
+    /// How many spans set an accessibility override.
+    pub(super) fn override_count(&self) -> usize {
+        self.override_count
     }
 
     /// How many spans set a link.
@@ -239,12 +261,13 @@ impl SpanRuns {
         self.has_cursor
     }
 
-    /// The bytes where the text enters or leaves a link, in order: where a
-    /// selectable paragraph's runs are cut, so each link holds its own.
-    pub(super) fn link_edges(&self) -> Vec<usize> {
+    /// The bytes where the text enters or leaves a link or an overridden
+    /// span, in order: where a selectable paragraph's runs are cut, so each
+    /// region holds its own.
+    pub(super) fn region_edges(&self) -> Vec<usize> {
         self.runs
             .windows(2)
-            .filter(|pair| pair[0].link != pair[1].link)
+            .filter(|pair| pair[0].link != pair[1].link || pair[0].overridden != pair[1].overridden)
             .map(|pair| pair[1].range.start)
             .collect()
     }
@@ -323,7 +346,9 @@ impl SpanRuns {
     /// is only a semantics label (a textless span's) has no glyphs of its
     /// own: it is bounded by the paragraph, `bounds`, so it is still read in
     /// its place. A selectable paragraph passes its runs' bytes as
-    /// `run_ranges`, and each region holds the runs in its bytes ([`host_runs`]).
+    /// `run_ranges`, and each region holds the runs in its bytes ([`host_runs`]);
+    /// each span whose accessibility override replaces its text is then a
+    /// region of its own outside a link, hidden when the override silences it.
     pub(super) fn semantics_regions(
         &self,
         painter: &TextPainter,
@@ -337,11 +362,18 @@ impl SpanRuns {
         let mut spans = Vec::new();
         let (mut text_ordinal, mut continued_ordinal) = (0, 0);
         let mut keyed = vec![false; routes.len()];
+        // Hosting runs, each overridden span outside a link is a region of
+        // its own: its override is its reading, its runs its authored text.
+        let hosting = !run_ranges.is_empty();
+        let same_region = |first: &SpanRun, next: &SpanRun| {
+            next.link == first.link
+                && (!hosting || first.link.is_some() || next.overridden == first.overridden)
+        };
         let mut runs = self.runs.iter().peekable();
         while let Some(first) = runs.next() {
             let mut range = first.range.clone();
             let mut label = first.label.clone();
-            while let Some(next) = runs.next_if(|next| next.link == first.link) {
+            while let Some(next) = runs.next_if(|next| same_region(first, next)) {
                 range.end = next.range.end;
                 label.push_str(&next.label);
             }
@@ -372,11 +404,16 @@ impl SpanRuns {
                 None if range.is_empty() => bounds,
                 None => continue,
             };
-            if label.is_empty() && routed.is_none() {
+            // A silenced span reads as nothing; hosting runs, it still holds
+            // its characters, hidden, so a selection across it covers them.
+            let silenced = label.is_empty() && routed.is_none();
+            if silenced && !(hosting && first.overridden.is_some()) {
                 continue;
             }
             let mut config = SemanticsConfiguration::new();
-            if !label.is_empty() {
+            if silenced {
+                config.set_hidden(true);
+            } else if !label.is_empty() {
                 config.set_label(label);
             }
             if let Some(direction) = direction {
