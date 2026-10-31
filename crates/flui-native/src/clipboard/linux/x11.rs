@@ -267,7 +267,7 @@ impl Drop for X11Clipboard {
                 current
                     .into_iter()
                     .chain(std::mem::take(&mut offer.retired))
-                    .collect()
+                    .collect::<Vec<SelectionText>>()
             })
             .unwrap_or_default();
         drop_retired(held);
