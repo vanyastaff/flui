@@ -146,14 +146,14 @@ graph LR
 | R7 | `deleted_note_then_crash_drops_the_draft_and_trims_the_stack` | P11 | C |
 | R8 | `unreadable_session_starts_home_at_zero` | P11 | C |
 | R9 | `first_launch_starts_from_initial_state_without_an_error` | P11 | C |
-| R10 | `reload_replaces_a_pending_load` (счёт `live_requests`) | P11 | C |
+| R10 | `reload_replaces_a_pending_load` (счёт держателей ворот, `live_requests`) | P11 | C |
 | R11 | `a_held_write_keeps_typing_and_scrolling_live`; `a_blocked_store_keeps_frames_and_input_live` | P11; teardown T4 | C, L |
 | R12 | `user_close_waits_for_an_in_flight_save`; прогон | P5; P12 | L, D |
 | R13 | `hidden_writes_the_session_and_resume_does_not_reread`; сворачивание | P11; P12 | C, D |
 | R14 | `close_with_a_failed_write_requires_a_decision`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
 | R15 | `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit`; `taskkill /F` | P5; P12 | L, D |
 | R16 | `busy_retry_follows_the_runtime_clock` | P5 | L |
-| R17 | `corrupt_bytes_are_kept_until_start_over` | P5 | L |
+| R17 | `corrupt_bytes_are_kept_until_start_over`; `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones`, `each_load_failure_offers_its_way_on` | P5; P11 | L, C |
 | R18 | `inaccessible_is_reported_apart_from_corrupt`; `directory_in_place_of_the_file_is_inaccessible`; прогон | P4; P2 (сделано); P12 | L, D |
 | R19 | `first_write_creates_the_directory`; `a_runner_write_lands_under_the_configured_roots` | P2 (сделано); P6 | L |
 | R20 | `retry_after_failure_publishes_the_latest_value`; `a_failed_write_keeps_its_bytes_until_replaced_or_flushed` | P5; teardown T4 | L |
@@ -236,4 +236,26 @@ graph LR
     свежий старт копирует нечитаемый сеанс, делается, когда он устоится
     (`a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored`, на
     `MemoryStorage::hold_copies`). Без каждого слушателя его строка падает.
+  - [x] (c) экраны отказов: загрузка данных отличает нечитаемые заметки (`Corrupt`, `Decode`)
+    от прочих отказов (`LoadFailure`); экран «Load failed» даёт Retry, а нечитаемым заметкам —
+    ещё «Start over» (`start_over`; заметки показываются, когда свежий старт сохранён и
+    документ принимает правки, а отказ копии даёт Retry, который зовёт `retry`).
+    Без хранилища (`Unavailable`) заметки живут в памяти. Баннер на `AnimatedBuilder` над
+    `Persisted`: «Storage is unavailable», «Read only», «Saving failed» с «Retry saving»
+    (`retry`). На экране загрузки — Reload (следующая попытка, прежняя загрузка брошена).
+    Строки: таблица `each_load_failure_offers_its_way_on` (повреждённые байты, неразбираемое
+    тело, новая версия, недоступный файл: Start over только у первых двух, файл не тронут),
+    `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones` (R17),
+    `start_over_shows_the_notes_once_they_take_edits`, `a_start_over_whose_copy_fails_offers_retry`,
+    `start_over_drops_the_place_taken_in_the_notes_given_up` (место отброшенных заметок не
+    восстанавливается над свежими: ревизия и id заметок могут совпасть),
+    `without_storage_the_notes_run_in_memory_with_a_banner`,
+    `a_failed_save_shows_a_banner_whose_retry_stores_the_notes` (R20),
+    `reload_replaces_a_pending_load` (R10), `a_held_write_keeps_typing_and_scrolling_live`
+    (R11). `AppRun::shows_starting` сверяет начало текста: прежние проверки
+    `!shows("Load failed: ")` сравнивали весь текст и не могли упасть. Откаты — Start over у
+    всех отказов, без ветки `Unavailable`, заметки до конца свежего старта, Retry без
+    `retry`, без `start_over`, баннер без «Saving failed», «Retry saving» без `retry` —
+    роняют свою строку. Слушатели `Persisted` узнают и об изменении, вернувшемся к сказанному
+    до доставки (`listeners_hear_a_change_that_came_back_before_the_delivery`).
 - [ ] P12 — нативный прогон (после flui-driver FD11)

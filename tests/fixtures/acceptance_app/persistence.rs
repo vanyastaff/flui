@@ -104,6 +104,8 @@ fn a_note_id_is_never_reused_across_a_restart() {
 struct Gate {
     open: Cell<bool>,
     waiting: RefCell<Option<Waker>>,
+    /// The attempt numbers the loader was called with, in order.
+    attempts: RefCell<Vec<u32>>,
 }
 
 impl Gate {
@@ -118,7 +120,8 @@ impl Gate {
 fn gated() -> (AcceptanceApp, Rc<Gate>) {
     let gate = Rc::new(Gate::default());
     let held = Rc::clone(&gate);
-    let loader: Loader = Rc::new(move |_attempt| {
+    let loader: Loader = Rc::new(move |attempt| {
+        held.attempts.borrow_mut().push(attempt);
         let gate = Rc::clone(&held);
         Box::pin(poll_fn(move |cx| {
             if gate.open.get() {
@@ -283,7 +286,7 @@ fn deleted_note_then_crash_drops_the_draft_and_trims_the_stack() {
     // is lost with the process.
     run.storage().put(&Session::NAME, before);
     let run = run.restart();
-    assert!(!run.shows("Load failed: "), "no load error");
+    assert!(!run.shows_starting("Load failed: "), "no load error");
     assert!(
         run.shows("Note 1") && !run.shows("Note 3 does not exist"),
         "a stack opening a deleted note starts at Home"
@@ -366,7 +369,11 @@ fn restored_values_that_no_longer_fit_fall_back() {
         let storage = copy_of(&stored);
         edit_session(&storage, case.edit);
         let mut run = AppRun::start_over(app(), storage);
-        assert!(!run.shows("Load failed: "), "{}: no load error", case.name);
+        assert!(
+            !run.shows_starting("Load failed: "),
+            "{}: no load error",
+            case.name
+        );
         (case.check)(&mut run);
     }
 }
@@ -380,7 +387,7 @@ fn unreadable_session_starts_home_at_zero() {
     run.storage().put(&Session::NAME, "not a session");
 
     let run = run.restart();
-    assert!(!run.shows("Load failed: "), "the data loads");
+    assert!(!run.shows_starting("Load failed: "), "the data loads");
     assert!(
         run.shows("Note 1") && !run.shows("Back"),
         "Home, at the top"
@@ -433,4 +440,277 @@ fn a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored() {
         "the place taken during the fresh start is stored"
     );
     assert_eq!(run.title(), "Groceries");
+}
+
+/// Each way a load of the notes fails shows Retry; only notes that cannot be
+/// read back offer Start over, and nothing is written until the user picks.
+#[test]
+fn each_load_failure_offers_its_way_on() {
+    struct Case {
+        name: &'static str,
+        stored: &'static str,
+        fail_reads: bool,
+        offers_start_over: bool,
+    }
+    let cases = [
+        Case {
+            name: "corrupt bytes",
+            stored: "not notes",
+            fail_reads: false,
+            offers_start_over: true,
+        },
+        Case {
+            name: "a body the notes cannot decode",
+            stored: "flui-document notes 1 1\n\"nope\"",
+            fail_reads: false,
+            offers_start_over: true,
+        },
+        Case {
+            name: "a newer format",
+            stored: "flui-document notes 99 1\n{}",
+            fail_reads: false,
+            offers_start_over: false,
+        },
+        Case {
+            name: "an inaccessible file",
+            stored: "not read",
+            fail_reads: true,
+            offers_start_over: false,
+        },
+    ];
+    for case in cases {
+        let storage = MemoryStorage::new();
+        storage.put(&Saved::NAME, case.stored);
+        if case.fail_reads {
+            storage.fail_reads(Some(StorageError::Inaccessible {
+                kind: ErrorKind::PermissionDenied,
+            }));
+        }
+        let run = AppRun::start_over(app(), storage);
+        assert!(
+            run.shows_starting("Load failed: "),
+            "{}: the failure is shown",
+            case.name
+        );
+        assert!(run.shows("Retry"), "{}: with Retry", case.name);
+        assert_eq!(
+            run.shows("Start over"),
+            case.offers_start_over,
+            "{}: Start over is offered only for unreadable notes",
+            case.name
+        );
+        assert_eq!(
+            run.storage().contents(&Saved::NAME).as_deref(),
+            Some(case.stored.as_bytes()),
+            "{}: nothing is written",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones() {
+    let storage = MemoryStorage::new();
+    storage.put(&Saved::NAME, "not notes");
+    let mut run = AppRun::start_over(app(), storage);
+    run.tap("Start over");
+    assert!(
+        run.shows("Note 1") && !run.shows_starting("Load failed: "),
+        "the initial notes are shown"
+    );
+    assert_eq!(
+        run.storage().kept_aside(&Saved::NAME),
+        [b"not notes".to_vec()],
+        "the unreadable notes are kept aside"
+    );
+
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    let run = run.restart();
+    assert!(
+        run.shows("Groceries") && !run.shows_starting("Load failed: "),
+        "the fresh notes are stored and take later saves"
+    );
+}
+
+#[test]
+fn without_storage_the_notes_run_in_memory_with_a_banner() {
+    let mut run = AppRun::start_without_storage(app());
+    assert!(
+        !run.shows_starting("Load failed: "),
+        "no storage is not a load failure"
+    );
+    assert!(run.shows("Note 1"), "the initial notes are shown");
+    assert!(
+        run.shows("Storage is unavailable: the notes are kept in memory only"),
+        "and a banner says they are not stored"
+    );
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    assert!(run.shows("Groceries"), "edits work in memory");
+}
+
+#[test]
+fn a_failed_save_shows_a_banner_whose_retry_stores_the_notes() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.storage().fail_next(StorageError::Full);
+    run.tap("Save note");
+    assert!(
+        run.shows_starting("Saving failed: "),
+        "the failed save is shown"
+    );
+    assert!(run.storage().contents(&Saved::NAME).is_none());
+
+    run.tap("Retry saving");
+    assert!(
+        !run.shows_starting("Saving failed: "),
+        "the banner goes once it is stored"
+    );
+    run.tap("Back");
+    let run = run.restart();
+    assert!(run.shows("Groceries"), "the retried save is read back");
+}
+
+#[test]
+fn reload_replaces_a_pending_load() {
+    let (app, gate) = gated();
+    let mut run = AppRun::start(app);
+    assert!(run.shows("Loading notes"));
+    let waiting = Rc::strong_count(&gate);
+    assert_eq!(gate.attempts.borrow().last(), Some(&0));
+    run.tap("Reload");
+    assert_eq!(
+        gate.attempts.borrow().last(),
+        Some(&1),
+        "Reload starts the next attempt"
+    );
+    assert!(run.shows("Loading notes"), "the new load waits too");
+    assert_eq!(
+        Rc::strong_count(&gate),
+        waiting,
+        "the replaced load's future is dropped, not kept beside the new one"
+    );
+
+    gate.set_open(true);
+    run.settle();
+    assert!(run.shows("Note 1"), "the new load is applied");
+    assert_eq!(run.storage().live_requests(), 0, "and no request is left");
+}
+
+#[test]
+fn a_held_write_keeps_typing_and_scrolling_live() {
+    let mut run = AppRun::start(app());
+    let held = run.storage().hold_writes();
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    assert!(
+        run.storage().contents(&Saved::NAME).is_none(),
+        "the save is held"
+    );
+    run.replace_title("Groceries and milk");
+    assert_eq!(run.title(), "Groceries and milk", "typing works");
+    run.tap("Back");
+    run.shift_tab();
+    run.key(NamedKey::End);
+    assert!(run.list_offset() > 0.0, "scrolling works");
+
+    drop(held);
+    run.settle();
+    let stored = run
+        .storage()
+        .contents(&Saved::NAME)
+        .expect("the held save lands once released");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("\"Groceries\""),
+        "with the title saved"
+    );
+}
+
+#[test]
+fn start_over_shows_the_notes_once_they_take_edits() {
+    let storage = MemoryStorage::new();
+    storage.put(&Saved::NAME, "not notes");
+    let mut run = AppRun::start_over(app(), storage);
+    let held = run.storage().hold_copies();
+    run.tap("Start over");
+    assert!(
+        run.shows("Loading notes") && !run.shows("Note 1"),
+        "no editable notes while the old ones are being kept aside"
+    );
+    drop(held);
+    run.settle();
+    assert_eq!(
+        run.storage().kept_aside(&Saved::NAME),
+        [b"not notes".to_vec()],
+        "the unreadable notes are kept aside"
+    );
+
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    let run = run.restart();
+    assert!(
+        run.shows("Groceries"),
+        "the first edit after the fresh start is stored"
+    );
+}
+
+#[test]
+fn a_start_over_whose_copy_fails_offers_retry() {
+    let storage = MemoryStorage::new();
+    storage.put(&Saved::NAME, "not notes");
+    let mut run = AppRun::start_over(app(), storage);
+    run.storage().fail_copies(Some(StorageError::Full));
+    run.tap("Start over");
+    assert!(
+        run.shows_starting("Load failed: ") && run.shows("Retry"),
+        "the failed copy is shown with Retry"
+    );
+    assert_eq!(
+        run.storage().contents(&Saved::NAME).as_deref(),
+        Some(&b"not notes"[..]),
+        "the unreadable notes are not written over"
+    );
+
+    run.storage().fail_copies(None);
+    run.tap("Retry");
+    assert!(run.shows("Note 1"), "Retry takes up the fresh start");
+    assert_eq!(
+        run.storage().kept_aside(&Saved::NAME),
+        [b"not notes".to_vec()]
+    );
+}
+
+#[test]
+fn start_over_drops_the_place_taken_in_the_notes_given_up() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    run.tap("Note 3");
+    run.replace_title("Old draft");
+    let run = run.restart();
+    assert!(run.shows("Editing note 3"), "the draft is restored");
+
+    run.storage().put(&Saved::NAME, "not notes");
+    let mut run = run.restart();
+    run.tap("Start over");
+    assert!(
+        !run.shows("Editing note 3") && !run.shows("Back"),
+        "the fresh notes open at Home, without the old draft"
+    );
+    let run = run.restart();
+    assert!(
+        !run.shows("Editing note 3") && run.shows("Note 3"),
+        "nor does a later launch restore it over the fresh notes"
+    );
 }
