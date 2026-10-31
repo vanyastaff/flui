@@ -616,6 +616,34 @@ fn selection_area_controller() {
     );
 }
 
+/// `EditableText` by touch: a tap's caret handle, a long press's word and
+/// its handles, dragging a handle, and what takes the handles away.
+#[test]
+fn editable_text_handles() {
+    run_cases(
+        "editable_text_handles",
+        &[
+            ("editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves", crate::editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves as fn()),
+            ("editable_text_handles::a_caret_handle_follows_the_field_or_its_default", crate::editable_text_handles::a_caret_handle_follows_the_field_or_its_default),
+            ("editable_text_handles::a_caret_handle_hides_after_its_timeout", crate::editable_text_handles::a_caret_handle_hides_after_its_timeout),
+            ("editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends", crate::editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends),
+            ("editable_text_handles::a_key_a_mouse_or_the_focus_leaving_hides_the_handles", crate::editable_text_handles::a_key_a_mouse_or_the_focus_leaving_hides_the_handles),
+            ("editable_text_handles::a_long_press_in_an_obscured_field_selects_all_of_it", crate::editable_text_handles::a_long_press_in_an_obscured_field_selects_all_of_it),
+            ("editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles", crate::editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles),
+            ("editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it", crate::editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it),
+            ("editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press", crate::editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press),
+            ("editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle", crate::editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle),
+            ("editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles", crate::editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles),
+            ("editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag", crate::editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag),
+            ("editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press", crate::editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press),
+            ("editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact", crate::editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact),
+            ("editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it", crate::editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it),
+            ("editable_text_handles::an_edit_during_a_long_press_ends_it", crate::editable_text_handles::an_edit_during_a_long_press_ends_it),
+            ("editable_text_handles::shown_handles_follow_a_new_line_height", crate::editable_text_handles::shown_handles_follow_a_new_line_height),
+        ],
+    );
+}
+
 /// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
 /// of a handle moves its end, and a tap, Esc or the mouse hides them.
 #[test]

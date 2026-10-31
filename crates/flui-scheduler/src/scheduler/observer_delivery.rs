@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Weak};
 
-use super::{AppLifecycleState, UpdateScheduler, discard_panic_payload};
+use super::{AppLifecycleState, UpdateScheduler};
 
 #[derive(Default)]
 pub(super) struct LifecycleDelivery {
@@ -91,7 +91,7 @@ pub(super) fn preserve_first_failure(
     if let Err(payload) = result {
         custody.signal.set(true);
         if first.is_some() {
-            discard_panic_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             *first = Some(payload);
         }

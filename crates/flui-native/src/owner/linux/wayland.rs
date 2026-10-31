@@ -45,8 +45,9 @@ pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts,
-    PresentationTime, SeatWindow, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent, TextRecorder, TextWire,
+    WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState,
+    WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -333,6 +334,7 @@ pub(crate) mod wait {
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod event_loop {
+    use std::any::Any;
     use std::os::fd::OwnedFd;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
@@ -349,7 +351,7 @@ mod event_loop {
     use parking_lot::Mutex;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
     use rustix::io::Errno;
-    use wayland_client::backend::WaylandError;
+    use wayland_client::backend::{ObjectId, WaylandError};
     use wayland_client::globals::{GlobalListContents, registry_queue_init};
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
@@ -491,6 +493,9 @@ mod event_loop {
         /// the pointer over the frame's surfaces reaches instead of the
         /// window's input.
         pub(crate) frame: Arc<dyn FramePointer>,
+        /// Its text, which a seat's `zwp_text_input_v3` in the window drives;
+        /// `None` where its text input is no Wayland one.
+        pub(crate) text: Option<Arc<dyn SeatWindowText>>,
     }
 
     /// A window's own frame as the seats' input reaches it: the window
@@ -515,6 +520,100 @@ mod event_loop {
         /// numbered `serial`: a move, a resize or a window menu it starts
         /// names that seat and serial.
         fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool);
+    }
+
+    /// What one seat's `zwp_text_input_v3` reported, recorded in the seats'
+    /// queue in order with the keys and pointers around it.
+    #[derive(Debug)]
+    pub(crate) struct TextWire {
+        /// The `zwp_text_input_v3` it came from.
+        pub(crate) input: ObjectId,
+        pub(crate) event: TextEvent,
+    }
+
+    /// One `zwp_text_input_v3` event.
+    #[derive(Debug)]
+    pub(crate) enum TextEvent {
+        Enter(WlSurface),
+        Leave,
+        Preedit {
+            text: Option<String>,
+            begin: i32,
+            end: i32,
+        },
+        Commit(Option<String>),
+        Delete {
+            before: u32,
+            after: u32,
+        },
+        Done(u32),
+        /// The text input went with its seat or its manager: recorded
+        /// behind what it reported before, so that reaches the field first.
+        Retired,
+    }
+
+    /// Where a text input's dispatch records its events: the seats' queue,
+    /// the input feature's.
+    pub(crate) trait TextRecorder: Send + Sync {
+        /// Queue `wire` behind what the seats recorded before it.
+        fn record_text(&self, wire: TextWire);
+    }
+
+    /// A window's text as the seats' text inputs reach it: the text
+    /// feature's, which made it with the window. The window hands it to the
+    /// seats' input with its surface, and the input passes it to
+    /// [`SeatText::attach`] unopened.
+    pub trait SeatWindowText: Any + Send + Sync {}
+
+    /// The seats' text inputs: the text feature's (`text::linux::wayland`),
+    /// which the table gives the seats' input. The input binds the manager
+    /// and makes a text input per seat through it, and hands it each
+    /// recorded [`TextWire`] in turn. Called on the owner thread, with no
+    /// cell of the input borrowed.
+    pub(crate) trait SeatText: Send + Sync {
+        /// Whether `interface` is the global the text inputs come from.
+        fn speaks(&self, interface: &str) -> bool;
+
+        /// Whether the manager is bound.
+        fn holds_manager(&self) -> bool;
+
+        /// Bind the manager, global `name`, and make a text input for each
+        /// of `seats`, recording into `recorder`.
+        fn bind(
+            &self,
+            registry: &WlRegistry,
+            name: u32,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+            recorder: &Weak<dyn TextRecorder>,
+            seats: &[WlSeat],
+        );
+
+        /// The compositor removed global `name`.
+        fn global_removed(&self, name: u32);
+
+        /// Seat `seat` was bound.
+        fn seat_added(
+            &self,
+            seat: &WlSeat,
+            queue: &QueueHandle<WaylandState>,
+            recorder: &Weak<dyn TextRecorder>,
+        );
+
+        /// Seat `seat` went.
+        fn seat_removed(&self, seat: &WlSeat);
+
+        /// Window `id` opened on `surface` with `text`.
+        fn attach(&self, id: WindowId, surface: &WlSurface, text: &Arc<dyn SeatWindowText>);
+
+        /// Window `id` closed.
+        fn detach(&self, id: WindowId);
+
+        /// Apply one recorded event.
+        fn deliver(&self, wire: TextWire);
+
+        /// The loop ends: the text inputs go.
+        fn release(&self);
     }
 
     /// The cursor the input last showed, for a test.

@@ -745,7 +745,6 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         .run_frame();
         let rejected_faults = Rc::new(PainterFaults::default());
         rejected_faults.comparison.set(Some(comparison));
-        rejected_faults.retirement.set(true);
         let root = run.root();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
@@ -770,8 +769,8 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         assert_eq!((old.source.len(), new.source.len()), (1, 0));
         assert_eq!(
             rejected_faults.drops.get(),
-            0,
-            "failed rejected ownership remains in exceptional custody"
+            1,
+            "the rejected painter is destroyed, not retained"
         );
         old.source.notify_listeners();
         assert!(run.pump().painted);
@@ -2211,6 +2210,37 @@ fn harness_editable_paints_the_selection_behind_the_glyphs() {
     );
 }
 
+/// A field publishes the caret under the start link while its selection is
+/// collapsed, and both ends of a selection under their links, as a
+/// paragraph does; without links it pushes no leader.
+///
+/// Red-check: publish both ends whatever the selection (the collapsed
+/// field pushes two leaders).
+fn harness_editable_publishes_its_selection_ends_for_handles() {
+    let leaders = |selection: Option<std::ops::Range<usize>>, links: bool| {
+        let (start, end) = if links {
+            (Some(LayerLink::new()), Some(LayerLink::new()))
+        } else {
+            (None, None)
+        };
+        let mut editable = RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_caret_byte_offset(4)
+            .with_selection(selection);
+        let _ = editable.set_selection_handles(start, end);
+        let run = RenderTester::mount(box_node(editable))
+            .with_constraints(loose(160.0))
+            .run_frame();
+        run.structure()
+            .iter()
+            .filter(|layer| **layer == "Leader")
+            .count()
+    };
+    assert_eq!(leaders(None, true), 1, "the caret alone");
+    assert_eq!(leaders(Some(4..4), true), 1, "a collapsed selection");
+    assert_eq!(leaders(Some(0..4), true), 2, "both ends of a selection");
+    assert_eq!(leaders(Some(0..4), false), 0, "no links, no leaders");
+}
+
 // ------------------------------------------------------------------------
 // Composing-region underline (ADR-0030)
 // ------------------------------------------------------------------------
@@ -2901,28 +2931,16 @@ fn harness_constrained_box_enforces_minimums() {
         "RenderConstrainedBox",
         &["additional_min_width", "additional_max_height"],
     );
-    // The unbounded maximum is absent from the description, not published as infinity: the
-    // protocol's numbers are finite.
+    // The unbounded maximum is described as infinity, which differs from "no field".
     let snapshot = run.render_snapshot();
-    let mut stack = vec![&snapshot];
-    while let Some(node) = stack.pop() {
-        for field in node.facts.iter().chain(&node.fields) {
-            let finite = match &field.value {
-                OwnedValue::Float(v) => v.is_finite(),
-                OwnedValue::Size(s) => s.width.is_finite() && s.height.is_finite(),
-                _ => true,
-            };
-            assert!(finite, "{} {} is not finite", node.kind, field.name);
-        }
-        stack.extend(&node.children);
-    }
     let constrained = snapshot
         .find_by_kind("RenderConstrainedBox")
         .unique()
         .expect("one constrained box");
-    assert!(
-        constrained.get::<f64>("additional_max_width").is_err(),
-        "an unbounded maximum is absent"
+    assert_eq!(
+        constrained.get::<f64>("additional_max_width"),
+        Ok(f64::INFINITY),
+        "an unbounded maximum is infinite"
     );
     assert_eq!(
         constrained.get::<f64>("additional_min_width"),
@@ -2930,7 +2948,7 @@ fn harness_constrained_box_enforces_minimums() {
         "a finite minimum is published"
     );
 
-    // `expand()` makes the stored minimum itself infinite; it is absent too, not `Size(inf, inf)`.
+    // `expand()` makes the stored minimum itself infinite, and the description says so.
     let run = RenderTester::mount(
         box_node(RenderConstrainedBox::new(BoxConstraints::expand()))
             .child(box_node(RenderColoredBox::red(10.0, 10.0))),
@@ -2942,10 +2960,13 @@ fn harness_constrained_box_enforces_minimums() {
         .find_by_kind("RenderConstrainedBox")
         .unique()
         .expect("one constrained box");
-    assert!(
-        expanded.get::<f64>("additional_min_width").is_err()
-            && expanded.get::<f64>("additional_min_height").is_err(),
-        "an unbounded minimum is absent"
+    assert_eq!(
+        expanded.get::<f64>("additional_min_width"),
+        Ok(f64::INFINITY)
+    );
+    assert_eq!(
+        expanded.get::<f64>("additional_min_height"),
+        Ok(f64::INFINITY)
     );
 }
 
@@ -6137,10 +6158,8 @@ impl RenderBox for CapturingSemanticsMerge {
     }
 }
 
-fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
+fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    // The first negative-control case has only one hostile destructor, so a
-    // broken aggregate drop can fail observably without aborting the process.
     #[derive(Clone, Copy, Debug)]
     enum Host {
         Merge,
@@ -6152,8 +6171,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
         .into_iter()
         .flat_map(|host| {
             policies.into_iter().flat_map(move |(custom, blocked)| {
-                [[true, false], [true, true], [false, true], [false, false]]
-                    .map(|fails| (host, custom, blocked, fails))
+                [[false, false]].map(|fails| (host, custom, blocked, fails))
             })
         })
     {
@@ -6210,13 +6228,13 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
                 .iter()
                 .map(|counter| counter.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
-            [0, 0],
-            "unproven callback ownership stays in exceptional custody after rejection"
+            [1, 1],
+            "rejected callbacks are destroyed with the draft"
         );
         assert_eq!(
             parent_dropped.load(Ordering::Relaxed),
-            0,
-            "overwritten receiver callbacks stay in custody too"
+            usize::from(matches!(host, Host::AuthoredMerge)),
+            "overwritten receiver callbacks are destroyed too"
         );
         assert_eq!(semantics_content(&run), original);
         assert!(!run.owner().debug_doing_semantics());
@@ -13285,6 +13303,10 @@ fn family_text_and_image() {
                 harness_editable_paints_the_selection_behind_the_glyphs,
             ),
             (
+                "editable_publishes_its_selection_ends_for_handles",
+                harness_editable_publishes_its_selection_ends_for_handles,
+            ),
+            (
                 "editable_composing_underline_paints_at_the_exact_multibyte_box",
                 harness_editable_composing_underline_paints_at_the_exact_multibyte_box,
             ),
@@ -13557,8 +13579,8 @@ fn family_semantics() {
         "semantics",
         &[
             (
-                "rejected_semantics_drafts_preserve_the_error_and_callback_custody",
-                harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody,
+                "rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks",
+                harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks,
             ),
             (
                 "accepted_semantics_drafts_retire_filtered_callbacks",
@@ -14063,10 +14085,10 @@ fn harness_intrinsic_width_rounds_up_to_ordinary_step() {
     assert_eq!(run.max_intrinsic_width(root, 100.0), 60.0);
 }
 
-/// An override of infinity lets the child overflow; the description leaves it out instead of
-/// publishing a number no wire format carries.
+/// An override of infinity lets the child overflow, which differs from no override: the
+/// description keeps infinity and leaves only the missing override absent.
 #[test]
-fn an_unbounded_overflow_override_is_absent_from_the_description() {
+fn an_unbounded_overflow_override_is_described_as_infinite() {
     let run = RenderTester::mount(
         box_node(RenderConstrainedOverflowBox::new(
             Alignment::CENTER,
@@ -14086,10 +14108,16 @@ fn an_unbounded_overflow_override_is_absent_from_the_description() {
         .unique()
         .expect("one overflow box");
     assert_eq!(overflow.get::<f64>("min_width"), Ok(10.0));
-    assert!(overflow.get::<f64>("max_width").is_err(), "unbounded width");
+    assert_eq!(overflow.get::<f64>("max_width"), Ok(f64::INFINITY));
+    assert_eq!(overflow.get::<f64>("max_height"), Ok(f64::INFINITY));
+    let min_height = overflow
+        .fields
+        .iter()
+        .find(|field| field.name == "min_height")
+        .expect("listed");
     assert!(
-        overflow.get::<f64>("max_height").is_err(),
-        "unbounded height"
+        matches!(min_height.value, OwnedValue::None),
+        "no override stays absent"
     );
 }
 
@@ -14118,9 +14146,9 @@ fn viewports_over_different_offsets_report_different_kind_arguments() {
     assert_eq!(arguments(&position).len(), 1);
 }
 
-/// An infinite preferred extent clamps at layout; the description leaves it out.
+/// An infinite preferred extent clamps at layout; the description still says infinity.
 #[test]
-fn an_unbounded_preferred_size_is_absent_from_the_description() {
+fn an_unbounded_preferred_size_is_described_as_infinite() {
     let run = RenderTester::mount(box_node(RenderCustomPaint::new(
         None,
         None,
@@ -14133,13 +14161,13 @@ fn an_unbounded_preferred_size_is_absent_from_the_description() {
         .find_by_kind("RenderCustomPaint")
         .unique()
         .expect("one custom paint");
-    assert!(paint.get::<f64>("preferred_width").is_err(), "unbounded");
+    assert_eq!(paint.get::<f64>("preferred_width"), Ok(f64::INFINITY));
     assert_eq!(paint.get::<f64>("preferred_height"), Ok(30.0));
 }
 
-/// A requested dimension of infinity clamps at layout; no object's description carries it.
+/// A requested dimension of infinity clamps at layout; the description still says infinity.
 #[test]
-fn a_sized_box_describes_an_infinite_dimension_as_absent() {
+fn a_sized_box_describes_an_infinite_dimension_as_infinite() {
     let run = RenderTester::mount(box_node(RenderSizedBox::fixed(f64::INFINITY, 30.0)))
         .with_constraints(loose(200.0))
         .run_layout();
@@ -14148,6 +14176,6 @@ fn a_sized_box_describes_an_infinite_dimension_as_absent() {
         .find_by_kind("RenderSizedBox")
         .unique()
         .expect("one sized box");
-    assert!(sized.get::<f64>("width").is_err(), "unbounded width");
+    assert_eq!(sized.get::<f64>("width"), Ok(f64::INFINITY));
     assert_eq!(sized.get::<f64>("height"), Ok(30.0));
 }

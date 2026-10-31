@@ -15,7 +15,7 @@ pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) 
     let held = if payload.is::<&'static str>() || payload.is::<String>() {
         payload
     } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         Box::new(String::from("a panic whose payload is not text"))
     };
     let refused = APP_RUNTIME.with(|slot| match slot.try_borrow_mut() {
@@ -33,7 +33,7 @@ pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) 
                 "a later terminal failure; the first one is the one resumed"
             );
         });
-        flui_foundation::panic::retain_opaque_payload(later);
+        flui_foundation::panic::discard_payload(later);
     }
 }
 
@@ -88,7 +88,7 @@ fn request_terminal_quit() {
         let _ = super::host::with_owner_platform(flui_native::OwnerPlatform::quit);
     });
     if let Err(payload) = quit {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -97,6 +97,6 @@ fn request_terminal_quit() {
 /// retained.
 pub(super) fn contain_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(report)) {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }

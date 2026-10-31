@@ -48,7 +48,7 @@ impl Retirement<'_> {
     fn observe(&mut self, payload: RetirePanic) {
         self.signal.set(true);
         if self.preserve_failure || self.first.is_some() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             self.first = Some(payload);
         }

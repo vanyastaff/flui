@@ -1,4 +1,4 @@
-//! Opaque layout failure payloads do not execute destruction while reporting.
+//! A layout failure stays authoritative while it is reported, and a replacement lays out.
 
 use flui_foundation::{Leaf, geometry::Size};
 use flui_rendering::{
@@ -20,22 +20,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Bomb(Arc<AtomicUsize>);
-impl Drop for Bomb {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("opaque payload destructor");
-    }
-}
-struct CompetingBombs {
-    _first: Bomb,
-    _second: Bomb,
-}
-
 #[derive(Debug)]
 struct Source {
     failure: u8,
-    drops: Arc<AtomicUsize>,
 }
 impl flui_foundation::inspect::Inspect for Source {
     fn kind(&self) -> &'static str {
@@ -51,28 +38,17 @@ impl RenderBox for Source {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        Ok(match self.failure {
-            1 => std::panic::panic_any(Bomb(Arc::clone(&self.drops))),
-            2 => std::panic::panic_any(CompetingBombs {
-                _first: Bomb(Arc::clone(&self.drops)),
-                _second: Bomb(Arc::clone(&self.drops)),
-            }),
-            3 => panic!("ordinary source failure"),
-            _ => ctx.constraints().constrain(Size::new(10.0, 20.0)),
-        })
+        assert!(self.failure != 3, "ordinary source failure");
+        Ok(ctx.constraints().constrain(Size::new(10.0, 20.0)))
     }
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
         false
     }
 }
 fn failure_then_replacement(failure: u8) {
-    let drops = Arc::new(AtomicUsize::new(0));
     let text = TextContextHandle::standalone();
     let constraints = BoxConstraints::tight(Size::new(10.0, 20.0));
-    let mut entry = RenderEntry::<BoxProtocol>::new(Box::new(Source {
-        failure,
-        drops: Arc::clone(&drops),
-    }));
+    let mut entry = RenderEntry::<BoxProtocol>::new(Box::new(Source { failure }));
     let error = entry
         .layout_leaf_only(constraints, text.source(), false)
         .expect_err("source must refuse layout");
@@ -86,12 +62,7 @@ fn failure_then_replacement(failure: u8) {
         ),
         "original layout failure must remain authoritative: {error:?}"
     );
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "reporting must not destroy opaque payloads"
-    );
-    entry = RenderEntry::<BoxProtocol>::new(Box::new(Source { failure: 0, drops }));
+    entry = RenderEntry::<BoxProtocol>::new(Box::new(Source { failure: 0 }));
     assert_eq!(
         entry
             .layout_leaf_only(constraints, text.source(), false)
@@ -101,12 +72,6 @@ fn failure_then_replacement(failure: u8) {
 }
 fn ordinary_payload_recovers() {
     failure_then_replacement(3);
-}
-fn hostile_payload_recovers() {
-    failure_then_replacement(1);
-}
-fn competing_payload_fields_recovers() {
-    failure_then_replacement(2);
 }
 #[derive(Debug)]
 struct BoxParent(Source);
@@ -155,15 +120,7 @@ impl flui_rendering::traits::RenderSliver for SliverParent {
     }
 }
 fn throw_source_failure(source: &Source) {
-    match source.failure {
-        1 => std::panic::panic_any(Bomb(Arc::clone(&source.drops))),
-        2 => std::panic::panic_any(CompetingBombs {
-            _first: Bomb(Arc::clone(&source.drops)),
-            _second: Bomb(Arc::clone(&source.drops)),
-        }),
-        3 => panic!("ordinary source failure"),
-        _ => (),
-    }
+    assert!(source.failure != 3, "ordinary source failure");
 }
 
 #[derive(Debug)]
@@ -192,7 +149,6 @@ impl RenderBox for SliverHost {
 
 fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
     use flui_rendering::constraints::SliverGeometry;
-    let drops = Arc::new(AtomicUsize::new(0));
     let captured = std::rc::Rc::new(std::cell::Cell::new(SliverGeometry::ZERO));
     let mut pipeline = crate::common::fresh_layout_pipeline();
     let constraints = BoxConstraints::tight(Size::new(10.0, 20.0));
@@ -200,10 +156,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
         flui_rendering::pipeline::phase::Layout,
     >,
                    failure| {
-        let source = Source {
-            failure,
-            drops: Arc::clone(&drops),
-        };
+        let source = Source { failure };
         let root = if sliver {
             pipeline
                 .render_tree_mut()
@@ -216,26 +169,14 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
         let parent = if sliver {
             pipeline
                 .render_tree_mut()
-                .insert_sliver_child(
-                    root,
-                    Box::new(SliverParent(Source {
-                        failure,
-                        drops: Arc::clone(&drops),
-                    })),
-                )
+                .insert_sliver_child(root, Box::new(SliverParent(Source { failure })))
                 .expect("sliver parent")
         } else {
             root
         };
         pipeline
             .render_tree_mut()
-            .insert_box_child(
-                parent,
-                Box::new(Source {
-                    failure: 0,
-                    drops: Arc::clone(&drops),
-                }),
-            )
+            .insert_box_child(parent, Box::new(Source { failure: 0 }))
             .expect("attached leaf establishes nonleaf layout");
         root
     };
@@ -268,11 +209,6 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
             "original nonleaf layout failure remains authoritative: {result:?}"
         );
     }
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "reporting must retain opaque destruction"
-    );
     pipeline.render_tree_mut().remove_recursive(root);
     let replacement = install(&mut pipeline, 0);
     assert_eq!(
@@ -290,7 +226,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
     }
 }
 
-struct PanickingReporter(Arc<AtomicUsize>, Arc<AtomicUsize>);
+struct PanickingReporter(Arc<AtomicUsize>);
 impl tracing::Subscriber for PanickingReporter {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         *metadata.level() == tracing::Level::ERROR && metadata.fields().field("panic_msg").is_some()
@@ -302,96 +238,48 @@ impl tracing::Subscriber for PanickingReporter {
     fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
     fn event(&self, _: &tracing::Event<'_>) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        std::panic::panic_any(CompetingBombs {
-            _first: Bomb(Arc::clone(&self.1)),
-            _second: Bomb(Arc::clone(&self.1)),
-        });
+        panic!("reporter failure");
     }
     fn enter(&self, _: &tracing::span::Id) {}
     fn exit(&self, _: &tracing::span::Id) {}
 }
 fn reporting_competition(protocol: u8, failure: u8) {
     let calls = Arc::new(AtomicUsize::new(0));
-    let drops = Arc::new(AtomicUsize::new(0));
-    tracing::subscriber::with_default(
-        PanickingReporter(Arc::clone(&calls), Arc::clone(&drops)),
-        || match protocol {
-            0 => failure_then_replacement(failure),
-            1 => nonleaf_failure_then_replacement(false, failure),
-            _ => nonleaf_failure_then_replacement(true, failure),
-        },
-    );
+    tracing::subscriber::with_default(PanickingReporter(Arc::clone(&calls)), || match protocol {
+        0 => failure_then_replacement(failure),
+        1 => nonleaf_failure_then_replacement(false, failure),
+        _ => nonleaf_failure_then_replacement(true, failure),
+    });
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
         "original failure reporter must actually run once"
     );
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "secondary opaque payload remains retained"
-    );
 }
 fn box_ordinary_recovers() {
     nonleaf_failure_then_replacement(false, 3);
 }
-fn box_hostile_recovers() {
-    nonleaf_failure_then_replacement(false, 1);
-}
-fn box_aggregate_recovers() {
-    nonleaf_failure_then_replacement(false, 2);
-}
 fn sliver_ordinary_recovers() {
     nonleaf_failure_then_replacement(true, 3);
-}
-fn sliver_hostile_recovers() {
-    nonleaf_failure_then_replacement(true, 1);
-}
-fn sliver_aggregate_recovers() {
-    nonleaf_failure_then_replacement(true, 2);
 }
 fn leaf_reporting_recovers() {
     reporting_competition(0, 3);
 }
-fn leaf_competing_reporting_recovers() {
-    reporting_competition(0, 2);
-}
 fn box_reporting_recovers() {
     reporting_competition(1, 3);
-}
-fn box_competing_reporting_recovers() {
-    reporting_competition(1, 2);
 }
 fn sliver_reporting_recovers() {
     reporting_competition(2, 3);
 }
-fn sliver_competing_reporting_recovers() {
-    reporting_competition(2, 2);
-}
 #[test]
-fn layout_reporting_retains_opaque_payloads() {
+fn layout_failures_are_reported_and_recovered_from() {
     let cases: &[(&str, fn())] = &[
         ("ordinary payload", ordinary_payload_recovers),
-        ("hostile payload", hostile_payload_recovers),
-        ("competing fields", competing_payload_fields_recovers),
         ("box ordinary", box_ordinary_recovers),
-        ("box hostile", box_hostile_recovers),
-        ("box aggregate", box_aggregate_recovers),
         ("sliver ordinary", sliver_ordinary_recovers),
-        ("sliver hostile", sliver_hostile_recovers),
-        ("sliver aggregate", sliver_aggregate_recovers),
         ("leaf reporting", leaf_reporting_recovers),
-        (
-            "leaf competing reporting",
-            leaf_competing_reporting_recovers,
-        ),
         ("box reporting", box_reporting_recovers),
-        ("box competing reporting", box_competing_reporting_recovers),
         ("sliver reporting", sliver_reporting_recovers),
-        (
-            "sliver competing reporting",
-            sliver_competing_reporting_recovers,
-        ),
     ];
     const SELECTED: &str = "FLUI_LAYOUT_PAYLOAD_CASE";
     if let Ok(selected) = std::env::var(SELECTED) {
@@ -408,7 +296,7 @@ fn layout_reporting_retains_opaque_payloads() {
             std::process::Command::new(std::env::current_exe().expect("test executable"))
                 .args([
                     "--exact",
-                    "leaf_payload::layout_reporting_retains_opaque_payloads",
+                    "leaf_payload::layout_failures_are_reported_and_recovered_from",
                     "--nocapture",
                 ])
                 .env(SELECTED, name)

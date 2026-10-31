@@ -256,9 +256,9 @@ impl ExternalBuildInbox {
                     "a frame request failed; the work stays queued and the wake owed"
                 );
             }));
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             if let Err(diagnostic) = report {
-                flui_foundation::panic::retain_opaque_payload(diagnostic);
+                flui_foundation::panic::discard_payload(diagnostic);
             }
         }
     }
@@ -314,7 +314,7 @@ impl ExternalBuildInbox {
                     if first_panic.is_none() {
                         first_panic = Some(payload);
                     } else {
-                        flui_foundation::panic::retain_opaque_payload(payload);
+                        flui_foundation::panic::discard_payload(payload);
                     }
                 }
             }

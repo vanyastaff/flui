@@ -526,11 +526,10 @@ fn frame_failure_containment_matrix() {
     crate::table_test::run_table(
         "frame_failure_containment_matrix",
         &[
-            ("frame_failure_containment::a_failed_handler_envelope_is_retained_through_ui_runtime_teardown", frame_failure_containment::a_failed_handler_envelope_is_retained_through_ui_runtime_teardown as fn()),
             ("frame_failure_containment::competing_opaque_frame_failures_keep_one_report_and_retry", frame_failure_containment::competing_opaque_frame_failures_keep_one_report_and_retry as fn()),
             ("frame_failure_containment::opaque_diagnostics_cannot_suppress_the_frame_handler", frame_failure_containment::opaque_diagnostics_cannot_suppress_the_frame_handler as fn()),
             ("frame_failure_containment::an_opaque_handler_failure_preserves_frame_recovery", frame_failure_containment::an_opaque_handler_failure_preserves_frame_recovery as fn()),
-            ("frame_failure_containment::a_segment_opaque_payload_is_retained_before_recovery", frame_failure_containment::a_segment_opaque_payload_is_retained_before_recovery as fn()),
+            ("frame_failure_containment::a_segment_opaque_payload_is_dropped_and_the_frame_recovers", frame_failure_containment::a_segment_opaque_payload_is_dropped_and_the_frame_recovers as fn()),
             ("frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames", frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames as fn()),
             ("frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment", frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment as fn()),
             ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),
