@@ -577,6 +577,7 @@ impl MacOSWindow {
 
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
+        self.text_key_window_changed();
         self.publish_state();
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
@@ -586,9 +587,27 @@ impl MacOSWindow {
 
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
+        self.text_key_window_changed();
         self.publish_state();
         self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
+    }
+
+    /// The content view's text hears the window's key status changed, first
+    /// of all: a protected field holds secure event input only while its
+    /// window is key, so another application's keyboard utilities work the
+    /// moment this window resigns.
+    fn text_key_window_changed(&self) {
+        let view = objc2::rc::Retained::as_ptr(&*self.view).cast_mut();
+        // SAFETY: the window owns its content view for its whole life
+        // (`view`), and AppKit sends key-status notifications on the main
+        // thread, the owner thread; `with_content_view` checks the view's
+        // class before reading its context.
+        unsafe {
+            crate::owner::apple::macos::content_view::with_content_view(view, |view| {
+                view.text().key_window_changed();
+            });
+        }
     }
 
     /// Handle occlusion state change (hidden-surface gating).
