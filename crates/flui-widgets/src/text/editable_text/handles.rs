@@ -157,8 +157,10 @@ pub(super) struct FieldHandles {
     /// shown or moved for: any other change, an edit of the text that keeps
     /// the offsets included, takes them away.
     expected: RefCell<Option<(Range<usize>, usize, u64)>>,
-    /// Set while the handles change the controller themselves.
-    moving: Cell<bool>,
+    /// While the handles change the controller themselves, the revision
+    /// their own change makes. A change a listener makes in reply has a
+    /// later revision and counts as an outside edit.
+    own_revision: Cell<Option<u64>>,
     /// Set while a finger rests on a handle.
     held: Cell<bool>,
     parts: RefCell<Option<HandleParts>>,
@@ -187,7 +189,7 @@ impl FieldHandles {
             caret_handle: Cell::new(CaretHandle::default()),
             grip: Cell::new(None),
             expected: RefCell::new(None),
-            moving: Cell::new(false),
+            own_revision: Cell::new(None),
             held: Cell::new(false),
             parts: RefCell::new(None),
             timer: RefCell::new(
@@ -432,7 +434,8 @@ impl FieldHandles {
     /// The controller changed: shown handles stay only for a change they
     /// made themselves.
     pub(super) fn controller_changed(&self, failure: &mut FirstPanic) {
-        if self.moving.get() {
+        let own = self.own_revision.get();
+        if own.is_some() && own == self.controller_state().map(|(.., revision)| revision) {
             return;
         }
         // An edit during a long press, whose handles show only once it
@@ -457,12 +460,16 @@ impl FieldHandles {
 
     /// A touch long press at `global` selects the word under it (the whole
     /// text of an obscured field). Returns whether it selected.
-    pub(super) fn long_pressed(&self, global: Offset<f64>) -> bool {
+    /// A panic from the controller's listeners is held in `failure`: the
+    /// press still selected, so the caller still claims the contact.
+    pub(super) fn long_pressed(&self, global: Offset<f64>, failure: &mut FirstPanic) -> bool {
         let Some(word) = self.word_at(global) else {
             return false;
         };
         *self.pressed_word.borrow_mut() = Some(word.clone());
-        self.move_controller(|controller| controller.set_selection(word.start, word.end));
+        failure.contain(|| {
+            self.move_controller(|controller| controller.set_selection(word.start, word.end));
+        });
         true
     }
 
@@ -521,12 +528,15 @@ impl FieldHandles {
         let Some(controller) = controller else {
             return;
         };
-        let was_moving = self.moving.replace(true);
         let controller = controller.borrow().clone();
+        let own = controller.revision().wrapping_add(1);
+        let outer = self.own_revision.replace(Some(own));
         let mut failure = FirstPanic::new();
         failure.contain(|| change(&controller));
-        self.moving.set(was_moving);
-        if self.shown.get().is_some() {
+        self.own_revision.set(outer);
+        // A listener that edited in reply already took the handles down;
+        // they only follow a controller left as their own change made it.
+        if self.shown.get().is_some() && controller.revision() == own {
             *self.expected.borrow_mut() = self.controller_state();
             let shown = match self.expected.borrow().as_ref() {
                 Some((selection, _, _)) if !selection.is_empty() => Shown::Selection,
@@ -733,7 +743,7 @@ impl FieldLongPress {
                 if let Some(handles) = pressed.upgrade() {
                     let mut failure = FirstPanic::new();
                     handles.hide(&mut failure);
-                    if handles.long_pressed(details.global_position) {
+                    if handles.long_pressed(details.global_position, &mut failure) {
                         silence();
                     }
                     failure.resume();

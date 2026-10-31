@@ -635,6 +635,8 @@ fn editable_text_handles() {
             ("editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles", crate::editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles),
             ("editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag", crate::editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag),
             ("editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press", crate::editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press),
+            ("editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact", crate::editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact),
+            ("editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it", crate::editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it),
             ("editable_text_handles::an_edit_during_a_long_press_ends_it", crate::editable_text_handles::an_edit_during_a_long_press_ends_it),
             ("editable_text_handles::shown_handles_follow_a_new_line_height", crate::editable_text_handles::shown_handles_follow_a_new_line_height),
         ],

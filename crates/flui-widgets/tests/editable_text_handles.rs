@@ -649,6 +649,129 @@ pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
     assert_eq!(scene.handles(), 2, "the ended press shows its handles");
 }
 
+/// A long press keeps its contact though the controller's listener panics
+/// on the word it selects: the field's own drag stays silent, so moving
+/// and lifting extend the word as a long press does.
+///
+/// Red-check: let the selection's panic skip silencing the field's drag
+/// (the move selects from the old caret).
+pub(crate) fn a_panic_on_the_long_press_selection_still_claims_the_contact() {
+    use flui_foundation::Listenable;
+    use flui_platform::pointer::PointerMove;
+
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let fired = Rc::new(std::cell::Cell::new(false));
+    let watched = scene.controller.clone();
+    let listener = scene.controller.add_listener(Rc::new({
+        let armed = Rc::clone(&armed);
+        let fired = Rc::clone(&fired);
+        move || {
+            if armed.get() && watched.selection() == (6..10) {
+                armed.set(false);
+                fired.set(true);
+                panic!("a listener fails on the pressed word");
+            }
+        }
+    }));
+    let info = PointerInfo::new(
+        PointerId::try_from(7_u64).expect("a nonzero id"),
+        PointerKind::Touch,
+    );
+    let held = PointerButtons::only(PointerButton::PRIMARY);
+    let sample = |millis: u64, at: Offset<f64>| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        )
+    };
+    let press = scene.along(start_of("alpha be"));
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(0, press),
+        )));
+    let pressed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene.laid.pump_for(Duration::from_millis(1000));
+    }));
+    // Whether the panic reaches here or the frame contains it, the listener
+    // failed on the pressed word.
+    drop(pressed);
+    assert!(fired.get(), "the press selected beta");
+    scene.controller.remove_listener(listener);
+    let gamma = scene.along(start_of("alpha beta ga"));
+    for (millis, at) in [(1016, gamma), (1032, gamma)] {
+        scene
+            .laid
+            .dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+                info,
+                held,
+                sample(millis, at),
+            )));
+    }
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+            info,
+            PointerButton::PRIMARY,
+            held,
+            sample(1048, gamma),
+        )));
+    scene.settle();
+    assert_eq!(scene.controller.selection(), 6..16, "beta through gamma");
+    assert_eq!(scene.handles(), 2);
+}
+
+/// An edit a controller listener makes in reply to the long press's own
+/// selection ends the press, as an edit from anywhere else does: lifting
+/// after moving keeps the selection the edit left and shows no handles.
+///
+/// Red-check: count every change made while the handles move the
+/// controller as theirs (the move selects from the old word and the
+/// release shows handles).
+pub(crate) fn an_edit_in_reply_to_a_long_press_ends_it() {
+    use flui_foundation::Listenable;
+
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let watched = scene.controller.clone();
+    let listener = scene.controller.add_listener(Rc::new({
+        let armed = Rc::clone(&armed);
+        move || {
+            if armed.get() && watched.selection() == (6..10) {
+                armed.set(false);
+                watched.set_text("one two three");
+            }
+        }
+    }));
+    let press = TouchScript::new("long press answered by an edit")
+        .down(1, scene.along(start_of("alpha be")))
+        .wait(Duration::from_millis(1000))
+        .frame()
+        .move_to(1, scene.along(start_of("alpha beta ga")))
+        .wait(Duration::from_millis(50))
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let after_edit = Rc::new(RefCell::new(None));
+    let noted = Rc::clone(&after_edit);
+    let controller = scene.controller.clone();
+    scene.laid.replay_with(&press, |_laid, step| {
+        if step == 1 {
+            *noted.borrow_mut() = Some(controller.selection());
+        }
+    });
+    scene.settle();
+    scene.controller.remove_listener(listener);
+    assert!(!armed.get(), "the press selected beta");
+    assert_eq!(scene.controller.text(), "one two three");
+    assert_eq!(Some(scene.selection()), *after_edit.borrow());
+    assert_eq!(scene.handles(), 0);
+}
+
 /// An edit made while a long press holds its word ends the press: lifting
 /// after moving neither selects in the new text from the old word nor
 /// shows handles.
