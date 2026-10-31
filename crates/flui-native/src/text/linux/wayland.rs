@@ -322,14 +322,18 @@ impl SeatText for SeatTexts {
                     if let Some(id) = held.window
                         && let Some(client) = objects.window(id).and_then(AttachedText::client)
                     {
-                        left.push(client);
+                        left.push(Left {
+                            client,
+                            wire: held.wire,
+                            next: None,
+                        });
                     }
                 }
                 left
             })
             .unwrap_or_default();
-        for client in left {
-            client.left();
+        for left in left {
+            left.deliver();
         }
     }
 
@@ -359,11 +363,11 @@ impl SeatText for SeatTexts {
                 let index = objects.inputs.iter().position(|held| held.seat == *seat)?;
                 let held = objects.inputs.remove(index);
                 held.wire.object.destroy();
-                objects.window(held.window?).and_then(AttachedText::client)
+                objects.leaving(held.window?, held.wire)
             })
             .flatten();
-        if let Some(client) = left {
-            client.left();
+        if let Some(left) = left {
+            left.deliver();
         }
     }
 
@@ -438,24 +442,27 @@ impl SeatText for SeatTexts {
                     TextEvent::Leave => {
                         let held = objects.input_mut(&input)?;
                         let window = held.window.take()?;
-                        let client = objects.window(window)?.client()?;
-                        return Some(Routed::Leave(client));
+                        let wire = Rc::clone(&held.wire);
+                        return objects.leaving(window, wire).map(Routed::Leave);
                     }
                     event => event,
                 };
-                let window = objects.input(&input)?.window?;
-                let client = objects.window(window)?.client()?;
-                Some(Routed::Event(client, event))
+                let held = objects.input(&input)?;
+                let wire = Rc::clone(&held.wire);
+                let client = objects.window(held.window?)?.client()?;
+                Some(Routed::Event(client, wire, event))
             })
             .flatten();
         match routed {
             Some(Routed::Enter(client, wire)) => client.entered(wire),
-            Some(Routed::Leave(client)) => client.left(),
-            Some(Routed::Event(client, event)) => match event {
-                TextEvent::Preedit { text, begin, end } => client.preedit(text, begin, end),
-                TextEvent::Commit(text) => client.commit_string(text),
-                TextEvent::Delete { before, after } => client.delete_surrounding(before, after),
-                TextEvent::Done(serial) => client.done(serial),
+            Some(Routed::Leave(left)) => left.deliver(),
+            Some(Routed::Event(client, wire, event)) => match event {
+                TextEvent::Preedit { text, begin, end } => client.preedit(&*wire, text, begin, end),
+                TextEvent::Commit(text) => client.commit_string(&*wire, text),
+                TextEvent::Delete { before, after } => {
+                    client.delete_surrounding(&*wire, before, after);
+                }
+                TextEvent::Done(serial) => client.done(&*wire, serial),
                 TextEvent::Enter(_) | TextEvent::Leave => {}
             },
             None => {}
@@ -483,8 +490,42 @@ impl SeatText for SeatTexts {
 /// A delivered event and the client it goes to.
 enum Routed {
     Enter(Rc<TextInputClient>, Rc<SeatWire>),
-    Leave(Rc<TextInputClient>),
-    Event(Rc<TextInputClient>, TextEvent),
+    Leave(Left),
+    Event(Rc<TextInputClient>, Rc<SeatWire>, TextEvent),
+}
+
+/// A seat's text input leaving a window: the window's client, the text
+/// input that left, and another seat's still in the window, which the
+/// client serves next when the one that left was the one it served.
+struct Left {
+    client: Rc<TextInputClient>,
+    wire: Rc<SeatWire>,
+    next: Option<Rc<SeatWire>>,
+}
+
+impl Left {
+    /// Tell the client, with no cell borrowed.
+    fn deliver(self) {
+        if self.client.left(&*self.wire)
+            && let Some(next) = self.next
+        {
+            self.client.entered(next);
+        }
+    }
+}
+
+impl TextObjects {
+    /// `wire` left window `window`, no longer holding it: what the window's
+    /// client hears.
+    fn leaving(&self, window: WindowId, wire: Rc<SeatWire>) -> Option<Left> {
+        let client = self.window(window)?.client()?;
+        let next = self
+            .inputs
+            .iter()
+            .find(|held| held.window == Some(window) && !Rc::ptr_eq(&held.wire, &wire))
+            .map(|held| Rc::clone(&held.wire));
+        Some(Left { client, wire, next })
+    }
 }
 
 fn make_input(

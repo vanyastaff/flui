@@ -198,6 +198,21 @@ fn head(text: &str, budget: usize) -> &str {
     &text[..to]
 }
 
+/// The selection as the input method is told it, with its text: whole when
+/// its text fits the surrounding budget, else a caret at its active end. A
+/// deletion around the selection counts from the same selection, so what the
+/// input method deletes is what it saw. `None` for a protected field.
+fn told_selection(session: &dyn TextStoreRead) -> Option<(Selection, String)> {
+    let selection = session.selection();
+    let range = selection.range();
+    let (selected, _) = text_within(session, range.start().get(), range.end().get())?;
+    if selected.len() > MAX_SURROUNDING_BYTES {
+        Some((Selection::collapsed(selection.active), String::new()))
+    } else {
+        Some((selection, selected))
+    }
+}
+
 /// The surrounding text of the document `session` reads, or `None` for a
 /// protected field, whose text the input method never sees.
 ///
@@ -205,7 +220,9 @@ fn head(text: &str, budget: usize) -> &str {
 /// was; otherwise the selection is kept whole when it fits and the rest of
 /// the budget goes to the text on either side, half each, the unused half
 /// of one side going to the other. A selection that does not fit is sent as
-/// a caret at its active end.
+/// a caret at its active end. A NUL, which a Wayland string cannot carry, is
+/// sent as a space: one byte for one, so every offset still names the
+/// document's own byte.
 pub(crate) fn surrounding(session: &dyn TextStoreRead) -> Option<Surrounding> {
     let len = session.document_len().get();
     // A code unit is at least one byte: `budget` units hold every byte the
@@ -215,16 +232,14 @@ pub(crate) fn surrounding(session: &dyn TextStoreRead) -> Option<Surrounding> {
         let range = composition.range;
         (range.start().get(), range.end().get(), String::new(), true)
     } else {
-        let selection = session.selection();
+        let (selection, selected) = told_selection(session)?;
         let range = selection.range();
-        let (lo, hi) = (range.start().get(), range.end().get());
-        let (selected, _) = text_within(session, lo, hi)?;
-        if selected.len() > budget {
-            let active = selection.active.get();
-            (active, active, String::new(), true)
-        } else {
-            (lo, hi, selected, selection.anchor <= selection.active)
-        }
+        (
+            range.start().get(),
+            range.end().get(),
+            selected,
+            selection.anchor <= selection.active,
+        )
     };
     let (before, _) = text_within(session, lo.saturating_sub(budget), lo)?;
     let (after, _) = text_within(session, hi, hi.saturating_add(budget).min(len))?;
@@ -236,7 +251,7 @@ pub(crate) fn surrounding(session: &dyn TextStoreRead) -> Option<Surrounding> {
     let end = start + selected.len();
     let (anchor, cursor) = if forward { (start, end) } else { (end, start) };
     Some(Surrounding {
-        text: format!("{before}{selected}{after}"),
+        text: format!("{before}{selected}{after}").replace('\0', " "),
         cursor,
         anchor,
     })
@@ -309,6 +324,9 @@ pub(crate) struct TextInputClient {
     wire: RefCell<Option<Rc<dyn TextInputWire>>>,
     /// Whether `enable` was sent on the wire since it entered.
     enabled: Cell<bool>,
+    /// Counts each `enable`: a grant made under one acts on the wire only
+    /// while the same one holds, never on the field that took focus since.
+    session: Cell<u64>,
     pending: RefCell<Pending>,
     /// The requests made while the client is inside a call into a store.
     queue: HostQueue<MirrorHostOp>,
@@ -363,8 +381,10 @@ fn apply(session: &mut dyn TextStoreEdit, pending: Pending) {
             tracing::debug!(?error, "the last preedit could not be ended");
         }
     }
-    if let Some((before, after)) = pending.delete {
-        let range = session.selection().range();
+    if let Some((before, after)) = pending.delete
+        && let Some((told, _)) = told_selection(session)
+    {
+        let range = told.range();
         let spans = surrounding_deletion(
             session,
             range,
@@ -442,6 +462,7 @@ impl TextInputClient {
             focused: RefCell::new(None),
             wire: RefCell::new(None),
             enabled: Cell::new(false),
+            session: Cell::new(0),
             pending: RefCell::new(Pending::default()),
             queue: HostQueue::new(),
             retired: Cell::new(false),
@@ -494,51 +515,92 @@ impl TextInputClient {
         self.sync_enablement();
     }
 
-    /// `leave`: the seat's text input left this window. The preedit is reset,
-    /// as the protocol asks: its text leaves the field.
-    pub(crate) fn left(&self) {
+    /// Whether `wire` is the text input this window serves: the last seat's
+    /// to enter. Another seat's events in the window are not this client's.
+    fn serves(&self, wire: &dyn TextInputWire) -> bool {
+        self.wire
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| std::ptr::addr_eq(Rc::as_ptr(current), std::ptr::from_ref(wire)))
+    }
+
+    /// `leave` of `wire`: the seat's text input left this window. The
+    /// preedit is reset, as the protocol asks: its text leaves the field. A
+    /// seat's text input the window does not serve leaves nothing behind.
+    /// Whether `wire` was the one served.
+    pub(crate) fn left(&self, wire: &dyn TextInputWire) -> bool {
+        if !self.serves(wire) {
+            return false;
+        }
         let wire = self.wire.borrow_mut().take();
         drop(wire);
         self.enabled.set(false);
         *self.pending.borrow_mut() = Pending::default();
         self.edit(|session| apply(session, Pending::default()));
+        true
     }
 
-    /// `preedit_string`.
-    pub(crate) fn preedit(&self, text: Option<String>, begin: i32, end: i32) {
-        self.pending.borrow_mut().preedit = text.map(|text| Preedit::new(text, begin, end));
+    /// `preedit_string` on `wire`.
+    pub(crate) fn preedit(
+        &self,
+        wire: &dyn TextInputWire,
+        text: Option<String>,
+        begin: i32,
+        end: i32,
+    ) {
+        if self.serves(wire) {
+            self.pending.borrow_mut().preedit = text.map(|text| Preedit::new(text, begin, end));
+        }
     }
 
-    /// `commit_string`.
-    pub(crate) fn commit_string(&self, text: Option<String>) {
-        self.pending.borrow_mut().commit = text;
+    /// `commit_string` on `wire`.
+    pub(crate) fn commit_string(&self, wire: &dyn TextInputWire, text: Option<String>) {
+        if self.serves(wire) {
+            self.pending.borrow_mut().commit = text;
+        }
     }
 
-    /// `delete_surrounding_text`, in bytes before and after the selection.
-    pub(crate) fn delete_surrounding(&self, before: u32, after: u32) {
-        self.pending.borrow_mut().delete = Some((before, after));
+    /// `delete_surrounding_text` on `wire`, in bytes before and after the
+    /// selection.
+    pub(crate) fn delete_surrounding(&self, wire: &dyn TextInputWire, before: u32, after: u32) {
+        if self.serves(wire) {
+            self.pending.borrow_mut().delete = Some((before, after));
+        }
     }
 
-    /// `done`: apply what was sent since the last one, and send the field's
-    /// state again when `serial` counts every commit sent.
-    pub(crate) fn done(&self, serial: u32) {
+    /// `done` on `wire`: apply what was sent since the last one, and send the
+    /// field's state again when `serial` counted every commit sent as the
+    /// `done` came. An edit the store holds until its frame ends keeps that
+    /// answer: the commits sent by an earlier held edit's state do not make
+    /// this one's stale, so the last edit's state is the one the input
+    /// method holds.
+    pub(crate) fn done(&self, wire: &dyn TextInputWire, serial: u32) {
+        if !self.serves(wire) {
+            return;
+        }
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
         if !self.enabled.get() {
             return;
         }
+        let current = wire.commits() == serial;
+        let session = self.session.get();
         let this = self.this.clone();
-        self.edit(move |session| {
-            apply(session, pending);
+        self.edit(move |edit| {
+            apply(edit, pending);
             let Some(client) = this.upgrade() else {
                 return;
             };
-            let Some(wire) = client.wire().filter(|_| client.enabled.get()) else {
-                return;
-            };
-            if wire.commits() == serial {
-                send_state(&*wire, session, ChangeCause::InputMethod);
+            if current && let Some(wire) = client.wire_of(session) {
+                send_state(&*wire, edit, ChangeCause::InputMethod);
             }
         });
+    }
+
+    /// The wire while the `enable` counted `session` holds: the field it
+    /// enabled still has focus and the seat is still in the window.
+    fn wire_of(&self, session: u64) -> Option<Rc<dyn TextInputWire>> {
+        self.wire()
+            .filter(|_| self.enabled.get() && self.session.get() == session)
     }
 
     // ------------------------------------------------------------------
@@ -568,6 +630,7 @@ impl TextInputClient {
 
     /// Send `enable` and the state of `store` on `wire`.
     fn enable_on(&self, wire: &Rc<dyn TextInputWire>, store: &Rc<dyn TextStore>) {
+        self.session.set(self.session.get().wrapping_add(1));
         wire.enable();
         wire.set_content_type(ContentType::of_store(&**store));
         let sent = {
@@ -675,18 +738,26 @@ impl TextInputClient {
     /// when the store queued it and the caller commits in place too.
     fn end_composition(&self, store: &Rc<dyn TextStore>) -> CompositionEnd {
         let this = self.this.clone();
-        let grant = LockGrant::read_write(move |session| {
-            if session.composition().is_some()
-                && let Err(error) = session.set_composition(None)
+        // `store` has focus now: a grant the store holds acts on the wire
+        // only while the same `enable` holds, so a field focused since is
+        // never reset or told this one's text.
+        let session = self.session.get();
+        let content = ContentType::of_store(&**store);
+        let grant = LockGrant::read_write(move |edit| {
+            if edit.composition().is_some()
+                && let Err(error) = edit.set_composition(None)
             {
                 tracing::debug!(?error, "a completed preedit could not be ended");
             }
             let Some(client) = this.upgrade() else {
                 return;
             };
-            if let Some(wire) = client.wire().filter(|_| client.enabled.get()) {
+            if let Some(wire) = client.wire_of(session) {
+                // `enable` resets the content type too: it is sent again
+                // with the rest of the state, as after any `enable`.
                 wire.enable();
-                send_state(&*wire, session, ChangeCause::Other);
+                wire.set_content_type(content);
+                send_state(&*wire, edit, ChangeCause::Other);
             }
         });
         let outcome = {

@@ -144,8 +144,8 @@ fn a_preedit_composes_and_a_commit_replaces_it() {
     let _ = wire.take();
 
     // "に" is three bytes: a cursor at its end.
-    client.preedit(Some("に".into()), 3, 3);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "abに");
     assert_eq!(
         store.composition(),
@@ -161,13 +161,13 @@ fn a_preedit_composes_and_a_commit_replaces_it() {
         "the preedit is left out of the surrounding text"
     );
 
-    client.preedit(Some("にほ".into()), 3, 3);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("にほ".into()), 3, 3);
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "abにほ", "the preedit is replaced");
     assert_eq!(store.selection(), caret(3), "the caret sits after に");
 
-    client.commit_string(Some("日本".into()));
-    client.done(wire.commits());
+    client.commit_string(&*wire, Some("日本".into()));
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "ab日本");
     assert_eq!(store.composition(), None);
     assert_eq!(store.selection(), caret(4));
@@ -178,8 +178,8 @@ fn a_preedit_composes_and_a_commit_replaces_it() {
 fn a_done_that_names_no_preedit_clears_it() {
     let store = InMemoryTextStore::new("");
     let (client, wire) = serving(&store);
-    client.preedit(Some("k".into()), -1, -1);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("k".into()), -1, -1);
+    client.done(&*wire, wire.commits());
     assert_eq!(
         store
             .composition()
@@ -187,7 +187,7 @@ fn a_done_that_names_no_preedit_clears_it() {
         Some(true),
         "a negative cursor hides the caret"
     );
-    client.done(wire.commits());
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "");
     assert_eq!(store.composition(), None);
 }
@@ -266,8 +266,8 @@ fn a_deletion_counts_bytes_around_the_selection() {
         let store = InMemoryTextStore::new(case.text);
         store.app_select(case.selection);
         let (client, wire) = serving(&store);
-        client.delete_surrounding(case.before, case.after);
-        client.done(wire.commits());
+        client.delete_surrounding(&*wire, case.before, case.after);
+        client.done(&*wire, wire.commits());
         assert_eq!(store.text(), case.expected, "{}", case.name);
         assert_eq!(
             store.selection().range().start(),
@@ -289,12 +289,12 @@ fn a_stale_done_is_applied_and_sends_no_state() {
     assert!(wire.commits() > stale, "the application edit was told");
     let _ = wire.take();
 
-    client.commit_string(Some("b".into()));
-    client.done(stale);
+    client.commit_string(&*wire, Some("b".into()));
+    client.done(&*wire, stale);
     assert_eq!(store.text(), "ab", "the commit is not dropped");
     assert_eq!(wire.take(), [], "no state answers a stale done");
 
-    client.done(wire.commits());
+    client.done(&*wire, wire.commits());
     assert_eq!(wire.surroundings(), [around("ab", 2, 2)]);
 }
 
@@ -314,17 +314,17 @@ fn an_application_edit_is_told_as_another_cause() {
 fn leaving_the_window_resets_the_preedit() {
     let store = InMemoryTextStore::new("a");
     let (client, wire) = serving(&store);
-    client.preedit(Some("b".into()), 1, 1);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("b".into()), 1, 1);
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "ab");
 
-    client.left();
+    client.left(&*wire);
     assert_eq!(store.text(), "a", "the preedit's text leaves the field");
     assert_eq!(store.composition(), None);
 
     // A late event of the left window changes nothing.
-    client.commit_string(Some("z".into()));
-    client.done(wire.commits());
+    client.commit_string(&*wire, Some("z".into()));
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "a");
 }
 
@@ -333,8 +333,8 @@ fn focus_moved_mid_composition_commits_it_where_it_was() {
     let first = InMemoryTextStore::new("");
     let second = InMemoryTextStore::new("");
     let (client, wire) = serving(&first);
-    client.preedit(Some("に".into()), 3, 3);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
     let _ = wire.take();
 
     client.focus_store(Some(as_store(&second)));
@@ -347,8 +347,8 @@ fn focus_moved_mid_composition_commits_it_where_it_was() {
         "the input method is reset for the next field"
     );
 
-    client.commit_string(Some("x".into()));
-    client.done(wire.commits());
+    client.commit_string(&*wire, Some("x".into()));
+    client.done(&*wire, wire.commits());
     assert_eq!(second.text(), "x");
     assert_eq!(first.text(), "に");
 
@@ -435,8 +435,8 @@ fn a_long_document_sends_a_window_around_the_selection() {
 fn a_completed_composition_stays_and_resets_the_input_method() {
     let store = InMemoryTextStore::new("");
     let (client, wire) = serving(&store);
-    client.preedit(Some("に".into()), 3, 3);
-    client.done(wire.commits());
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
     let _ = wire.take();
 
     let end = client.complete_composition(&as_store(&store));
@@ -445,6 +445,10 @@ fn a_completed_composition_stays_and_resets_the_input_method() {
     assert_eq!(store.composition(), None);
     let sent = wire.take();
     assert_eq!(sent.first(), Some(&Sent::Enable));
+    assert!(
+        sent.contains(&Sent::Content(ContentType::of_store(&*as_store(&store)))),
+        "enable resets the content type, which is sent again: {sent:?}"
+    );
     assert!(sent.contains(&Sent::Surrounding(around("に", 3, 3))));
 }
 
@@ -456,15 +460,20 @@ fn an_edit_held_by_the_frame_is_applied_in_order() {
     let (client, wire) = serving(&store);
 
     gate.set_open(false);
-    client.commit_string(Some("a".into()));
-    client.done(wire.commits());
-    client.commit_string(Some("b".into()));
-    client.done(wire.commits());
+    client.commit_string(&*wire, Some("a".into()));
+    client.done(&*wire, wire.commits());
+    client.commit_string(&*wire, Some("b".into()));
+    client.done(&*wire, wire.commits());
     assert_eq!(store.text(), "", "the frame transaction holds the edits");
 
     gate.set_open(true);
     let _ = store.run_deferred_grants();
     assert_eq!(store.text(), "ab", "neither commit is lost, nor reordered");
+    assert_eq!(
+        wire.surroundings().last(),
+        Some(&around("ab", 2, 2)),
+        "the input method holds the last edit's state"
+    );
 }
 
 #[test]
@@ -477,4 +486,74 @@ fn a_retired_client_sends_nothing_more() {
     client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
     client.focus_store(Some(as_store(&store)));
     assert_eq!(wire.take(), []);
+}
+
+#[test]
+fn a_deletion_counts_from_the_caret_a_too_long_selection_is_told_as() {
+    let text = format!("x{}", "a".repeat(4000));
+    let store = InMemoryTextStore::new(text);
+    store.app_select(Selection {
+        anchor: Utf16Offset::new(1),
+        active: Utf16Offset::new(4001),
+    });
+    let (client, wire) = serving(&store);
+    let [told] = wire.surroundings().try_into().expect("one state");
+    assert_eq!(told.cursor, told.anchor, "a caret at the active end");
+
+    client.delete_surrounding(&*wire, 1, 0);
+    client.done(&*wire, wire.commits());
+    assert_eq!(
+        store.text(),
+        format!("x{}", "a".repeat(3999)),
+        "the byte before the caret the input method saw goes"
+    );
+}
+
+#[test]
+fn a_nul_reaches_the_input_method_as_one_byte_of_space() {
+    let store = InMemoryTextStore::new("a\0b");
+    let (_client, wire) = serving(&store);
+    assert_eq!(wire.surroundings(), [around("a b", 3, 3)]);
+}
+
+#[test]
+fn a_completion_held_past_a_focus_change_leaves_the_next_field_alone() {
+    let first = InMemoryTextStore::new("");
+    let second = InMemoryTextStore::new("next");
+    let gate = CommitGate::new();
+    first.set_commit_gate(gate.clone());
+    let (client, wire) = serving(&first);
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
+
+    gate.set_open(false);
+    let _ = client.complete_composition(&as_store(&first));
+    client.focus_store(Some(as_store(&second)));
+    let _ = wire.take();
+
+    gate.set_open(true);
+    let _ = first.run_deferred_grants();
+    assert_eq!(first.text(), "に");
+    assert_eq!(
+        wire.take(),
+        [],
+        "the first field's late grant neither resets nor describes the second"
+    );
+}
+
+#[test]
+fn a_second_seat_leaving_keeps_the_seat_the_window_serves() {
+    let store = InMemoryTextStore::new("");
+    let (client, first) = serving(&store);
+    let second = Rc::new(Wire::default());
+    client.entered(Rc::clone(&second) as Rc<dyn TextInputWire>);
+
+    assert!(!client.left(&*first), "the first seat is no longer served");
+    client.commit_string(&*first, Some("x".into()));
+    client.done(&*first, first.commits());
+    assert_eq!(store.text(), "", "a seat not served edits nothing");
+
+    client.commit_string(&*second, Some("y".into()));
+    client.done(&*second, second.commits());
+    assert_eq!(store.text(), "y", "the served seat still edits");
 }
