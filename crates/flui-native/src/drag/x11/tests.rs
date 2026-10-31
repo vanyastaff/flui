@@ -1041,3 +1041,29 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
     });
     assert_same!(read, Ok(TransferPayload::Text("fresh".to_owned())));
 }
+
+/// An atom the server cannot name is not kept: a client sending fresh
+/// invalid atoms grows nothing in the transfer, and the type the server
+/// names still offers.
+#[test]
+fn an_atom_the_server_cannot_name_is_not_kept() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.answer(Some(TransferActions::COPY));
+    let source = Source::new();
+    let atoms = &source.atoms;
+    let invalid = [0x0FFF_FFF0, 0x0FFF_FFF1];
+    source.enter(target.xid, &[invalid[0], atoms.utf8, invalid[1]]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let names = &target.drag.state.lock().names;
+    assert!(
+        invalid.iter().all(|atom| !names.contains_key(atom)),
+        "kept {names:?}"
+    );
+    assert!(names.contains_key(&atoms.utf8));
+}

@@ -83,6 +83,9 @@ const RESERVED: usize = 4 * 1024 * 1024;
 /// The most types read of a source's `XdndTypeList`.
 const MAX_TYPES: u32 = 256;
 
+/// The most atom names the transfer keeps, of the types sources offered.
+const MAX_NAMES: usize = 1024;
+
 /// The most actions read of a source's `XdndActionList`.
 const MAX_ACTIONS: u32 = 16;
 
@@ -538,8 +541,9 @@ struct State {
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
-    /// The name of each atom a source offered, as the server named it.
-    names: HashMap<xproto::Atom, Option<String>>,
+    /// The name the server gave each atom a source offered that has one, at
+    /// most [`MAX_NAMES`]: an atom the server cannot name is asked again.
+    names: HashMap<xproto::Atom, String>,
 }
 
 /// What a step leaves to do once the lock is let go: completers to resolve
@@ -799,17 +803,20 @@ impl X11Drag {
             .iter()
             .map(|&atom| xcb.get_atom_name(atom).ok())
             .collect();
-        let named: Vec<(xproto::Atom, Option<String>)> = unknown
+        let named: Vec<(xproto::Atom, String)> = unknown
             .into_iter()
             .zip(cookies)
-            .map(|(atom, cookie)| {
-                let name = cookie
-                    .and_then(|cookie| cookie.reply().ok())
-                    .and_then(|reply| String::from_utf8(reply.name).ok());
-                (atom, name)
+            .filter_map(|(atom, cookie)| {
+                let reply = cookie?.reply().ok()?;
+                Some((atom, String::from_utf8(reply.name).ok()?))
             })
             .collect();
-        self.state.lock().names.extend(named);
+        let mut state = self.state.lock();
+        if state.names.len().saturating_add(named.len()) > MAX_NAMES {
+            // Names are learned again as sources offer them.
+            state.names.clear();
+        }
+        state.names.extend(named);
     }
 
     /// The atoms of a source's property `name`, at most `most`.
@@ -888,7 +895,7 @@ impl X11Drag {
         let mut state = self.state.lock();
         let named: Vec<(xproto::Atom, &str)> = types
             .iter()
-            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_deref()?)))
+            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_str())))
             .collect();
         let offered: Arc<[(xproto::Atom, Kind)]> = model::representations(&named).into();
         if let Some(hover) = state.hover.as_mut().filter(|hover| hover.source == source) {
