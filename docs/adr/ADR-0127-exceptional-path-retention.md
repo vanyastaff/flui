@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  §2–§4 and the hit-test metadata retention: values are destroyed normally, under containment after a caught failure.
 - **Amended:** 2026-10-11 — the unconditional focus-drop example is identified as the former motivating defect; operation boundaries and exceptional retention remain unchanged.
 - **Supersedes:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md), in part:
   its statement that callback captures, queued obligations and render-object
