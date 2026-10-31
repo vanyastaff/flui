@@ -3,7 +3,7 @@
 use std::fmt::Debug;
 
 use flui_foundation::geometry::{Matrix4, Rect, Size};
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_layer::TransformLayer;
 
 use super::ViewConfiguration;
@@ -367,9 +367,13 @@ impl RenderViewAdapter {
     }
 }
 
-impl Diagnosticable for RenderViewAdapter {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        self.view.debug_fill_properties(properties);
+impl Inspect for RenderViewAdapter {
+    fn kind(&self) -> &'static str {
+        "RenderViewAdapter"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        self.view.inspect(out);
     }
 }
 
@@ -488,14 +492,18 @@ pub struct CompositeResult {
 }
 
 // ============================================================================
-// Diagnosticable Implementation
+// Inspect Implementation
 // ============================================================================
 
-impl Diagnosticable for RenderView {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        properties.add("size", format!("{:?}", self.size));
-        if let Some(ref config) = self.configuration {
-            properties.add("devicePixelRatio", config.device_pixel_ratio());
+impl Inspect for RenderView {
+    fn kind(&self) -> &'static str {
+        "RenderView"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("size", &self.size).unit(Unit::LogicalPx);
+        if let Some(config) = &self.configuration {
+            out.field("devicePixelRatio", &config.device_pixel_ratio());
         }
     }
 }

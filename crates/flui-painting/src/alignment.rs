@@ -158,6 +158,14 @@ impl Default for Alignment {
     }
 }
 
+/// An alignment reports as the offset `@x,y` in its normalized coordinates (`@-1,-1` is the
+/// top-left corner), not in logical pixels.
+impl flui_foundation::inspect::ToValue for Alignment {
+    fn to_value(&self) -> flui_foundation::inspect::Value<'_> {
+        flui_foundation::inspect::Value::Offset(Offset::new(self.x, self.y))
+    }
+}
+
 impl From<(f64, f64)> for Alignment {
     #[inline]
     fn from((x, y): (f64, f64)) -> Self {

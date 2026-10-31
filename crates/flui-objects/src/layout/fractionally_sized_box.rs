@@ -275,22 +275,22 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFractionallySizedBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
+impl flui_foundation::inspect::Inspect for RenderFractionallySizedBox {
+    fn kind(&self) -> &'static str {
+        "RenderFractionallySizedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field(
             "width_factor",
-            self.width_factor
-                .map_or_else(|| "unset".to_string(), |f| format!("{}", f.value())),
+            &self.width_factor.map(FractionFactor::value),
         );
-        builder.add(
+        out.field(
             "height_factor",
-            self.height_factor
-                .map_or_else(|| "unset".to_string(), |f| format!("{}", f.value())),
+            &self.height_factor.map(FractionFactor::value),
         );
-        builder.add(
-            "alignment",
-            format!("({}, {})", self.alignment.x, self.alignment.y),
-        );
+        out.field("alignment", &self.alignment)
+            .unit(flui_foundation::inspect::Unit::Fraction);
     }
 }
 

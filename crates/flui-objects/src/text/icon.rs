@@ -1,9 +1,8 @@
 //! A single icon glyph and its square share one admitted logical size.
 
 use flui_foundation::geometry::{Offset, Size};
-use flui_foundation::{
-    Diagnosticable, Leaf, TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent,
-};
+use flui_foundation::inspect::{Fields, Inspect, Unit, Value};
+use flui_foundation::{Leaf, TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
 use flui_painting::typography::{InlineSpan, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextBaseline as PainterBaseline, TextPainter, TextResolvedSize, TextSizing};
 use flui_rendering::constraints::BoxConstraints;
@@ -135,13 +134,17 @@ impl RenderIcon {
     }
 }
 
-impl Diagnosticable for RenderIcon {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add("side", self.side.to_string());
+impl Inspect for RenderIcon {
+    fn kind(&self) -> &'static str {
+        "RenderIcon"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("side", &self.side).unit(Unit::LogicalPx);
         if let Some(glyph) = self.glyph {
-            properties.add("text", glyph.to_string());
+            out.field("text", &*glyph.encode_utf8(&mut [0; 4]));
         }
-        properties.add("style", format!("{:?}", self.style));
+        out.value("style", Value::Debug(&self.style));
     }
 }
 

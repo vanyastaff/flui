@@ -175,14 +175,8 @@ impl AnimationController {
                 }
                 ControllerDelivery::Run(delivery) => {
                     let profile = crate::observability::ProfileSpan::listeners();
-                    let retain = retirement.has_failure();
                     retirement.run_classified(FailureClass::Delivery, |_| {
-                        let delivery = delivery.into_inner();
-                        if retain {
-                            delivery.deliver_after_failure();
-                        } else {
-                            delivery.deliver();
-                        }
+                        delivery.into_inner().deliver();
                     });
                     profile.close(retirement);
                 }

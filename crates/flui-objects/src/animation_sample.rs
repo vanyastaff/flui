@@ -23,7 +23,9 @@ use crate::subscription::RenderSubscription;
 #[derive(Debug)]
 struct SampleCell<T> {
     generation: Cell<u64>,
-    value: RefCell<T>,
+    /// Shared, so a reader can keep the sample without holding the cell: the value is replaced
+    /// as a whole, never mutated.
+    value: RefCell<Rc<T>>,
     undelivered: Cell<bool>,
     /// Whether a `request_update` is running: a notification its wake raises
     /// must not retry that same request, or the retry recurses without bound.
@@ -65,7 +67,7 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
             proxy: Rc::new(proxy),
             cell: Rc::new(SampleCell {
                 generation: Cell::new(0),
-                value: RefCell::new(value),
+                value: RefCell::new(Rc::new(value)),
                 undelivered: Cell::new(false),
                 delivering: Cell::new(false),
             }),
@@ -76,7 +78,15 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
 
     /// The last admitted value.
     pub(crate) fn get(&self) -> T {
-        self.cell.value.borrow().clone()
+        T::clone(&self.cell.value.borrow())
+    }
+
+    /// Lends the last admitted value without cloning it. The cell is released before `read`
+    /// runs, so `read` may run user code (a sink that changes the animation) and the sample it
+    /// was lent stays the one it saw.
+    pub(crate) fn with<R>(&self, read: impl FnOnce(&T) -> R) -> R {
+        let sample = Rc::clone(&self.cell.value.borrow());
+        read(&sample)
     }
 
     /// Subscribes to the proxy; each admitted change requests `impact`.
@@ -140,8 +150,8 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
     if cell.generation.get() != generation || !admit(&value) {
         return;
     }
-    if *cell.value.borrow() != value {
-        let previous = cell.value.replace(value);
+    if **cell.value.borrow() != value {
+        let previous = cell.value.replace(Rc::new(value));
         // The outgoing value drops after the cell is released.
         drop(previous);
         cell.undelivered.set(true);
@@ -210,6 +220,31 @@ mod tests {
         );
     }
 
+    // A reader that changes the animation while it holds the lent sample (an inspection sink
+    // does) must not meet a cell still borrowed, and must not leave the cache stale.
+    #[test]
+    fn a_reader_may_change_the_animation_while_it_holds_the_sample() {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let anchor = owner.insert(Box::new(crate::RenderColoredBox::red(10.0, 10.0))
+            as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>);
+        let handle = owner
+            .local_render_invalidation_handle(anchor)
+            .expect("live anchor");
+        let proxy = ProxyAnimation::new(
+            Rc::new(flui_animation::ConstantAnimation::new(0.25)) as Rc<dyn Animation<f64>>
+        );
+        let mut sample = AnimationSample::new(proxy.clone(), 0.0, |_| true);
+        sample.attach(&handle, RenderUpdateImpact::PAINT);
+
+        let lent = sample.with(|value| {
+            proxy.set_parent(Rc::new(flui_animation::ConstantAnimation::new(0.75)));
+            *value
+        });
+
+        assert_eq!(lent, 0.25, "the reader keeps the sample it was lent");
+        assert_eq!(sample.get(), 0.75, "and the cache follows the new parent");
+    }
+
     // The terminal ticket refuses a new reading but must not strand an
     // accepted sample whose wake failed: no public run reaches `u64::MAX`.
     #[test]
@@ -232,7 +267,7 @@ mod tests {
         let proxy = ProxyAnimation::new(Rc::new(controller) as Rc<dyn Animation<f64>>);
         let cell = SampleCell {
             generation: Cell::new(u64::MAX),
-            value: RefCell::new(0.5),
+            value: RefCell::new(Rc::new(0.5)),
             undelivered: Cell::new(true),
             delivering: Cell::new(false),
         };
@@ -243,6 +278,6 @@ mod tests {
             "the owed delivery is retried"
         );
         assert!(!cell.undelivered.get(), "and settled");
-        assert_eq!(*cell.value.borrow(), 0.5, "a new reading is still refused");
+        assert_eq!(**cell.value.borrow(), 0.5, "a new reading is still refused");
     }
 }

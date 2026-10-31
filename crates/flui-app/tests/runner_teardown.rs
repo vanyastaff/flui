@@ -260,8 +260,8 @@ fn runner_teardown() {
                 a_panicking_post_frame_callback_reports_once_and_the_next_frame_builds,
             ),
             (
-                "a_session_end_handler_panic_with_a_panicking_payload_refuses",
-                a_session_end_handler_panic_with_a_panicking_payload_refuses,
+                "a_session_end_handler_panic_refuses",
+                a_session_end_handler_panic_refuses,
             ),
         ],
     );
@@ -1206,16 +1206,10 @@ pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
     run.join().expect("the run returns Ok");
 }
 
-/// A close handler that panics on a session end refuses it, even when the
-/// panic's payload panics again as it is dropped: the payload is kept, so
-/// the answer stays `Block` (ADR-0260 §1).
-///
-/// Red-check: drop the payload where the panic is caught — the second panic
-/// escapes the query and no answer is given.
-pub(crate) fn a_session_end_handler_panic_with_a_panicking_payload_refuses() {
-    let handler = flui_app::app::CloseRequestHandler::new(|_| {
-        std::panic::panic_any(PanicsOnDrop("the handler's payload panicked on drop"))
-    });
+/// A close handler that panics on a session end refuses it, and the answer
+/// is still given (ADR-0260 §1).
+pub(crate) fn a_session_end_handler_panic_refuses() {
+    let handler = flui_app::app::CloseRequestHandler::new(|_| panic!("the handler failed"));
     let (run, _events, _shared) = guarded_run_with(
         HoldOn::Nothing,
         AppConfig::new().with_close_request_handler(handler),

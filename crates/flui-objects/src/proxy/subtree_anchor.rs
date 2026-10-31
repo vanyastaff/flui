@@ -162,15 +162,14 @@ impl RenderSubtreeAnchor {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSubtreeAnchor {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "render_id",
-            match self.anchor.get() {
-                Some(id) => format!("{id:?}"),
-                None => "<unmounted>".to_owned(),
-            },
-        );
+impl flui_foundation::inspect::Inspect for RenderSubtreeAnchor {
+    fn kind(&self) -> &'static str {
+        "RenderSubtreeAnchor"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // Absent while unmounted.
+        out.field("render_id", &self.anchor.get());
     }
 }
 
@@ -276,15 +275,14 @@ impl RenderSliverSubtreeAnchor {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverSubtreeAnchor {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "render_id",
-            match self.anchor.get() {
-                Some(id) => format!("{id:?}"),
-                None => "<unmounted>".to_owned(),
-            },
-        );
+impl flui_foundation::inspect::Inspect for RenderSliverSubtreeAnchor {
+    fn kind(&self) -> &'static str {
+        "RenderSliverSubtreeAnchor"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // Absent while unmounted.
+        out.field("render_id", &self.anchor.get());
     }
 }
 

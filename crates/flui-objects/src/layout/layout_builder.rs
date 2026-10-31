@@ -104,13 +104,48 @@ fn report_unsupported_intrinsics() {
     );
 }
 
-impl flui_foundation::Diagnosticable for RenderLayoutBuilder {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_optional(
-            "published_constraints",
-            self.cell.constraints().map(|c| format!("{c:?}")),
-        );
-        builder.add("needs_build", self.cell.needs_build());
+impl flui_foundation::inspect::Inspect for RenderLayoutBuilder {
+    fn kind(&self) -> &'static str {
+        "RenderLayoutBuilder"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let constraints = self.cell.constraints();
+        let unit = flui_foundation::inspect::Unit::LogicalPx;
+        // An unbounded bound is absent, not infinite: a published size is finite.
+        out.field(
+            "published_min_width",
+            &constraints
+                .as_ref()
+                .map(|c| c.min_width)
+                .filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "published_min_height",
+            &constraints
+                .as_ref()
+                .map(|c| c.min_height)
+                .filter(|h| h.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "published_max_width",
+            &constraints
+                .as_ref()
+                .map(|c| c.max_width)
+                .filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "published_max_height",
+            &constraints
+                .as_ref()
+                .map(|c| c.max_height)
+                .filter(|h| h.is_finite()),
+        )
+        .unit(unit);
+        out.field("needs_build", &self.cell.needs_build());
     }
 }
 

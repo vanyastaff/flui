@@ -11,7 +11,7 @@ help: the trait `RenderBox` is not implemented for `NotABox`
    |
  6 | struct NotABox;
    | ^^^^^^^^^^^^^^
-   = note: render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::Diagnosticable`; `RenderObject<P>` then follows from a blanket impl
+   = note: render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::inspect::Inspect`; `RenderObject<P>` then follows from a blanket impl
 help: the trait `RenderObject<BoxProtocol>` is implemented for `RenderViewAdapter`
   --> src/view/render_view.rs
    |

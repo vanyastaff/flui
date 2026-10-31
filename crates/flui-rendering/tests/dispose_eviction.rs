@@ -58,7 +58,13 @@ impl Drop for RetirementProbe {
     }
 }
 
-impl flui_foundation::Diagnosticable for RetirementProbe {}
+impl flui_foundation::inspect::Inspect for RetirementProbe {
+    fn kind(&self) -> &'static str {
+        "RetirementProbe"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl flui_rendering::traits::RenderBox for RetirementProbe {
     type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
@@ -317,7 +323,7 @@ fn visual_notifier_retirement_child(mode: &str) {
         (Ok(()), None) => {}
         (Err(payload), Some(text)) => {
             assert_eq!(payload.downcast_ref::<&'static str>(), Some(&text));
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         _ => panic!("unexpected visual notifier outcome for {mode}"),
     }

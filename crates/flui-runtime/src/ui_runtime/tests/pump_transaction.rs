@@ -25,7 +25,13 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
 
     #[derive(Debug, Default)]
     struct FixedBox;
-    impl flui_foundation::Diagnosticable for FixedBox {}
+    impl flui_foundation::inspect::Inspect for FixedBox {
+        fn kind(&self) -> &'static str {
+            "FixedBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for FixedBox {
         type Arity = Leaf;
         type ParentData = BoxParentData;

@@ -23,7 +23,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
@@ -88,7 +87,13 @@ impl std::fmt::Debug for BoxWithSliverChild {
     }
 }
 
-impl Diagnosticable for BoxWithSliverChild {}
+impl flui_foundation::inspect::Inspect for BoxWithSliverChild {
+    fn kind(&self) -> &'static str {
+        "BoxWithSliverChild"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;

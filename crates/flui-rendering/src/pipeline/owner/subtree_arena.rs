@@ -50,7 +50,7 @@ use crate::storage::TreeLease;
 use std::marker::PhantomData;
 
 use flui_foundation::RenderId;
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::panic::payload_text;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -1466,9 +1466,11 @@ unsafe fn layout_subtree_borrowed_impl(
                         }))
                     {
                         // Reporting is secondary; do not retire its opaque failure or report it again.
-                        retain_opaque_payload(reporting_payload);
+                        flui_foundation::panic::discard_payload(reporting_payload);
                     }
-                    retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+                    flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
+                        payload,
+                    ));
                     return Err(crate::error::RenderError::poisoned(
                         debug_name,
                         crate::error::PoisonPhase::Layout,
@@ -2160,9 +2162,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                     }))
                 {
                     // Reporting is secondary; do not retire its opaque failure or report it again.
-                    retain_opaque_payload(reporting_payload);
+                    flui_foundation::panic::discard_payload(reporting_payload);
                 }
-                retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+                flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
+                    payload,
+                ));
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,
@@ -2267,7 +2271,13 @@ mod tests {
 
         #[derive(Debug, Default)]
         struct LeafStub;
-        impl flui_foundation::Diagnosticable for LeafStub {}
+        impl flui_foundation::inspect::Inspect for LeafStub {
+            fn kind(&self) -> &'static str {
+                "LeafStub"
+            }
+
+            fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+        }
         impl RenderBox for LeafStub {
             type Arity = Leaf;
             type ParentData = BoxParentData;
