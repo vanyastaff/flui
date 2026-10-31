@@ -1023,6 +1023,10 @@ impl<O: ViewportOffset + 'static> Inspect for RenderViewport<O> {
         "RenderViewport"
     }
 
+    fn kind_args(&self, args: &mut dyn FnMut(&'static str)) {
+        args(core::any::type_name::<O>());
+    }
+
     fn inspect(&self, out: &mut Fields<'_>) {
         out.field("axis_direction", &self.axis_direction);
         out.field("cross_axis_direction", &self.cross_axis_direction);
@@ -1788,6 +1792,10 @@ impl Default for RenderShrinkWrappingViewport<ScrollableViewportOffset> {
 impl<O: ViewportOffset + 'static> Inspect for RenderShrinkWrappingViewport<O> {
     fn kind(&self) -> &'static str {
         "RenderShrinkWrappingViewport"
+    }
+
+    fn kind_args(&self, args: &mut dyn FnMut(&'static str)) {
+        args(core::any::type_name::<O>());
     }
 
     fn inspect(&self, out: &mut Fields<'_>) {

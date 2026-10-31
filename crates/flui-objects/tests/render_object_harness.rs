@@ -14062,3 +14062,58 @@ fn harness_intrinsic_width_rounds_up_to_ordinary_step() {
     assert_eq!(run.box_geometry(run.id("child")).width, 60.0);
     assert_eq!(run.max_intrinsic_width(root, 100.0), 60.0);
 }
+
+/// An override of infinity lets the child overflow; the description leaves it out instead of
+/// publishing a number no wire format carries.
+#[test]
+fn an_unbounded_overflow_override_is_absent_from_the_description() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(10.0),
+            Some(f64::INFINITY),
+            None,
+            Some(f64::INFINITY),
+            OverflowBoxFit::DeferToChild,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let overflow = snapshot
+        .find_by_kind("RenderConstrainedOverflowBox")
+        .unique()
+        .expect("one overflow box");
+    assert_eq!(overflow.get::<f64>("min_width"), Ok(10.0));
+    assert!(overflow.get::<f64>("max_width").is_err(), "unbounded width");
+    assert!(
+        overflow.get::<f64>("max_height").is_err(),
+        "unbounded height"
+    );
+}
+
+/// Two viewports that differ only in their offset type are different kinds to a diff.
+#[test]
+fn viewports_over_different_offsets_report_different_kind_arguments() {
+    use flui_rendering::view::{ScrollPosition, ScrollableViewportOffset};
+
+    fn arguments(object: &dyn Inspect) -> Vec<&'static str> {
+        let mut found = Vec::new();
+        object.kind_args(&mut |name| found.push(name));
+        found
+    }
+
+    let position = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollPosition::new(0.0),
+    );
+    let scrollable = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(0.0),
+    );
+    assert_ne!(arguments(&position), arguments(&scrollable));
+    assert_eq!(arguments(&position).len(), 1);
+}
