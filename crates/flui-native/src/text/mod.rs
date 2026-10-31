@@ -9,8 +9,9 @@
 //!
 //! - `windows`: the Text Services Framework (`tsf`), which reads the focused
 //!   field's store, and the screen geometry its input methods are placed by;
-//! - `apple`: AppKit's `NSTextInputClient` (`macos`) and UIKit's Dynamic Type
-//!   sizing (`ios`);
+//! - `apple`: the store host AppKit's `NSTextInputClient` (`macos`) and
+//!   UIKit's `UITextInput` responder serve the focused field through, and
+//!   UIKit's Dynamic Type sizing (`ios`);
 //! - `android`: `FluiView`'s editor, which mirrors the focused field, and
 //!   the system font scale;
 //! - `web`: the browser's `EditContext` or a hidden textarea, which mirrors
@@ -39,6 +40,7 @@ pub(crate) mod apple;
 pub(crate) mod headless;
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     target_arch = "wasm32",
     windows,
@@ -100,9 +102,9 @@ pub trait TextInput: Send + Sync + 'static {
 /// How a window's text input reaches the focused field.
 pub enum WindowTextInput {
     /// The field tells the input method whether it may compose and where its
-    /// caret is: AppKit, winit and the headless host.
+    /// caret is: winit and the headless host.
     Ime(Arc<dyn PlatformTextInput>),
-    /// The platform reads the field's store (TSF) or mirrors it into an
+    /// The platform reads the field's store (TSF, AppKit, UIKit) or mirrors it into an
     /// editor of its own (Android's `FluiView`, the browser's `EditContext` or
     /// textarea), and the window serves the field through this host.
     Store(Rc<dyn TextStoreHost>),

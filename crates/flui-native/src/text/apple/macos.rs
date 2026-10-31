@@ -41,12 +41,13 @@
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::text_store::TextStoreHost;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text_store::{TextStoreHost, TextStoreStatus};
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 
-use super::client::{InputContext, TextClient};
+use super::client::{DocumentChange, InputContext, TextClient};
+use super::secure_input::SecureHold;
 use crate::owner::apple::macos::content_view::{ViewText, with_content_view};
 use crate::owner::apple::macos::{ContentViewRef, on_owner_thread};
 
@@ -97,6 +98,8 @@ struct ViewInputContext {
     /// The view, alive while the client holds this: the client drops it as
     /// it retires, which the view's `dealloc` causes.
     view: *mut AnyObject,
+    /// Whether this view holds secure event input.
+    secure: SecureHold,
 }
 
 impl ViewInputContext {
@@ -138,9 +141,25 @@ impl InputContext for ViewInputContext {
         }
     }
 
-    fn set_secure_input(&self, secure: bool) -> bool {
+    /// Secure event input follows the field: held while a protected one has
+    /// focus in the key window.
+    fn field_changed(&self, status: Option<TextStoreStatus>) {
+        let wanted = status.is_some_and(|status| status.protected) && self.is_key_window();
+        self.secure.sync(wanted, Self::set_secure_input);
+    }
+
+    /// AppKit asks its client for the document whenever it needs it, so an
+    /// application's edit needs no notice beyond the marked text it ended
+    /// and the coordinates it moved.
+    fn document_changed(&self, _change: DocumentChange) {}
+}
+
+impl ViewInputContext {
+    /// Take (`true`) or give back (`false`) one hold on the process's
+    /// secure event input; `false` when the system refused.
+    fn set_secure_input(secure: bool) -> bool {
         // SAFETY: both functions take no arguments and only move the
-        // process's hold count; the client pairs each hold it took with one
+        // process's hold count; `SecureHold` pairs each hold it took with one
         // give-back, so the count never goes below what others hold.
         let status = unsafe {
             if secure {
@@ -179,7 +198,10 @@ impl InputContext for ViewInputContext {
 
 impl ViewText for TextView {
     fn bind(&self, view: *mut AnyObject) {
-        self.client.bind(Rc::new(ViewInputContext { view }));
+        self.client.bind(Rc::new(ViewInputContext {
+            view,
+            secure: SecureHold::default(),
+        }));
     }
 
     fn store_host(&self) -> Rc<dyn TextStoreHost> {

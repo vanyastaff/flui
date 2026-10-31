@@ -79,3 +79,32 @@ pub(crate) fn a_press_on_a_field_takes_no_focus_back_once_focus_moves_on() {
         "the focus stays where it moved after the press"
     );
 }
+
+/// The Return key a platform sends for a line break (UIKit's `insertText:`
+/// of a lone `"\n"`, AppKit's `insertNewline:`) submits a single-line field
+/// and leaves its text as it was: no line break goes into it.
+pub(crate) fn the_return_key_submits_a_single_line_field_without_a_line_break() {
+    use std::cell::RefCell;
+
+    let controller = TextEditingController::with_text("sent");
+    let focus_node = FocusNode::with_debug_label("return field");
+    let submitted = Rc::new(RefCell::new(Vec::<String>::new()));
+    let harness = mount(
+        RawTextField::new(controller.clone())
+            .focus_node(Rc::clone(&focus_node))
+            .on_submitted({
+                let submitted = Rc::clone(&submitted);
+                move |_cx, text| submitted.borrow_mut().push(text.to_owned())
+            }),
+    );
+    let _ = focus_node.request_focus();
+    for state in [KeyState::Down, KeyState::Up] {
+        let enter = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(state)
+            .build();
+        let _ = harness.focus_manager().dispatch_key_event(&enter);
+    }
+    assert_eq!(*submitted.borrow(), ["sent"], "Return submitted once");
+    assert_eq!(controller.text(), "sent", "no line break went in");
+}

@@ -1,22 +1,23 @@
 //! The responder the system keyboard types into (ADR-0255 decision 11): an
 //! invisible `UITextInput` view beside the window's `FluiView`, which never
-//! becomes first responder itself. It holds the document the keyboard edits
-//! ([`Composition`]) and tells the focused field what each edit means, in the
-//! IME vocabulary AppKit's text input speaks, with Backspace for deletes:
-//! the composition as it reads, the text committed, a delete or a
-//! replacement before the caret.
+//! becomes first responder itself. It serves the focused field's store to the
+//! keyboard through the window's [`TextClient`], the store host AppKit's
+//! text input serves it through too (ADR-0090): each `UITextInput` method is
+//! one of the client's verbs, and the client tells the keyboard which field
+//! it serves and what the application changed ([`ResponderContext`]).
 //!
 //! UIKit asks a `UITextInput` for positions and ranges as objects of its own
 //! making: [`TextPosition`] and [`TextRange`] carry an offset into the
-//! document, in UTF-16 units.
+//! field's document, in UTF-16 units, as the store counts.
 //!
-//! The rects and the selection rects UIKit asks for are the focused field's
-//! caret area, whatever the range: until the shared text store serves the
-//! field's layout, nothing finer is known here.
+//! The view sits at the window view's origin, so the store's logical window
+//! coordinates are its own.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::rc::Rc;
 use std::sync::Weak;
 
+use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
@@ -27,7 +28,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSComparisonResult, NSDictionary, NSInteger, NSObject,
-    NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSString,
+    NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
     NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UITextAutocorrectionType,
@@ -36,7 +37,7 @@ use objc2_ui_kit::{
     UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
-use super::super::composition::{Announcement, Composition, Edit};
+use super::super::client::{DocumentChange, InputContext, TextClient, Typed};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
@@ -121,12 +122,10 @@ impl TextRange {
 
 /// What a [`TextInputView`] keeps.
 pub(super) struct ResponderIvars {
-    document: RefCell<Composition>,
-    /// The window the edits are told to.
+    /// The window's store host, which serves the focused field.
+    client: Rc<TextClient>,
+    /// The window the Return and Backspace presses are told to.
     delivery: Weak<WindowDelivery>,
-    /// Where the focused field's caret is, in the window's logical points,
-    /// which are this view's: it sits at the window view's origin.
-    caret: Cell<CGRect>,
     /// What the keyboard is told of the focused field.
     traits: Cell<KeyboardTraits>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
@@ -196,10 +195,9 @@ define_class!(
     }
 
     unsafe impl UIKeyInput for TextInputView {
-        /// Always yes: the field may hold text from before it took focus,
-        /// which the document never saw, and a no would stop the keyboard
-        /// sending the delete the field needs. A delete with nothing there
-        /// does nothing.
+        /// Always yes: a no would stop the keyboard sending the delete a
+        /// field the store could not be read for still needs. A delete with
+        /// nothing there does nothing.
         #[unsafe(method(hasText))]
         fn has_text(&self) -> bool {
             true
@@ -208,17 +206,18 @@ define_class!(
         #[unsafe(method(insertText:))]
         fn insert_text(&self, text: &NSString) {
             os_entry("FluiTextInputView insertText:", (), AfterPanic::Answer(|()| ()), || {
-                let units = utf16(text);
-                let edit = self.ivars().document.borrow_mut().insert(&units);
-                self.announce("insertText:", Some(edit));
+                if self.client().type_text(text.to_string()) == Typed::Return {
+                    self.press(NamedKey::Enter, Code::Enter);
+                }
             });
         }
 
+        /// A Backspace press: the field deletes the grapheme cluster before
+        /// its caret, or its selection, as it does for a hardware key.
         #[unsafe(method(deleteBackward))]
         fn delete_backward(&self) {
             os_entry("FluiTextInputView deleteBackward", (), AfterPanic::Answer(|()| ()), || {
-                let edit = self.ivars().document.borrow_mut().delete_backward();
-                self.announce("deleteBackward", Some(edit));
+                self.press(NamedKey::Backspace, Code::Backspace);
             });
         }
     }
@@ -227,26 +226,24 @@ define_class!(
         #[unsafe(method_id(textInRange:))]
         fn text_in_range(&self, range: &UITextRange) -> Option<Retained<NSString>> {
             os_entry("FluiTextInputView textInRange:", (), AfterPanic::Answer(|()| None), || {
-                let range = ours(range)?;
-                let document = self.ivars().document.borrow();
-                Some(NSString::from_str(&String::from_utf16_lossy(document.text_in(range))))
+                let (text, _) = self.client().substring(ours(range)?)?;
+                Some(NSString::from_str(&text))
             })
         }
 
         #[unsafe(method(replaceRange:withText:))]
         fn replace_range(&self, range: &UITextRange, text: &NSString) {
             os_entry("FluiTextInputView replaceRange:withText:", (), AfterPanic::Answer(|()| ()), || {
-                let Some(range) = ours(range) else { return };
-                let units = utf16(text);
-                let edit = self.ivars().document.borrow_mut().replace(range, &units);
-                self.announce("replaceRange:withText:", edit);
+                if let Some(range) = ours(range) {
+                    self.client().replace(range, text.to_string());
+                }
             });
         }
 
         #[unsafe(method_id(selectedTextRange))]
         fn selected_text_range(&self) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView selectedTextRange", (), AfterPanic::Answer(|()| None), || {
-                let selection = self.ivars().document.borrow().selection();
+                let selection = self.client().selected_range()?;
                 Some(Retained::into_super(TextRange::new(self.mtm(), selection)))
             })
         }
@@ -255,7 +252,7 @@ define_class!(
         fn set_selected_text_range(&self, range: Option<&UITextRange>) {
             os_entry("FluiTextInputView setSelectedTextRange:", (), AfterPanic::Answer(|()| ()), || {
                 if let Some(range) = range.and_then(ours) {
-                    self.ivars().document.borrow_mut().select(range);
+                    self.client().select(range);
                 }
             });
         }
@@ -263,7 +260,7 @@ define_class!(
         #[unsafe(method_id(markedTextRange))]
         fn marked_text_range(&self) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView markedTextRange", (), AfterPanic::Answer(|()| None), || {
-                let marked = self.ivars().document.borrow().marked()?;
+                let marked = self.client().marked_range()?;
                 Some(Retained::into_super(TextRange::new(self.mtm(), marked)))
             })
         }
@@ -276,23 +273,23 @@ define_class!(
         #[unsafe(method(setMarkedTextStyle:))]
         fn set_marked_text_style(&self, _style: Option<&NSDictionary<NSAttributedStringKey, objc2::runtime::AnyObject>>) {}
 
+        /// The marked text replaces the composition, else the selection;
+        /// `selected` is the selection within it.
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text(&self, marked: Option<&NSString>, selected: NSRange) {
             os_entry("FluiTextInputView setMarkedText:selectedRange:", (), AfterPanic::Answer(|()| ()), || {
-                let units = marked.map(utf16).unwrap_or_default();
+                let text = marked.map(NSString::to_string).unwrap_or_default();
                 let end = selected.location.saturating_add(selected.length);
                 let selected = Utf16Range::try_new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
                     .expect("BUG: a saturating end is never before its start");
-                let edit = self.ivars().document.borrow_mut().set_marked(&units, selected);
-                self.announce("setMarkedText:selectedRange:", Some(edit));
+                self.client().set_marked_text(text, selected, None);
             });
         }
 
         #[unsafe(method(unmarkText))]
         fn unmark_text(&self) {
             os_entry("FluiTextInputView unmarkText", (), AfterPanic::Answer(|()| ()), || {
-                let edit = self.ivars().document.borrow_mut().unmark();
-                self.announce("unmarkText", edit);
+                self.client().unmark_text();
             });
         }
 
@@ -306,15 +303,14 @@ define_class!(
         #[unsafe(method_id(endOfDocument))]
         fn end_of_document(&self) -> Retained<UITextPosition> {
             os_entry("FluiTextInputView endOfDocument", (), AfterPanic::Abort, || {
-                let end = self.ivars().document.borrow().end();
-                Retained::into_super(TextPosition::new(self.mtm(), end))
+                Retained::into_super(TextPosition::new(self.mtm(), self.end()))
             })
         }
 
         #[unsafe(method_id(textRangeFromPosition:toPosition:))]
         fn text_range_from_position(&self, from: &UITextPosition, to: &UITextPosition) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView textRangeFromPosition:toPosition:", (), AfterPanic::Answer(|()| None), || {
-                let range = self.ivars().document.borrow().range(offset(from)?, offset(to)?);
+                let range = self.range(offset(from)?, offset(to)?);
                 Some(Retained::into_super(TextRange::new(self.mtm(), range)))
             })
         }
@@ -359,7 +355,7 @@ define_class!(
         #[unsafe(method_id(inputDelegate))]
         fn input_delegate(&self) -> Option<Retained<ProtocolObject<dyn UITextInputDelegate>>> {
             os_entry("FluiTextInputView inputDelegate", (), AfterPanic::Answer(|()| None), || {
-                self.ivars().input_delegate.borrow().as_ref().and_then(ObjcWeak::load)
+                self.delegate()
             })
         }
 
@@ -404,11 +400,11 @@ define_class!(
             })
         }
 
+
         #[unsafe(method_id(characterRangeByExtendingPosition:inDirection:))]
         fn character_range_by_extending(&self, position: &UITextPosition, direction: UITextLayoutDirection) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView characterRangeByExtendingPosition:inDirection:", (), AfterPanic::Answer(|()| None), || {
-                let at = offset(position)?;
-                let range = self.ivars().document.borrow().extend(at, backward(direction));
+                let range = self.extended(offset(position)?, backward(direction));
                 Some(Retained::into_super(TextRange::new(self.mtm(), range)))
             })
         }
@@ -421,17 +417,20 @@ define_class!(
         #[unsafe(method(setBaseWritingDirection:forRange:))]
         fn set_base_writing_direction(&self, _direction: NSWritingDirection, _range: &UITextRange) {}
 
+        /// The range's first line, from the field's layout: where the
+        /// candidate bar and the dictation marker go.
         #[unsafe(method(firstRectForRange:))]
-        fn first_rect_for_range(&self, _range: &UITextRange) -> CGRect {
+        fn first_rect_for_range(&self, range: &UITextRange) -> CGRect {
             os_entry("FluiTextInputView firstRectForRange:", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
-                self.ivars().caret.get()
+                self.rect(ours(range))
             })
         }
 
         #[unsafe(method(caretRectForPosition:))]
-        fn caret_rect_for_position(&self, _position: &UITextPosition) -> CGRect {
+        fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             os_entry("FluiTextInputView caretRectForPosition:", (), AfterPanic::Answer(|()| CGRect::ZERO), || {
-                self.ivars().caret.get()
+                let at = offset(position).map(|at| self.range(at, at));
+                self.rect(at)
             })
         }
 
@@ -441,124 +440,206 @@ define_class!(
         }
 
         #[unsafe(method_id(closestPositionToPoint:))]
-        fn closest_position_to_point(&self, _point: CGPoint) -> Option<Retained<UITextPosition>> {
+        fn closest_position_to_point(&self, point: CGPoint) -> Option<Retained<UITextPosition>> {
             os_entry("FluiTextInputView closestPositionToPoint:", (), AfterPanic::Answer(|()| None), || {
-                let caret = self.ivars().document.borrow().selection().end();
-                Some(Retained::into_super(TextPosition::new(self.mtm(), caret)))
+                let at = self.client().character_index(Point::new(point.x, point.y))?;
+                Some(Retained::into_super(TextPosition::new(self.mtm(), at)))
             })
         }
 
         #[unsafe(method_id(closestPositionToPoint:withinRange:))]
-        fn closest_position_within_range(&self, _point: CGPoint, range: &UITextRange) -> Option<Retained<UITextPosition>> {
+        fn closest_position_within_range(&self, point: CGPoint, range: &UITextRange) -> Option<Retained<UITextPosition>> {
             os_entry("FluiTextInputView closestPositionToPoint:withinRange:", (), AfterPanic::Answer(|()| None), || {
-                let end = ours(range)?.end();
-                Some(Retained::into_super(TextPosition::new(self.mtm(), end)))
+                let range = ours(range)?;
+                let at = self
+                    .client()
+                    .character_index(Point::new(point.x, point.y))
+                    .unwrap_or(range.end())
+                    .clamp(range.start(), range.end());
+                Some(Retained::into_super(TextPosition::new(self.mtm(), at)))
             })
         }
 
         #[unsafe(method_id(characterRangeAtPoint:))]
-        fn character_range_at_point(&self, _point: CGPoint) -> Option<Retained<UITextRange>> {
-            None
+        fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
+            os_entry("FluiTextInputView characterRangeAtPoint:", (), AfterPanic::Answer(|()| None), || {
+                let at = self.client().character_index(Point::new(point.x, point.y))?;
+                Some(Retained::into_super(TextRange::new(self.mtm(), self.extended(at, false))))
+            })
         }
     }
 );
 
 impl TextInputView {
-    /// A responder that tells `delivery`'s window what the keyboard types.
+    /// A responder serving the field the window's store host focuses, which
+    /// tells `delivery`'s window the Return and Backspace presses.
     pub(super) fn new(mtm: MainThreadMarker, delivery: Weak<WindowDelivery>) -> Retained<Self> {
+        let client = TextClient::new();
         let this = Self::alloc(mtm).set_ivars(ResponderIvars {
-            document: RefCell::new(Composition::default()),
+            client: Rc::clone(&client),
             delivery,
-            caret: Cell::new(CGRect::ZERO),
             traits: Cell::new(KeyboardTraits::DEFAULT),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
         });
         // SAFETY: UIView's designated initializer, on a fresh allocation.
-        unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] }
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] };
+        // The context holds the view weakly: the view holds the client.
+        client.bind(Rc::new(ResponderContext {
+            view: ObjcWeak::from_retained(&this),
+        }));
+        this
     }
 
-    /// The focused field's caret moved to `caret`, in the window's logical
-    /// points.
-    pub(super) fn set_caret(&self, caret: CGRect) {
-        self.ivars().caret.set(caret);
+    /// The window's store host: the client serving the focused field.
+    pub(super) fn client(&self) -> &Rc<TextClient> {
+        &self.ivars().client
     }
 
-    /// The focused field's status: the traits the keyboard reads. UIKit
-    /// reads them only as the view becomes first responder, so a keyboard
-    /// already up is told to read them again; one that is down reads them
-    /// when the field takes it.
-    pub(super) fn set_field_status(&self, status: TextStoreStatus) {
-        let traits = keyboard_traits(status);
-        if self.ivars().traits.replace(traits) != traits && self.isFirstResponder() {
-            self.reloadInputViews();
-        }
-    }
-
-    /// A field took the keyboard or gave it back, or composition was turned
-    /// off: the document empties, and a composition in progress ends
-    /// uncommitted. The keyboard is told the text changed under it, as UIKit
-    /// asks of a change it did not make.
-    pub(super) fn reset(&self) {
-        let delegate = self
-            .ivars()
+    fn delegate(&self) -> Option<Retained<ProtocolObject<dyn UITextInputDelegate>>> {
+        self.ivars()
             .input_delegate
             .borrow()
             .as_ref()
-            .and_then(ObjcWeak::load);
-        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
-        if let Some(delegate) = &delegate {
-            delegate.textWillChange(Some(input));
-        }
-        let edit = self.ivars().document.borrow_mut().reset();
-        if let Some(delegate) = &delegate {
-            delegate.textDidChange(Some(input));
-        }
-        self.announce("reset", edit);
+            .and_then(ObjcWeak::load)
+    }
+
+    /// The end of the focused field's document; its start when no field has
+    /// focus or the store cannot be read now.
+    fn end(&self) -> Utf16Offset {
+        self.client().document_len().unwrap_or(Utf16Offset::ZERO)
+    }
+
+    /// The range between `a` and `b`, in order and inside the document.
+    fn range(&self, a: Utf16Offset, b: Utf16Offset) -> Utf16Range {
+        let end = self.end();
+        let (a, b) = (a.min(end), b.min(end));
+        Utf16Range::try_new(a.min(b), a.max(b)).expect("BUG: min and max are ordered")
     }
 
     /// The position `by` units from `from`, if it lies in the document.
     fn moved(&self, from: Utf16Offset, by: NSInteger) -> Option<Retained<UITextPosition>> {
         let to = Utf16Offset::new(from.get().checked_add_signed(by)?);
-        (to <= self.ivars().document.borrow().end())
-            .then(|| Retained::into_super(TextPosition::new(self.mtm(), to)))
+        (to <= self.end()).then(|| Retained::into_super(TextPosition::new(self.mtm(), to)))
     }
 
-    /// Tell the window what `edit` means for the focused field, then ask for
-    /// a frame. The document is not borrowed: the field's code runs here.
-    fn announce(&self, method: &'static str, edit: Option<Edit>) {
-        let (marked, selection) = {
-            let document = self.ivars().document.borrow();
-            (document.marked(), document.selection())
+    /// The unit before `at` (`backward`) or after it, inside the document;
+    /// empty at its end.
+    fn extended(&self, at: Utf16Offset, backward: bool) -> Utf16Range {
+        let other = if backward {
+            Utf16Offset::new(at.get().saturating_sub(1))
+        } else {
+            Utf16Offset::new(at.get().saturating_add(1))
         };
-        // In the message, not as fields: the system log shows a message but
-        // redacts the fields of an app's entry.
-        tracing::debug!(
-            target: LOG,
-            "keyboard edit: {method} {edit:?} marked={marked:?} selection={selection:?}"
-        );
-        let Some(edit) = edit else { return };
+        self.range(at, other)
+    }
+
+    /// The rectangle of `range`'s first line in this view's points, from the
+    /// field's layout; empty where no field has focus or its layout has none.
+    fn rect(&self, range: Option<Utf16Range>) -> CGRect {
+        let Some((bounds, _)) = range.and_then(|range| self.client().first_rect(Some(range)))
+        else {
+            return CGRect::ZERO;
+        };
+        let Bounds { origin, size } = bounds;
+        CGRect::new(
+            CGPoint::new(origin.x, origin.y),
+            CGSize::new(size.width, size.height),
+        )
+    }
+
+    /// A press and release of `key`, told to the window as a hardware key
+    /// would be, then a frame asked for.
+    fn press(&self, key: NamedKey, code: Code) {
+        tracing::debug!(target: LOG, "keyboard key: {key:?}");
         let Some(delivery) = self.ivars().delivery.upgrade() else {
             return;
         };
-        for announcement in edit.announcements() {
-            match announcement {
-                Announcement::Ime(event) => {
-                    delivery.dispatch_input(PlatformInput::Ime(event));
-                }
-                Announcement::Backspace => {
-                    for state in [KeyState::Down, KeyState::Up] {
-                        delivery.dispatch_input(PlatformInput::Keyboard(KeyEvent::new(
-                            state,
-                            Key::Named(NamedKey::Backspace),
-                            Code::Backspace,
-                            EventTime::from_nanos(crate::input::event_timestamp_ns()),
-                        )));
-                    }
-                }
-            }
+        for state in [KeyState::Down, KeyState::Up] {
+            delivery.dispatch_input(PlatformInput::Keyboard(KeyEvent::new(
+                state,
+                Key::Named(key),
+                code,
+                EventTime::from_nanos(crate::input::event_timestamp_ns()),
+            )));
         }
         delivery.dispatch_request_frame();
+    }
+
+    /// The keyboard serves `status`'s field: its traits, re-read by a
+    /// keyboard already up; the keyboard comes up for a field and goes down
+    /// without one.
+    fn serve(&self, status: Option<TextStoreStatus>) {
+        let Some(status) = status else {
+            if self.isFirstResponder() {
+                self.resignFirstResponder();
+            }
+            return;
+        };
+        let traits = keyboard_traits(status);
+        let changed = self.ivars().traits.replace(traits) != traits;
+        if !self.isFirstResponder() {
+            self.becomeFirstResponder();
+        } else if changed {
+            self.reloadInputViews();
+        }
+    }
+
+    /// Tell the keyboard the document changed under it, which it did not
+    /// do: it drops its marked text and reads the field again.
+    fn text_changed_under_keyboard(&self) {
+        let delegate = self.delegate();
+        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
+        if let Some(delegate) = &delegate {
+            delegate.textWillChange(Some(input));
+            delegate.textDidChange(Some(input));
+        }
+    }
+
+    /// Tell the keyboard the selection moved under it.
+    fn selection_changed_under_keyboard(&self) {
+        let delegate = self.delegate();
+        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
+        if let Some(delegate) = &delegate {
+            delegate.selectionWillChange(Some(input));
+            delegate.selectionDidChange(Some(input));
+        }
+    }
+}
+
+/// The keyboard as the window's [`TextClient`] reaches it, through the
+/// responder.
+struct ResponderContext {
+    /// The responder, held weakly: it holds the client, which holds this.
+    view: ObjcWeak<TextInputView>,
+}
+
+impl InputContext for ResponderContext {
+    /// UIKit has no call that drops the keyboard's marked text alone: told
+    /// the text changed under it, it drops it.
+    fn discard_marked_text(&self) {
+        if let Some(view) = self.view.load() {
+            view.text_changed_under_keyboard();
+        }
+    }
+
+    /// UIKit asks `firstRectForRange:` each time it places the candidate
+    /// bar, and keeps no rectangle to invalidate.
+    fn invalidate_character_coordinates(&self) {}
+
+    fn field_changed(&self, status: Option<TextStoreStatus>) {
+        if let Some(view) = self.view.load() {
+            view.serve(status);
+        }
+    }
+
+    fn document_changed(&self, change: DocumentChange) {
+        if let Some(view) = self.view.load() {
+            match change {
+                DocumentChange::Text => view.text_changed_under_keyboard(),
+                DocumentChange::Selection => view.selection_changed_under_keyboard(),
+            }
+        }
     }
 }
 
@@ -577,8 +658,4 @@ fn offset(position: &UITextPosition) -> Option<Utf16Offset> {
 /// Whether `direction` runs toward the document's start.
 fn backward(direction: UITextLayoutDirection) -> bool {
     direction == UITextLayoutDirection::Left || direction == UITextLayoutDirection::Up
-}
-
-fn utf16(text: &NSString) -> Vec<u16> {
-    text.to_string().encode_utf16().collect()
 }

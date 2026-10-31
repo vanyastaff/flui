@@ -12,15 +12,25 @@ use flui_platform::text_store::{
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
-use super::{InputContext, TextClient};
+use super::super::secure_input::SecureHold;
+use super::{DocumentChange, InputContext, TextClient, Typed};
 
-/// AppKit's input context as the client reaches it: the calls it got, and
-/// what the input method does when told to discard its marked text.
+/// The input method's context as the client reaches it: the calls it got,
+/// what the input method does when told to discard its marked text, and
+/// macOS's secure event input, held through [`SecureHold`] as the AppKit
+/// context holds it.
 #[derive(Default)]
 struct Context {
     discards: Cell<usize>,
     invalidations: Cell<usize>,
     on_discard: RefCell<Option<Box<dyn Fn()>>>,
+    /// Each status the client told, in order.
+    statuses: RefCell<Vec<Option<TextStoreStatus>>>,
+    /// Each application change the client told, in order.
+    changes: RefCell<Vec<DocumentChange>>,
+    /// What the input method does when told of an application change.
+    on_change: RefCell<Option<Box<dyn Fn()>>>,
+    secure: SecureHold,
     /// The holds on secure event input the client has taken and not given
     /// back.
     secure_holds: Cell<isize>,
@@ -43,18 +53,26 @@ impl InputContext for Context {
         self.invalidations.set(self.invalidations.get() + 1);
     }
 
-    fn set_secure_input(&self, secure: bool) -> bool {
-        if self.refuse_secure.replace(false) {
-            return false;
-        }
-        let holds = self.secure_holds.get() + if secure { 1 } else { -1 };
-        assert!(holds >= 0, "a hold was given back that was never taken");
-        self.secure_holds.set(holds);
-        true
+    fn field_changed(&self, status: Option<TextStoreStatus>) {
+        self.statuses.borrow_mut().push(status);
+        let wanted = status.is_some_and(|status| status.protected) && !self.resigned.get();
+        self.secure.sync(wanted, |secure| {
+            if self.refuse_secure.replace(false) {
+                return false;
+            }
+            let holds = self.secure_holds.get() + if secure { 1 } else { -1 };
+            assert!(holds >= 0, "a hold was given back that was never taken");
+            self.secure_holds.set(holds);
+            true
+        });
     }
 
-    fn is_key_window(&self) -> bool {
-        !self.resigned.get()
+    fn document_changed(&self, change: DocumentChange) {
+        self.changes.borrow_mut().push(change);
+        let answer = self.on_change.borrow_mut().take();
+        if let Some(answer) = answer {
+            answer();
+        }
     }
 }
 
@@ -513,4 +531,149 @@ fn a_focus_moved_by_a_status_query_is_held_for() {
     );
     client.focus_store(None);
     assert_eq!(context.secure_holds.get(), 0);
+}
+
+/// The input method hears of the application's edits, text and selection
+/// apart, and never of its own: UIKit drops its marked text when told the
+/// document changed under it, so an edit it made itself must not be told
+/// back.
+#[test]
+fn the_input_method_hears_the_applications_edits_and_not_its_own() {
+    let store = InMemoryTextStore::new("ab");
+    store.app_select(caret(2));
+    let (client, context) = serving(&store);
+
+    client.set_marked_text("か".to_owned(), span(1, 1), None);
+    client.insert_text("漢".to_owned(), None);
+    client.replace(span(0, 1), "A".to_owned());
+    client.select(span(1, 1));
+    client.unmark_text();
+    assert_eq!(store.text(), "Ab漢");
+    assert_eq!(
+        *context.changes.borrow(),
+        [],
+        "the input method's own edits are not told back"
+    );
+
+    store.app_replace(span(0, 1), "x");
+    assert_eq!(
+        context.changes.borrow().first(),
+        Some(&DocumentChange::Text),
+        "an application's edit of the text"
+    );
+    let told = context.changes.borrow().len();
+    store.app_select(caret(0));
+    assert_eq!(
+        context.changes.borrow()[told..],
+        [DocumentChange::Selection],
+        "an application's move of the selection alone"
+    );
+
+    client.focus_store(None);
+    let told = context.changes.borrow().len();
+    store.app_replace(span(0, 1), "y");
+    assert_eq!(
+        context.changes.borrow().len(),
+        told,
+        "a field without focus is not the input method's"
+    );
+}
+
+/// An input method that answers an application's edit by editing the field
+/// (UIKit committing its marked text) edits it under that notice, and a
+/// focus move it causes waits for the notice to return.
+#[test]
+fn an_edit_answering_the_applications_notice_lands() {
+    let store = InMemoryTextStore::new("ab");
+    store.app_select(caret(2));
+    let other = InMemoryTextStore::new("");
+    let (client, context) = serving(&store);
+    *context.on_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        move || {
+            client.insert_text("c".to_owned(), None);
+            client.focus_store(Some(Rc::clone(&other)));
+            assert!(
+                client.document_len() == Some(Utf16Offset::new(3)),
+                "focus moves only once the notice returns"
+            );
+        }
+    }));
+    store.app_select(caret(2));
+    assert_eq!(store.text(), "abc");
+    assert_eq!(
+        client.document_len(),
+        Some(Utf16Offset::new(0)),
+        "then it moved"
+    );
+}
+
+/// The field's status reaches the input method as focus, status, binding
+/// and retirement change it; `None` once no field has focus.
+#[test]
+fn the_input_method_is_told_the_fields_status() {
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    let client = TextClient::new();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    client.focus_store(Some(as_store(&password)));
+    password.set_protected(false);
+    client.focus_store(None);
+    client.focus_store(Some(as_store(&password)));
+    client.retire();
+    let told = context
+        .statuses
+        .borrow()
+        .iter()
+        .map(|status| status.map(|status| status.protected))
+        .collect::<Vec<Option<bool>>>();
+    assert_eq!(
+        told,
+        [None, Some(true), Some(false), None, Some(false), None],
+        "bind, focus, status, focus left, focus, retirement"
+    );
+}
+
+/// UIKit's verbs beyond AppKit's: a replacement and a selection clamped to
+/// the document, and the document's length.
+#[test]
+fn uikit_replaces_selects_and_measures_the_field() {
+    let store = InMemoryTextStore::new("teh cat");
+    store.app_select(caret(7));
+    let (client, _context) = serving(&store);
+    assert_eq!(client.document_len(), Some(Utf16Offset::new(7)));
+    client.replace(span(0, 3), "the".to_owned());
+    assert_eq!(store.text(), "the cat");
+    client.replace(span(4, 99), "dog".to_owned());
+    assert_eq!(store.text(), "the dog");
+    client.select(span(4, 99));
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: Utf16Offset::new(4),
+            active: Utf16Offset::new(7),
+        }
+    );
+    client.focus_store(None);
+    assert_eq!(client.document_len(), None, "no field has focus");
+}
+
+/// A lone line break from the keyboard is the Return key, which the field
+/// answers as a press; any other text, a line break inside it included, is
+/// inserted.
+#[test]
+fn a_lone_line_break_is_the_return_key() {
+    let store = InMemoryTextStore::new("");
+    let (client, _context) = serving(&store);
+    for (typed, answer, text) in [
+        ("a", Typed::Inserted, "a"),
+        ("\n", Typed::Return, "a"),
+        ("b\nc", Typed::Inserted, "ab\nc"),
+        ("\n\n", Typed::Inserted, "ab\nc\n\n"),
+    ] {
+        assert_eq!(client.type_text(typed.to_owned()), answer, "{typed:?}");
+        assert_eq!(store.text(), text, "{typed:?}");
+    }
 }

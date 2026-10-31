@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     target_arch = "wasm32",
     test
@@ -23,6 +24,7 @@ use std::rc::Rc;
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     target_arch = "wasm32",
     test
@@ -115,6 +117,7 @@ impl<Op> HostQueue<Op> {
     /// Forget every queued request: the host retired with its window.
     #[cfg(any(
         target_os = "android",
+        target_os = "ios",
         target_os = "macos",
         target_arch = "wasm32",
         test
@@ -129,6 +132,7 @@ impl<Op> HostQueue<Op> {
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     target_arch = "wasm32",
     test
@@ -145,6 +149,7 @@ pub(crate) enum MirrorHostOp {
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     target_arch = "wasm32",
     test

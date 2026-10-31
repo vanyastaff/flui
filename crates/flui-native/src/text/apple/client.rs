@@ -35,7 +35,7 @@ use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     Composition, CompositionEnd, LockGrant, LockTiming, PointMode, Selection, TextChange,
     TextStore, TextStoreEdit, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
-    commit_composition_in_place,
+    TextStoreStatus, commit_composition_in_place,
 };
 
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -44,11 +44,12 @@ use crate::text::host_queue::{HostQueue, MirrorHostOp};
 #[cfg(test)]
 mod tests;
 
-/// What the client asks of AppKit's input context, the view's
-/// `NSTextInputContext`.
+/// What the client asks of the platform's input method: AppKit's
+/// `NSTextInputContext` on macOS, UIKit's keyboard through the responder's
+/// `inputDelegate` on iOS.
 pub(crate) trait InputContext {
-    /// Forget the marked text the context holds (`discardMarkedText`). The
-    /// input method may answer by committing or unmarking it through the
+    /// Forget the marked text the input method holds (`discardMarkedText`).
+    /// The input method may answer by committing or unmarking it through the
     /// client, inside this call.
     fn discard_marked_text(&self);
 
@@ -56,32 +57,50 @@ pub(crate) trait InputContext {
     /// again (`invalidateCharacterCoordinates`).
     fn invalidate_character_coordinates(&self);
 
-    /// Take (`true`) or give back (`false`) one hold on the process's
-    /// secure event input (`EnableSecureEventInput`): while any is held, no
-    /// other process's event tap sees the keys typed. The system counts
-    /// holds, so the client gives back exactly what it took. `false` when the
-    /// system refused, and the client's count stays as it was.
-    fn set_secure_input(&self, secure: bool) -> bool;
+    /// The field the input method serves, by its status, or `None` when no
+    /// field has focus or the client retired. Called on every change that
+    /// can change the answer (focus, the focused field's status, binding,
+    /// retirement, the window's key status) and possibly with the same
+    /// answer again: the context applies only what changed.
+    fn field_changed(&self, status: Option<TextStoreStatus>);
 
-    /// Whether the view's window is the key window, the one the keyboard
-    /// types into (`isKeyWindow`); `false` for a view in no window.
-    fn is_key_window(&self) -> bool;
+    /// The application changed the focused field's document, `change`, which
+    /// the input method did not make: never called for an edit it made
+    /// through the client, which it already knows of. The input method may
+    /// answer through the client, inside this call.
+    fn document_changed(&self, change: DocumentChange);
+}
+
+/// What the application changed of the focused field's document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DocumentChange {
+    /// Its text.
+    Text,
+    /// Its selection alone.
+    Selection,
+}
+
+/// What [`TextClient::type_text`] made of the keyboard's text.
+#[cfg(any(target_os = "ios", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Typed {
+    /// The Return key: the caller sends the field an Enter press.
+    Return,
+    /// The text went into the field.
+    Inserted,
 }
 
 /// One content view's text input: the store it serves and AppKit's context.
 pub(crate) struct TextClient {
     /// The field the input method composes in; `None` when no field has focus.
     focused: RefCell<Option<Rc<dyn TextStore>>>,
-    /// AppKit's input context; `None` until the view binds it and after it
+    /// The input method's context; `None` until the view binds it and after it
     /// retires.
     context: RefCell<Option<Rc<dyn InputContext>>>,
-    /// Whether AppKit's input context holds marked text it set through this
+    /// Whether the input method holds marked text it set through this
     /// client (`setMarkedText:` with text, until a commit, an unmark or a
     /// discard).
     marked: Cell<bool>,
-    /// Whether the client holds secure event input: while a protected field
-    /// has focus and the context is bound.
-    secure: Cell<bool>,
     /// The requests made while the client is inside a call into a store.
     queue: HostQueue<MirrorHostOp>,
     retired: Cell<bool>,
@@ -93,7 +112,6 @@ impl std::fmt::Debug for TextClient {
         f.debug_struct("TextClient")
             .field("focused", &self.focused.borrow().is_some())
             .field("marked", &self.marked.get())
-            .field("secure", &self.secure.get())
             .field("retired", &self.retired.get())
             .finish_non_exhaustive()
     }
@@ -147,32 +165,32 @@ impl TextClient {
             focused: RefCell::new(None),
             context: RefCell::new(None),
             marked: Cell::new(false),
-            secure: Cell::new(false),
             queue: HostQueue::new(),
             retired: Cell::new(false),
             this: this.clone(),
         })
     }
 
-    /// AppKit's input context for this view, once the view exists.
+    /// The input method's context for this view, once the view exists.
     pub(crate) fn bind(&self, context: Rc<dyn InputContext>) {
         if !self.retired.get() {
             *self.context.borrow_mut() = Some(context);
             // A field may have taken focus before the view existed.
-            self.sync_secure_input();
+            self.sync_field();
         }
     }
 
-    /// The view is going away: the focused field is let go and AppKit's
+    /// The view is going away: the focused field is let go and the input method's
     /// context is never reached again. A later call is a no-op.
     pub(crate) fn retire(&self) {
         if self.retired.replace(true) {
             return;
         }
         self.queue.clear();
-        // Retired, the client wants no hold: what it took is given back
-        // while the context is still there to give it back through.
-        self.sync_secure_input();
+        // Retired, the client serves no field: what the context took for
+        // one (a secure input hold, the keyboard) is given back while it is
+        // still there to give it back through.
+        self.sync_field();
         let context = self.context.borrow_mut().take();
         drop(context);
         let store = self.focused.borrow_mut().take();
@@ -212,37 +230,36 @@ impl TextClient {
         }
     }
 
-    /// Hold secure event input exactly while a protected field has focus in
-    /// the key window, as `NSSecureTextField` does: a password typed in FLUI
-    /// reaches no other process's event tap, and another application's
-    /// keyboard utilities work while this one is in the background. Called
-    /// wherever the answer can change: focus, the focused field's status,
-    /// the window's key status, binding and retirement.
-    fn sync_secure_input(&self) {
-        let wanted = {
+    /// Tell the input method which field it serves, by its status: what it
+    /// does with it (a secure keyboard, secure event input, the keyboard's
+    /// traits) follows the field. Called wherever the answer can change:
+    /// focus, the focused field's status, the window's key status, binding
+    /// and retirement.
+    fn sync_field(&self) {
+        let status = {
             // The store's `status` is application code, which may move
             // focus: a request it makes waits in the queue, and the refocus
             // the drain below runs syncs again with the focus it gives.
             let _entered = self.queue.enter();
-            !self.retired.get()
-                && self
-                    .context()
-                    .is_some_and(|context| context.is_key_window())
-                && self.focused().is_some_and(|store| store.status().protected)
+            if self.retired.get() {
+                None
+            } else {
+                self.focused().map(|store| store.status())
+            }
         };
-        if wanted != self.secure.get()
-            && let Some(context) = self.context()
-            && context.set_secure_input(wanted)
-        {
-            self.secure.set(wanted);
+        // The input method's answer may come back into the client: no
+        // borrow is held.
+        if let Some(context) = self.context() {
+            context.field_changed(status);
         }
         self.drain();
     }
 
     /// The view's window became or stopped being the key window: the keys
     /// typed reach this window's field only while it is.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn key_window_changed(&self) {
-        self.sync_secure_input();
+        self.sync_field();
     }
 
     /// Apply the requests queued while the client was inside a store call.
@@ -299,7 +316,7 @@ impl TextClient {
             *self.focused.borrow_mut() = Some(Rc::clone(&store));
             contain_owner_callback(|| store.set_observer(Some(observer)));
         }
-        self.sync_secure_input();
+        self.sync_field();
         self.invalidate_character_coordinates();
     }
 
@@ -348,6 +365,7 @@ impl TextClient {
     // ------------------------------------------------------------------
 
     /// Whether a key press goes to the input method: a field has focus.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn takes_key_presses(&self) -> bool {
         self.focused.borrow().is_some()
     }
@@ -355,6 +373,7 @@ impl TextClient {
     /// Whether a key release still belongs to the keyboard path: `false`
     /// exactly while AppKit's context holds marked text, since the press that
     /// opened the composition went to the input method.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn reports_key_release(&self) -> bool {
         !self.marked.get()
     }
@@ -474,20 +493,84 @@ impl TextClient {
     }
 
     // ------------------------------------------------------------------
+    // UIKit's UITextInput verbs beyond AppKit's
+    // ------------------------------------------------------------------
+
+    /// `replaceRange:withText:` — `text` replaces `range`, clamped to the
+    /// document (an autocorrection, a text shortcut); the composition, if
+    /// any, stays as the store keeps it.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn replace(&self, range: Utf16Range, text: String) {
+        self.edit(move |session| {
+            let range = clamped(range, session.document_len());
+            if let Err(error) = session.replace(range, &text) {
+                tracing::debug!(
+                    ?error,
+                    "an input method replacement did not fit the document"
+                );
+            }
+        });
+    }
+
+    /// `setSelectedTextRange:` — the selection becomes `range`, clamped to
+    /// the document, its active end at `range`'s end.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn select(&self, range: Utf16Range) {
+        self.edit(move |session| {
+            let range = clamped(range, session.document_len());
+            let selection = Selection {
+                anchor: range.start(),
+                active: range.end(),
+            };
+            if let Err(error) = session.set_selection(selection) {
+                tracing::debug!(?error, "the input method's selection was refused");
+            }
+        });
+    }
+
+    /// `endOfDocument` — the document's length in UTF-16 units; `None` when
+    /// no field has focus or the store cannot grant a read now.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn document_len(&self) -> Option<Utf16Offset> {
+        self.read(|session| session.document_len())
+    }
+
+    /// `insertText:` from UIKit's keyboard: a lone line break is the Return
+    /// key, which the field answers as a key press (a single-line field
+    /// submits), as AppKit's `insertNewline:` and TSF send it; any other
+    /// text, a line break inside dictated text included, is inserted as
+    /// [`insert_text`](Self::insert_text) inserts it.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn type_text(&self, text: String) -> Typed {
+        if text == "\n" {
+            return Typed::Return;
+        }
+        self.insert_text(text, None);
+        Typed::Inserted
+    }
+
+    // ------------------------------------------------------------------
     // What the field's store reports
     // ------------------------------------------------------------------
 
-    /// The application changed the field: a composition its edit ended is
-    /// one AppKit's context must forget.
-    fn application_edited(&self) {
-        if !self.marked.get() {
-            return;
+    /// The application changed the field, `change`: a composition its edit
+    /// ended is one the input method must forget, and the input method is
+    /// told of the change, which it did not make.
+    fn application_edited(&self, change: DocumentChange) {
+        if self.marked.get() {
+            let composing = self.read(|session| session.composition().is_some());
+            if composing == Some(false) {
+                self.discard_marked_text();
+            }
         }
-        let composing = self.read(|session| session.composition().is_some());
-        if composing == Some(false) {
-            self.discard_marked_text();
-            self.drain();
+        if let Some(context) = self.context() {
+            // As a call into the focused store: what the input method does
+            // in answer edits the store under it, and a host operation it
+            // causes waits for it to return.
+            let _entered = self.queue.enter();
+            context.document_changed(change);
         }
+        self.drain();
     }
 }
 
@@ -551,13 +634,13 @@ struct ClientObserver {
 impl TextStoreObserver for ClientObserver {
     fn text_changed(&self, _change: TextChange) {
         if let Some(client) = self.client.upgrade() {
-            client.application_edited();
+            client.application_edited(DocumentChange::Text);
         }
     }
 
     fn selection_changed(&self) {
         if let Some(client) = self.client.upgrade() {
-            client.application_edited();
+            client.application_edited(DocumentChange::Selection);
         }
     }
 
@@ -569,7 +652,7 @@ impl TextStoreObserver for ClientObserver {
 
     fn status_changed(&self) {
         if let Some(client) = self.client.upgrade() {
-            client.sync_secure_input();
+            client.sync_field();
         }
     }
 }
