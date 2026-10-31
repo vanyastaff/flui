@@ -190,7 +190,9 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-zbus = { version = "6", default-features = false, features = ["proxy", "tokio"] }
+# D-Bus on its own runtime, not tokio: the features unify, and a capability
+# crate must not reach tokio (ADR-0154 §1). zbus still awaits fine on tokio.
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adopted with the unified execution services,
 # ADR-0047, issue #557). `default-features = false` and no
