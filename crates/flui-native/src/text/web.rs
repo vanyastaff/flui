@@ -848,14 +848,25 @@ mod input {
                     )?);
                 }
             }
-            // The canvas forwards its focus to the field's editor.
+            // The canvas forwards its focus to the field's editor: the hidden
+            // one, or the host's field while the host still names it (the
+            // tree's focus that left it puts the page's focus on the canvas
+            // before the store moves off it).
             {
                 let editor = element.html().clone();
+                let field = (!hidden).then(|| Rc::clone(&self.field));
                 listeners.push(listen(
                     self.canvas.as_ref(),
                     "focus",
                     Box::new(move |_| {
-                        let _ = editor.focus();
+                        let named = field.as_ref().is_none_or(|field| {
+                            field
+                                .named()
+                                .is_some_and(|named| named.is_same_node(Some(editor.as_ref())))
+                        });
+                        if named {
+                            let _ = editor.focus();
+                        }
                     }),
                 )?);
             }

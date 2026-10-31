@@ -1010,6 +1010,37 @@ async fn a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor() {
     canvas.window.close_now();
 }
 
+/// The tree's focus leaving a served field for a node served on the canvas
+/// puts the page's focus on the canvas, and the field the host no longer
+/// names does not take it back: the store is served on the canvas, by its
+/// `EditContext` or, without one, by the hidden editor, which has the focus.
+#[wasm_bindgen_test]
+async fn the_canvas_keeps_the_focus_a_field_left() {
+    for edit_context in [true, false] {
+        let hidden = (!edit_context).then(super::EditContextHidden::hide);
+        let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+        let (canvas, accessibility) = served_form(&store);
+        assert!(field("name").expect("the field").focused);
+        accessibility.publish(form("ab", ROOT));
+        super::wait(0).await;
+        assert!(
+            !field("name").expect("the field stays").focused,
+            "the field left, with EditContext {edit_context}"
+        );
+        if edit_context {
+            assert_eq!(focused(), "canvas");
+            assert_eq!(super::edit_context_text().as_deref(), Some("ab"));
+        } else {
+            assert!(
+                super::editor().is_some_and(|editor| editor.focused),
+                "the hidden editor has the focus"
+            );
+        }
+        canvas.window.close_now();
+        drop(hidden);
+    }
+}
+
 /// The store leaves the field's element when the tree's focus leaves the
 /// field, the field is removed or the window closes: it is served on the
 /// canvas again, the element loses its hints, and what is typed into the
