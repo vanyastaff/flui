@@ -51,7 +51,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::linux::text::TextForm;
-use crate::host::MAX_TEXT;
+use crate::host::{MAX_TEXT, owned_text};
 
 /// How long a transfer may wait for its peer: a whole read, or the next
 /// chunk of an `INCR` write.
@@ -378,11 +378,11 @@ impl Selections {
             }
         }
         if let Some(owned) = &self.owned {
-            let text = Arc::clone(&owned.text);
+            let text = owned_text(&owned.text);
             if self.reading.is_some() {
                 self.retire_destination();
             }
-            self.answer(Ok(Some(text)));
+            self.answer(text);
             return Ok(());
         }
         if self.reading.is_none() {

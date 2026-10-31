@@ -20,7 +20,7 @@ use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::host::{NativeClipboard, host_text};
+use crate::host::{NativeClipboard, host_text, owned_text};
 
 pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,
@@ -103,7 +103,7 @@ impl NativeClipboard for WebClipboard {
 /// What a read the browser did not answer gives: this page's last write, or
 /// `error` when it wrote nothing yet.
 fn fallback_read(fallback: &Mutex<Option<Arc<str>>>, error: ClipboardError) -> ClipboardRead {
-    fallback.lock().clone().map(Some).ok_or(error)
+    fallback.lock().as_ref().map_or(Err(error), owned_text)
 }
 
 /// Why the browser refused a read: a `NotAllowedError` is the user's or the

@@ -47,7 +47,7 @@ use web_time::Instant;
 
 use super::owners::Owners;
 use super::text::TextForm;
-use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection};
+use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 
@@ -317,7 +317,7 @@ impl NativeClipboard for SeatClipboard {
                             .find(|device| device.selection.is_some())
                     });
                 if let Some(owned) = state.owned.read(device.map(|device| &device.seat)) {
-                    return Read::Now(Ok(Some(Arc::clone(&owned.text))));
+                    return Read::Now(owned_text(&owned.text));
                 }
                 let Some((offer, (form, mime))) = device
                     .and_then(|device| device.selection.as_ref())

@@ -27,17 +27,18 @@ pub trait NativeClipboard {
 /// The most bytes of text a clipboard or primary-selection read answers, on
 /// every host: past it the read answers
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
-#[cfg(any(
-    windows,
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios",
-    target_arch = "wasm32",
-    wayland_host,
-    x11_host,
-    feature = "winit-backend"
-))]
 pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
+
+/// What a read answers with `text` the application wrote and the host still
+/// holds: shared, not copied, and refused past [`MAX_TEXT`] bytes as text
+/// from any other client is, so a read's answer never depends on who owns
+/// the clipboard.
+pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
+    if text.len() > MAX_TEXT {
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(Some(Arc::clone(text)))
+}
 
 /// What a read answers with `text` the host handed over whole: refused past
 /// [`MAX_TEXT`] bytes before the shared copy is made, so text a host already
@@ -126,7 +127,7 @@ impl std::fmt::Debug for MemoryClipboard {
 
 impl SyncClipboard for MemoryClipboard {
     fn read_now(&self) -> ClipboardRead {
-        Ok(self.text.lock().clone())
+        self.text.lock().as_ref().map_or(Ok(None), owned_text)
     }
 
     fn write_now(&self, text: String) {
@@ -210,5 +211,26 @@ mod tests {
         );
         let past = "a".repeat(MAX_TEXT + 1);
         assert_eq!(host_text(past), Err(ClipboardError::TooLarge));
+    }
+}
+
+#[cfg(test)]
+mod owned_tests {
+    use flui_platform::ClipboardError;
+
+    use super::{MAX_TEXT, MemoryClipboard, SyncClipboard as _};
+
+    /// Text the application wrote is read back up to the limit and refused
+    /// past it, as text from any other client is.
+    #[test]
+    fn owned_text_is_refused_past_the_limit() {
+        let clipboard = MemoryClipboard::new();
+        clipboard.write_now("a".repeat(MAX_TEXT));
+        assert_eq!(
+            clipboard.read_now().map(|text| text.map(|text| text.len())),
+            Ok(Some(MAX_TEXT))
+        );
+        clipboard.write_now("a".repeat(MAX_TEXT + 1));
+        assert_eq!(clipboard.read_now(), Err(ClipboardError::TooLarge));
     }
 }

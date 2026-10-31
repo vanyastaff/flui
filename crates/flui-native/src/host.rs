@@ -48,6 +48,8 @@ pub(crate) use clipboard::MAX_TEXT;
     feature = "winit-backend"
 ))]
 pub(crate) use clipboard::host_text;
+#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
+pub(crate) use clipboard::owned_text;
 pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 
