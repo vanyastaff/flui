@@ -620,7 +620,7 @@ pub(crate) fn a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size() {
     assert_eq!(dragging_plates, plates + 1, "the drag shows one plate");
     assert!(dragging_sized > sized, "the plate is the row's size");
     // The app rebuilds the list during the drag: the plate keeps its size.
-    shelf.items.update(|items| items[3] = "z".to_owned());
+    shelf.items.update(|items| "z".clone_into(&mut items[3]));
     laid.pump();
     shelf.ring.update(|ring| *ring = true);
     laid.dispatch_pointer_move(row_at(1, HANDLE_X).0, row_at(1, HANDLE_X).1);
