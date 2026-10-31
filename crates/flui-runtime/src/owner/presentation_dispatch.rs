@@ -59,7 +59,7 @@ pub enum WindowObservation {
     /// the window is handed its input regions again (ADR-0217 §5).
     Moved,
     /// The window's insets changed: the safe area, the soft keyboard and its
-    /// motion, or the system-gesture edges (ADR-0276).
+    /// motion, or the system-gesture edges (ADR-0277).
     Insets(WindowInsets),
     /// Normalized system appearance changed.
     Brightness(Brightness),
@@ -298,7 +298,7 @@ impl PendingWindowState {
                         data.view_padding = insets.safe_area();
                         data.system_gesture_insets = insets.system_gestures();
                         // A moving keyboard is sampled by each frame at its
-                        // vsync (ADR-0276 §3); one at rest is its target.
+                        // vsync (ADR-0277 §3); one at rest is its target.
                         let keyboard = insets.keyboard();
                         if keyboard.motion().is_none() {
                             data.view_insets = keyboard.target();

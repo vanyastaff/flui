@@ -481,7 +481,7 @@ impl UiRuntime {
     }
 
     /// Hold `keyboard` as presentation `id`'s soft-keyboard inset: each frame
-    /// samples it at its vsync while it moves (ADR-0276 §3); the window-state
+    /// samples it at its vsync while it moves (ADR-0277 §3); the window-state
     /// operation that holds it asks for the first of those frames. Nothing when
     /// this UI runtime no longer hosts `id`.
     pub(crate) fn hold_keyboard_inset_for(

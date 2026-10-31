@@ -190,7 +190,7 @@ pub struct WindowState {
     /// [`WindowAppearance::Light`].
     pub appearance: WindowAppearance,
     /// Where the content is covered or contested: the safe area, the soft
-    /// keyboard and its motion, and the system-gesture edges (ADR-0276).
+    /// keyboard and its motion, and the system-gesture edges (ADR-0277).
     /// Zero where the platform reports none; whether a window reports the
     /// keyboard and the gesture edges at all is in its
     /// [`capabilities`](Self::capabilities).
