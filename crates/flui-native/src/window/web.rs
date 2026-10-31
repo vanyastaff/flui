@@ -166,7 +166,7 @@ fn sample_state(
         metrics,
         appearance: page_appearance(),
         // The page owns the viewport; the canvas has no safe area of its own.
-        insets: flui_platform::WindowInsets::ZERO.with_keyboard(keyboard_over(canvas)),
+        insets: flui_platform::WindowInsets::ZERO.with_keyboard(keyboard_over(canvas, size.height)),
         execution,
         occluded: hidden,
         hovered,
@@ -185,8 +185,12 @@ fn sample_state(
 /// Firefox). A page zoomed in by a pinch has a smaller
 /// visual viewport with no keyboard, so it reports none; a keyboard that
 /// resizes the layout viewport resizes the canvas instead and covers none of
-/// it.
-fn keyboard_over(canvas: &web_sys::HtmlCanvasElement) -> flui_platform::KeyboardInset {
+/// it. The occlusion is in the logical pixels of a window `logical_height`
+/// tall, whatever transform scales the canvas on screen.
+fn keyboard_over(
+    canvas: &web_sys::HtmlCanvasElement,
+    logical_height: f64,
+) -> flui_platform::KeyboardInset {
     let Some(frame) = web_sys::window().and_then(|window| {
         overlaid_keyboard(&window).or_else(|| viewport_keyboard(&window))
     })
@@ -205,6 +209,14 @@ fn keyboard_over(canvas: &web_sys::HtmlCanvasElement) -> flui_platform::Keyboard
             ..frame
         },
     );
+    // The box a transform scales is measured scaled, and the window's size
+    // is not: the occlusion goes out in the window's logical pixels.
+    let scale = logical_height / bounds.height();
+    let target = if scale.is_finite() && scale > 0.0 {
+        flui_foundation::geometry::EdgeInsets::new(0.0, 0.0, target.bottom * scale, 0.0)
+    } else {
+        flui_foundation::geometry::EdgeInsets::ZERO
+    };
     flui_platform::KeyboardInset::try_at_rest(target)
         .unwrap_or(flui_platform::KeyboardInset::HIDDEN)
 }

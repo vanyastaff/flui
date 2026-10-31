@@ -100,6 +100,12 @@ export function scrollCanvasTo(top) {
     canvases[canvases.length - 1].top = top;
     fireWindow('scroll', false);
 }
+// A transform on an ancestor draws the canvas `scale` times its size; the
+// window hears it as the canvas moving.
+export function scaleCanvas(scale) {
+    canvases[canvases.length - 1].scale = scale;
+    fireWindow('scroll', false);
+}
 // The visual viewport shrunk to `height` at `scale`, as a keyboard or a pinch
 // leaves it.
 export function setVisualViewport(height, scale) {
@@ -143,6 +149,8 @@ extern "C" {
     fn move_virtual_keyboard(top: f64);
     #[wasm_bindgen(js_name = scrollCanvasTo)]
     fn scroll_canvas_to(top: f64);
+    #[wasm_bindgen(js_name = scaleCanvas)]
+    fn scale_canvas(scale: f64);
 }
 
 /// The page's window and the handler it was opened with.
@@ -481,6 +489,11 @@ async fn web_window_reads_the_keyboard_from_the_visual_viewport() {
     assert_eq!(keyboard().target().bottom, 120.0);
     scroll_canvas_to(0.0);
     assert_eq!(keyboard().target().bottom, 80.0);
+    // Drawn at half its size, the canvas ends 5 of its on-screen pixels into
+    // the keyboard, which are 10 of the window's.
+    scale_canvas(0.5);
+    assert_eq!(keyboard().target().bottom, 10.0);
+    scale_canvas(1.0);
     set_visual_viewport(150.0, 1.0);
     assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
     remove_keyboard();
