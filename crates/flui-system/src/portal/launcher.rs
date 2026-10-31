@@ -29,35 +29,47 @@ impl PortalLauncher {
     /// Open `path` for the portal, which takes a descriptor rather than a
     /// path, so a sandboxed application hands over only what it can reach.
     ///
-    /// A plain read-only descriptor, not `O_PATH`: the portal refuses
-    /// `O_PATH` from an application kind that has not opted in, a Snap among
-    /// them. `entry` opens the directory entry itself: a symbolic link there
-    /// is refused instead of followed, since the portal acts on the path its
-    /// descriptor resolves to, and trashing a link must not trash its target.
+    /// Never `O_PATH`: the portal refuses it from an application kind that
+    /// has not opted in, a Snap among them. To show a file the descriptor is
+    /// read-only and follows links. To trash one it is the directory entry
+    /// itself, so a symbolic link is refused instead of followed (the portal
+    /// acts on the path its descriptor resolves to, and trashing a link must
+    /// not trash its target), and read-write where the file allows: the
+    /// portal trashes a sandboxed application's file only through a writable
+    /// descriptor. A directory, or a file this process may not write, goes
+    /// read-only, which the portal accepts from an unsandboxed application.
     ///
     /// Non-blocking, since this runs on the caller's thread: opening a named
     /// pipe with no writer would otherwise wait for one. The portal is never
     /// read through the descriptor, so the mode costs nothing.
-    fn open(path: &Path, entry: Entry) -> Result<File, LaunchError> {
-        let flags = libc::O_CLOEXEC
-            | libc::O_NONBLOCK
-            | match entry {
-                Entry::FollowLinks => 0,
-                Entry::Itself => libc::O_NOFOLLOW,
-            };
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(flags)
-            .open(path)
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::NotFound => LaunchError::NotFound,
-                io::ErrorKind::PermissionDenied => LaunchError::Denied,
-                // `O_NOFOLLOW` met a symbolic link.
-                _ if error.raw_os_error() == Some(libc::ELOOP) => LaunchError::Denied,
-                _ => LaunchError::Failed {
-                    code: error.raw_os_error().unwrap_or(0),
-                },
-            })
+    fn open(path: &Path, purpose: Purpose) -> Result<File, LaunchError> {
+        let open = |write: bool, follow: bool| {
+            let flags =
+                libc::O_CLOEXEC | libc::O_NONBLOCK | if follow { 0 } else { libc::O_NOFOLLOW };
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(write)
+                .custom_flags(flags)
+                .open(path)
+        };
+        let opened = match purpose {
+            Purpose::Show => open(false, true),
+            Purpose::Trash => open(true, false).or_else(|error| match error.raw_os_error() {
+                Some(libc::EISDIR | libc::EACCES | libc::EPERM | libc::EROFS | libc::ETXTBSY) => {
+                    open(false, false)
+                }
+                _ => Err(error),
+            }),
+        };
+        opened.map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => LaunchError::NotFound,
+            io::ErrorKind::PermissionDenied => LaunchError::Denied,
+            // `O_NOFOLLOW` met a symbolic link.
+            _ if error.raw_os_error() == Some(libc::ELOOP) => LaunchError::Denied,
+            _ => LaunchError::Failed {
+                code: error.raw_os_error().unwrap_or(0),
+            },
+        })
     }
 
     /// Ask an `OpenURI` method that answers through a `Request`.
@@ -103,7 +115,7 @@ impl PortalLauncher {
 
     fn ask_with_file(&self, method: &'static str, path: PathBuf, answer: Resolver<LaunchResult>) {
         self.ask_open_uri(method, answer, move |token| {
-            let file = Self::open(&path, Entry::FollowLinks)?;
+            let file = Self::open(&path, Purpose::Show)?;
             Ok(OpenUriBody::File((
                 String::new(),
                 zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
@@ -148,7 +160,7 @@ impl LauncherBackend for PortalLauncher {
     }
 
     fn trash_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        let file = Self::open(&path, Entry::Itself).and_then(|file| {
+        let file = Self::open(&path, Purpose::Trash).and_then(|file| {
             self.portal.start().map_err(launch_error)?;
             Ok(zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)))
         });
@@ -185,12 +197,11 @@ impl LauncherBackend for PortalLauncher {
     }
 }
 
-/// Which file a path names for the portal.
+/// What a descriptor handed to the portal is for.
 #[derive(Clone, Copy)]
-enum Entry {
-    /// What a symbolic link points to: opening or revealing a link shows
-    /// its target.
-    FollowLinks,
-    /// The directory entry itself; a symbolic link is refused.
-    Itself,
+enum Purpose {
+    /// Opening or revealing: a symbolic link shows its target.
+    Show,
+    /// Trashing: the directory entry itself; a symbolic link is refused.
+    Trash,
 }

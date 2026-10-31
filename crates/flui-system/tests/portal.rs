@@ -98,6 +98,9 @@ enum Call {
     },
     Trash {
         path: PathBuf,
+        /// Whether the descriptor is open for writing, which the portal
+        /// requires of a sandboxed application.
+        writable: bool,
     },
     Open {
         parent: String,
@@ -183,6 +186,18 @@ impl Script {
     }
 }
 
+fn fd_writable(fd: &OwnedFd) -> bool {
+    // The access mode is the low two bits of `fdinfo`'s octal `flags`.
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
+        .expect("the fd has its info");
+    let flags = info
+        .lines()
+        .find_map(|line| line.strip_prefix("flags:"))
+        .map(|flags| u32::from_str_radix(flags.trim(), 8).expect("octal flags"))
+        .expect("fdinfo names the flags");
+    flags & 0o3 == 0o2
+}
+
 fn fd_path(fd: &OwnedFd) -> PathBuf {
     std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd())).expect("the fd names a file")
 }
@@ -236,7 +251,10 @@ struct Trash(Arc<Script>);
 #[zbus::interface(name = "org.freedesktop.portal.Trash")]
 impl Trash {
     fn trash_file(&self, fd: OwnedFd) -> u32 {
-        self.0.record(Call::Trash { path: fd_path(&fd) });
+        self.0.record(Call::Trash {
+            path: fd_path(&fd),
+            writable: fd_writable(&fd),
+        });
         *self.0.trashed.lock().expect("trashed")
     }
 }
@@ -458,6 +476,13 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
     );
     let _ = std::fs::remove_file(&link);
 
+    // A file goes to the portal writable, as a sandboxed application's
+    // trashing needs; a directory cannot open so and goes read-only.
+    let folder = file.with_extension("folder");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir(&folder).expect("a folder");
+    assert_eq!(settle(&mut host, launcher.trash_path(&folder)), Ok(Ok(())));
+
     let canonical = file.canonicalize().expect("the file exists");
     assert_eq!(
         portal.calls(),
@@ -476,11 +501,20 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
             },
             Call::Trash {
                 path: canonical.clone(),
+                writable: true,
             },
-            Call::Trash { path: canonical },
+            Call::Trash {
+                path: canonical,
+                writable: true,
+            },
+            Call::Trash {
+                path: folder.canonicalize().expect("the folder exists"),
+                writable: false,
+            },
         ]
     );
     let _ = std::fs::remove_file(file);
+    let _ = std::fs::remove_dir(folder);
 }
 
 #[test]
