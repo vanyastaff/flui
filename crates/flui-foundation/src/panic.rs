@@ -116,15 +116,16 @@ impl FirstPanic {
     }
 
     /// The held payload, for a caller that cannot raise it (a native callback
-    /// boundary) and reports it instead.
+    /// boundary) and reports it instead. Dropping a `FirstPanic` destroys a
+    /// held payload under containment ([`discard_payload`]).
     #[must_use]
-    pub fn into_payload(self) -> Option<Box<dyn Any + Send>> {
-        self.0
+    pub fn into_payload(mut self) -> Option<Box<dyn Any + Send>> {
+        self.0.take()
     }
 
     /// Raise the held panic, if there is one.
-    pub fn resume(self) {
-        if let Some(payload) = self.0 {
+    pub fn resume(mut self) {
+        if let Some(payload) = self.0.take() {
             std::panic::resume_unwind(payload);
         }
     }
@@ -197,7 +198,7 @@ pub enum FailureClass {
 }
 
 /// The first local annotation and independently accumulated publication restriction.
-/// Dropping this receipt drops its payload.
+/// Dropping this receipt destroys its payload under containment ([`discard_payload`]).
 /// It cannot resume a payload held under an enclosing owner's earlier failure.
 #[doc(hidden)]
 pub struct RecoveryFailure {
@@ -245,6 +246,30 @@ impl std::fmt::Debug for RecoveryFailure {
             .field("class", &self.class())
             .field("blocking_class", &self.blocking_class)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for FirstPanic {
+    fn drop(&mut self) {
+        if let Some(payload) = self.0.take() {
+            discard_payload(payload);
+        }
+    }
+}
+
+impl Drop for RecoveryFailure {
+    fn drop(&mut self) {
+        if let Some(captured) = self.captured.take() {
+            discard_payload(captured.into_parts().0);
+        }
+    }
+}
+
+impl Drop for PanicRecovery {
+    fn drop(&mut self) {
+        if let Some(captured) = self.first.take() {
+            discard_payload(captured.into_parts().0);
+        }
     }
 }
 
