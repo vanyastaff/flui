@@ -10,10 +10,10 @@
 
 use std::{fmt, rc::Rc};
 
-use flui_platform::ClipboardRead;
 use flui_platform::capability::{
     Capability, Completion, CompletionSource, ProviderContext, Resolver,
 };
+use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
 
 use super::shared_read::SharedRead;
 
@@ -44,8 +44,14 @@ pub trait ClipboardBackend: 'static {
     /// and shares its answer with every reader that asked meanwhile.
     fn read_text(&self, answer: Resolver<ClipboardRead>);
 
-    /// Replace the clipboard's text.
-    fn write_text(&self, text: String);
+    /// Replace the clipboard's text with `write`'s, kept out of the
+    /// clipboard's history and cloud sync when it is
+    /// [`concealed`](ClipboardWrite::concealed) as far as
+    /// [`concealment`](Self::concealment) says (ADR-0152 §6).
+    fn write(&self, write: ClipboardWrite);
+
+    /// What this host does with a concealed write. Constant for a backend.
+    fn concealment(&self) -> Concealment;
 }
 
 /// Widget-facing plain-text clipboard for one presentation.
@@ -75,10 +81,26 @@ impl ClipboardHandle {
         }
     }
 
-    /// Replace the clipboard's text.
-    pub fn write_text(&self, text: impl Into<String>) {
+    /// Replace the clipboard's text with `write`'s; a
+    /// [`concealed`](ClipboardWrite::concealed) write is kept out of the
+    /// clipboard's history and cloud sync as far as
+    /// [`concealment`](Self::concealment) says (ADR-0152 §6).
+    pub fn write(&self, write: ClipboardWrite) {
         self.reads.0.changed();
-        self.backend.write_text(text.into());
+        self.backend.write(write);
+    }
+
+    /// Replace the clipboard's text: `write(ClipboardWrite::text(text))`.
+    pub fn write_text(&self, text: impl Into<String>) {
+        self.write(ClipboardWrite::text(text));
+    }
+
+    /// What this host does with a [`concealed`](ClipboardWrite::concealed)
+    /// write, so an app can tell its user before it copies a secret the host
+    /// can only write as an ordinary entry.
+    #[must_use]
+    pub fn concealment(&self) -> Concealment {
+        self.backend.concealment()
     }
 
     /// Read the clipboard's text: `Ok(None)` when it holds none, an error

@@ -28,6 +28,7 @@ mod cases {
     use std::time::Instant;
 
     use flui_native::Platform as _;
+    use flui_native::testing::clipboard::a_concealed_write_stays_out_of_history;
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use super::wayland_clients::{Client, STEP};
@@ -62,7 +63,8 @@ mod cases {
         client.read(|answer| client.platform.clipboard().read_text(answer))
     }
 
-    /// One client writes and reads its own text back; a second, whose
+    /// One client writes concealed and reads it back, then writes and reads
+    /// its own text back; a second, whose
     /// window takes the keyboard, reads that text from the first through
     /// the compositor and writes its own; once the second's window closes
     /// and the keyboard is back, the first reads the second's text.
@@ -73,6 +75,15 @@ mod cases {
         let screen = session.screen();
         let _focus = (screen.connection, screen.root, screen.origin);
         let first = Client::open("first");
+        // The scenario every host runs: a concealed write pastes back and
+        // stays out of the history (ADR-0152 §6).
+        let clipboard = first.platform.clipboard();
+        assert_eq!(
+            a_concealed_write_stays_out_of_history(&*clipboard, |clipboard| {
+                first.read(|answer| clipboard.read_text(answer))
+            }),
+            Ok(())
+        );
         write(&first, "written by the first");
         assert_eq!(
             read(&first).as_deref(),

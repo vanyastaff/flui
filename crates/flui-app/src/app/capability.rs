@@ -15,7 +15,7 @@ use flui_interaction::{
 use flui_native::{NativeClipboard, NativePrimarySelection};
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use flui_platform::{
-    ClipboardRead, Storage, Unsupported, UnsupportedReason,
+    ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
         Capability, CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
     },
@@ -155,8 +155,12 @@ impl ClipboardBackend for NativeBackend {
         self.0.read_text(answer);
     }
 
-    fn write_text(&self, text: String) {
-        self.0.write_text(text);
+    fn write(&self, write: ClipboardWrite) {
+        self.0.write(write);
+    }
+
+    fn concealment(&self) -> Concealment {
+        self.0.concealment()
     }
 }
 

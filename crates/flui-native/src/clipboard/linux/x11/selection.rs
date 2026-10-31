@@ -34,7 +34,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, capability::Resolver};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use web_time::Instant;
@@ -50,7 +50,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
-use crate::clipboard::linux::text::TextForm;
+use crate::clipboard::linux::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, owned_text};
 
 /// How long a transfer may wait for its peer: a whole read, or the next
@@ -85,8 +85,8 @@ const READ_ORDER: [TextForm; 3] = [TextForm::Utf8String, TextForm::PlainUtf8, Te
 
 /// What the handle asks of the thread.
 pub(super) enum Command {
-    /// Own the selection with this text.
-    Write(String),
+    /// Own the selection with this write.
+    Write(ClipboardWrite),
     /// Answer with the selection's text.
     Read(Resolver<ClipboardRead>),
     /// Let go of everything and end.
@@ -100,6 +100,8 @@ struct Atoms {
     timestamp: xproto::Atom,
     incr: xproto::Atom,
     text: xproto::Atom,
+    /// [`CONCEALED_HINT`], offered with a concealed write's text.
+    concealed_hint: xproto::Atom,
     /// The window's properties a read is converted into, one at a time: a
     /// read that timed out retires its property, so an owner that answers
     /// it late writes where no read looks.
@@ -115,12 +117,13 @@ struct Atoms {
 
 impl Atoms {
     fn intern(connection: &RustConnection) -> Result<Self, ReplyOrIdError> {
-        let names: [&[u8]; 11] = [
+        let names: [&[u8]; 12] = [
             b"CLIPBOARD",
             b"TARGETS",
             b"TIMESTAMP",
             b"INCR",
             b"TEXT",
+            CONCEALED_HINT.as_bytes(),
             b"FLUI_CLIPBOARD_CLOCK",
             b"FLUI_CLIPBOARD_READ_CLOCK",
             b"FLUI_CLIPBOARD_0",
@@ -150,6 +153,7 @@ impl Atoms {
             timestamp,
             incr,
             text,
+            concealed_hint,
             clock,
             read_clock,
             first,
@@ -169,6 +173,7 @@ impl Atoms {
             timestamp,
             incr,
             text,
+            concealed_hint,
             destinations: [first, second, third, fourth],
             clock,
             read_clock,
@@ -200,15 +205,18 @@ impl Atoms {
 struct Owned {
     text: Arc<str>,
     time: xproto::Timestamp,
+    /// Whether the write was concealed: [`CONCEALED_HINT`] is offered too.
+    concealed: bool,
     /// The text's length in ISO 8859-1, counted once: each request for the
     /// form would otherwise scan the whole text again.
     latin1_len: OnceCell<usize>,
 }
 
 impl Owned {
-    fn new(text: String, time: xproto::Timestamp) -> Self {
+    fn new(write: ClipboardWrite, time: xproto::Timestamp) -> Self {
         Self {
-            text: text.into(),
+            concealed: write.is_concealed(),
+            text: write.into_text().into(),
             time,
             latin1_len: OnceCell::new(),
         }
@@ -256,7 +264,7 @@ pub(super) struct Selections {
     atoms: Atoms,
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
-    pending: Option<String>,
+    pending: Option<ClipboardWrite>,
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
@@ -323,8 +331,8 @@ impl Selections {
     /// Carry out `command`; `false` once it asks the thread to end.
     fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
         match command {
-            Command::Write(text) => {
-                self.pending = Some(text);
+            Command::Write(write) => {
+                self.pending = Some(write);
                 self.clocks += 1;
                 // The server stamps the property's change with its time.
                 self.connection.change_property8(
@@ -505,7 +513,7 @@ impl Selections {
         if self.clocks > 0 {
             return Ok(());
         }
-        let Some(text) = self.pending.take() else {
+        let Some(write) = self.pending.take() else {
             return Ok(());
         };
         self.connection
@@ -516,7 +524,7 @@ impl Selections {
             .reply()?
             .owner;
         if owner == self.window {
-            self.owned = Some(Owned::new(text, time));
+            self.owned = Some(Owned::new(write, time));
         } else {
             // A client took it at a later time than ours.
             self.owned = None;
@@ -714,6 +722,9 @@ impl Selections {
         if target == self.atoms.targets {
             let mut targets = vec![self.atoms.targets, self.atoms.timestamp, self.atoms.text];
             targets.extend(self.atoms.forms);
+            if owned.concealed {
+                targets.push(self.atoms.concealed_hint);
+            }
             self.connection.change_property32(
                 PropMode::REPLACE,
                 request.requestor,
@@ -730,6 +741,19 @@ impl Selections {
                 property,
                 AtomEnum::INTEGER,
                 &[owned.time],
+            )?;
+            return Ok(true);
+        }
+        if target == self.atoms.concealed_hint {
+            if !owned.concealed {
+                return Ok(false);
+            }
+            self.connection.change_property8(
+                PropMode::REPLACE,
+                request.requestor,
+                property,
+                self.atoms.concealed_hint,
+                CONCEALED_HINT_VALUE,
             )?;
             return Ok(true);
         }

@@ -35,7 +35,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
+};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
@@ -46,7 +48,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 use web_time::Instant;
 
 use super::owners::Owners;
-use super::text::TextForm;
+use super::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
@@ -362,8 +364,15 @@ impl NativeClipboard for SeatClipboard {
         }
     }
 
-    fn write_text(&self, text: String) {
-        let text: Arc<str> = text.into();
+    /// A concealed write is offered with KDE's password-manager hint, which
+    /// only a clipboard manager that reads it honours.
+    fn concealment(&self) -> Concealment {
+        Concealment::HintOnly
+    }
+
+    fn write(&self, write: ClipboardWrite) {
+        let concealed = write.is_concealed();
+        let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
             let source = last.and_then(|input| {
@@ -378,11 +387,15 @@ impl NativeClipboard for SeatClipboard {
                     SourceData {
                         shared: Arc::downgrade(&self.shared),
                         text: Arc::clone(&text),
+                        concealed,
                         encoded: OwnerCell::new(),
                     },
                 );
                 for form in TextForm::OFFERED {
                     source.offer(form.name().to_owned());
+                }
+                if concealed {
+                    source.offer(CONCEALED_HINT.to_owned());
                 }
                 device.device.set_selection(Some(&source), input.serial);
                 Some((input.seat, source))
@@ -457,6 +470,8 @@ impl OfferData {
 pub(crate) struct SourceData {
     shared: Weak<Shared>,
     text: Arc<str>,
+    /// Whether the write was concealed: [`CONCEALED_HINT`] is offered too.
+    concealed: bool,
     /// The text in each form asked for so far, encoded once and shared by
     /// every `send` of that form; read on the owner thread alone.
     encoded: OwnerCell<Vec<(TextForm, Arc<[u8]>)>>,
@@ -573,10 +588,13 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Send { mime_type, fd } => {
                 // A form the source did not offer is answered with nothing:
                 // dropping the descriptor ends the reader's read.
-                let Some(form) = TextForm::named(&mime_type) else {
-                    return;
+                let bytes = if mime_type == CONCEALED_HINT {
+                    data.concealed
+                        .then(|| Arc::<[u8]>::from(CONCEALED_HINT_VALUE))
+                } else {
+                    TextForm::named(&mime_type).and_then(|form| data.bytes(form))
                 };
-                let (Some(shared), Some(bytes)) = (data.shared.upgrade(), data.bytes(form)) else {
+                let (Some(shared), Some(bytes)) = (data.shared.upgrade(), bytes) else {
                     return;
                 };
                 let Some(permit) = shared.writers.permit() else {
