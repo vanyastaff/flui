@@ -616,6 +616,10 @@ pub enum MenuCause {
     Assistive,
     /// The control revealed while focus is in the row.
     Control,
+    /// A touch selected text: a long press, or a tap on the caret.
+    SelectionTouch,
+    /// A touch let go of a selection handle it dragged.
+    HandleReleased,
 }
 
 /// One request to show a context menu, handed to its [`MenuPresenter`].
@@ -627,6 +631,20 @@ pub struct MenuRequest {
 }
 
 impl MenuRequest {
+    /// A request to show `items`, raised by `cause`, at `position` in root
+    /// coordinates when a pointer raised it.
+    pub(crate) fn new(
+        items: Rc<[MenuItem]>,
+        cause: MenuCause,
+        position: Option<Offset<f64>>,
+    ) -> Self {
+        Self {
+            items,
+            cause,
+            position,
+        }
+    }
+
     /// The items to show, in order.
     #[must_use]
     pub fn items(&self) -> &[MenuItem] {
@@ -665,6 +683,26 @@ pub struct MenuItem {
 }
 
 impl MenuItem {
+    /// An item performing `command` through `chain`, the bindings where the
+    /// widget offering it is mounted.
+    pub(crate) fn new(command: GestureCommand, chain: Option<ActionChain>) -> Self {
+        Self { command, chain }
+    }
+
+    /// Whether choosing the item would perform its command now: unless the
+    /// action bound to its intent is disabled.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.command.is_offered_in(self.chain.as_ref())
+    }
+
+    /// The signal that [`is_enabled`](Self::is_enabled) may have changed,
+    /// when the action bound to the item's intent gives one.
+    #[must_use]
+    pub fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        self.command.offer_changes_in(self.chain.as_ref())
+    }
+
     /// The item's label.
     #[must_use]
     pub fn label(&self) -> &str {

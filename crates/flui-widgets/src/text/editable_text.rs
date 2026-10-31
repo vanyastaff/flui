@@ -51,7 +51,7 @@ use crate::text::primary_selection::PrimarySelectionOwner;
 use crate::text::selection_area::handles::Look;
 use crate::text::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
-use crate::{DefaultSelectionHandles, DotHandles, SelectionHandles};
+use crate::{DefaultSelectionControls, DotHandles, SelectionHandles};
 
 mod clipboard;
 mod cursor_area;
@@ -574,7 +574,7 @@ impl EditableText {
     }
 
     /// Build the touch handles with `handles`, in place of the nearest
-    /// [`DefaultSelectionHandles`]' or [`DotHandles`] in the opaque active
+    /// [`DefaultSelectionControls`]' or [`DotHandles`] in the opaque active
     /// selection colour, as a [`SelectionArea`](crate::SelectionArea) does.
     ///
     /// A touch selection (a long press, which the same touch extends by
@@ -589,7 +589,7 @@ impl EditableText {
     }
 
     /// Whether a tap shows a handle under the caret, in place of the
-    /// nearest [`DefaultSelectionHandles`]' choice or the platform's
+    /// nearest [`DefaultSelectionControls`]' choice or the platform's
     /// ([`CaretHandle::default`]).
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
@@ -2227,7 +2227,7 @@ impl ViewState<EditableText> for EditableTextState {
         let look = view
             .handles
             .clone()
-            .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
+            .or_else(|| DefaultSelectionControls::handles_of(ctx))
             .map_or_else(
                 || {
                     Look::Dots(DotHandles::new(
@@ -2238,7 +2238,7 @@ impl ViewState<EditableText> for EditableTextState {
             );
         let caret_handle = view
             .caret_handle
-            .or_else(|| DefaultSelectionHandles::caret_handle_of(ctx))
+            .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
         let touch_handles = Rc::clone(&self.touch_handles);

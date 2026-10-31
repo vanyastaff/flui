@@ -1,5 +1,5 @@
-//! Touch handles: what they look like ([`SelectionHandles`], [`DotHandles`],
-//! [`DefaultSelectionHandles`]) and how a [`SelectionArea`](super::SelectionArea)
+//! Touch handles: what they look like ([`SelectionHandles`], [`DotHandles`])
+//! and how a [`SelectionArea`](super::SelectionArea)
 //! shows them, in its nearest [`Overlay`](crate::Overlay), each pinned under one end of the
 //! selection by a layer link the paragraph holding that end publishes.
 
@@ -21,14 +21,13 @@ use flui_rendering::pipeline::LeaderWatch;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, Child, InheritedView, RenderView, View, ViewExt, impl_inherited_view,
+    BoxedView, Child, RenderView, View, ViewExt,
     impl_render_view,
 };
 
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
-use crate::text::editable_text::CaretHandle;
 use crate::{Container, Positioned, Stack};
 
 /// Which end of a selection a handle moves, in reading order.
@@ -101,80 +100,11 @@ impl SelectionHandles for DotHandles {
     }
 }
 
-/// Sets the [`SelectionHandles`] of the selection areas and editable texts
-/// beneath it that set none of their own, and when a tap in those texts
-/// shows a caret handle.
-#[derive(Clone)]
-pub struct DefaultSelectionHandles {
-    handles: Rc<dyn SelectionHandles>,
-    caret_handle: Option<CaretHandle>,
-    child: BoxedView,
-}
-
-impl std::fmt::Debug for DefaultSelectionHandles {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DefaultSelectionHandles")
-            .field("caret_handle", &self.caret_handle)
-            .field("child", &self.child)
-            .finish_non_exhaustive()
-    }
-}
-
-impl DefaultSelectionHandles {
-    /// `handles` for the areas and fields in `child`.
-    pub fn new(handles: impl SelectionHandles, child: impl IntoView) -> Self {
-        Self {
-            handles: Rc::new(handles),
-            caret_handle: None,
-            child: child.into_view().boxed(),
-        }
-    }
-
-    /// Also set when a tap in an editable text beneath shows a caret
-    /// handle, in place of the platform's ([`CaretHandle::default`]).
-    #[must_use]
-    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
-        self.caret_handle = Some(caret_handle);
-        self
-    }
-
-    /// The handles the nearest `DefaultSelectionHandles` above `ctx` sets,
-    /// registering a dependency on it.
-    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<dyn SelectionHandles>> {
-        ctx.depend_on::<Self, _>(|scope| Rc::clone(&scope.handles))
-    }
-
-    /// The caret handle the nearest `DefaultSelectionHandles` above `ctx`
-    /// sets, if it sets one, registering a dependency on it.
-    pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
-        ctx.depend_on::<Self, _>(|scope| scope.caret_handle)
-            .flatten()
-    }
-}
-
-impl InheritedView for DefaultSelectionHandles {
-    type Data = Rc<dyn SelectionHandles>;
-
-    fn data(&self) -> &Self::Data {
-        &self.handles
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
-    fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.handles, &old.handles) || self.caret_handle != old.caret_handle
-    }
-}
-
-impl_inherited_view!(DefaultSelectionHandles);
-
 /// What an area's handles look like: handles it was given, its own or a
 /// default's, else dots in its active colour.
 #[derive(Clone)]
 pub(crate) enum Look {
-    /// Handles given to the area or to a `DefaultSelectionHandles` above it.
+    /// Handles given to the area or to a `DefaultSelectionControls` above it.
     Given(Rc<dyn SelectionHandles>),
     /// The dots an area without given handles draws.
     Dots(DotHandles),

@@ -177,6 +177,7 @@ pub use async_builders::{
 };
 pub use container::Container;
 pub use context_menu::{ContextMenuArea, ContextMenuAreaState};
+pub use popup_menu::PlainSelectionMenu;
 pub use controls::{
     ActivityArc, ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState,
     ExpansionState, Slider, SliderState,
@@ -315,11 +316,12 @@ pub use swipe::{
     SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };
 pub use text::{
-    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionHandles, DefaultSelectionStyle,
+    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
     RawTextField, RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea,
     SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
-    SelectionHandles, SelectionInput, SelectionStyle, SubmitCallback, Text, TextEditingController,
+    SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
+    PopupOrigin, SelectionStyle, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
@@ -415,7 +417,7 @@ pub mod prelude {
         ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
         ContentShape, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
         CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
-        DefaultFocusTraversalState, DefaultSelectionHandles, DefaultSelectionStyle,
+        DefaultFocusTraversalState, DefaultSelectionControls, DefaultSelectionStyle,
         DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
         DotHandles, DragSlot, Draggable, DropTarget, EditableText, EditableTextState, ExcludeFocus,
         ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible,

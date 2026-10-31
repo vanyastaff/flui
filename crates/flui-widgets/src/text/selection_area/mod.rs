@@ -45,9 +45,7 @@ use flui_view::{
 };
 
 pub use self::controller::{SelectError, SelectionController};
-pub use self::handles::{
-    DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectionHandles,
-};
+pub use self::handles::{DotHandles, HandleInfo, HandleSide, SelectionHandles};
 use self::handles::{HandleState, Look};
 use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
 use super::primary_selection::PrimarySelectionOwner;
@@ -58,7 +56,7 @@ use crate::interaction::{
     Actions, CopySelectionTextIntent, DismissIntent, Focus, SelectAllTextIntent,
 };
 use crate::support::RefCallback;
-use crate::{Overlay, Semantics};
+use crate::{DefaultSelectionControls, Overlay, Semantics};
 
 /// What a [`SelectionArea`] holds selected, in reading order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +138,7 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
 /// moves its end, and the handles follow the ends as the text scrolls. A
 /// tap, Esc or a selection by mouse hides them. They look like
 /// [`handles`](Self::handles) sets, else the nearest
-/// [`DefaultSelectionHandles`], else [`DotHandles`] in the opaque active
+/// [`DefaultSelectionControls`], else [`DotHandles`] in the opaque active
 /// highlight colour. Without an overlay there are no handles, and a debug
 /// build says so.
 ///
@@ -192,7 +190,7 @@ impl SelectionArea {
     }
 
     /// Build the touch handles with `handles`, in place of the nearest
-    /// [`DefaultSelectionHandles`]' or [`DotHandles`] in the opaque active
+    /// [`DefaultSelectionControls`]' or [`DotHandles`] in the opaque active
     /// highlight colour.
     #[must_use]
     pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
@@ -376,7 +374,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         let look = view
             .handles
             .clone()
-            .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
+            .or_else(|| DefaultSelectionControls::handles_of(ctx))
             .map_or_else(
                 || Look::Dots(DotHandles::new(style.active.with_alpha(255))),
                 Look::Given,
