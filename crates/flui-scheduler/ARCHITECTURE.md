@@ -893,6 +893,19 @@ During an existing unwind the values are retained instead, the same limit
 eager-poll retirement and foreign-owner rejection without consuming frame demand;
 `frame_waker_wakes_the_ui_runtime_from_a_worker` in `flui-runtime`.
 
+### Owner-local tasks sleep on the scheduler's clock
+
+**Rule:** a task waits for time through `AsyncDriver::timer`'s `Sleep`, whose deadline lives in
+the same task store and reads the clock the `UpdateScheduler` was built with (ADR-0275). Every
+poll of ready tasks first fires the deadlines already due, one at a time with the borrow
+released before each wake, so the woken tasks run in that batch. `OwnerFrame::next_deadline`
+is the earliest armed one; `UiRuntime::next_wake` folds it in. Retirement closes the deadlines
+with the tasks and drops their wakers unwoken.
+
+**Tests:** `a_sleep_resolves_at_its_deadline_on_the_runtime_clock`,
+`a_dropped_sleep_disarms_only_its_deadline` and
+`a_sleep_outliving_its_owner_stays_pending_without_a_waker` in `tests/timer.rs`.
+
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one
 
 **Rule:** the task-poll step of `OwnerFrame::pump_background` scales with **ready** work (`R`),

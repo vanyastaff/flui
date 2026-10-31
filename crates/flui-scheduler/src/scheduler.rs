@@ -1739,6 +1739,11 @@ impl UpdateScheduler {
     // Background wakes
     // =========================================================================
 
+    /// The clock this scheduler reads time from.
+    pub(crate) fn clock_source(&self) -> ClockSource {
+        self.inner.frame.clock.clone()
+    }
+
     /// Clears the `frame_scheduled` latch for a wake that will call
     /// [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready) WITHOUT a surrounding
     /// [`handle_begin_frame`](Self::handle_begin_frame) — the frames-disabled

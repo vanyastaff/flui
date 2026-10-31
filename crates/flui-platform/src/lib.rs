@@ -118,6 +118,7 @@ mod display;
 pub mod drag;
 mod environment;
 mod event_time;
+pub mod executor;
 mod flag_set;
 mod frame_request;
 mod haptic_feedback;
