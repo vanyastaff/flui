@@ -7,9 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use accesskit::{Node, NodeId, TreeId, TreeUpdate};
+use accesskit::{Action, Node, NodeId, Role, TextPosition, TextSelection, TreeId, TreeUpdate};
 
 use super::aria::{self, ElementIds, ElementSpec, ParentFrame};
+use super::selection::{self, Run};
 
 /// One change the DOM must make, in the order given.
 #[derive(Debug, PartialEq)]
@@ -37,6 +38,11 @@ pub(crate) enum Op {
     Remove(NodeId),
     /// The tree's focus moved to `id`.
     Focus(NodeId),
+    /// The page's selection is to show this one, published by static text
+    /// that publishes runs, or none: the text it was in is gone or holds no
+    /// selection now. Also asked when such text is written again, which
+    /// drops the page's selection in it.
+    Select(Option<TextSelection>),
 }
 
 /// Why an update was not applied; the mirror is unchanged and the
@@ -64,6 +70,9 @@ pub(crate) struct Mirror {
     nodes: HashMap<NodeId, Entry>,
     root: Option<NodeId>,
     focus: Option<NodeId>,
+    /// The node whose published selection the page shows, and that
+    /// selection.
+    selection: Option<(NodeId, TextSelection)>,
     ids: ElementIds,
 }
 
@@ -74,6 +83,7 @@ impl Mirror {
             nodes: HashMap::new(),
             root: None,
             focus: None,
+            selection: None,
             ids,
         }
     }
@@ -119,7 +129,15 @@ impl Mirror {
         let mut structure_changed = self.root != Some(root);
         let mut placement_changed: HashSet<NodeId> = HashSet::new();
         let mut children_changed: Vec<NodeId> = Vec::new();
+        let mut selected: Vec<(NodeId, Option<TextSelection>)> = Vec::new();
         for (id, node) in update.nodes {
+            let previous = self
+                .nodes
+                .get(&id)
+                .and_then(|entry| entry.node.text_selection());
+            if node.text_selection() != previous && !aria::takes_text(&node) {
+                selected.push((id, node.text_selection().copied()));
+            }
             if let Some(entry) = self.nodes.get_mut(&id) {
                 if entry.node.children() != node.children() {
                     children_changed.push(id);
@@ -200,10 +218,18 @@ impl Mirror {
                 dirty.extend(entry.node.children().iter().copied());
             }
         }
+        // A paragraph's text is its runs'.
+        dirty.extend(
+            sent.iter()
+                .filter_map(|id| self.nodes.get(id))
+                .filter(|entry| entry.node.role() == Role::TextRun)
+                .filter_map(|entry| entry.parent),
+        );
         dirty.sort_unstable();
         dirty.dedup();
+        let mut rewritten = false;
         for id in dirty {
-            self.refresh(id, root, &mut ops);
+            rewritten |= self.refresh(id, root, &mut ops);
         }
 
         children_changed.sort_unstable();
@@ -238,7 +264,129 @@ impl Mirror {
                 ops.push(Op::Focus(focus));
             }
         }
+        self.select(selected, rewritten, &mut ops);
         Ok(ops)
+    }
+
+    /// Follow the selections `selected` names, as (node, published
+    /// selection): the last one published is the page's. The one shown is
+    /// dropped when its node left the tree or published none, and shown
+    /// again when text it may lie in was `rewritten`.
+    fn select(
+        &mut self,
+        selected: Vec<(NodeId, Option<TextSelection>)>,
+        rewritten: bool,
+        ops: &mut Vec<Op>,
+    ) {
+        let before = self.selection.map(|(_, selection)| selection);
+        for (id, selection) in selected {
+            match selection {
+                Some(selection) => self.selection = Some((id, selection)),
+                None if self.selection.is_some_and(|(owner, _)| owner == id) => {
+                    self.selection = None;
+                }
+                None => {}
+            }
+        }
+        if self
+            .selection
+            .is_some_and(|(owner, _)| !self.nodes.contains_key(&owner))
+        {
+            self.selection = None;
+        }
+        let after = self.selection.map(|(_, selection)| selection);
+        if after != before || (rewritten && after.is_some()) {
+            ops.push(Op::Select(after));
+        }
+    }
+
+    /// The selection the page shows, as its node published it.
+    pub(crate) fn selection(&self) -> Option<TextSelection> {
+        self.selection.map(|(_, selection)| selection)
+    }
+
+    /// The runs of `paragraph`, in order, with their ids: its `TextRun`
+    /// children.
+    fn runs(&self, paragraph: NodeId) -> Vec<(NodeId, Run<'_>)> {
+        let Some(entry) = self.nodes.get(&paragraph) else {
+            return Vec::new();
+        };
+        entry
+            .node
+            .children()
+            .iter()
+            .filter_map(|&child| {
+                let node = &self.nodes.get(&child)?.node;
+                (node.role() == Role::TextRun).then(|| {
+                    (
+                        child,
+                        Run {
+                            text: node.value().unwrap_or_default(),
+                            lengths: node.character_lengths(),
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The text of static text that publishes runs: the runs' text joined,
+    /// so that the page's offsets in its element are the runs'. `None` for
+    /// any other node.
+    fn run_text(&self, id: NodeId) -> Option<String> {
+        let node = &self.nodes.get(&id)?.node;
+        if node.role() != Role::Label {
+            return None;
+        }
+        let runs = self.runs(id);
+        (!runs.is_empty()).then(|| runs.iter().map(|(_, run)| run.text).collect())
+    }
+
+    /// The position in `paragraph`'s runs of UTF-16 `offset` into its
+    /// element's text; see [`selection::position_at`].
+    pub(crate) fn text_position(&self, paragraph: NodeId, offset: u32) -> Option<TextPosition> {
+        self.run_text(paragraph)?;
+        let runs = self.runs(paragraph);
+        let texts: Vec<Run<'_>> = runs.iter().map(|&(_, run)| run).collect();
+        let (run, character_index) = selection::position_at(&texts, offset)?;
+        Some(TextPosition {
+            node: runs[run].0,
+            character_index,
+        })
+    }
+
+    /// Where `position` lies in the page: its run's paragraph and the
+    /// UTF-16 offset into the paragraph element's text.
+    pub(crate) fn dom_position(&self, position: TextPosition) -> Option<(NodeId, u32)> {
+        let paragraph = self.nodes.get(&position.node)?.parent?;
+        self.run_text(paragraph)?;
+        let runs = self.runs(paragraph);
+        let run = runs.iter().position(|&(id, _)| id == position.node)?;
+        let texts: Vec<Run<'_>> = runs.iter().map(|&(_, run)| run).collect();
+        let offset = selection::offset_of(&texts, run, position.character_index)?;
+        Some((paragraph, offset))
+    }
+
+    /// The node a selection from `anchor`'s text to `focus`'s is asked of:
+    /// the nearest node over both that takes `SetTextSelection`, the
+    /// paragraph itself when both ends are in it.
+    pub(crate) fn selection_target(&self, anchor: NodeId, focus: NodeId) -> Option<NodeId> {
+        let ancestors = |mut id: NodeId| {
+            let mut chain = vec![id];
+            while let Some(parent) = self.nodes.get(&id).and_then(|entry| entry.parent) {
+                chain.push(parent);
+                id = parent;
+            }
+            chain
+        };
+        let over_focus: HashSet<NodeId> = ancestors(focus).into_iter().collect();
+        ancestors(anchor).into_iter().find(|id| {
+            over_focus.contains(id)
+                && self
+                    .nodes
+                    .get(id)
+                    .is_some_and(|entry| entry.node.supports_action(Action::SetTextSelection))
+        })
     }
 
     /// Every child named by the update, and the root, is either sent or
@@ -275,37 +423,56 @@ impl Mirror {
         reachable
     }
 
-    /// Bring `id`'s spec up to date and say what changed.
-    fn refresh(&mut self, id: NodeId, root: NodeId, ops: &mut Vec<Op>) {
+    /// Bring `id`'s spec up to date and say what changed. Answers whether
+    /// the text of static text that publishes runs was written, which drops
+    /// the page's selection in it.
+    fn refresh(&mut self, id: NodeId, root: NodeId, ops: &mut Vec<Op>) -> bool {
         let Some(entry) = self.nodes.get(&id) else {
-            return;
+            return false;
         };
         if !aria::is_mirrored(&entry.node) {
-            return;
+            return false;
         }
         let frame = entry
             .parent
             .and_then(|parent| self.nodes.get(&parent))
             .map_or_else(ParentFrame::default, |parent| ParentFrame::of(&parent.node));
-        let spec = aria::describe(id, &entry.node, frame, id == root, &self.ids);
+        let mut spec = aria::describe(id, &entry.node, frame, id == root, &self.ids);
+        let run_text = self.run_text(id);
+        let runs = run_text.is_some();
+        if runs {
+            spec.text = run_text;
+        }
         let entry = self
             .nodes
             .get_mut(&id)
             .expect("BUG: refreshed node is mirrored");
         match entry.spec.replace(spec.clone()) {
-            None => ops.push(Op::Create { id, spec }),
+            None => {
+                ops.push(Op::Create { id, spec });
+                runs
+            }
             // A node that is mirrored as another element now (a link given a
             // URL, a slider made read-only) gets a new one in its place.
-            Some(old) if old.tag != spec.tag => ops.push(Op::Replace { id, spec }),
-            Some(old) if old != spec => ops.push(Op::Update { id, old, new: spec }),
-            Some(_) => {}
+            Some(old) if old.tag != spec.tag => {
+                ops.push(Op::Replace { id, spec });
+                runs
+            }
+            Some(old) if old != spec => {
+                let written = runs && old.text != spec.text;
+                ops.push(Op::Update { id, old, new: spec });
+                written
+            }
+            Some(_) => false,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Action, Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
+    use accesskit::{
+        Action, Node, NodeId, Rect, Role, TextPosition, TextSelection, TreeId, TreeInfo, TreeUpdate,
+    };
 
     use super::{ElementIds, Mirror, Op, Refused};
 
@@ -368,6 +535,7 @@ mod tests {
                 Op::Root(id) => format!("root {}", id.0),
                 Op::Remove(id) => format!("remove {}", id.0),
                 Op::Focus(id) => format!("focus {}", id.0),
+                Op::Select(selection) => format!("select {selection:?}"),
             })
             .collect()
     }
@@ -642,5 +810,141 @@ mod tests {
                 "focus 1"
             ]
         );
+    }
+
+    const AREA: NodeId = NodeId(20);
+    const FIRST: NodeId = NodeId(21);
+    const SECOND: NodeId = NodeId(22);
+    const FIRST_RUN: NodeId = NodeId(31);
+    const SECOND_RUN: NodeId = NodeId(32);
+    const THIRD_RUN: NodeId = NodeId(33);
+
+    fn run(text: &str) -> Node {
+        let mut node = Node::new(Role::TextRun);
+        node.set_value(text);
+        let lengths: Vec<u8> = text
+            .chars()
+            .map(|character| u8::try_from(character.len_utf8()).expect("one character"))
+            .collect();
+        node.set_character_lengths(lengths);
+        node
+    }
+
+    fn paragraph(value: &str, runs: &[NodeId]) -> Node {
+        let mut node = Node::new(Role::Label);
+        node.set_value(value);
+        node.set_children(runs.to_vec());
+        node.add_action(Action::SetTextSelection);
+        node
+    }
+
+    fn area(selection: Option<TextSelection>) -> Node {
+        let mut node = Node::new(Role::Document);
+        node.set_children(vec![FIRST, SECOND]);
+        node.add_action(Action::SetTextSelection);
+        if let Some(selection) = selection {
+            node.set_text_selection(selection);
+        }
+        node
+    }
+
+    fn at(node: NodeId, character_index: usize) -> TextPosition {
+        TextPosition {
+            node,
+            character_index,
+        }
+    }
+
+    fn document(selection: Option<TextSelection>) -> TreeUpdate {
+        full(
+            vec![
+                (ROOT, root(&[AREA])),
+                (AREA, area(selection)),
+                (
+                    FIRST,
+                    paragraph("Greeting\nHi 😀 there", &[FIRST_RUN, SECOND_RUN]),
+                ),
+                (SECOND, paragraph("Bye", &[THIRD_RUN])),
+                (FIRST_RUN, run("Hi 😀")),
+                (SECOND_RUN, run(" there")),
+                (THIRD_RUN, run("Bye")),
+            ],
+            ROOT,
+        )
+    }
+
+    /// Static text that publishes runs shows the runs' text, and the page's
+    /// offsets in it are positions in the runs: an emoji is one character of
+    /// two offsets, and one run's end is the next one's start.
+    #[test]
+    fn a_paragraph_s_text_is_its_runs_and_its_offsets_their_positions() {
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror.apply(document(None)).expect("a document");
+        assert_eq!(
+            mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
+            Some("Hi 😀 there"),
+            "the runs' text, not the label joined to it"
+        );
+        let rows = [
+            (3, at(FIRST_RUN, 3)),
+            (4, at(FIRST_RUN, 3)),
+            (5, at(SECOND_RUN, 0)),
+            (11, at(SECOND_RUN, 6)),
+        ];
+        for (offset, position) in rows {
+            assert_eq!(
+                mirror.text_position(FIRST, offset),
+                Some(position),
+                "offset {offset}"
+            );
+        }
+        assert_eq!(mirror.text_position(FIRST, 12), None, "past the end");
+        assert_eq!(mirror.text_position(AREA, 0), None, "the area has no runs");
+        assert_eq!(mirror.dom_position(at(FIRST_RUN, 4)), Some((FIRST, 5)));
+        assert_eq!(mirror.dom_position(at(SECOND_RUN, 1)), Some((FIRST, 6)));
+        assert_eq!(mirror.dom_position(at(THIRD_RUN, 3)), Some((SECOND, 3)));
+        assert_eq!(mirror.dom_position(at(THIRD_RUN, 4)), None);
+        assert_eq!(mirror.selection_target(FIRST, FIRST), Some(FIRST));
+        assert_eq!(mirror.selection_target(FIRST, SECOND), Some(AREA));
+    }
+
+    /// The page shows the selection static text last published, again when
+    /// the text it lies in is written, and none once it is cleared or its
+    /// node goes.
+    #[test]
+    fn the_page_shows_the_published_selection() {
+        let across = TextSelection {
+            anchor: at(FIRST_RUN, 1),
+            focus: at(THIRD_RUN, 2),
+        };
+        let select = |selection: Option<TextSelection>| format!("select {selection:?}");
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        let ops = mirror.apply(document(Some(across))).expect("a document");
+        assert_eq!(kinds(&ops).last(), Some(&select(Some(across))));
+        let ops = mirror
+            .apply(partial(vec![(AREA, area(Some(across)))], ROOT))
+            .expect("the same selection");
+        assert_eq!(kinds(&ops), Vec::<String>::new(), "published already");
+        let ops = mirror
+            .apply(partial(vec![(THIRD_RUN, run("Bye!"))], ROOT))
+            .expect("a run's text changes");
+        assert_eq!(
+            kinds(&ops),
+            vec!["update 22".to_owned(), select(Some(across))],
+            "the rewritten text drops the page's selection, so it is shown again"
+        );
+        let ops = mirror
+            .apply(partial(vec![(AREA, area(None))], ROOT))
+            .expect("the selection is cleared");
+        assert_eq!(kinds(&ops), vec![select(None)]);
+        assert_eq!(mirror.selection(), None);
+
+        mirror
+            .apply(partial(vec![(AREA, area(Some(across)))], ROOT))
+            .expect("selected again");
+        let ops = mirror
+            .apply(partial(vec![(ROOT, root(&[]))], ROOT))
+            .expect("the area goes");
+        assert_eq!(kinds(&ops).last(), Some(&select(None)));
     }
 }

@@ -316,6 +316,8 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
     # The semantics host's range inputs
     "HtmlInputElement",
+    # The page's selection in the semantics host's static text
+    "Selection",
     # Events
     "Event",
     "EventTarget",

@@ -25,7 +25,9 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use accesskit::{Action, ActionData, ActionRequest, NodeId, TreeId, TreeUpdate};
+use accesskit::{
+    Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId, TreeUpdate,
+};
 use flui_platform::keyboard::KeyState;
 use flui_semantics::AssistiveFocusSupport;
 use flui_semantics::platform::{
@@ -328,6 +330,15 @@ impl Page {
                 this.input_changed(&event);
             }
         })?);
+        // The page has one selection, and tells the document of its changes.
+        let this = self.this.clone();
+        listeners.push(
+            self.listen(self.document.as_ref(), "selectionchange", move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.selection_changed();
+                }
+            })?,
+        );
         // `scroll` does not bubble: the host sees its scrollers' in the
         // capture phase.
         let this = self.this.clone();
@@ -505,9 +516,13 @@ impl Page {
         let focus_was_in_window = self.holds_focus(&host) || self.canvas_focused();
         let mut focus_moved = false;
         let mut scrolled = Vec::new();
+        let mut shown = None;
         {
             let mut tree = self.tree.borrow_mut();
             for op in ops {
+                if let Op::Select(selection) = &op {
+                    shown = Some(*selection);
+                }
                 if matches!(op, Op::Focus(_)) {
                     focus_moved = true;
                 }
@@ -527,6 +542,10 @@ impl Page {
         // Scrolled once placed and shown: a hidden element has no box.
         for (element, scroll) in &scrolled {
             scroll_to(element, scroll);
+        }
+        // Once every element is written: the text it lies in is in place.
+        if let Some(selection) = shown {
+            self.show_selection(selection);
         }
         let field = self.focused_field();
         self.field.name(field.as_ref());
@@ -746,6 +765,99 @@ impl Page {
         }
     }
 
+    /// Show the selection static text published, or none, as the page's
+    /// selection. The page's own selection, in text outside the host, is
+    /// left alone: the host takes the page's selection only while it is
+    /// empty, a caret or already in the host.
+    fn show_selection(&self, selection: Option<TextSelection>) {
+        let Some(host) = self.host_element() else {
+            return;
+        };
+        let Ok(Some(page)) = self.document.get_selection() else {
+            return;
+        };
+        let in_host = selection_in(&page, &host);
+        if !(in_host || page.range_count() == 0 || page.is_collapsed()) {
+            return;
+        }
+        let ends = {
+            let Ok(tree) = self.tree.try_borrow() else {
+                return;
+            };
+            selection.and_then(|selection| {
+                Some((
+                    text_at(&tree, selection.anchor)?,
+                    text_at(&tree, selection.focus)?,
+                ))
+            })
+        };
+        let shown = match ends {
+            Some(((anchor, anchor_offset), (focus, focus_offset))) => {
+                page.set_base_and_extent(&anchor, anchor_offset, &focus, focus_offset)
+            }
+            // A caret elsewhere on the page stays where it is.
+            None if in_host => page.remove_all_ranges(),
+            None => Ok(()),
+        };
+        if let Err(error) = shown {
+            warn_failure("the page's selection could not be set", &error);
+        }
+    }
+
+    /// The page's selection changed, for a screen reader selecting static
+    /// text: a selection with both ends in text that publishes runs is
+    /// asked of the nearest node over both that takes `SetTextSelection`,
+    /// and the page shows the published selection again until the tree
+    /// publishes the new one, so a selection the node refuses leaves
+    /// nothing behind. The published selection itself (the host's own,
+    /// after a publish) asks for nothing.
+    fn selection_changed(&self) {
+        let Some(host) = self.host_element() else {
+            return;
+        };
+        let Ok(Some(page)) = self.document.get_selection() else {
+            return;
+        };
+        let (Some(anchor), Some(focus)) = (
+            text_end(&host, page.anchor_node(), page.anchor_offset()),
+            text_end(&host, page.focus_node(), page.focus_offset()),
+        ) else {
+            return;
+        };
+        let Ok(tree) = self.tree.try_borrow() else {
+            return;
+        };
+        let published = tree.mirror.selection();
+        let published_ends = published.and_then(|selection| {
+            Some((
+                tree.mirror.dom_position(selection.anchor)?,
+                tree.mirror.dom_position(selection.focus)?,
+            ))
+        });
+        if published_ends == Some((anchor, focus)) {
+            return;
+        }
+        let request = (|| {
+            let target = tree.mirror.selection_target(anchor.0, focus.0)?;
+            let selection = TextSelection {
+                anchor: tree.mirror.text_position(anchor.0, anchor.1)?,
+                focus: tree.mirror.text_position(focus.0, focus.1)?,
+            };
+            Some((target, selection))
+        })();
+        drop(tree);
+        let Some((target, selection)) = request else {
+            return;
+        };
+        self.show_selection(published);
+        self.submit(Work::Action(ActionRequest {
+            action: Action::SetTextSelection,
+            target_tree: TreeId::ROOT,
+            target_node: target,
+            data: Some(ActionData::SetTextSelection(selection)),
+        }));
+    }
+
     /// Show what stands beside the canvas only while the canvas is shown,
     /// and put the host over the canvas's drawable box in the viewport, at
     /// the canvas's layout size, which the tree's CSS pixels are in.
@@ -928,6 +1040,36 @@ fn closest(event: &web_sys::Event, selector: &str) -> Option<Element> {
         .and_then(|target| target.closest(selector).ok().flatten())
 }
 
+/// Whether both ends of the page's selection are in `host`.
+fn selection_in(page: &web_sys::Selection, host: &HtmlElement) -> bool {
+    let inside = |node: Option<web_sys::Node>| node.is_some_and(|node| host.contains(Some(&node)));
+    inside(page.anchor_node()) && inside(page.focus_node())
+}
+
+/// The text node `position` lies in and the UTF-16 offset into it: the
+/// text that leads its paragraph's element.
+fn text_at(tree: &Tree, position: TextPosition) -> Option<(web_sys::Node, u32)> {
+    let (paragraph, offset) = tree.mirror.dom_position(position)?;
+    let text = tree
+        .elements
+        .get(&paragraph)?
+        .first_child()
+        .filter(|child| child.node_type() == web_sys::Node::TEXT_NODE)?;
+    Some((text, offset))
+}
+
+/// The paragraph and the UTF-16 offset an end of the page's selection names,
+/// when it lies in the text that leads a mirrored element in `host`.
+fn text_end(host: &HtmlElement, node: Option<web_sys::Node>, offset: u32) -> Option<(NodeId, u32)> {
+    let node = node.filter(|node| node.node_type() == web_sys::Node::TEXT_NODE)?;
+    let element = node.parent_element()?;
+    if !host.contains(Some(&element)) || element.first_child().as_ref() != Some(&node) {
+        return None;
+    }
+    let id = element.get_attribute(NODE_ATTRIBUTE)?.parse::<u64>().ok()?;
+    Some((NodeId(id), offset))
+}
+
 /// The mirrored element `event` happened on, and its node.
 fn event_node(event: &web_sys::Event) -> Option<(NodeId, Element)> {
     let element = closest(event, "[data-flui-node]")?;
@@ -1013,7 +1155,7 @@ fn run(
             }
         }
         // Followed once every other change is made.
-        Op::Focus(_) => {}
+        Op::Focus(_) | Op::Select(_) => {}
     }
     Ok(())
 }
