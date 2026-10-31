@@ -938,10 +938,18 @@ caller asks. Ids on the wire are the tree's own handles (`v3.2`, `r12`); a `root
 `NodeRef` (`p3/v3.2`), which must name this presentation: a reference to another or a closed
 window is `UnknownPresentation` (`unknown_handle`, kind window) and is never looked up here, and
 a handle of another tree is `invalid_argument`. A root that left its tree is `NodeGone`
-(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` answers
-`LayersNotKept` (`not_supported`): the sink takes the scene a frame paints, and the window keeps
-no copy to read between frames. Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
-reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render object or view that panics while the tree is read (`debug_name`, `inspect`) answers `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does; pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
+(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` is read from
+the next scene the window shows: the sink takes the scene a frame paints and the window keeps no
+copy, so the read parks on the presentation (at most 16, then `TreeBusy` with the reason),
+the root render object is marked for paint and a frame is requested. The frame reads the scene before
+the sink takes it and answers once the sink shows it; a scene the surface withholds, retries or
+fails leaves the read parked for the next one, and a reply that panics does not cost the others
+theirs. A window that closes first answers `PresentationGone`.
+Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
+reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render
+object or view that panics while the tree is read (`debug_name`, `inspect`) answers
+`InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
+pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
