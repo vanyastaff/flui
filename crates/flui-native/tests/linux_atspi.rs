@@ -97,11 +97,12 @@ mod cases {
     /// An X server, a session bus and the accessibility bus, which the
     /// process's environment names.
     struct Session {
-        children: Vec<Child>,
         /// The client's connection to the accessibility bus.
         bus: zbus::Connection,
         /// Appended to every text a case listens for.
         nonce: String,
+        /// Stopped before the runtime directory they use is removed.
+        _children: Children,
         _runtime: TempDir,
     }
 
@@ -114,9 +115,13 @@ mod cases {
         }
     }
 
-    impl Drop for Session {
+    /// The programs a session started, killed when dropped, also when the
+    /// session fails to start.
+    struct Children(Vec<Child>);
+
+    impl Drop for Children {
         fn drop(&mut self) {
-            for child in self.children.iter_mut().rev() {
+            for child in self.0.iter_mut().rev() {
                 // Each child leads its own process group, which holds what it
                 // started: the launcher's accessibility bus and the registry
                 // that bus activates outlive a kill of the launcher alone.
@@ -134,6 +139,9 @@ mod cases {
         "/usr/lib/at-spi2-core/at-spi-bus-launcher",
         "/usr/lib/at-spi-bus-launcher",
     ];
+
+    /// The name `at-spi-bus-launcher` holds on the session bus.
+    const BUS_NAME: &str = "org.a11y.Bus";
 
     /// How long a case waits for the bus to answer or an event to arrive.
     const PATIENCE: Duration = Duration::from_secs(10);
@@ -163,22 +171,12 @@ mod cases {
             )
             .expect("the runtime directory is private");
             let runtime = TempDir(runtime);
+            let mut children = Children(Vec::new());
             let (server, display) = x_server();
-            let mut session_bus = Command::new("dbus-daemon")
-                .args(["--session", "--nofork", "--print-address=1"])
-                .arg(format!(
-                    "--address=unix:path={}",
-                    runtime.0.join("bus").display()
-                ))
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .expect("dbus-daemon starts");
-            let mut address = String::new();
-            BufReader::new(session_bus.stdout.take().expect("piped"))
-                .read_line(&mut address)
-                .expect("dbus-daemon prints its address");
+            children.0.push(server);
+            let session_address = format!("unix:path={}", runtime.0.join("bus").display());
+            // Set before the session bus starts, so a program it activates
+            // runs in this session too.
             // SAFETY: no thread has started; nothing reads the environment
             // while it is set.
             #[expect(
@@ -188,10 +186,24 @@ mod cases {
             unsafe {
                 std::env::set_var("DISPLAY", &display);
                 std::env::remove_var("WAYLAND_DISPLAY");
-                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", address.trim());
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &session_address);
                 std::env::remove_var("AT_SPI_BUS_ADDRESS");
                 std::env::set_var("XDG_RUNTIME_DIR", &runtime.0);
             }
+            let session_bus = Command::new("dbus-daemon")
+                .args(["--session", "--nofork", "--print-address=1"])
+                .arg(format!("--address={session_address}"))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .expect("dbus-daemon starts");
+            children.0.push(session_bus);
+            let session_bus = children.0.last_mut().expect("just pushed");
+            // The address is printed once the bus listens.
+            BufReader::new(session_bus.stdout.take().expect("piped"))
+                .read_line(&mut String::new())
+                .expect("dbus-daemon prints its address");
             let launcher = Command::new(launcher)
                 .arg("--launch-immediately")
                 .stdout(Stdio::null())
@@ -199,13 +211,25 @@ mod cases {
                 .process_group(0)
                 .spawn()
                 .expect("at-spi-bus-launcher starts");
+            children.0.push(launcher);
             let bus = block_on(async {
                 let session = zbus::Connection::session()
                     .await
                     .expect("the session bus answers");
+                let names = zbus::fdo::DBusProxy::new(&session)
+                    .await
+                    .expect("org.freedesktop.DBus");
                 let deadline = Instant::now() + PATIENCE;
                 let address = loop {
-                    if let Ok(proxy) = BusProxy::new(&session).await
+                    // Asked only once the launcher holds its name: a call to
+                    // the name before would have the session bus activate a
+                    // second launcher, whose bus replaces this one's socket.
+                    let launched = names
+                        .name_has_owner(BUS_NAME.try_into().expect("a bus name"))
+                        .await
+                        .unwrap_or(false);
+                    if launched
+                        && let Ok(proxy) = BusProxy::new(&session).await
                         && let Ok(address) = proxy.get_address().await
                     {
                         break address;
@@ -233,7 +257,7 @@ mod cases {
                 .expect("the clock is after 1970")
                 .subsec_nanos();
             Some(Self {
-                children: vec![server, session_bus, launcher],
+                _children: children,
                 bus,
                 nonce: format!("{nonce:08x}"),
                 _runtime: runtime,
