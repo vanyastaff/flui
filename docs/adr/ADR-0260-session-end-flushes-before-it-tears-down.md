@@ -14,6 +14,8 @@
   its slot), [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (what a panic on
   this path does), [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the session
   messages' OS entry answers a panic by letting the session end)
+- **Amended:** 2026-10-31 — the teardown it runs also runs each element's unmount hooks, right after
+  its `dispose` ([ADR-0078, amendment 2026-10-31](ADR-0078-rules-live-in-types-and-lints.md#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens)).
 
 ## Context and problem statement
 
