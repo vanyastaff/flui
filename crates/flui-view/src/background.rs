@@ -71,6 +71,16 @@ impl Background {
         }
     }
 
+    /// The lanes themselves, for a crate below this one that runs its own
+    /// work on them and answers through channels of its own, such as
+    /// `flui-assets`' image loads. Work spawned here has none of `compute`'s
+    /// and `io`'s answering at the owner's turn boundaries, cancellation or
+    /// panic capture.
+    #[must_use]
+    pub fn executor(&self) -> &Arc<dyn Executor> {
+        &self.executor
+    }
+
     /// Run `job`, a CPU job (a decode, a large layout, a hash), on the
     /// compute lane.
     ///

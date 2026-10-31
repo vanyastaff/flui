@@ -39,8 +39,8 @@ corresponding feature gates.
 - `image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions` compares
   real file and embedded decoding, rejects malformed embedded data without caching
   it, accepts valid bytes under the same key afterward, and recovers after a missing
-  file. `load_image_bridged_completes_both_the_success_and_the_failure_path` covers
-  the production bridged file path and non-Tokio polling.
+  file. `image_loads_run_on_their_lanes_and_survive_the_requests_that_leave` covers
+  the production file path and polling outside Tokio.
 - `font_sources_preserve_bytes_and_recover_after_load_errors` compares file and
   embedded font bytes, rejects short/invalid data without caching, and exercises
   subsequent success after invalid data and missing files.

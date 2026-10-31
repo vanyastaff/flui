@@ -158,6 +158,7 @@ impl ImageProvider for ControlledProvider {
 
     fn resolve_async(
         &self,
+        _background: Option<&flui_view::background::Background>,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
         Box::pin(ControlledFuture {
@@ -316,7 +317,7 @@ fn reuse_decoded_source(fail_first: bool) {
             assert!(provider.resolve().is_err(), "a new source is cold");
             if fail_first {
                 assert!(
-                    tokio::time::timeout(DECODE_BUDGET, provider.resolve_async())
+                    tokio::time::timeout(DECODE_BUDGET, provider.resolve_async(None))
                         .await
                         .expect("missing source completes")
                         .is_err(),
@@ -325,16 +326,17 @@ fn reuse_decoded_source(fail_first: bool) {
             }
             std::fs::write(&path, include_bytes!("fixtures/tiny.png"))
                 .expect("source fixture writes");
-            let first = tokio::time::timeout(DECODE_BUDGET, provider.resolve_async())
+            let first = tokio::time::timeout(DECODE_BUDGET, provider.resolve_async(None))
                 .await
                 .expect("first decode completes")
                 .expect("available source decodes");
             assert_eq!((first.width(), first.height()), (5, 3));
             std::fs::remove_file(&path).expect("remove source after successful decode");
-            let repeated = tokio::time::timeout(DECODE_BUDGET, provider.clone().resolve_async())
-                .await
-                .expect("cached decode completes")
-                .expect("completed cache hit must not reload the missing source");
+            let repeated =
+                tokio::time::timeout(DECODE_BUDGET, provider.clone().resolve_async(None))
+                    .await
+                    .expect("cached decode completes")
+                    .expect("completed cache hit must not reload the missing source");
             assert_eq!((repeated.width(), repeated.height()), (5, 3));
             assert_eq!(repeated.data(), first.data());
         });
