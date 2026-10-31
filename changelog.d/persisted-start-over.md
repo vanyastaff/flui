@@ -10,6 +10,11 @@
 - `CodecStep::Initial`: a panic in `Document::initial`, contained while a missing file is loaded
   or a fresh start writes the initial value, is reported as `PersistError::Panicked` with it.
 
+### Changed
+
+- `CodecStep` is `#[non_exhaustive]`, so a later step does not break a match on it: a match outside
+  `flui-view` needs a wildcard arm.
+
 ### Security
 
 - On Unix, `FileStore` creates every stored value and every copy aside readable and writable by

@@ -214,6 +214,7 @@ pub enum ReadOnlyReason {
 
 /// Which step of a [`Document`]'s codec ran when it panicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CodecStep {
     /// [`Document::initial`].
     Initial,
