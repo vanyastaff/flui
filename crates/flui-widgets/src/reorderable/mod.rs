@@ -20,7 +20,7 @@
 //! model key the list is given, so a row's element, state and focus follow
 //! its item to the new position.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -361,14 +361,21 @@ struct RowPayload {
     key: Rc<dyn ViewKey>,
 }
 
+/// One running drag of a row: what its preview last said.
+struct RowDrag {
+    key: Rc<dyn ViewKey>,
+    over: Option<usize>,
+    /// Whether a row reported the drag over it since the list last looked:
+    /// the rows answer a move before the list around them does.
+    row_reported: bool,
+}
+
 /// One mounted list, as its rows share it.
 struct Shared {
     view: RefCell<ReorderableList>,
-    /// The row the live drag is over.
-    over: Cell<Option<usize>>,
-    /// Whether a row reported the drag over it since the list last looked:
-    /// the rows answer a move before the list around them does.
-    row_reported: Cell<bool>,
+    /// The drags of this list's rows that run now, one per dragged item:
+    /// two contacts may drag two rows at once, each with its own preview.
+    drags: RefCell<Vec<RowDrag>>,
     writer: RefCell<Option<WriterSource>>,
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
@@ -400,18 +407,62 @@ impl Shared {
         let view = self.view.borrow().clone();
         view.index_of(key)
     }
+    /// Run `change` on the state of the drag of `key`, started if new; the
+    /// cell is released before the caller runs app code.
+    fn with_drag<R>(&self, key: &Rc<dyn ViewKey>, change: impl FnOnce(&mut RowDrag) -> R) -> R {
+        let mut drags = self.drags.borrow_mut();
+        let at = drags
+            .iter()
+            .position(|drag| drag.key.key_eq(&**key))
+            .unwrap_or_else(|| {
+                drags.push(RowDrag {
+                    key: Rc::clone(key),
+                    over: None,
+                    row_reported: false,
+                });
+                drags.len() - 1
+            });
+        change(&mut drags[at])
+    }
 
-    /// A drag of `key` is over `over` now.
-    fn hover(&self, key: &dyn ViewKey, over: Option<usize>) {
-        if self.over.replace(over) == over {
+    /// A drag of `key` is over `over` now; the preview hears of each change,
+    /// per dragged item.
+    fn hover(&self, key: &Rc<dyn ViewKey>, over: Option<usize>) {
+        if !self.with_drag(key, |drag| std::mem::replace(&mut drag.over, over) != over) {
             return;
         }
         let view = self.view.borrow().clone();
-        let (Some(preview), Some(from)) = (view.on_reorder_preview.clone(), view.index_of(key))
+        let (Some(preview), Some(from)) = (view.on_reorder_preview.clone(), view.index_of(&**key))
         else {
             return;
         };
         self.write(|cx| preview(cx, ReorderPreview { from, over }));
+    }
+
+    /// Note that a row answered the drag of `key` in this move.
+    fn row_reported(&self, key: &Rc<dyn ViewKey>) {
+        self.with_drag(key, |drag| drag.row_reported = true);
+    }
+    /// Whether a row answered the drag of `key` since the list last asked.
+    fn take_row_reported(&self, key: &dyn ViewKey) -> bool {
+        self.drags
+            .borrow_mut()
+            .iter_mut()
+            .find(|drag| drag.key.key_eq(key))
+            .is_some_and(|drag| std::mem::take(&mut drag.row_reported))
+    }
+
+    /// Forget any state left from an earlier drag of `key`, telling no one.
+    fn forget(&self, key: &dyn ViewKey) {
+        self.drags.borrow_mut().retain(|drag| !drag.key.key_eq(key));
+    }
+
+    /// The drag of `key` ended: over no row, and forgotten.
+    fn ended(&self, key: &Rc<dyn ViewKey>) {
+        self.hover(key, None);
+        self.drags
+            .borrow_mut()
+            .retain(|drag| !drag.key.key_eq(&**key));
     }
 
     /// Move the item keyed `key` to `to`, and announce its new position;
@@ -462,7 +513,7 @@ pub struct ReorderableListState {
 impl fmt::Debug for ReorderableListState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReorderableListState")
-            .field("over", &self.shared.over.get())
+            .field("drags", &self.shared.drags.borrow().len())
             .finish_non_exhaustive()
     }
 }
@@ -480,8 +531,7 @@ impl StatefulView for ReorderableList {
         ReorderableListState {
             shared: Rc::new(Shared {
                 view: RefCell::new(self.clone()),
-                over: Cell::new(None),
-                row_reported: Cell::new(false),
+                drags: RefCell::new(Vec::new()),
                 writer: RefCell::new(None),
                 announcer: RefCell::new(None),
                 strings: RefCell::new(None),
@@ -546,9 +596,9 @@ impl ViewState<ReorderableList> for ReorderableListState {
             move |drag: &DragView<'_>| {
                 if let Some(payload) = drag.value::<RowPayload>()
                     && Rc::ptr_eq(&payload.list, &between)
-                    && !between.row_reported.replace(false)
+                    && !between.take_row_reported(&*payload.key)
                 {
-                    between.hover(&*payload.key, None);
+                    between.hover(&payload.key, None);
                 }
                 None
             },
@@ -558,8 +608,7 @@ impl ViewState<ReorderableList> for ReorderableListState {
             if let Some(payload) = drag.value::<RowPayload>()
                 && Rc::ptr_eq(&payload.list, &left)
             {
-                left.row_reported.set(false);
-                left.hover(&*payload.key, None);
+                left.hover(&payload.key, None);
             }
         })
     }
@@ -584,7 +633,7 @@ impl HandleSource {
     fn draggable(&self, child: BoxedView, devices: PointerKindSet) -> Draggable {
         let list = Rc::clone(&self.list);
         let key = Rc::clone(&self.key);
-        let started = Rc::clone(&self.list);
+        let (started, started_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
         let (ended, ended_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
         let feedback = self.feedback.clone();
         Draggable::bare(
@@ -599,11 +648,10 @@ impl HandleSource {
         .devices(devices)
         .reach(DragReach::Window)
         .feedback(move || feedback.clone())
-        .on_drag_started(move |_cx| started.over.set(None))
+        .on_drag_started(move |_cx| started.forget(&*started_key))
         // A drag that ends anywhere, dropped or not, is over no row now.
         .on_drag_end(move |_cx, _outcome| {
-            ended.row_reported.set(false);
-            ended.hover(&*ended_key, None);
+            ended.ended(&ended_key);
         })
     }
 
@@ -786,9 +834,9 @@ impl StatelessView for ReorderRow {
                     return None;
                 }
                 // Where the model has this row now, as for the drop.
-                hover.row_reported.set(true);
+                hover.row_reported(&payload.key);
                 if let Some(over) = hover.index_now(&*row) {
-                    hover.hover(&*payload.key, Some(over));
+                    hover.hover(&payload.key, Some(over));
                 }
                 Some(TransferActions::MOVE)
             },
