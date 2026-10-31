@@ -17,23 +17,25 @@
 //! `RenderLeaderLayer` publishes its size), and `flui-engine`'s
 //! `render_layer_recursive` resolves the actual pixel offset against the
 //! already-fully-built `LayerTree`, which indexes that frame's leaders — see
-//! `flui_layer::resolve_follower_offset`.
+//! `flui_layer::resolve_follower_transform`, which takes the leader's full transform
+//! (scale and rotation included) and, under [`LeaderClip::Hide`], hides the
+//! follower while the leader's anchor is clipped out.
 //!
 //! **Hit-testing now consults that same resolved position** (flui-rendering ARCHITECTURE.md, follower hit-testing):
 //! `PipelineOwner` retains a `RenderId`-keyed side table of
-//! composite-resolved follower offsets, populated post-paint by resolving
+//! composite-resolved follower transforms, populated post-paint by resolving
 //! each paint-phase-correlated follower with the identical
-//! `resolve_follower_offset` the GPU path uses. The hit-test walk
+//! `resolve_follower_transform` the GPU path uses. The hit-test walk
 //! (`PipelineOwner::hit_test_subtree_impl`) reads that side table
-//! generically — pushing the resolved translation onto the
-//! `HitTestResult` transform stack and shifting the position handed into
+//! generically — pushing the resolved transform's inverse onto the
+//! `HitTestResult` transform stack and mapping the position handed into
 //! this node's subtree, exactly the way it already does for
 //! `hit_test_transform` results and ordinary child offsets. This node's
 //! own [`RenderBox::hit_test`] body below stays a plain structural
 //! forward — the resolved-position shift is applied by the WALK, not the
-//! object — and an unlinked follower with `show_when_unlinked == false`
+//! object — and a hidden follower (unlinked and not shown, or its leader clipped out)
 //! has its subtree skipped entirely by that same walk, mirroring
-//! `resolve_follower_offset -> None -> don't descend` on the render path.
+//! `resolve_follower_transform -> None -> don't descend` on the render path.
 //! See the follower hit-testing mapping decision in flui-rendering's ARCHITECTURE.md.
 //!
 //! # Rust-native shape
@@ -52,7 +54,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
 use flui_painting::paint::Alignment;
-use flui_rendering::layer::LayerLink;
+use flui_rendering::layer::{FollowerLayer, LayerLink, LeaderClip};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},
@@ -80,6 +82,9 @@ pub struct RenderFollowerLayer {
     leader_anchor: Alignment,
     /// Anchor point on this follower's own rect. Default `TOP_LEFT`.
     follower_anchor: Alignment,
+    /// What happens while the leader's anchor is clipped out. Default
+    /// `Escape`.
+    leader_clip: LeaderClip,
     /// Whether a child is attached (tracked for hit testing / layout,
     /// mirroring `RenderClip`'s `has_child`). Does **not** gate paint or
     /// `always_needs_compositing` — see the module doc's divergence note.
@@ -97,6 +102,7 @@ impl RenderFollowerLayer {
             offset: Offset::ZERO,
             leader_anchor: Alignment::TOP_LEFT,
             follower_anchor: Alignment::TOP_LEFT,
+            leader_clip: LeaderClip::Escape,
             has_child: false,
         }
     }
@@ -127,6 +133,21 @@ impl RenderFollowerLayer {
     pub fn with_follower_anchor(mut self, follower_anchor: Alignment) -> Self {
         self.follower_anchor = follower_anchor;
         self
+    }
+
+    /// Builder: what the follower does while its leader's anchor is
+    /// clipped out of a clip the follower is not under. Default
+    /// [`LeaderClip::Escape`].
+    #[must_use]
+    pub fn with_leader_clip(mut self, leader_clip: LeaderClip) -> Self {
+        self.leader_clip = leader_clip;
+        self
+    }
+
+    /// See [`Self::with_leader_clip`].
+    #[inline]
+    pub fn leader_clip(&self) -> LeaderClip {
+        self.leader_clip
     }
 
     /// The current layer link.
@@ -228,6 +249,7 @@ impl flui_foundation::Diagnosticable for RenderFollowerLayer {
         builder.add("offset", self.offset);
         builder.add_enum("leader_anchor", self.leader_anchor);
         builder.add_enum("follower_anchor", self.follower_anchor);
+        builder.add_enum("leader_clip", self.leader_clip);
     }
 }
 
@@ -247,18 +269,16 @@ impl RenderBox for RenderFollowerLayer {
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         // Pushes the FollowerLayer regardless of child presence; the no-leader/hidden decision resolves at a
-        // later render-time pass (module doc), not here. This node's own
-        // paint-time size is published the same way `RenderLeaderLayer`
-        // publishes its size — the Tier-2 render-time resolution needs it
-        // for `FollowerLayer::calculate_offset`'s `follower_size` param.
-        let size = ctx.size();
+        // later render-time pass (module doc), not here. `with_follower`
+        // publishes this node's own paint-time size the same way
+        // `RenderLeaderLayer` publishes its size, for the follower anchor.
         ctx.with_follower(
-            self.link,
-            size,
-            self.offset,
-            self.show_when_unlinked,
-            self.leader_anchor,
-            self.follower_anchor,
+            FollowerLayer::new(self.link)
+                .with_target_offset(self.offset)
+                .with_show_when_unlinked(self.show_when_unlinked)
+                .with_leader_anchor(self.leader_anchor)
+                .with_follower_anchor(self.follower_anchor)
+                .with_leader_clip(self.leader_clip),
             PaintCx::paint_children_in_order,
         );
     }

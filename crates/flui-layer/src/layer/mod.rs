@@ -37,7 +37,7 @@ pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
 use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
-pub use follower::FollowerLayer;
+pub use follower::{FollowerLayer, LeaderClip};
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
 pub use offset::OffsetLayer;
@@ -152,11 +152,12 @@ impl Layer {
     ///
     /// This is the one place the set of translating variants is written down:
     /// each variant that carries an offset answers here, and both consumers —
-    /// the GPU walk's pushes and the follower resolver's chain sums — read the
-    /// same answer. A `Transform`
-    /// contributes only its translation (the follower system is offset-only);
-    /// a `Follower` contributes zero because its own translation is resolved
-    /// by the walk rather than stored on the layer.
+    /// the GPU walk's pushes and the follower resolver's chains — read the
+    /// same answer. A `Transform` answers its translation component only, so
+    /// every consumer that places a subtree matches `Transform` first and
+    /// applies the whole matrix; a `Follower` answers zero because its
+    /// transform is resolved against its leader rather than stored on the
+    /// layer.
     pub fn local_translation(&self) -> Offset<f64> {
         match self {
             Layer::Offset(layer) => layer.offset(),

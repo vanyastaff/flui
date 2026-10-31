@@ -229,18 +229,21 @@ impl FrameProtocol {
                 continue;
             };
             let layer = node.layer();
-            let transform = if let flui_layer::Layer::Transform(layer) = layer {
-                parent * glam::DMat4::from_cols_array(&layer.transform().m)
-            } else {
-                let offset = if matches!(layer, flui_layer::Layer::Follower(_)) {
-                    let Some(offset) = flui_layer::resolve_follower_offset(tree, id) else {
+            let transform = match layer {
+                flui_layer::Layer::Transform(layer) => {
+                    parent * glam::DMat4::from_cols_array(&layer.transform().m)
+                }
+                flui_layer::Layer::Follower(_) => {
+                    let Some(follower) = flui_layer::resolve_follower_transform(tree, id) else {
                         continue;
                     };
-                    offset
-                } else {
-                    layer.local_translation()
-                };
-                parent * glam::DMat4::from_translation(glam::DVec3::new(offset.dx, offset.dy, 0.0))
+                    parent * glam::DMat4::from_cols_array(&follower.m)
+                }
+                _ => {
+                    let offset = layer.local_translation();
+                    parent
+                        * glam::DMat4::from_translation(glam::DVec3::new(offset.dx, offset.dy, 0.0))
+                }
             };
             if let flui_layer::Layer::BackdropFilter(layer) = layer {
                 let Ok(affine) = crate::clip_geometry::ValidatedAffine::try_new(transform) else {
