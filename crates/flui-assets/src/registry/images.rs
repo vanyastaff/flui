@@ -134,6 +134,15 @@ type Fetch = Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>;
 /// One load from its read to its settled waiters.
 type Run = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+/// How a run comes by the load slot it holds from its read to its decode.
+enum LoadSlot {
+    /// Reserved at admission, for a run its lanes poll.
+    Reserved(Reservation),
+    /// Asked for at the run's first poll, in admission order, for a run
+    /// that only progresses while its caller polls it.
+    OnFirstPoll(Arc<OrderedSlots>, AdmissionOrder),
+}
+
 /// The identity of one load attempt, shared by its pending entry, its
 /// subscribers and its run.
 #[derive(Debug)]
@@ -314,10 +323,16 @@ impl DecodedImages {
                 cancel: None,
             },
         );
-        // Reserved under the lock that assigned `order`, so load slots follow
-        // admission order however late each load first runs. The slot
-        // queue's lock never takes this one, so the nesting cannot invert.
-        let load_slot = self.loads.reserve(order);
+        // A load bound for lanes reserves under the lock that assigned
+        // `order`, so load slots follow admission order however late each
+        // lane first runs it. A load that runs where it is polled asks only
+        // once it is polled: a future its caller holds unpolled must not
+        // keep a slot from the load the caller awaits. The slot queue's lock
+        // never takes this one, so the nesting cannot invert.
+        let load_slot = match lanes {
+            Some(_) => LoadSlot::Reserved(self.loads.reserve(order)),
+            None => LoadSlot::OnFirstPoll(Arc::clone(&self.loads), order),
+        };
         drop(state);
         let completion = Completion {
             images: Arc::clone(self),
@@ -332,13 +347,16 @@ impl DecodedImages {
     }
 
     /// Reads the source, decodes it and settles every waiter.
-    fn run(&self, completion: Completion, load_slot: Reservation, lanes: Lanes) -> Run {
+    fn run(&self, completion: Completion, load_slot: LoadSlot, lanes: Lanes) -> Run {
         let fetch = self.fetch(&completion.source);
         Box::pin(async move {
             // Granted before the read starts and held until the decode
             // returns: reads past admission, and the encoded bytes waiting
             // to decode, are bounded by count.
-            let _load = load_slot.granted().await;
+            let _load = match load_slot {
+                LoadSlot::Reserved(reservation) => reservation.granted().await,
+                LoadSlot::OnFirstPoll(loads, order) => loads.acquire(order).await,
+            };
             let outcome = match fetch.await {
                 Ok(bytes) => {
                     completion
@@ -556,13 +574,15 @@ impl DecodedImages {
             })
         };
         match lanes.spawn_compute(job) {
-            Ok(()) => rx.await.unwrap_or_else(|_| {
-                // The lane dropped the job unrun: it is shutting down.
-                Some(Err(AssetError::DecodeFailed {
-                    path: source.label().to_string(),
-                    reason: "the compute lane dropped the decode".to_owned(),
-                }))
-            }),
+            // `None` when the lane dropped the job unrun: it is shutting
+            // down, and the load closes unsettled for a waiter on other
+            // lanes to take over.
+            Ok(()) => rx.await.ok().flatten(),
+            // Lanes shutting down take no more work from this load, the
+            // decode included: it closes unsettled, as above.
+            Err(SpawnError::ShuttingDown) => None,
+            // Lanes with no room now: decode where the load runs, as a load
+            // given no lanes does.
             Err(_refused) => {
                 let decode = shared.lock().take();
                 decode.and_then(|decode| decode())
@@ -585,8 +605,22 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
         path: path.to_string(),
         reason: format!("the file is larger than {MAX_ENCODED_FILE_BYTES} bytes"),
     };
+    let not_a_file = || AssetError::LoadFailed {
+        path: path.to_string(),
+        reason: "not a regular file".to_owned(),
+    };
+    // Opening a FIFO or a device can block until another party acts, and
+    // this runs on a shared IO lane: only a regular file is opened, checked
+    // again once open in case the path was swapped in between.
+    if !std::fs::metadata(path.as_ref()).map_err(failed)?.is_file() {
+        return Err(not_a_file());
+    }
     let mut file = std::fs::File::open(path.as_ref()).map_err(failed)?;
-    let length = file.metadata().map_err(failed)?.len();
+    let metadata = file.metadata().map_err(failed)?;
+    if !metadata.is_file() {
+        return Err(not_a_file());
+    }
+    let length = metadata.len();
     if length > MAX_ENCODED_FILE_BYTES {
         return Err(too_large());
     }

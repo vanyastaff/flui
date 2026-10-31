@@ -171,6 +171,96 @@ fn a_cancelled_load_never_reaches_the_decoder() {
     assert_fixture(&block_on(next).expect("the decode slot is free"));
 }
 
+/// The compute lane retires before the IO lane and drops the decode it
+/// accepted: the load closes unsettled and the request on other lanes takes
+/// it over, rather than every request failing with the retiring lanes.
+///
+/// Red-check: settle a dropped decode as `DecodeFailed`.
+fn a_decode_its_lanes_drop_is_taken_over_on_other_lanes() {
+    let retiring = QueuedLanes::new();
+    let other = ThreadLanes::new();
+    let registry = registry();
+    let first = registry.load_image(fixture_path(), Some(retiring.lanes()));
+    let second = registry.load_image(fixture_path(), Some(other.lanes()));
+    retiring.run_io_until_idle();
+    assert_eq!(
+        retiring.computes(),
+        1,
+        "the read is done and its decode queued"
+    );
+    retiring.drop_compute();
+    retiring.run_io_until_idle();
+    assert_fixture(&block_on(second).expect("the other lanes' request took the load over"));
+    assert_fixture(&block_on(first).expect("the first request then finds the image kept"));
+}
+
+/// Lanes shutting down refuse the decode: the load closes unsettled instead
+/// of decoding on the retiring IO lane, and the request on other lanes takes
+/// it over.
+///
+/// Red-check: decode a `ShuttingDown` refusal inline (the image is decoded
+/// on the retiring lane).
+fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
+    let retiring = QueuedLanes::new();
+    let other = ThreadLanes::new();
+    let registry = registry();
+    let first = registry.load_image(fixture_path(), Some(retiring.lanes()));
+    let second = registry.load_image(fixture_path(), Some(other.lanes()));
+    retiring.refuse(SpawnError::ShuttingDown);
+    retiring.run_until_idle();
+    let source = flui_assets::ImageSource::Asset(fixture_path().into());
+    assert!(
+        registry.cached_image(&source).is_none(),
+        "the retiring IO lane decoded nothing"
+    );
+    assert_fixture(&block_on(second).expect("the other lanes' request took the load over"));
+    drop(first);
+}
+
+/// Loads with no lanes run only while polled, so ones their caller holds
+/// unpolled take no load slot: the load it awaits gets one even when there
+/// are more held loads than slots.
+///
+/// Red-check: reserve the slot of a load without lanes at admission (the
+/// awaited load never starts).
+fn loads_held_unpolled_leave_the_slots_to_the_awaited_one() {
+    let registry = AssetRegistryBuilder::new()
+        .with_default_capacity()
+        .with_decode_threads(NonZeroUsize::MIN)
+        .build();
+    let held: Vec<_> = (0..8)
+        .map(|index| {
+            registry.load_image(
+                format!(
+                    "{}/tests/fixtures/held-{index}.png",
+                    env!("CARGO_MANIFEST_DIR")
+                ),
+                None,
+            )
+        })
+        .collect();
+    assert_fixture(
+        &block_on(registry.load_image(fixture_path(), None)).expect("the awaited load runs"),
+    );
+    drop(held);
+}
+
+/// A path that names no regular file is refused before it is opened: a FIFO
+/// or a device could block the shared IO lane in `open`.
+///
+/// Red-check: drop the regular-file check (the directory opens and its read
+/// fails with an OS error instead).
+fn a_path_that_is_not_a_regular_file_is_refused() {
+    let refused = block_on(
+        registry().load_image(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"), None),
+    );
+    assert!(
+        matches!(&refused, Err(AssetError::LoadFailed { reason, .. })
+            if reason.contains("not a regular file")),
+        "a directory is refused, got {refused:?}"
+    );
+}
+
 /// A file over the 256 MiB encoded-image cap fails with a typed error before
 /// it is buffered. `set_len` makes the file without writing its bytes.
 fn an_oversized_file_is_refused_before_it_is_read() {
@@ -341,6 +431,22 @@ fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
         (
             "cancelled before the read",
             a_cancelled_load_never_reaches_the_decoder,
+        ),
+        (
+            "compute lane retires first",
+            a_decode_its_lanes_drop_is_taken_over_on_other_lanes,
+        ),
+        (
+            "compute lane refuses while shutting down",
+            a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes,
+        ),
+        (
+            "unpolled loads hold no slot",
+            loads_held_unpolled_leave_the_slots_to_the_awaited_one,
+        ),
+        (
+            "not a regular file",
+            a_path_that_is_not_a_regular_file_is_refused,
         ),
     ]);
 }

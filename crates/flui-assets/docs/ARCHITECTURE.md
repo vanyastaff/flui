@@ -493,14 +493,19 @@ the first becomes the new lead, on its own lanes. A load that panics answers its
 waiters with the failure instead, from a drop guard that sees the unwind.
 
 Decodes run at most `with_decode_threads` at once (half the cores, at most four),
-never on the IO lane; a compute lane refusing the job hands the decode back to
-where the load runs. At admission, on the calling thread and under the lock that
-assigns its order, a load reserves one of four load slots per decode thread; it
-waits for that reservation before it reads and holds the slot until its decode
+never on the IO lane. A compute lane with no room hands the decode back to where
+the load runs; lanes shutting down, by refusing the decode or dropping it unrun,
+close the load unsettled for a waiter on other lanes to take over. A load bound
+for lanes reserves one of four load slots per decode thread at admission, on the
+calling thread and under the lock that assigns its order; a load with no lanes
+runs only while its request polls it, so it asks for its slot at its first poll,
+and loads a caller holds unpolled keep no slot from the one it awaits. A load
+waits for its slot before it reads and holds it until its decode
 returns, so the reads in flight and the encoded bytes waiting to decode are
 bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a file
 by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`), refused
-before more than that is buffered. Once its bytes are read it asks for a decode
+before more than that is buffered. Only a regular file is opened, so a FIFO or a
+device cannot block the shared IO lane in `open`. Once its bytes are read it asks for a decode
 slot. Load slots are granted in admission order. A decode slot goes to the
 earliest-admitted load whose bytes are ready; a load still fetching holds none,
 so a ready load admitted later decodes first rather than leaving the decoder idle

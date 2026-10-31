@@ -159,6 +159,13 @@ impl QueuedLanes {
         drop(compute);
     }
 
+    /// Retire the compute lane alone, as a host may before its IO lane:
+    /// refuse every later spawn and drop the queued jobs unrun.
+    pub fn drop_compute(&self) {
+        self.refuse(SpawnError::ShuttingDown);
+        drop(std::mem::take(&mut *self.compute.lock()));
+    }
+
     /// Compute jobs accepted so far.
     pub fn computes(&self) -> usize {
         self.computes.load(Ordering::SeqCst)
@@ -171,16 +178,28 @@ impl QueuedLanes {
 
     /// Runs queued jobs and polls queued futures until none is runnable.
     pub fn run_until_idle(&self) {
+        self.run(true);
+    }
+
+    /// Polls queued futures until none is runnable, leaving compute jobs
+    /// queued.
+    pub fn run_io_until_idle(&self) {
+        self.run(false);
+    }
+
+    fn run(&self, compute: bool) {
         let flag = Arc::new(Flag(AtomicBool::new(true)));
         let waker = Waker::from(Arc::clone(&flag));
         let mut cx = Context::from_waker(&waker);
         loop {
             let mut ran = false;
-            loop {
-                let job = self.compute.lock().pop_front();
-                let Some(job) = job else { break };
-                job();
-                ran = true;
+            if compute {
+                loop {
+                    let job = self.compute.lock().pop_front();
+                    let Some(job) = job else { break };
+                    job();
+                    ran = true;
+                }
             }
             let woken = flag.0.swap(false, Ordering::SeqCst);
             if self.fresh.swap(false, Ordering::SeqCst) || woken {
