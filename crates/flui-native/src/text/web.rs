@@ -72,17 +72,18 @@ mod ime {
     /// What a field's element shows of a store's text, and where each of
     /// its offsets is in the store. The browser sanitizes the value a script
     /// gives a field (HTML's value sanitization): a single-line input drops
-    /// line feeds and carriage returns, and a textarea shows a line feed for
-    /// a lone carriage return and drops the one before a line feed. The
-    /// store keeps its text: an edit of the shown value is the edit of the
-    /// store's code units it covers.
+    /// line feeds and carriage returns, and a textarea shows one line feed
+    /// for a CRLF and one for a lone carriage return. The store keeps its
+    /// text: an edit of the shown value is the edit of the store's code
+    /// units it covers, a CRLF's one shown line feed covering both.
     #[derive(Debug, Clone, Default, PartialEq, Eq)]
     pub(crate) struct FieldValue {
         shown: Vec<u16>,
-        /// The store offset of each shown code unit.
-        at: Vec<usize>,
-        /// The store's length.
-        len: usize,
+        /// The store range each shown code unit stands for.
+        spans: Vec<(usize, usize)>,
+        /// The store's text.
+        store: Vec<u16>,
+        single_line: bool,
     }
 
     impl FieldValue {
@@ -90,21 +91,25 @@ mod ime {
         #[must_use]
         pub(crate) fn of(store: &[u16], single_line: bool) -> Self {
             let mut shown = Vec::with_capacity(store.len());
-            let mut at = Vec::with_capacity(store.len());
-            for (index, &unit) in store.iter().enumerate() {
-                let unit = match unit {
+            let mut spans = Vec::with_capacity(store.len());
+            let mut units = store.iter().copied().enumerate().peekable();
+            while let Some((index, unit)) = units.next() {
+                let (unit, end) = match unit {
                     LINE_FEED | CARRIAGE_RETURN if single_line => continue,
-                    CARRIAGE_RETURN if store.get(index + 1) == Some(&LINE_FEED) => continue,
-                    CARRIAGE_RETURN => LINE_FEED,
-                    unit => unit,
+                    CARRIAGE_RETURN if units.next_if(|&(_, next)| next == LINE_FEED).is_some() => {
+                        (LINE_FEED, index + 2)
+                    }
+                    CARRIAGE_RETURN => (LINE_FEED, index + 1),
+                    unit => (unit, index + 1),
                 };
                 shown.push(unit);
-                at.push(index);
+                spans.push((index, end));
             }
             Self {
                 shown,
-                at,
-                len: store.len(),
+                spans,
+                store: store.to_vec(),
+                single_line,
             }
         }
 
@@ -123,19 +128,23 @@ mod ime {
         pub(crate) fn store_range(&self, start: usize, end: usize) -> (usize, usize) {
             let shown = self.shown.len();
             let (start, end) = (start.min(end).min(shown), start.max(end).min(shown));
-            let from = self.at.get(start).copied().unwrap_or(self.len);
+            let from = self
+                .spans
+                .get(start)
+                .map_or(self.store.len(), |&(from, _)| from);
             let to = end
                 .checked_sub(1)
-                .and_then(|before| self.at.get(before))
-                .map_or(0, |&at| at + 1);
+                .and_then(|before| self.spans.get(before))
+                .map_or(0, |&(_, to)| to);
             (from, to.max(from))
         }
 
         /// The shown text's edit of `start..old_end` into `inserted`, as an
         /// edit of the store: the store range it replaces
         /// ([`Self::store_range`]), after which `self` shows the edited
-        /// store. The inserted units are the browser's value, which it
-        /// shows as they are.
+        /// store as the browser would hold it, which can differ from what
+        /// the browser holds after the edit (a line feed typed after a lone
+        /// carriage return makes a CRLF, shown as one).
         pub(crate) fn replace(
             &mut self,
             start: usize,
@@ -143,25 +152,17 @@ mod ime {
             inserted: &[u16],
         ) -> (usize, usize) {
             let (from, to) = self.store_range(start, old_end);
-            let shown = self.shown.len();
-            let (start, old_end) = (start.min(old_end).min(shown), start.max(old_end).min(shown));
-            let grown = inserted.len();
-            let removed = to - from;
-            self.shown.splice(start..old_end, inserted.iter().copied());
-            let after = self.at.split_off(old_end);
-            self.at.truncate(start);
-            self.at.extend(from..from + grown);
-            self.at
-                .extend(after.into_iter().map(|at| at - removed + grown));
-            self.len = self.len - removed + grown;
+            self.store.splice(from..to, inserted.iter().copied());
+            *self = Self::of(&self.store, self.single_line);
             (from, to)
         }
 
         /// The shown offset of the store's `offset`: the units the field
-        /// drops before it are not counted.
+        /// drops before it are not counted, and an offset inside a CRLF is
+        /// before its line feed.
         #[must_use]
         pub(crate) fn shown_offset(&self, offset: usize) -> usize {
-            self.at.partition_point(|&at| at < offset)
+            self.spans.partition_point(|&(_, end)| end <= offset)
         }
     }
 
@@ -340,12 +341,17 @@ mod input {
         fn show(&self, text: &str) -> FieldValue {
             let units: Vec<u16> = text.encode_utf16().collect();
             let shown = FieldValue::of(&units, matches!(self, Self::Line(_)));
+            self.set_shown(&shown);
+            shown
+        }
+
+        /// Set the element's value to what `shown` shows.
+        fn set_shown(&self, shown: &FieldValue) {
             let value = String::from_utf16_lossy(shown.shown());
             match self {
                 Self::Area(area) => area.set_value(&value),
                 Self::Line(line) => line.set_value(&value),
             }
-            shown
         }
 
         /// The element's selection in the store's text it shows as `shown`,
@@ -1075,7 +1081,19 @@ mod input {
                         .replace(change.start, change.old_end, inserted);
                 (from, to, String::from_utf16_lossy(inserted), inserted.len())
             });
-            let selection = element.selection(&mirror.borrow());
+            // An edit whose store the browser would show otherwise (a line
+            // feed typed after a lone carriage return) is shown again, the
+            // caret after what it inserted.
+            let reshown = change
+                .as_ref()
+                .filter(|_| mirror.borrow().shown() != now.as_slice())
+                .map(|&(from, _, _, units)| {
+                    let caret = Selection::collapsed(Utf16Offset::new(from + units));
+                    element.set_shown(&mirror.borrow());
+                    element.select(&mirror.borrow(), caret);
+                    caret
+                });
+            let selection = reshown.unwrap_or_else(|| element.selection(&mirror.borrow()));
             self.edit(move |session| {
                 if let Some((from, to, inserted, units)) = &change {
                     let replaced = clamped(

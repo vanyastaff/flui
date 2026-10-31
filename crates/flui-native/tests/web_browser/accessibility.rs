@@ -1119,6 +1119,39 @@ async fn a_field_keeps_the_line_breaks_it_cannot_show() {
     }
 }
 
+/// A textarea shows a CRLF of the store as one line feed, and deleting it
+/// deletes both units from the store.
+#[wasm_bindgen_test]
+async fn a_textarea_s_line_feed_is_the_store_s_crlf() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("a\r\nb");
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    let mut update = form("", FIELD);
+    let mut notes = Node::new(Role::MultilineTextInput);
+    notes.set_label("Notes");
+    notes.set_author_id("name");
+    notes.set_value(store.text());
+    notes.add_action(Action::Focus);
+    notes.set_bounds(Rect::new(20.0, 20.0, 220.0, 50.0));
+    update.nodes[1].1 = notes;
+    accessibility.publish(update);
+    canvas.host.focus_store(Some(super::as_store(&store)));
+    let state = field("name").expect("the field");
+    assert_eq!(
+        (state.tag.as_str(), state.value.as_str()),
+        ("textarea", "a\nb")
+    );
+    type_into_field(Some("name"), "ab", 1, false);
+    assert_eq!(store.text(), "ab", "the CRLF is gone");
+    canvas.window.close_now();
+    super::wait(0).await;
+}
+
 /// A backward selection in a field is the store's backward selection, its
 /// active end at the start, and the field shows the store's selection with
 /// its direction.

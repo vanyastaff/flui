@@ -1815,7 +1815,8 @@ and writes only what changed between two specs.
   host; the canvas forwards its focus to the host's field only while the host
   names it, and a field the store moves to takes the canvas's focus. A field
   shows the store's text as the browser's value sanitization lets it (a
-  single-line input drops line breaks) and maps its offsets to the store's
+  single-line input drops line breaks, a textarea shows a CRLF as one line
+  feed) and maps its offsets to the store's
   (`FieldValue`), so an edit next to a unit it cannot show keeps it; its
   selection keeps its direction.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
@@ -1842,6 +1843,7 @@ Linux. In headless Chrome,
 `the_canvas_keeps_the_focus_a_field_left`,
 `a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
 `a_field_keeps_the_line_breaks_it_cannot_show`,
+`a_textarea_s_line_feed_is_the_store_s_crlf`,
 `a_field_s_selection_keeps_its_direction` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.

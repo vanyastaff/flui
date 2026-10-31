@@ -112,34 +112,50 @@ fn a_field_shows_the_store_s_text_as_the_browser_holds_it() {
     for (offset, shown) in back {
         assert_eq!(line.shown_offset(offset), shown, "store offset {offset}");
     }
-    // The textarea drops only a CRLF's carriage return.
-    assert_eq!(area.store_range(3, 4), (4, 5), "the CRLF's line feed");
+    // A textarea shows a CRLF as one line feed.
+    assert_eq!(
+        area.store_range(3, 4),
+        (3, 5),
+        "a CRLF's line feed is the pair"
+    );
     assert_eq!(area.shown_offset(4), 3);
 }
 
 /// An edit of the shown text is the edit of the store's units it covers,
-/// after which the value shows the edited store.
+/// after which the value shows the edited store as the browser would hold
+/// it: deleting a textarea's line feed deletes the whole CRLF, and a line
+/// feed typed after a lone carriage return makes one line break of the two.
 #[test]
 fn an_edit_of_the_shown_text_is_an_edit_of_the_store() {
     let rows = [
         (
             "a\nb",
+            true,
             (1, 2, "x"),
             (2, 3),
             "a\nx",
-            "replacing the unit after the line feed",
+            "replacing the unit after a dropped line feed",
         ),
         (
             "a\nb",
+            true,
             (0, 1, ""),
             (0, 1),
             "\nb",
             "deleting the unit before it",
         ),
-        ("a\nb", (1, 1, "x"), (2, 2), "a\nxb", "inserting at it"),
-        ("a\nb", (0, 2, ""), (0, 3), "", "deleting across it"),
+        (
+            "a\nb",
+            true,
+            (1, 1, "x"),
+            (2, 2),
+            "a\nxb",
+            "inserting at it",
+        ),
+        ("a\nb", true, (0, 2, ""), (0, 3), "", "deleting across it"),
         (
             "\nab",
+            true,
             (0, 0, "x"),
             (1, 1),
             "\nxab",
@@ -147,19 +163,44 @@ fn an_edit_of_the_shown_text_is_an_edit_of_the_store() {
         ),
         (
             "ab\n",
+            true,
             (2, 2, "x"),
             (3, 3),
             "ab\nx",
             "inserting past a trailing one",
         ),
+        (
+            "a\r\nb",
+            false,
+            (1, 2, ""),
+            (1, 3),
+            "ab",
+            "deleting a CRLF's line feed",
+        ),
+        (
+            "a\r\nb",
+            false,
+            (2, 2, "x"),
+            (3, 3),
+            "a\r\nxb",
+            "inserting after a CRLF",
+        ),
+        (
+            "a\rb",
+            false,
+            (2, 2, "\n"),
+            (2, 2),
+            "a\r\nb",
+            "a line feed after a lone carriage return",
+        ),
     ];
-    for (text, (start, old_end, inserted), replaced, edited, why) in rows {
-        let mut value = FieldValue::of(&units(text), true);
+    for (text, single_line, (start, old_end, inserted), replaced, edited, why) in rows {
+        let mut value = FieldValue::of(&units(text), single_line);
         assert_eq!(
             value.replace(start, old_end, &units(inserted)),
             replaced,
             "{why}"
         );
-        assert_eq!(value, FieldValue::of(&units(edited), true), "{why}");
+        assert_eq!(value, FieldValue::of(&units(edited), single_line), "{why}");
     }
 }
