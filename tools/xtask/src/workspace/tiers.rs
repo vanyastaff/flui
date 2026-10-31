@@ -40,7 +40,14 @@ pub(super) fn names(workspace_metadata: &Json) -> anyhow::Result<Vec<String>> {
 }
 
 /// What a crate promises (ADR-0081 §3); the set is closed.
-const KINDS: [&str; 5] = ["stable", "evolving", "internal", "official", "tool"];
+const KINDS: [&str; 6] = [
+    "stable",
+    "evolving",
+    "internal",
+    "official",
+    "tool",
+    "capability",
+];
 
 /// The kind of an application: an example, a tool or `flui-cli`.
 const TOOL: &str = "tool";
@@ -51,6 +58,18 @@ const OFFICIAL: &str = "official";
 /// What an official package may name in a normal or build dependency: the
 /// package-author surface and the contract crates (ADR-0081 §3, ADR-0088 §2).
 const SDK_SURFACE: [&str; 3] = ["flui-sdk", "flui-platform", "flui-protocol"];
+
+/// The kind of a capability crate: a leaf of tier `pkg` that carries its own
+/// OS code (ADR-0154 §1).
+pub(super) const CAPABILITY: &str = "capability";
+
+/// The tier a capability crate sits in (ADR-0154 §1).
+const CAPABILITY_TIER: &str = "pkg";
+
+/// The one member that may name a capability crate in a normal or build
+/// dependency: the facade, which re-exports it behind a feature (ADR-0154
+/// §1, §8).
+const FACADE: &str = "flui";
 
 /// The keys a crate with a tier declares.
 const TIER_KEYS: [&str; 3] = ["tier", "tier-kind", "order"];
@@ -120,6 +139,19 @@ pub(super) enum Finding {
     /// A member under `packages/` lists `edge-exceptions`: a package moves
     /// there only once it builds on the SDK alone.
     PackageExcepted { name: String, rel: String },
+    /// A capability crate whose tier is not [`CAPABILITY_TIER`] (ADR-0154 §1).
+    CapabilityTier {
+        name: String,
+        rel: String,
+        tier: String,
+    },
+    /// A capability crate has a normal or build dependency outside
+    /// [`SDK_SURFACE`] (ADR-0154 §1).
+    CapabilityOffContract { from: String, to: String },
+    /// A member other than the facade names a capability crate in a normal
+    /// or build dependency, or another capability crate names it in any
+    /// kind: a capability crate is a leaf below the facade (ADR-0154 §1).
+    CapabilityNotLeaf { from: String, to: String },
     /// An `edge-exceptions` entry for an edge the rule admits or that does
     /// not exist.
     Stale { from: String, to: String },
@@ -181,6 +213,15 @@ impl Finding {
                 "edge-exceptions".to_owned(),
                 "package excepted",
             ),
+            Self::CapabilityTier { name, tier, .. } => {
+                (name.clone(), tier.clone(), "capability tier")
+            }
+            Self::CapabilityOffContract { from, to } => {
+                (from.clone(), to.clone(), "capability off contract")
+            }
+            Self::CapabilityNotLeaf { from, to } => {
+                (from.clone(), to.clone(), "capability not leaf")
+            }
             Self::Stale { from, to } => (from.clone(), to.clone(), "stale exception"),
             Self::BadExit { from, to, .. } => (from.clone(), to.clone(), "bad exit"),
             Self::NoTrainGuard { name, .. } => (name.clone(), TRAIN_LINKS.to_owned(), "no guard"),
@@ -264,6 +305,24 @@ impl fmt::Display for Finding {
                 f,
                 "{rel} is under packages/ and lists `edge-exceptions`: a package moves there \
                  once it builds on the SDK alone (ADR-0088)"
+            ),
+            Self::CapabilityTier { rel, tier, .. } => write!(
+                f,
+                "{rel} is a capability crate in tier \"{tier}\"; capability crates sit in tier \
+                 \"{CAPABILITY_TIER}\" (ADR-0154 §1)"
+            ),
+            Self::CapabilityOffContract { from, to } => write!(
+                f,
+                "{from} is a capability crate and depends on {to}: its normal and build \
+                 dependencies are {} only, plus external crates (ADR-0154 §1); list it in \
+                 `edge-exceptions` with the ADR that removes the edge",
+                SDK_SURFACE.join(", ")
+            ),
+            Self::CapabilityNotLeaf { from, to } => write!(
+                f,
+                "{from} depends on {to}, a capability crate: only the facade names one in a \
+                 normal or build dependency, and no capability crate names another in any kind \
+                 (ADR-0154 §1); list it in `edge-exceptions` with the ADR that removes the edge"
             ),
             Self::Stale { from, to } => write!(
                 f,
@@ -364,6 +423,16 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                 });
             }
         }
+        if member.tier_kind.as_deref() == Some(CAPABILITY)
+            && let Some(tier) = &member.tier
+            && tier != CAPABILITY_TIER
+        {
+            findings.push(Finding::CapabilityTier {
+                name: name.clone(),
+                rel: rel.clone(),
+                tier: tier.clone(),
+            });
+        }
         if let Some(kind) = &member.tier_kind
             && !KINDS.contains(&kind.as_str())
         {
@@ -433,7 +502,11 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         let (Some(from_at), Some(to_at)) = (position(from), position(to)) else {
             continue;
         };
-        if to_at < from_at {
+        // The facade re-exports each capability crate behind a feature: the
+        // one edge into tier `pkg` the tier rule admits (ADR-0154 §1, §8).
+        let facade_on_capability =
+            from_name == FACADE && to.tier_kind.as_deref() == Some(CAPABILITY);
+        if to_at < from_at || facade_on_capability {
             continue;
         }
         refused.insert((from_name, to_name));
@@ -485,7 +558,12 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
 ///   `official` package in any kind, dev included (ADR-0028: the design
 ///   systems do not depend on each other in any form);
 /// - **off the SDK**: an `official` package has a normal or build dependency
-///   on a member outside [`SDK_SURFACE`].
+///   on a member outside [`SDK_SURFACE`];
+/// - **capability off contract**: a `capability` crate has a normal or build
+///   dependency on a member outside [`SDK_SURFACE`] (ADR-0154 §1);
+/// - **capability not leaf**: a member other than the facade names a
+///   `capability` crate in a normal or build dependency, or another
+///   `capability` crate names it in any kind (ADR-0154 §1).
 fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
     let by_name = members.by_name();
     let mut refusals = BTreeMap::new();
@@ -494,6 +572,7 @@ fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
             continue;
         }
         let official = member.tier_kind.as_deref() == Some(OFFICIAL);
+        let capability = member.tier_kind.as_deref() == Some(CAPABILITY);
         for dep in member.repo_deps() {
             let Some(to) = by_name.get(dep.name.as_str()) else {
                 continue;
@@ -501,7 +580,19 @@ fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
             let edge = (member.name(), to.name());
             let (from, target) = (edge.0.to_owned(), edge.1.to_owned());
             let to_official = to.tier_kind.as_deref() == Some(OFFICIAL);
-            if official && to_official {
+            let to_capability = to.tier_kind.as_deref() == Some(CAPABILITY);
+            let development = dep.kind == DependencyKind::Development;
+            if to_capability && (capability || (!development && member.name() != FACADE)) {
+                refusals
+                    .entry(edge)
+                    .or_insert(Finding::CapabilityNotLeaf { from, to: target });
+            } else if capability {
+                if !development && !SDK_SURFACE.contains(&to.name()) {
+                    refusals
+                        .entry(edge)
+                        .or_insert(Finding::CapabilityOffContract { from, to: target });
+                }
+            } else if official && to_official {
                 refusals
                     .entry(edge)
                     .or_insert(Finding::OfficialOnOfficial { from, to: target });
@@ -660,6 +751,10 @@ fn self_test_members() -> Members {
         "edge-exceptions",
         exception("v1"),
     );
+    let (facade_rel, facade) = krate(FACADE, "H", 5, "stable");
+    let (cap1_rel, cap1) = krate("cap1", "pkg", 10, CAPABILITY);
+    let (cap2_rel, cap2) = krate("cap2", "pkg", 11, CAPABILITY);
+    let (cap_tier_rel, cap_tier) = krate("cap-tier", "K", 9, CAPABILITY);
     let guard = |mut node: Node| {
         node.links = Some(TRAIN_LINKS.to_owned());
         node
@@ -720,12 +815,35 @@ fn self_test_members() -> Members {
             &[("h1", Normal), ("pkg1", Normal)],
         ),
         node("tools/t1/Cargo.toml", &tool, &[]),
+        // silent: the facade names a capability crate, upward but admitted
+        node(&facade_rel, &facade, &[("cap1", Normal)]),
+        // silent: a capability crate on the SDK and a dev edge off it;
+        // planted: its normal edge off the contract
+        node(
+            &cap1_rel,
+            &cap1,
+            &[("flui-sdk", Normal), ("v1", Normal), ("h1", Dev)],
+        ),
+        // planted: a capability crate names another, dev included
+        node(&cap2_rel, &cap2, &[("cap1", Dev)]),
+        // planted: a capability crate outside tier pkg
+        node(&cap_tier_rel, &cap_tier, &[]),
+        // planted: a core crate names a capability crate (upward, and not
+        // the facade)
+        crate_node("k-cap", "K", 7, &[("cap1", Normal)]),
+        // silent: a core crate's dev edge to a capability crate
+        crate_node("k-capdev", "K", 8, &[("cap1", Dev)]),
     ];
     Members::from_nodes(nodes).expect("BUG: the self-test graph is well-typed")
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 17] = [
+const EXPECTED: [(&str, &str, &str); 22] = [
+    ("cap1", "v1", "capability off contract"),
+    ("cap2", "cap1", "capability not leaf"),
+    ("k-cap", "cap1", "capability not leaf"),
+    ("k-cap", "cap1", "upward"),
+    ("cap-tier", "K", "capability tier"),
     ("h2", "pkg1", "names official"),
     ("pkg2", "pkg1", "official on official"),
     ("h-pkg", "pkg2", "names official"),

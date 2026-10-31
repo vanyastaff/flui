@@ -907,9 +907,41 @@ expires it deterministically) and joins `next_wake`, so a window that draws noth
 out; a timeout is an answer, `satisfied: false` with the last observation and the causes, and the
 window closing answers `gone`. A presentation holds 256 waits: the next is refused with
 `TooManyWaits` (`busy`, retry `soon`), never dropped and never in place of an older one. A
-condition on events is refused until the event stream exists. Image loads are not among the
-causes: the runtime sits below the layer that loads images. Pinned by
-`src/ui_runtime/tests/agent_wait.rs` and `crates/flui-semantics/tests/wait.rs`.
+condition on an event holds once the window emitted an event of that kind after the wait began
+(see Events). Image loads are not among the causes: the runtime sits below the layer that loads
+images. Pinned by `src/ui_runtime/tests/agent_wait.rs` and
+`crates/flui-semantics/tests/wait.rs`.
+
+**Events.** `subscribe` (`UiCommand::SemanticsAgentSubscribe`) registers a subscriber on the
+presentation (`agent_events`, an `EventHub`) and answers with an `EventStream`; dropping the
+stream ends the subscription (the hub sees that it holds the queue's last `Arc`). After each
+frame `drive_frame` ran, the presentation emits what the frame left: a `frame` event per frame
+presented or dropped since the last report, and a `semantics` event when the tree's revision
+changed. Closing emits a last `window { opened: false }` and ends every stream. Each emission
+also notes the event's kind on the waits parked on the window, which is what a `Condition::Event`
+reads, so a wait and a subscription see one stream. A window with nothing to draw presents no
+frame and emits nothing. Each subscriber's queue holds 256 events: one that falls behind has the
+overflow counted, and the next event that fits is preceded by `gap { missed }`; a stream that
+ends owing a gap queues it past the bound, so a stream never ends shorter than it says. A
+presentation admits 64 live subscriptions and refuses the next with `TooManySubscriptions`
+(`busy`, retry `soon`); a subscription with no filter is `invalid_argument`. Only events after
+the registration are delivered, never a replay. `input` and `announcement` are accepted as
+filters and not emitted yet (they come from the input journal and the announcement fan-out);
+`frame.time_us` is not filled yet. Pinned by `src/ui_runtime/tests/agent_events.rs`.
+
+**Inspect.** `inspect` (`UiCommand::SemanticsAgentInspect`) answers at the owner with the typed
+snapshot a tree describes itself with (`flui_foundation::inspect`): `inspect_elements` for
+`Widgets`, `inspect_render` for `Render`. The snapshot becomes the protocol's owned
+`InspectNode` tree in `agent_inspect.rs` (the protocol crate has no foundation edge), with an
+iterative walk so a deep chain costs no Rust stack; at most 4096 nodes are reported whatever the
+caller asks. Ids on the wire are the tree's own handles (`v3.2`, `r12`); a `root` may be a
+`NodeRef` (`p3/v3.2`), which must name this presentation: a reference to another or a closed
+window is `UnknownPresentation` (`unknown_handle`, kind window) and is never looked up here, and
+a handle of another tree is `invalid_argument`. A root that left its tree is `NodeGone`
+(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` answers
+`LayersNotKept` (`not_supported`): the sink takes the scene a frame paints, and the window keeps
+no copy to read between frames. Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
+reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render object or view that panics while the tree is read (`debug_name`, `inspect`) answers `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does; pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is

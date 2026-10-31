@@ -132,6 +132,9 @@ pub struct ElementOwner<'a> {
     /// contend with the other split-borrow fields.
     pub(crate) keep_alive: super::KeepAliveHolds,
 
+    /// Unmount hooks, run by the tree right after an element's `dispose`.
+    pub(crate) unmount_hooks: super::UnmountHooks,
+
     /// This frame's `GlobalKey` declarations (`parent -> child -> key`),
     /// verified at the frame boundary by `BuildOwner::finalize_tree`.
     ///

@@ -26,7 +26,7 @@ use crate::{
     AppLifecycleState, AsyncDriver, CloseGuard, CloseHold, LifecycleSubscription, TaskToken,
     TimerHandle,
 };
-use crate::{LifecycleContext, LifecycleContextExt};
+use crate::{LifecycleContext, LifecycleContextExt, UnmountHook};
 
 /// The first word of a stored document's header line.
 const HEADER_MAGIC: &str = "flui-document";
@@ -65,10 +65,13 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// or [`committed`](Self::committed) changes, so a widget can rebuild with
 /// them. They are told on a later turn of the UI runtime's tasks, never from
 /// inside a call on the document, and once for all the changes since the
-/// last time they were told; a change undone before then tells nobody. A
-/// listener may call any method of the document. A listener is kept as long
-/// as the document, so one that holds a clone of it keeps both alive for good:
-/// it holds a [`WeakPersisted`] from [`downgrade`](Self::downgrade) instead.
+/// last time they were told, also when the state is back on what they were
+/// told by then: a reader may have seen it in between. A call that changes
+/// nothing tells nobody. A listener may call any method of the document. The
+/// listeners belong to the state that opened the document: they are dropped
+/// when it unmounts, so one may hold a clone of the document, and a listener
+/// added after that is not kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
+/// document without keeping it alive.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
@@ -91,6 +94,8 @@ struct OpenDocument<D> {
     /// The presentation's close guard, which a write in flight or a failed
     /// one holds.
     guard: Option<CloseGuard>,
+    /// The opening state's unmount, which drops the listeners.
+    unmount: RefCell<Option<UnmountHook>>,
     /// Tells the document's listeners of changes.
     announcer: Announcer,
     /// Borrowed only between codec calls, storage requests and wakes.
@@ -187,8 +192,26 @@ struct Announcer {
     told: RefCell<Reported>,
     /// Whether a delivery is queued and has not started yet.
     queued: Cell<bool>,
+    /// Whether the state moved off what the listeners were told since the
+    /// last delivery, even if it is back there now: a reader may have seen
+    /// the state in between, so the delivery tells them.
+    moved: Cell<bool>,
     /// The latest delivery's task.
     delivery: RefCell<Option<TaskToken>>,
+    /// Set when the state that opened the document unmounts: nobody is
+    /// told again, and a listener added later is not kept.
+    closed: Cell<bool>,
+}
+
+impl Announcer {
+    /// The opening state unmounted: drop the queued delivery, then the
+    /// listeners, whose captures may hold clones of the document.
+    fn close(&self) {
+        self.closed.set(true);
+        let delivery = self.delivery.borrow_mut().take();
+        drop(delivery);
+        Listenable::remove_all_listeners(&self.notifier);
+    }
 }
 
 impl<D: Document> Clone for Persisted<D> {
@@ -281,39 +304,50 @@ impl<D: Document> Persisted<D> {
                 .ok()
                 .map(|(_, subscription)| subscription)
         });
-        Self {
-            document: Rc::new(OpenDocument {
-                storage,
-                registry,
-                driver: cx.async_driver(),
-                timer: cx.timer(),
-                hurry,
-                _lifecycle: lifecycle,
-                guard: cx.close_guard(),
-                announcer: Announcer {
-                    notifier: ChangeNotifier::new(),
-                    told: RefCell::new((status.clone(), committed, None)),
-                    queued: Cell::new(false),
-                    delivery: RefCell::new(None),
-                },
-                state: RefCell::new(DocumentState {
-                    status,
-                    generation: 0,
-                    loaded: None,
-                    published: None,
-                    committed_at_load: None,
-                    failure: None,
-                    hold: None,
-                    watch: None,
-                    watching: false,
-                    busy_retries: 0,
-                    busy_deadline: None,
-                    unreadable: None,
-                    restart: None,
-                    copying: None,
-                }),
+        let document = Rc::new(OpenDocument {
+            storage,
+            registry,
+            driver: cx.async_driver(),
+            timer: cx.timer(),
+            hurry,
+            _lifecycle: lifecycle,
+            guard: cx.close_guard(),
+            unmount: RefCell::new(None),
+            announcer: Announcer {
+                notifier: ChangeNotifier::new(),
+                told: RefCell::new((status.clone(), committed, None)),
+                queued: Cell::new(false),
+                moved: Cell::new(false),
+                delivery: RefCell::new(None),
+                closed: Cell::new(false),
+            },
+            state: RefCell::new(DocumentState {
+                status,
+                generation: 0,
+                loaded: None,
+                published: None,
+                committed_at_load: None,
+                failure: None,
+                hold: None,
+                watch: None,
+                watching: false,
+                busy_retries: 0,
+                busy_deadline: None,
+                unreadable: None,
+                restart: None,
+                copying: None,
             }),
-        }
+        });
+        // The listeners belong to the state that opened the document: they go
+        // when it unmounts, whichever clones of the document live on.
+        let closing = Rc::downgrade(&document);
+        let hook = cx.on_unmount(Box::new(move || {
+            if let Some(document) = closing.upgrade() {
+                document.announcer.close();
+            }
+        }));
+        *document.unmount.borrow_mut() = Some(hook);
+        Self { document }
     }
 
     /// Read the stored document: [`Document::initial`] when nothing is
@@ -544,7 +578,14 @@ impl<D: Document> Listenable for Persisted<D> {
     /// The document follows the registry while it has listeners, so a
     /// commit by another document of this name is told too.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        let id = self.document.announcer.notifier.add_observer(observer);
+        let announcer = &self.document.announcer;
+        let id = announcer.notifier.add_observer(observer);
+        if announcer.closed.get() {
+            // The opening state is gone: the listener would never be told,
+            // and is not kept.
+            announcer.notifier.remove_listener(id);
+            return id;
+        }
         self.document.refresh();
         id
     }
@@ -989,18 +1030,25 @@ impl<D: Document> OpenDocument<D> {
     }
 
     /// Queue a delivery to the listeners if what they were told no longer
-    /// stands and none is queued. Runs no listener: they run in the
-    /// delivery, on a later turn of the runtime's tasks.
+    /// stands, noting the move for a delivery already queued. Runs no
+    /// listener: they run in the delivery, on a later turn of the runtime's
+    /// tasks.
     fn announce(self: &Rc<Self>) {
         let announcer = &self.announcer;
         let Some(driver) = &self.driver else {
             return;
         };
-        if announcer.queued.get() {
+        if announcer.closed.get() {
             return;
         }
         let now = self.reported();
         if *announcer.told.borrow() == now {
+            return;
+        }
+        // Kept also while a delivery is queued: the state may be back on
+        // what was told by the time it runs.
+        announcer.moved.set(true);
+        if announcer.queued.get() {
             return;
         }
         let document = Rc::downgrade(self);
@@ -1064,7 +1112,7 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     let now = open.reported();
     let changed = {
         let mut told = announcer.told.borrow_mut();
-        let changed = *told != now;
+        let changed = announcer.moved.replace(false) || *told != now;
         *told = now;
         changed
     };

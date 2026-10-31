@@ -11,7 +11,7 @@ use flui::platform::EventTime;
 use flui::platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui::testing::a11y::Role;
 use flui::testing::storage::MemoryStorage;
-use flui::testing::widgets::{LaidOut, lay_out_with_storage, offset, settle_lazy, tight};
+use flui::testing::widgets::{LaidOut, lay_out, lay_out_with_storage, offset, settle_lazy, tight};
 use flui::view::CloseReason;
 
 use crate::app::AcceptanceApp;
@@ -43,6 +43,21 @@ impl AppRun {
         let mut laid = lay_out_with_storage(app.clone(), tight(WIDTH, HEIGHT), storage.clone());
         laid.enable_semantics();
         let mut run = Self { laid, storage, app };
+        run.settle();
+        run
+    }
+
+    /// Start `app` on a host with no storage at all, as a platform without
+    /// files runs it. [`storage`](Self::storage) is an empty one nothing
+    /// reads or writes.
+    pub fn start_without_storage(app: AcceptanceApp) -> Self {
+        let mut laid = lay_out(app.clone(), tight(WIDTH, HEIGHT));
+        laid.enable_semantics();
+        let mut run = Self {
+            laid,
+            storage: MemoryStorage::new(),
+            app,
+        };
         run.settle();
         run
     }
@@ -79,6 +94,13 @@ impl AppRun {
         self.request_close();
         drop(self);
     }
+
+    /// Whether the window has closed: at once, or once what held its close
+    /// was released or decided.
+    pub fn is_closed(&self) -> bool {
+        self.laid.is_closed()
+    }
+
     /// The operating system ends the session.
     pub fn end_session(&mut self) {
         self.laid.end_session();
@@ -106,6 +128,21 @@ impl AppRun {
         self.reachable(text).is_some()
     }
 
+    /// Whether text starting with `prefix` is on screen where a pointer
+    /// reaches it, for a message that ends with a detail the row does not
+    /// pin, such as an error's description.
+    pub fn shows_starting(&self, prefix: &str) -> bool {
+        self.laid
+            .find_all_by_render_type("RenderParagraph")
+            .into_iter()
+            .filter(|id| {
+                self.laid
+                    .render_property(*id, "text")
+                    .is_some_and(|text| text.starts_with(prefix))
+            })
+            .any(|id| self.centre_if_hit(id).is_some())
+    }
+
     /// Tap the on-screen `text`, then settle.
     ///
     /// # Panics
@@ -117,6 +154,15 @@ impl AppRun {
             .unwrap_or_else(|| panic!("{text:?} is not on screen"));
         self.laid.dispatch_pointer_down(x, y);
         self.laid.dispatch_pointer_up(x, y);
+        self.settle();
+    }
+
+    /// Type `text` into the focused field, one key per character, then
+    /// settle.
+    pub fn type_text(&mut self, text: &str) {
+        for character in text.chars() {
+            self.press(Key::character(character.to_string()), Modifiers::NONE);
+        }
         self.settle();
     }
 

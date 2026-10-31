@@ -27,19 +27,22 @@ use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, InputPath,
-    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
-    WaitParams, WindowId,
+    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, EventFilter,
+    InputPath, InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Retry, Snapshot,
+    SnapshotReading, Tree, WaitOutcome, WaitParams, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
 use flui_view::__runtime::{AgentPort, PendingAnswer};
-use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
+use flui_view::dev_agent::{
+    AgentAnswer, AgentEvents, AgentFault, AgentWindow, HandleKind, InspectTarget,
+};
 use parking_lot::{Mutex, RwLock};
 
 use super::UiRuntime;
+use super::agent_events::EventStream;
 use super::commands::{CommandSendError, UiCommand, UiCommandSender};
 use crate::semantics_host::SemanticsHandle;
 
@@ -121,14 +124,41 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
     },
+    /// A render object or view panicked while its tree was being read; the panic continues on
+    /// the owner thread. A read changes nothing.
+    #[error("reading the tree panicked")]
+    InspectPanicked,
     /// The presentation already holds as many waits as it admits; one ends before another is
     /// taken.
     #[error("the window already holds as many waits as it admits")]
     TooManyWaits,
+    /// The presentation already has as many live subscriptions as it admits; one ends (its
+    /// stream is dropped) before another is taken.
+    #[error("the window already has as many event subscriptions as it admits")]
+    TooManySubscriptions,
     /// The render tree was busy (a layout was in progress) when the hit-test
     /// asked for it; the same call can succeed after the frame.
     #[error("the render tree was busy")]
     RenderTreeBusy,
+    /// A tree was in the middle of something when an inspection asked for it (named in the
+    /// message, such as a frame having the render tree checked out); the same call can succeed
+    /// after it.
+    #[error("the tree is busy {0}")]
+    TreeBusy(&'static str),
+    /// An inspection's root is not in its tree: it was removed, or its slot holds a newer node.
+    #[error("{node} is gone")]
+    NodeGone {
+        /// The root asked for, as a handle.
+        node: String,
+    },
+    /// A node reference names a window that is not this one, or is closed: the node it names is
+    /// never looked up here.
+    #[error("the node reference names another window")]
+    UnknownPresentation,
+    /// The window does not keep a painted scene after the sink takes it, so the layer tree cannot
+    /// be read between frames.
+    #[error("the window keeps no painted scene to read the layer tree from")]
+    LayersNotKept,
 }
 
 impl AgentError {
@@ -136,19 +166,28 @@ impl AgentError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
-                ErrorCode::Busy
-            }
+            Self::InboxFull
+            | Self::NoTreeYet
+            | Self::RenderTreeBusy
+            | Self::TooManyWaits
+            | Self::TooManySubscriptions
+            | Self::TreeBusy(_) => ErrorCode::Busy,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
-            Self::PresentationGone | Self::NodeNotFound { issued: true, .. } => ErrorCode::Gone,
-            Self::NodeNotFound { issued: false, .. } => ErrorCode::UnknownHandle,
+            Self::PresentationGone
+            | Self::NodeNotFound { issued: true, .. }
+            | Self::NodeGone { .. } => ErrorCode::Gone,
+            Self::NodeNotFound { issued: false, .. } | Self::UnknownPresentation => {
+                ErrorCode::UnknownHandle
+            }
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
+            Self::LayersNotKept => ErrorCode::NotSupported,
             Self::Malformed
             | Self::HandlerPanicked { .. }
             | Self::ResolvePanicked { .. }
-            | Self::HitTestPanicked { .. } => ErrorCode::Platform,
+            | Self::HitTestPanicked { .. }
+            | Self::InspectPanicked => ErrorCode::Platform,
         }
     }
 
@@ -156,9 +195,12 @@ impl AgentError {
     #[must_use]
     pub fn retry(&self) -> Retry {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
-                Retry::Soon
-            }
+            Self::InboxFull
+            | Self::NoTreeYet
+            | Self::RenderTreeBusy
+            | Self::TooManyWaits
+            | Self::TooManySubscriptions
+            | Self::TreeBusy(_) => Retry::Soon,
             _ => Retry::Never,
         }
     }
@@ -174,8 +216,8 @@ impl AgentError {
     #[must_use]
     pub fn handle_kind(&self) -> Option<&'static str> {
         match self {
-            Self::PresentationGone => Some("window"),
-            Self::NodeNotFound { .. } => Some("element"),
+            Self::PresentationGone | Self::UnknownPresentation => Some("window"),
+            Self::NodeNotFound { .. } | Self::NodeGone { .. } => Some("element"),
             _ => None,
         }
     }
@@ -231,8 +273,12 @@ impl From<AgentError> for AgentFault {
     /// effect, and a message that names element ids only.
     fn from(error: AgentError) -> Self {
         let kind = match &error {
-            AgentError::PresentationGone => Some(HandleKind::Window),
-            AgentError::NodeNotFound { .. } => Some(HandleKind::Element),
+            AgentError::PresentationGone | AgentError::UnknownPresentation => {
+                Some(HandleKind::Window)
+            }
+            AgentError::NodeNotFound { .. } | AgentError::NodeGone { .. } => {
+                Some(HandleKind::Element)
+            }
             _ => None,
         };
         let fault = AgentFault::new(error.code(), error.retry(), error.to_string())
@@ -443,6 +489,27 @@ impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
     }
 }
 
+/// A subscription's answer, handed to a hook as the stream it reads.
+struct EventsAnswer(AgentReply<EventStream>);
+
+impl PendingAnswer<AgentEvents> for EventsAnswer {
+    fn try_take(&mut self) -> Option<Result<AgentEvents, AgentFault>> {
+        self.0.try_take().map(Self::wrap)
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<AgentEvents, AgentFault>> {
+        self.0.recv_timeout(timeout).map(Self::wrap)
+    }
+}
+
+impl EventsAnswer {
+    fn wrap(answer: Result<EventStream, AgentError>) -> Result<AgentEvents, AgentFault> {
+        answer
+            .map(flui_view::__runtime::agent_events)
+            .map_err(AgentFault::from)
+    }
+}
+
 /// What a presentation keeps for the development agent: see
 /// [`UiRuntime::dev_agent_window`]. Owner thread only.
 pub(crate) struct DevAgentSlot {
@@ -607,8 +674,10 @@ impl SemanticsAgent {
     ///
     /// A wait that runs out is still an answer: `satisfied: false`, with the last observation
     /// and why the window had not settled. `Frames` counts frames the owner presents after the
-    /// request and keeps them coming; a condition on events is refused until the event stream
-    /// exists. The timeout is on the window's clock, 5 s when absent and at most a day.
+    /// request and keeps them coming. A condition on an event holds once the window emits an
+    /// event of that kind after the request; it never holds for `input` or `announcement`, which
+    /// the window does not emit yet, so a wait on one runs to its timeout. The timeout is on the
+    /// window's clock, 5 s when absent and at most a day.
     ///
     /// # Errors
     ///
@@ -627,6 +696,87 @@ impl SemanticsAgent {
             UiCommand::SemanticsAgentWait {
                 presentation_id: self.sender.presentation_id,
                 params: Box::new(params),
+                reply,
+            },
+            answer,
+        )
+    }
+
+    /// Read one of the window's trees, as the typed snapshot it describes itself with: the
+    /// element tree (`Widgets`), the render tree (`Render`) or the layers of the last painted
+    /// scene (`Layers`), or the subtree under `params.root`. `params.window` is the caller's own
+    /// bookkeeping: the read is this window's.
+    ///
+    /// Ids in the answer are the tree's own handles (`v3.2`, `r12`, `l4.37`); `root` takes one,
+    /// or a `p3/v3.2` reference that must name this window. The layer tree is not kept after a
+    /// frame: it answers [`AgentError::LayersNotKept`] (the sink takes the scene). A tree that has nothing yet (no
+    /// scene was painted) answers an empty reading. A node whose own `inspect` panics is
+    /// recorded on it and the read goes on; at most 4096 nodes are reported.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
+    /// enqueued; the reply carries the rest, among them [`AgentError::UnknownPresentation`] for
+    /// a reference to another window, [`AgentError::NodeGone`] for a root that is no longer in
+    /// its tree, [`AgentError::TreeBusy`] while a frame holds the tree and
+    /// [`AgentError::LayersNotKept`] for the layer tree.
+    pub fn inspect(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> Result<AgentReply<InspectReading>, AgentError> {
+        let (command, answer) = self.inspect_command(target, params);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn inspect_command(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> (UiCommand, AgentReply<InspectReading>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::SemanticsAgentInspect {
+                presentation_id: self.sender.presentation_id,
+                target,
+                params: Box::new(params),
+                reply,
+            },
+            answer,
+        )
+    }
+
+    /// Subscribe to this agent's window's events: the kinds `filters` select, in the order the
+    /// window emits them, from the moment the owner registers the subscription. The reply
+    /// carries the stream; dropping the stream ends the subscription.
+    ///
+    /// A subscriber that reads slower than the window emits misses events, counted, never
+    /// silently: its queue holds 256, and the next event that fits is preceded by a `gap` naming
+    /// how many were missed. `Input` and `Announcement` are accepted as filters but the window
+    /// does not emit them yet: a stream that selects only those stays silent until the window
+    /// closes.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
+    /// enqueued; the reply carries the rest, among them [`AgentError::TooManySubscriptions`] and
+    /// [`AgentError::InvalidArgument`] for no filter at all.
+    pub fn subscribe(
+        &self,
+        filters: Vec<EventFilter>,
+    ) -> Result<AgentReply<EventStream>, AgentError> {
+        let (command, answer) = self.subscribe_command(filters);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn subscribe_command(&self, filters: Vec<EventFilter>) -> (UiCommand, AgentReply<EventStream>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::SemanticsAgentSubscribe {
+                presentation_id: self.sender.presentation_id,
+                filters,
                 reply,
             },
             answer,
@@ -762,12 +912,13 @@ pub(crate) struct DevAgentPort {
 
 impl DevAgentPort {
     /// Run `enqueue` if the window is open, holding admission open for it.
-    fn admit<T>(
+    fn admit<T, P>(
         &self,
-        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, AgentReply<T>),
+        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, P),
     ) -> Result<AgentAnswer<T>, AgentFault>
     where
         T: Send + 'static,
+        P: PendingAnswer<T> + 'static,
     {
         let (admission, answer) = {
             let open = self.open.read();
@@ -821,6 +972,21 @@ impl AgentPort for DevAgentPort {
 
     fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
         self.admit(|agent| agent.wait_command(params))
+    }
+
+    fn inspect(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
+        self.admit(|agent| agent.inspect_command(target, params))
+    }
+
+    fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+        self.admit(|agent| {
+            let (command, answer) = agent.subscribe_command(filters);
+            (command, EventsAnswer(answer))
+        })
     }
 
     fn actionability(

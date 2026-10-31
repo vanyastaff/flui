@@ -5,7 +5,9 @@
 //! know ([`WaitFacts`]). Evaluation is pure and runs no user code, so the owner can run it after
 //! every frame without a borrow outliving the call.
 
-use flui_protocol::{Condition, Expectation, LocateParams, Locator, Matches, Node, Observation};
+use flui_protocol::{
+    Condition, EventKind, Expectation, LocateParams, Locator, Matches, Node, Observation,
+};
 
 use super::Placement;
 use super::locate::WireLocateError;
@@ -14,6 +16,35 @@ use crate::owner::SemanticsOwner;
 /// The most matched elements one observation carries; the rest are counted.
 const OBSERVED_NODES: usize = 16;
 
+/// The kinds of event a window emitted since a wait began.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EventSet(u8);
+
+impl EventSet {
+    /// No event.
+    pub const EMPTY: Self = Self(0);
+
+    /// The bit of `kind`: its place in the vocabulary.
+    fn bit(kind: EventKind) -> u8 {
+        let place = EventKind::ALL
+            .iter()
+            .position(|known| *known == kind)
+            .expect("BUG: every event kind is in the vocabulary");
+        1 << place
+    }
+
+    /// Records that an event of `kind` was emitted.
+    pub fn insert(&mut self, kind: EventKind) {
+        self.0 |= Self::bit(kind);
+    }
+
+    /// Whether an event of `kind` was emitted.
+    #[must_use]
+    pub fn contains(self, kind: EventKind) -> bool {
+        self.0 & Self::bit(kind) != 0
+    }
+}
+
 /// What a condition depends on besides the tree, measured by the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitFacts {
@@ -21,6 +52,8 @@ pub struct WaitFacts {
     pub frames: u64,
     /// Whether the window has nothing pending that could still change it.
     pub settled: bool,
+    /// The kinds of event the window emitted since the wait began.
+    pub events: EventSet,
 }
 
 /// Whether a condition held, and what was seen deciding it.
@@ -30,16 +63,6 @@ pub struct Evaluation {
     pub holds: bool,
     /// The revision evaluated and the elements the condition's locators matched.
     pub observation: Observation,
-}
-
-/// Whether `condition` waits on an event, which no evaluation here can see.
-#[must_use]
-pub fn waits_on_events(condition: &Condition) -> bool {
-    match condition {
-        Condition::Event(_) => true,
-        Condition::All(all) | Condition::Any(all) => all.iter().any(waits_on_events),
-        _ => false,
-    }
 }
 
 /// Whether `condition` counts frames, so a wait on it must keep frames coming.
@@ -59,7 +82,7 @@ impl SemanticsOwner {
     /// then do not hold (a window that has drawn nothing has not made anything disappear), while
     /// `Frames` and `Settled` are decided from `facts` alone. `Matches` holds when the locator
     /// names at least one element and every element it names meets the expectation. An `Event`
-    /// never holds here.
+    /// holds when `facts` says an event of its kind was emitted since the wait began.
     ///
     /// # Errors
     ///
@@ -110,7 +133,14 @@ impl SemanticsOwner {
                 }
                 holds
             }
-            // `Event` and a condition added later: nothing here can see them.
+            // An event of another window never reaches this one's wait.
+            Condition::Event(filter) => {
+                filter
+                    .window
+                    .is_none_or(|window| window == placement.window)
+                    && facts.events.contains(filter.kind)
+            }
+            // A condition added later: nothing here can see it.
             _ => false,
         })
     }

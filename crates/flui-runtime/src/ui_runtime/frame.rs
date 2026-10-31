@@ -1,5 +1,6 @@
 //! Frame production: draw, paint, commit, render and frame telemetry.
 
+use super::input::preserve_first_input_panic;
 use super::{EpochDisposition, FramePaintOutcome, MAX_NOT_SHOWN_RETRIES, UiRuntime};
 use crate::epoch::FrameCommitState;
 use crate::frame_failure::{FrameFailureKind, SegmentPhase};
@@ -381,9 +382,20 @@ impl UiRuntime {
         // Owed until the anchor below completes: a drive that unwinds leaves
         // it to the next owner turn (ADR-0142 item 5).
         self.anchor_owed.set(true);
-        let result = self
-            .owner_frame
-            .drive_frame(
+        // The frames every presentation has rendered or dropped so far: a drive that unwinds
+        // having added none (a transient callback, say) had no frame to report.
+        let frames_seen = || {
+            self.presentations.iter().fold(0_u64, |seen, presentation| {
+                seen.saturating_add(presentation.frames_rendered())
+                    .saturating_add(presentation.frames_dropped())
+            })
+        };
+        let seen_before = frames_seen();
+        // A callback that panics after the frame presented unwinds out of the drive, but the
+        // frame happened: what an agent is owed for it is still delivered below, and the panic
+        // continues after.
+        let driven = catch_unwind(AssertUnwindSafe(|| {
+            self.owner_frame.drive_frame(
                 now,
                 deadline,
                 move || {
@@ -392,14 +404,34 @@ impl UiRuntime {
                 },
                 pipeline,
             )
-            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
+        }));
         drop(commits_closed);
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
-        // left, and the waits an agent parked see the window as the frame left it.
-        for presentation in self.presentations.iter() {
-            Self::complete_agent_reads(presentation);
+        // left, the events it produced are emitted, and the waits an agent parked see the window as
+        // the frame left it, events included.
+        let (result, mut first_panic) = match driven {
+            Ok(result) => (Some(result), None),
+            Err(payload) => (None, Some(payload)),
+        };
+        if result.is_some() || frames_seen() != seen_before {
+            // Contained: the platform's wake is user code, and the drive's own failure, when
+            // there is one, is the one that continues.
+            let reported = catch_unwind(AssertUnwindSafe(|| {
+                for presentation in self.presentations.iter() {
+                    Self::complete_agent_reads(presentation);
+                }
+                self.publish_agent_events();
+                self.evaluate_agent_waits(true);
+            }))
+            .err();
+            preserve_first_input_panic(&mut first_panic, reported, "agent frame report");
         }
-        self.evaluate_agent_waits(true);
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+        let result = result
+            .expect("BUG: a drive that did not unwind returned")
+            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         self.run_commit_anchor();
         result
     }

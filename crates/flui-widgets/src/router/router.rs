@@ -338,6 +338,21 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         let announcer = &self.shared.announcer;
         *announcer.driver.borrow_mut() = cx.async_driver();
         *announcer.told.borrow_mut() = self.shared.page_ids();
+        // An unmounted router tells nobody again. Its queued delivery and its
+        // listeners go at the unmount, not with the shared state: a listener
+        // that holds a handle would keep that state, and so itself, alive.
+        // The delivery goes first, so a listener capture's `Drop` that panics
+        // leaves nothing queued.
+        let shared = Rc::downgrade(&*self.shared);
+        cx.on_unmount(Box::new(move || {
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let delivery = shared.announcer.delivery.borrow_mut().take();
+            drop(delivery);
+            Listenable::remove_all_listeners(&shared.announcer.notifier);
+        }))
+        .forget();
     }
 
     fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
@@ -367,14 +382,6 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     fn dispose(&mut self) {
         self.shared.mounted.set(false);
         self.shared.navigator.remove_observer(&self.observer);
-        // An unmounted router tells nobody again. Its queued delivery and its
-        // listeners go now, not with the shared state: a listener that holds
-        // a handle would keep that state, and so itself, alive. The delivery
-        // goes first, so a listener capture's `Drop` that panics leaves
-        // nothing queued.
-        let delivery = self.shared.announcer.delivery.borrow_mut().take();
-        drop(delivery);
-        Listenable::remove_all_listeners(&self.shared.announcer.notifier);
     }
 }
 

@@ -21,6 +21,7 @@
 
 mod diff;
 mod fields;
+mod node_ref;
 mod render;
 mod snapshot;
 mod tree;
@@ -31,6 +32,7 @@ pub use diff::{Change, DiffOptions, NodePath, diff};
 pub use fields::{
     Field, FieldMeta, FieldValue, Fields, Inspect, Level, Meta, Payload, Seq, Sink, Unit,
 };
+pub use node_ref::{NodeRef, ParseRefError};
 pub use render::{Ansi, Plain, Role, Style, render, style_for};
 pub use snapshot::{
     FieldError, FromField, INSPECT_FAILED, MatchError, Matches, OwnedField, OwnedValue,

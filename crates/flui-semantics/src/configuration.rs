@@ -1504,6 +1504,23 @@ impl SemanticsConfiguration {
         self.attributes.document_selection.as_ref()
     }
 
+    /// Publishes runs `runs` of the enclosing text, the nearest ancestor
+    /// that declares [`text_content`](Self::text_content), as this node's
+    /// children instead of that text's (ADR-0214 §2 as amended): a link of
+    /// a selectable paragraph, or the text between its links, holds its own.
+    /// The regions of one text cover its runs in order, without overlap.
+    /// `None` clears it.
+    pub fn set_hosted_runs(&mut self, runs: Option<std::ops::Range<usize>>) {
+        self.attributes.hosted_runs = runs;
+        self.mark_annotated();
+    }
+
+    /// The runs of the enclosing text this node holds, if any.
+    #[inline]
+    pub fn hosted_runs(&self) -> Option<std::ops::Range<usize>> {
+        self.attributes.hosted_runs.clone()
+    }
+
     // ========================================================================
     // Relations
     // ========================================================================
@@ -1635,6 +1652,7 @@ impl SemanticsConfiguration {
             current_value_length,
             text,
             document_selection,
+            hosted_runs,
             heading_level: _,
             anchors: _,
             relations: _,
@@ -1680,6 +1698,8 @@ impl SemanticsConfiguration {
             )
             // Runs describe one field's layout.
             || both(text.is_some(), theirs.text.is_some())
+            // Hosted runs are one region's share of one text.
+            || both(hosted_runs.is_some(), theirs.hosted_runs.is_some())
             // A selection is one document's.
             || both(
                 document_selection.is_some(),
@@ -1785,6 +1805,7 @@ impl SemanticsConfiguration {
             current_value_length,
             text,
             document_selection,
+            hosted_runs,
             heading_level,
             anchors,
             relations,
@@ -1886,6 +1907,7 @@ impl SemanticsConfiguration {
         }
         keep(&mut mine.text, text.as_ref());
         keep(&mut mine.document_selection, document_selection.as_ref());
+        keep(&mut mine.hosted_runs, hosted_runs.as_ref());
         keep(&mut mine.heading_level, heading_level.as_ref());
         // A level belongs to a heading, as in `set_role`: a merge whose role is
         // not one publishes no level and keeps none to revive.
