@@ -128,6 +128,27 @@ export function scrollOf(id) { return byId(id).scrollTop; }
 export function topOf(id) { return byId(id).offsetTop; }
 export function scrollLeftOf(id) { return byId(id).scrollLeft; }
 export function styleScroller(style) { document.getElementById("scroller").style.cssText += style; }
+// A field's tag, value, selection, focus and the hints it gives the browser.
+export function fieldState(id) {
+    const field = byId(id);
+    return JSON.stringify(field ? {
+        tag: field.tagName.toLowerCase(), value: field.value, start: field.selectionStart,
+        end: field.selectionEnd, focused: document.activeElement === field,
+        autocomplete: field.getAttribute("autocomplete"), inputmode: field.getAttribute("inputmode"),
+    } : null);
+}
+let held;
+// Keep a field's element, to type into it once the host has let it go.
+export function holdField(id) { held = byId(id); }
+// The input method types into a field (or the held one): its value becomes `value`.
+export function typeIntoField(id, value, caret, composing) {
+    const field = id == null ? held : byId(id);
+    field.value = value;
+    field.setSelectionRange(caret, caret);
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: composing,
+        inputType: composing ? "insertCompositionText" : "insertText" }));
+}
+export function fieldComposition(id, type) { byId(id).dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -181,6 +202,14 @@ extern "C" {
     fn scroll_left_of(id: &str) -> f64;
     #[wasm_bindgen(js_name = styleScroller)]
     fn style_scroller(style: &str);
+    #[wasm_bindgen(js_name = fieldState)]
+    fn field_state(id: &str) -> String;
+    #[wasm_bindgen(js_name = holdField)]
+    fn hold_field(id: &str);
+    #[wasm_bindgen(js_name = typeIntoField)]
+    fn type_into_field(id: Option<&str>, value: &str, caret: u32, composing: bool);
+    #[wasm_bindgen(js_name = fieldComposition)]
+    fn field_composition(id: &str, kind: &str);
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -491,16 +520,16 @@ async fn the_placeholder_and_the_host_are_hidden_with_the_canvas() {
     window.close_now();
 }
 
-/// A focused text field leaves the page's focus on the canvas, where the
-/// window's text input serves it.
+/// A focused node that takes text with no field of its own (a date) leaves
+/// the page's focus on the canvas, where the window's text input serves it.
 #[wasm_bindgen_test]
-fn a_focused_text_field_keeps_the_page_s_focus_on_the_canvas() {
+fn a_focused_node_taking_text_without_a_field_keeps_focus_on_the_canvas() {
     const FIELD: NodeId = NodeId(4);
     let with_field = |focus| {
         let mut tree = counter(0);
         tree.nodes[0].1.push_child(FIELD);
-        let mut field = Node::new(Role::TextInput);
-        field.set_label("Name");
+        let mut field = Node::new(Role::DateInput);
+        field.set_label("Date");
         field.add_action(Action::Focus);
         field.set_bounds(Rect::new(20.0, 120.0, 220.0, 150.0));
         tree.nodes.push((FIELD, field));
@@ -839,4 +868,184 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
     assert!(actions.lock().expect("the record").is_empty());
     window.close_now();
     remove_scroller();
+}
+
+/// What a mirrored text field's element holds.
+#[derive(Debug, serde::Deserialize)]
+struct FieldState {
+    tag: String,
+    value: String,
+    start: u32,
+    end: u32,
+    focused: bool,
+    autocomplete: Option<String>,
+    inputmode: Option<String>,
+}
+
+fn field(id: &str) -> Option<FieldState> {
+    serde_json::from_str(&field_state(id)).expect("the page's answer")
+}
+
+const FIELD: NodeId = NodeId(2);
+const OTHER: NodeId = NodeId(3);
+
+/// A text field named "name" holding `value`, beside a button.
+fn form(value: &str, focus: NodeId) -> TreeUpdate {
+    let mut name = Node::new(Role::EmailInput);
+    name.set_label("Email");
+    name.set_author_id("name");
+    name.set_value(value);
+    name.add_action(Action::Focus);
+    name.set_bounds(Rect::new(20.0, 20.0, 220.0, 50.0));
+    let mut button = Node::new(Role::Button);
+    button.set_label("Send");
+    button.set_author_id("send");
+    button.add_action(Action::Focus);
+    button.set_bounds(Rect::new(20.0, 60.0, 120.0, 90.0));
+    let mut update = under_root(vec![(FIELD, name), (OTHER, button)]);
+    update.nodes[0].1.set_children(vec![FIELD, OTHER]);
+    update.focus = focus;
+    update
+}
+
+/// A window whose tree, published with the field focused, is mirrored, and
+/// the field's store, served.
+fn served_form(
+    store: &Rc<flui_testing::text_store_kit::InMemoryTextStore>,
+) -> (super::HostedCanvas, Arc<dyn PlatformAccessibility>) {
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    accessibility.publish(form(&store.text(), FIELD));
+    canvas.host.focus_store(Some(super::as_store(store)));
+    (canvas, accessibility)
+}
+
+/// While the tree's focus is a text field, its store is served through the
+/// field's own element: the page's focus is on it, the canvas has no
+/// editor, the store's text, selection and hints are the element's, the
+/// input method's edits there reach the store first (composing until
+/// `compositionend`), the application's edit made while it composes reaches
+/// the element, and a published value that lags the store is not written
+/// over it. Its keys reach the window once.
+#[wasm_bindgen_test]
+fn a_focused_text_field_is_edited_through_its_element() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    store.set_purpose(flui_platform::text_store::TextInputPurpose::Email);
+    let (canvas, accessibility) = served_form(&store);
+    let state = field("name").expect("the field's element");
+    assert_eq!(state.tag, "input");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+    assert_eq!(
+        (state.autocomplete.as_deref(), state.inputmode.as_deref()),
+        (Some("email"), Some("email")),
+        "filled and typed as an address"
+    );
+    assert_eq!(super::edit_context_text(), None, "no editor on the canvas");
+    assert!(super::editor().is_none(), "and none beside it");
+
+    field_composition("name", "compositionstart");
+    type_into_field(Some("name"), "abに", 3, true);
+    assert_eq!(store.text(), "abに");
+    assert!(store.composition().is_some(), "the inserted text composes");
+    // The tree publishes a value that lags the store.
+    accessibility.publish(form("a", FIELD));
+    assert_eq!(
+        field("name").expect("the field").value,
+        "abに",
+        "the store's"
+    );
+    store.app_replace(
+        flui_platform::text_store::Utf16Range::try_new(
+            flui_platform::text_store::Utf16Offset::ZERO,
+            flui_platform::text_store::Utf16Offset::new(2),
+        )
+        .expect("a range"),
+        "AB",
+    );
+    let state = field("name").expect("the field");
+    let caret = u32::try_from(store.selection().range().start().get()).expect("a short text");
+    assert_eq!(
+        (state.value.as_str(), state.start),
+        ("ABに", caret),
+        "the store's"
+    );
+    field_composition("name", "compositionend");
+    assert_eq!(store.composition(), None);
+    type_into_field(Some("name"), "ABにc", 4, false);
+    assert_eq!(store.text(), "ABにc");
+    let state = field("name").expect("the field");
+    assert_eq!((state.start, state.end), (4, 4));
+
+    let keys = canvas.keys.borrow().len();
+    super::key_at_focus("Enter", None);
+    assert_eq!(canvas.keys.borrow().len(), keys + 1, "delivered once");
+    assert_eq!(
+        canvas.last_key().key,
+        flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
+    );
+}
+
+/// The store leaves the field's element when the tree's focus leaves the
+/// field, the field is removed or the window closes: it is served on the
+/// canvas again, the element loses its hints, and what is typed into the
+/// element after that never reaches the store; the host shows a field no
+/// store is served through as published.
+#[wasm_bindgen_test]
+async fn the_store_goes_back_to_the_canvas_when_the_field_goes() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let (canvas, accessibility) = served_form(&store);
+    assert!(field("name").expect("the field").focused);
+
+    // The tree's focus moves on while the store is still the focused one.
+    accessibility.publish(form("ab", OTHER));
+    super::wait(0).await;
+    assert_eq!(
+        super::edit_context_text().as_deref(),
+        Some("ab"),
+        "served on the canvas"
+    );
+    let state = field("name").expect("the field stays");
+    assert_eq!(state.autocomplete, None, "its hints are gone");
+    type_into_field(Some("name"), "abz", 3, false);
+    assert_eq!(store.text(), "ab", "the element no longer edits the store");
+    assert_eq!(
+        field("name").expect("the field").value,
+        "ab",
+        "as published"
+    );
+
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    assert_eq!(super::edit_context_text(), None, "back on the field");
+    hold_field("name");
+    let mut root = Node::new(Role::Window);
+    root.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(ROOT, root)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    super::wait(0).await;
+    assert!(field("name").is_none(), "the field is removed");
+    assert_eq!(
+        super::edit_context_text().as_deref(),
+        Some("ab"),
+        "served on the canvas again"
+    );
+    type_into_field(None, "abz", 3, false);
+    assert_eq!(store.text(), "ab", "the removed element keeps no listener");
+
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    hold_field("name");
+    canvas.window.close_now();
+    super::wait(0).await;
+    type_into_field(None, "abz", 3, false);
+    assert_eq!(store.text(), "ab", "nothing listens once the window closed");
 }

@@ -2,21 +2,23 @@
 //! mirrored into an `EditContext` on the canvas, or a hidden textarea beside
 //! it where the browser has none, and served to the browser's input method.
 //!
-//! - `ime`: the decidable half, which virtual keyboard a field asks for;
+//! - `ime`: the decidable half, which virtual keyboard a field asks for and
+//!   what the browser fills it with;
 //!   pure, built for the web and for tests on every host;
 //! - `input`: `WebTextInput`, the window's `TextStoreHost` over the DOM.
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod ime {
     //! The decidable half of the web backend's text input (ADR-0090): which
-    //! virtual keyboard a field asks for. What a hidden `<textarea>`'s change
+    //! virtual keyboard a field asks for, what the browser fills it with and
+    //! how its Enter key is labelled. What a hidden `<textarea>`'s change
     //! was is the mirror's one edit ([`crate::text::ime::diff`]); which key
     //! belongs to the input method is `input::web::keys`'s. Cfg-free plain
     //! functions, so Linux CI pins them; `text::web::input` reads the DOM.
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::text_store::TextInputPurpose;
+    use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
 
     /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
     /// browser's virtual keyboard for.
@@ -33,6 +35,37 @@ mod ime {
         }
     }
 
+    /// The `autocomplete` an editor of a field of `status` gives the browser.
+    /// The hidden editor beside the canvas offers nothing to fill, and a
+    /// protected one tells a password manager it is no login field. The
+    /// semantics host's field (`native`), which a screen reader user reads and
+    /// edits as the page's own, is filled as a native field of its purpose
+    /// would be: with an address, a phone number or a password.
+    #[must_use]
+    pub(crate) const fn autocomplete(status: &TextStoreStatus, native: bool) -> &'static str {
+        match (native, status.protected, status.purpose) {
+            (false, true, _) => "new-password",
+            (true, true, _) => "current-password",
+            (true, false, TextInputPurpose::Email) => "email",
+            (true, false, TextInputPurpose::Url) => "url",
+            (true, false, TextInputPurpose::Phone) => "tel",
+            // Free text, a number or a query has nothing to fill it with.
+            _ => "off",
+        }
+    }
+
+    /// The `enterkeyhint` a field of `status` labels the virtual keyboard's
+    /// Enter key with: a search for a query, a new line for a field of many
+    /// lines; `None` leaves the browser's own.
+    #[must_use]
+    pub(crate) const fn enter_key_hint(status: &TextStoreStatus) -> Option<&'static str> {
+        match status.purpose {
+            TextInputPurpose::Search => Some("search"),
+            _ if !status.single_line => Some("enter"),
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     mod tests;
 }
@@ -42,7 +75,13 @@ mod input {
     //! The web window's text input: the field's `TextStore` (ADR-0090) served
     //! to the browser's input method through an `EditContext` on the canvas
     //! where the browser has one (Chromium), and through a hidden `<textarea>`
-    //! beside the canvas where it does not.
+    //! beside the canvas where it does not. While the semantics host mirrors
+    //! the tree's focus as a text field (`FocusedField`), the store is served
+    //! through that `<input>` or `<textarea>` instead, so a screen reader reads
+    //! and edits the field the input method edits: the host places it and
+    //! routes its focus and keys, and the input writes its value from the
+    //! store, which takes every edit first. The field gone, or named no more,
+    //! the store moves back to the canvas.
     //!
     //! [`WebTextInput`] is the window's `TextStoreHost` (ADR-0135): the
     //! presentation names the focused field's store, and the host mirrors that
@@ -77,11 +116,11 @@ mod input {
     };
     use wasm_bindgen::{JsCast, prelude::*};
 
-    use super::ime::input_mode;
+    use super::ime::{autocomplete, enter_key_hint, input_mode};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
-    use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
+    use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef, FocusedField};
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{diff, document_text, scalar_spans};
 
@@ -153,11 +192,79 @@ mod input {
     enum Surface {
         /// An `EditContext` on the canvas.
         Context(EditContext),
-        /// A hidden textarea beside the canvas, with the text it last held.
-        TextArea {
-            element: web_sys::HtmlTextAreaElement,
+        /// An element the browser edits, with the text it last held: the
+        /// hidden textarea the input keeps beside the canvas (`hidden`), or
+        /// the semantics host's field, which the host keeps.
+        Editor {
+            element: EditorElement,
+            hidden: bool,
             mirror: RefCell<Vec<u16>>,
         },
+    }
+
+    /// An editor element: a `<textarea>`, or a single-line `<input>`.
+    #[derive(Clone)]
+    enum EditorElement {
+        Area(web_sys::HtmlTextAreaElement),
+        Line(web_sys::HtmlInputElement),
+    }
+
+    impl EditorElement {
+        /// `element` as an editor; `None` when it is neither.
+        fn of(element: &web_sys::HtmlElement) -> Option<Self> {
+            if let Some(area) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+                Some(Self::Area(area.clone()))
+            } else {
+                element
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .map(|line| Self::Line(line.clone()))
+            }
+        }
+
+        fn html(&self) -> &web_sys::HtmlElement {
+            match self {
+                Self::Area(area) => area,
+                Self::Line(line) => line,
+            }
+        }
+
+        fn value(&self) -> String {
+            match self {
+                Self::Area(area) => area.value(),
+                Self::Line(line) => line.value(),
+            }
+        }
+
+        fn set_value(&self, value: &str) {
+            match self {
+                Self::Area(area) => area.set_value(value),
+                Self::Line(line) => line.set_value(value),
+            }
+        }
+
+        /// The selection's start and end; the start of the text when the
+        /// element reports none.
+        fn selection(&self) -> (u32, u32) {
+            let (start, end) = match self {
+                Self::Area(area) => (area.selection_start(), area.selection_end()),
+                Self::Line(line) => (line.selection_start(), line.selection_end()),
+            };
+            (
+                start.ok().flatten().unwrap_or(0),
+                end.ok().flatten().unwrap_or(0),
+            )
+        }
+
+        fn select(&self, start: u32, end: u32) {
+            let _ = match self {
+                Self::Area(area) => area.set_selection_range(start, end),
+                Self::Line(line) => line.set_selection_range(start, end),
+            };
+        }
+
+        fn is(&self, element: &web_sys::HtmlElement) -> bool {
+            self.html().is_same_node(Some(element.as_ref()))
+        }
     }
 
     /// The focused field: its store, the surface mirroring it, and the
@@ -178,6 +285,9 @@ mod input {
         editor: Rc<dyn CanvasEditor>,
         accepting: Accepting,
         keys: Rc<dyn CanvasKeys>,
+        /// The semantics host's field, which the store is served through
+        /// while the host names it.
+        field: Rc<FocusedField>,
         /// Whether this browser has `EditContext`, decided when the window
         /// opens.
         edit_context: bool,
@@ -231,23 +341,32 @@ mod input {
 
     impl WebTextInput {
         fn new(window: &CanvasRef) -> Rc<Self> {
-            Rc::new_cyclic(|this| Self {
+            let input = Rc::new_cyclic(|this| Self {
                 canvas: window.canvas.clone(),
                 editor: Rc::clone(&window.editor),
                 accepting: window.accepting.clone(),
                 keys: Rc::clone(&window.keys),
+                field: Rc::clone(&window.field),
                 edit_context: has_edit_context(),
                 attached: RefCell::new(None),
                 queue: HostQueue::new(),
                 retired: Cell::new(false),
                 resync_queued: RefCell::default(),
                 this: this.clone(),
-            })
+            });
+            let this = Rc::downgrade(&input);
+            input.field.on_change(Some(Rc::new(move || {
+                if let Some(this) = this.upgrade() {
+                    this.field_changed();
+                }
+            })));
+            input
         }
 
         /// The window closed: detach the focused field, if any, for good.
         fn retire(&self) {
             self.retired.set(true);
+            self.field.on_change(None);
             self.queue.clear();
             self.detach();
         }
@@ -258,6 +377,37 @@ mod input {
                 .borrow()
                 .as_ref()
                 .map(|attached| Rc::clone(&attached.store))
+        }
+
+        /// The semantics host named another field, or none: the focused store
+        /// moves to the field it names, or back to the canvas, once the
+        /// current task ends, as the host may be changing its elements now.
+        fn field_changed(&self) {
+            let found = self
+                .attached
+                .borrow()
+                .as_ref()
+                .map(|attached| (Rc::clone(&attached.store), Rc::clone(&attached.surface)));
+            let Some((store, surface)) = found else {
+                return;
+            };
+            let named = self.field.named();
+            let served = match &*surface {
+                Surface::Editor {
+                    element,
+                    hidden: false,
+                    ..
+                } => Some(element),
+                Surface::Context(_) | Surface::Editor { .. } => None,
+            };
+            let moved = match (served, named.as_ref().and_then(EditorElement::of)) {
+                (Some(served), Some(named)) => !served.is(named.html()),
+                (None, None) => false,
+                _ => true,
+            };
+            if moved {
+                self.schedule_resync(store);
+            }
         }
 
         /// Apply the requests queued while the host was inside a store call.
@@ -381,7 +531,12 @@ mod input {
                         tracing::debug!(?error, "the EditContext could not be detached");
                     }
                 }
-                Surface::TextArea { element, .. } => {
+                Surface::Editor {
+                    element,
+                    hidden: true,
+                    ..
+                } => {
+                    let element = element.html();
                     let had_focus = self
                         .canvas
                         .owner_document()
@@ -392,6 +547,13 @@ mod input {
                     }
                     self.editor.set(None);
                     element.remove();
+                }
+                // The field is the host's, its focus too: only the hints go.
+                Surface::Editor { element, .. } => {
+                    self.field.serve(None);
+                    for name in EDITOR_HINTS {
+                        let _ = element.html().remove_attribute(name);
+                    }
                 }
             }
             contain_owner_callback(|| store.set_observer(None));
@@ -412,14 +574,20 @@ mod input {
             }
         }
 
-        /// Give `store` a fresh surface, holding its text and selection.
+        /// Give `store` a fresh surface, holding its text and selection: the
+        /// semantics host's field while it names one, else an `EditContext` on
+        /// the canvas, else a hidden textarea beside it.
         fn attach(&self, store: Rc<dyn TextStore>) {
             let (text, selection) = snapshot(&*store)
                 .unwrap_or_else(|| (String::new(), Selection::collapsed(Utf16Offset::ZERO)));
-            let attached = if self.edit_context {
-                self.attach_context(&store, &text, selection)
-            } else {
-                self.attach_textarea(&store, &text, selection)
+            let field = self.field.named().as_ref().and_then(EditorElement::of);
+            let attached = match field {
+                Some(field) => self.attach_editor(&store, &text, selection, field, false),
+                None if self.edit_context => self.attach_context(&store, &text, selection),
+                None => self.hidden_editor().and_then(|element| {
+                    let element = EditorElement::Area(element);
+                    self.attach_editor(&store, &text, selection, element, true)
+                }),
             };
             match attached {
                 Ok(attached) => {
@@ -559,19 +727,17 @@ mod input {
                 Surface::Context(_) => self
                     .canvas
                     .set_attribute("inputmode", input_mode(status.purpose)),
-                Surface::TextArea { element, .. } => set_textarea_hints(element, &status),
+                Surface::Editor {
+                    element, hidden, ..
+                } => set_editor_hints(element.html(), &status, !*hidden),
             };
             if let Err(error) = result {
                 tracing::debug!(?error, "the keyboard hints could not be updated");
             }
         }
 
-        fn attach_textarea(
-            &self,
-            store: &Rc<dyn TextStore>,
-            text: &str,
-            selection: Selection,
-        ) -> Result<Attached, JsValue> {
+        /// A hidden textarea for the canvas's field, not yet in the page.
+        fn hidden_editor(&self) -> Result<web_sys::HtmlTextAreaElement, JsValue> {
             let document = self
                 .canvas
                 .owner_document()
@@ -579,7 +745,6 @@ mod input {
             let element: web_sys::HtmlTextAreaElement =
                 document.create_element("textarea")?.unchecked_into();
             for (name, value) in [
-                ("autocomplete", "off"),
                 ("autocapitalize", "off"),
                 ("autocorrect", "off"),
                 ("spellcheck", "false"),
@@ -587,8 +752,6 @@ mod input {
             ] {
                 element.set_attribute(name, value)?;
             }
-            let status = store.status();
-            set_textarea_hints(&element, &status)?;
             let style = element.style();
             for (property, value) in [
                 ("position", "fixed"),
@@ -605,10 +768,26 @@ mod input {
             ] {
                 style.set_property(property, value)?;
             }
+            Ok(element)
+        }
+
+        /// Serve `store` through `element`, holding `text` and `selection`:
+        /// the `hidden` textarea, which the input puts beside the canvas and
+        /// whose focus and keys it routes, or the semantics host's field, which
+        /// the host places and whose focus and keys the host routes.
+        fn attach_editor(
+            &self,
+            store: &Rc<dyn TextStore>,
+            text: &str,
+            selection: Selection,
+            element: EditorElement,
+            hidden: bool,
+        ) -> Result<Attached, JsValue> {
+            set_editor_hints(element.html(), &store.status(), !hidden)?;
             element.set_value(text);
             let selected = selection.range();
-            let _ = element.set_selection_range(as_u32(selected.start()), as_u32(selected.end()));
-            let target: &web_sys::EventTarget = element.as_ref();
+            element.select(as_u32(selected.start()), as_u32(selected.end()));
+            let target: &web_sys::EventTarget = element.html().as_ref();
             let mut listeners = Vec::new();
             let listen = |target: &web_sys::EventTarget,
                           kind: &'static str,
@@ -616,13 +795,15 @@ mod input {
                 CanvasListener::install(target, kind, &self.accepting, body)
                     .map_err(|error| JsValue::from_str(&error.to_string()))
             };
-            for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
-                let keys = Rc::clone(&self.keys);
-                listeners.push(listen(
-                    target,
-                    kind,
-                    Box::new(move |event| keys.deliver(&event, state)),
-                )?);
+            if hidden {
+                for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
+                    let keys = Rc::clone(&self.keys);
+                    listeners.push(listen(
+                        target,
+                        kind,
+                        Box::new(move |event| keys.deliver(&event, state)),
+                    )?);
+                }
             }
             for kind in ["compositionstart", "compositionend"] {
                 let this = self.this.clone();
@@ -636,7 +817,7 @@ mod input {
                         let composing = event.type_() == "compositionstart";
                         this.keys.set_composing(composing);
                         if !composing {
-                            this.read_textarea(false);
+                            this.read_editor(false);
                         }
                     }),
                 )?);
@@ -648,26 +829,28 @@ mod input {
                     kind,
                     Box::new(move |_| {
                         if let Some(this) = this.upgrade() {
-                            this.read_textarea(this.keys.composing());
+                            this.read_editor(this.keys.composing());
                         }
                     }),
                 )?);
             }
-            for kind in ["focus", "blur"] {
-                let focus = Rc::clone(&self.editor);
-                listeners.push(listen(
-                    target,
-                    kind,
-                    Box::new(move |event| {
-                        if !focus.is_handoff(&event) {
-                            focus.sync();
-                        }
-                    }),
-                )?);
+            if hidden {
+                for kind in ["focus", "blur"] {
+                    let focus = Rc::clone(&self.editor);
+                    listeners.push(listen(
+                        target,
+                        kind,
+                        Box::new(move |event| {
+                            if !focus.is_handoff(&event) {
+                                focus.sync();
+                            }
+                        }),
+                    )?);
+                }
             }
             // The canvas forwards its focus to the field's editor.
             {
-                let editor = element.clone();
+                let editor = element.html().clone();
                 listeners.push(listen(
                     self.canvas.as_ref(),
                     "focus",
@@ -676,31 +859,35 @@ mod input {
                     }),
                 )?);
             }
-            listeners.extend(self.viewport_listeners()?);
-            let parent = self
-                .canvas
-                .parent_node()
-                .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
-            parent.insert_before(&element, self.canvas.next_sibling().as_ref())?;
-            self.editor.set(Some(element.unchecked_ref()));
-            let canvas_focused = self.editor.has_focus();
-            if canvas_focused {
-                let _ = element.focus();
+            if hidden {
+                listeners.extend(self.viewport_listeners()?);
+                let parent = self
+                    .canvas
+                    .parent_node()
+                    .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
+                parent.insert_before(element.html(), self.canvas.next_sibling().as_ref())?;
+                self.editor.set(Some(element.html()));
+                if self.editor.has_focus() {
+                    let _ = element.html().focus();
+                }
+            } else {
+                self.field.serve(Some(element.html()));
             }
             Ok(Attached {
                 store: Rc::clone(store),
-                surface: Rc::new(Surface::TextArea {
+                surface: Rc::new(Surface::Editor {
                     element,
+                    hidden,
                     mirror: RefCell::new(text.encode_utf16().collect()),
                 }),
                 _listeners: listeners,
             })
         }
 
-        /// Apply what changed in the textarea since the host last read it: the
+        /// Apply what changed in the editor since the host last read it: the
         /// one edit between the two values, the composition when `composing`,
         /// and the selection.
-        fn read_textarea(&self, composing: bool) {
+        fn read_editor(&self, composing: bool) {
             let surface = self
                 .attached
                 .borrow()
@@ -709,16 +896,16 @@ mod input {
             let Some(surface) = surface else {
                 return;
             };
-            let Surface::TextArea { element, mirror } = &*surface else {
+            let Surface::Editor {
+                element, mirror, ..
+            } = &*surface
+            else {
                 return;
             };
             let now: Vec<u16> = element.value().encode_utf16().collect();
             let change = diff(&mirror.borrow(), &now);
             mirror.borrow_mut().clone_from(&now);
-            let selection = (
-                element.selection_start().ok().flatten().unwrap_or(0),
-                element.selection_end().ok().flatten().unwrap_or(0),
-            );
+            let selection = element.selection();
             self.edit(move |session| {
                 if let Some(change) = change {
                     let replaced = clamped(
@@ -780,11 +967,12 @@ mod input {
                     let _ =
                         context.update_selection(as_u32(selected.start()), as_u32(selected.end()));
                 }
-                Surface::TextArea { element, mirror } => {
+                Surface::Editor {
+                    element, mirror, ..
+                } => {
                     element.set_value(&text);
                     *mirror.borrow_mut() = text.encode_utf16().collect();
-                    let _ = element
-                        .set_selection_range(as_u32(selected.start()), as_u32(selected.end()));
+                    element.select(as_u32(selected.start()), as_u32(selected.end()));
                 }
             }
         }
@@ -802,9 +990,8 @@ mod input {
                     let _ =
                         context.update_selection(as_u32(selected.start()), as_u32(selected.end()));
                 }
-                Surface::TextArea { element, .. } => {
-                    let _ = element
-                        .set_selection_range(as_u32(selected.start()), as_u32(selected.end()));
+                Surface::Editor { element, .. } => {
+                    element.select(as_u32(selected.start()), as_u32(selected.end()));
                 }
             }
             self.push_bounds();
@@ -877,15 +1064,21 @@ mod input {
                         let _ = context.update_selection_bounds(&rect);
                     }
                 }
-                Surface::TextArea { element, .. } => {
+                Surface::Editor {
+                    element,
+                    hidden: true,
+                    ..
+                } => {
                     if let Some(caret) = caret {
-                        let style = element.style();
+                        let style = element.html().style();
                         let _ = style.set_property("left", &format!("{}px", caret.origin.x + left));
                         let _ = style.set_property("top", &format!("{}px", caret.origin.y + top));
                         let _ = style
                             .set_property("height", &format!("{}px", caret.size.height.max(1.0)));
                     }
                 }
+                // The semantics host places its field.
+                Surface::Editor { .. } => {}
             }
         }
 
@@ -981,9 +1174,9 @@ mod input {
                     let _ = attach_edit_context(element, &JsValue::NULL);
                     let _ = attach_edit_context(element, context.as_ref());
                 }
-                Some(Surface::TextArea { element, .. }) => {
-                    let _ = element.blur();
-                    let _ = element.focus();
+                Some(Surface::Editor { element, .. }) => {
+                    let _ = element.html().blur();
+                    let _ = element.html().focus();
                 }
                 None => {}
             }
@@ -1119,22 +1312,25 @@ mod input {
         }
     }
 
-    /// The hints a textarea editor gives the browser for the field's status: the
-    /// keyboard its purpose asks for, and, for a protected field, that a password
-    /// manager must not treat the editor as a login field.
-    fn set_textarea_hints(
-        element: &web_sys::HtmlTextAreaElement,
+    /// The attributes an editor's hints are written to, which the semantics
+    /// host's field loses once nothing is served through it.
+    const EDITOR_HINTS: [&str; 3] = ["inputmode", "autocomplete", "enterkeyhint"];
+
+    /// The hints an editor gives the browser for the field's status
+    /// ([`EDITOR_HINTS`]): the keyboard its purpose asks for, what the
+    /// browser may fill it with (`native` for the semantics host's field,
+    /// see [`autocomplete`]) and the label of the keyboard's Enter key.
+    fn set_editor_hints(
+        element: &web_sys::HtmlElement,
         status: &TextStoreStatus,
+        native: bool,
     ) -> Result<(), JsValue> {
         element.set_attribute("inputmode", input_mode(status.purpose))?;
-        element.set_attribute(
-            "autocomplete",
-            if status.protected {
-                "new-password"
-            } else {
-                "off"
-            },
-        )
+        element.set_attribute("autocomplete", autocomplete(status, native))?;
+        match enter_key_hint(status) {
+            Some(hint) => element.set_attribute("enterkeyhint", hint),
+            None => element.remove_attribute("enterkeyhint"),
+        }
     }
 }
 

@@ -503,6 +503,7 @@ impl WebWindow {
             accepting: registration.accepting(),
             keys,
             editor: Rc::clone(&focus) as Rc<dyn CanvasEditor>,
+            field: Rc::default(),
         };
         let facets = positions.for_window(&canvas);
         let visibility = Rc::new(self.visibility_sync(Rc::clone(&registration.accepting)));

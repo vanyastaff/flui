@@ -23,8 +23,9 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
@@ -44,6 +45,7 @@ pub struct InMemoryTextStore {
     /// was held or the gate was shut when they happened.
     pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
+    purpose: Cell<TextInputPurpose>,
     owner_notifications: Cell<usize>,
     /// A session changed the committed text and its owner notification is
     /// not delivered yet: it is, once the session's lock is released.
@@ -115,6 +117,7 @@ impl InMemoryTextStore {
             observer: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
+            purpose: Cell::new(TextInputPurpose::Text),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
             generation: Cell::new(EditGeneration::FIRST),
@@ -143,6 +146,14 @@ impl InMemoryTextStore {
     /// Mark the store protected (a password field) and tell the observer.
     pub fn set_protected(&self, protected: bool) {
         if self.protected.replace(protected) != protected {
+            self.report(Notice::Status);
+        }
+    }
+
+    /// Give the store `purpose` (an address, a query, …) and tell the
+    /// observer.
+    pub fn set_purpose(&self, purpose: TextInputPurpose) {
+        if self.purpose.replace(purpose) != purpose {
             self.report(Notice::Status);
         }
     }
@@ -295,7 +306,9 @@ impl InMemoryTextStore {
 
 impl TextStore for InMemoryTextStore {
     fn status(&self) -> TextStoreStatus {
-        TextStoreStatus::EDITABLE_SINGLE_LINE.with_protected(self.protected.get())
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+            .with_protected(self.protected.get())
+            .with_purpose(self.purpose.get())
     }
 
     fn request_lock(

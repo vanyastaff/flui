@@ -242,11 +242,74 @@ pub struct CanvasRef {
     pub(crate) keys: Rc<dyn CanvasKeys>,
     /// The canvas's focus area, which the text input's editor joins.
     pub(crate) editor: Rc<dyn CanvasEditor>,
+    /// The field the semantics host mirrors where the tree's focus is, which
+    /// the text input edits through.
+    pub(crate) field: Rc<FocusedField>,
 }
 
 impl std::fmt::Debug for CanvasRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CanvasRef").finish_non_exhaustive()
+    }
+}
+
+/// The text field a canvas's semantics host mirrors where the tree's focus
+/// is ([`CanvasRef::field`]): the `<input>` or `<textarea>` a screen reader
+/// reads and edits as a native field. While the window's text input serves
+/// the focused store, it edits the store through that element instead of an
+/// editor of its own, and the host leaves the element's value to it.
+#[derive(Default)]
+pub(crate) struct FocusedField {
+    /// The element the semantics host names.
+    named: RefCell<Option<web_sys::HtmlElement>>,
+    /// The element the text input edits a store through now.
+    served: RefCell<Option<web_sys::HtmlElement>>,
+    /// What the text input does when the named element changes.
+    changed: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+impl FocusedField {
+    /// The element the semantics host names now.
+    pub(crate) fn named(&self) -> Option<web_sys::HtmlElement> {
+        self.named.borrow().clone()
+    }
+
+    /// The semantics host's focused field is `element` now, `None` when the
+    /// tree's focus is on no mirrored field or the host is gone. The text
+    /// input hears of a change with nothing here borrowed.
+    pub(crate) fn name(&self, element: Option<&web_sys::HtmlElement>) {
+        let same = match (&*self.named.borrow(), element) {
+            (Some(named), Some(element)) => named.is_same_node(Some(element.as_ref())),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        *self.named.borrow_mut() = element.cloned();
+        let changed = self.changed.borrow().clone();
+        if let Some(changed) = changed {
+            changed();
+        }
+    }
+
+    /// Run `changed` whenever the named element changes; `None` stops it.
+    pub(crate) fn on_change(&self, changed: Option<Rc<dyn Fn()>>) {
+        *self.changed.borrow_mut() = changed;
+    }
+
+    /// The text input edits a store through `element` now, or through none.
+    pub(crate) fn serve(&self, element: Option<&web_sys::HtmlElement>) {
+        *self.served.borrow_mut() = element.cloned();
+    }
+
+    /// Whether the text input edits a store through `element`, whose value
+    /// is then the store's.
+    pub(crate) fn serves(&self, element: &web_sys::Element) -> bool {
+        self.served
+            .borrow()
+            .as_ref()
+            .is_some_and(|served| served.is_same_node(Some(element.as_ref())))
     }
 }
 

@@ -33,14 +33,16 @@ use flui_semantics::platform::{
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement};
+use web_sys::{
+    Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement,
+};
 
 use super::aria::{self, ElementIds, ElementSpec, Placement, Scroll, Tag};
 use super::mirror::{Mirror, Op, Refused};
 use crate::accessibility::bridge::BridgeShared;
 use crate::owner::slot::OwnerSlot;
 use crate::owner::web::listener::{CanvasListener, viewport_listeners, warn_failure};
-use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
+use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef, FocusedField};
 
 /// The attribute that names the node an element mirrors.
 const NODE_ATTRIBUTE: &str = "data-flui-node";
@@ -185,6 +187,8 @@ struct Page {
     accepting: Accepting,
     keys: Rc<dyn CanvasKeys>,
     editor: Rc<dyn CanvasEditor>,
+    /// The field the text input edits through, which the tree's focus names.
+    field: Rc<FocusedField>,
     stage: RefCell<Stage>,
     tree: RefCell<Tree>,
     work: RefCell<VecDeque<Work>>,
@@ -213,6 +217,7 @@ impl Page {
             accepting: window.accepting.clone(),
             keys: Rc::clone(&window.keys),
             editor: Rc::clone(&window.editor),
+            field: Rc::clone(&window.field),
             stage: RefCell::new(Stage::Retired),
             tree: RefCell::new(Tree {
                 mirror: Mirror::new(ElementIds::new(scope())),
@@ -317,7 +322,7 @@ impl Page {
         let this = self.this.clone();
         listeners.push(self.listen(target, "input", move |event| {
             if let Some(this) = this.upgrade() {
-                this.slider_moved(&event);
+                this.input_changed(&event);
             }
         })?);
         // `scroll` does not bubble: the host sees its scrollers' in the
@@ -495,9 +500,14 @@ impl Page {
                 if matches!(op, Op::Focus(_)) {
                     focus_moved = true;
                 }
-                if let Err(error) =
-                    run(&self.document, &host, &mut tree.elements, &mut scrolled, op)
-                {
+                if let Err(error) = run(
+                    &self.document,
+                    &host,
+                    &self.field,
+                    &mut tree.elements,
+                    &mut scrolled,
+                    op,
+                ) {
                     warn_failure("the semantics host could not be changed", &error);
                 }
             }
@@ -507,15 +517,29 @@ impl Page {
         for (element, scroll) in &scrolled {
             scroll_to(element, scroll);
         }
+        let field = self.focused_field();
+        self.field.name(field.as_ref());
         if focus_was_in_window && (focus_moved || !self.holds_focus(&host)) {
             self.follow_focus();
         }
     }
 
+    /// The element of the tree's focus when it is mirrored as a text field.
+    fn focused_field(&self) -> Option<HtmlElement> {
+        let tree = self.tree.borrow();
+        let focus = tree.mirror.focus()?;
+        tree.mirror
+            .spec(focus)
+            .is_some_and(|spec| spec.tag.is_field())
+            .then(|| tree.elements.get(&focus).cloned())
+            .flatten()
+    }
+
     /// Move the page's focus to the tree's focus. A focus whose element
-    /// takes no DOM focus (a root without `Action::Focus`), or a text field,
-    /// which the window's text input serves on the canvas, puts the page's
-    /// focus on the canvas, off any element it was on before.
+    /// takes no DOM focus (a root without `Action::Focus`), or a node that
+    /// takes text with no field of its own, which the window's text input
+    /// serves on the canvas, puts the page's focus on the canvas, off any
+    /// element it was on before.
     fn follow_focus(&self) {
         let element = {
             let tree = self.tree.borrow();
@@ -524,8 +548,13 @@ impl Page {
             }
             tree.mirror
                 .focus()
-                // A text field is served on the canvas.
-                .filter(|&focus| !tree.mirror.node(focus).is_some_and(aria::takes_text))
+                .filter(|&focus| {
+                    let field = tree
+                        .mirror
+                        .spec(focus)
+                        .is_some_and(|spec| spec.tag.is_field());
+                    field || !tree.mirror.node(focus).is_some_and(aria::takes_text)
+                })
                 .and_then(|focus| tree.elements.get(&focus).cloned())
         };
         if let Some(element) = element {
@@ -590,29 +619,41 @@ impl Page {
         }));
     }
 
-    /// The browser moved a slider's range input, for a screen reader: the
-    /// value, or a step towards it, is asked of the node. The input shows
-    /// the node's value again until the tree publishes the moved one, so a
-    /// move the node refuses leaves nothing behind.
-    fn slider_moved(&self, event: &web_sys::Event) {
+    /// The browser changed an input's value. A slider's range input moved
+    /// for a screen reader: the value, or a step towards it, is asked of the
+    /// node. The input shows the node's value again until the tree publishes
+    /// the moved one, so a move the node refuses leaves nothing behind. A text
+    /// field the window's text input edits through is the store's, which
+    /// takes the edit; one it does not is shown as published again, since
+    /// only the store edits the text.
+    fn input_changed(&self, event: &web_sys::Event) {
         let Some((node, element)) = event_node(event) else {
             return;
         };
-        let Some(input) = element.dyn_ref::<HtmlInputElement>() else {
+        if self.field.serves(&element) {
             return;
-        };
-        let value = input.value_as_number();
+        }
         let Ok(tree) = self.tree.try_borrow() else {
             return;
         };
-        let request = tree
-            .mirror
-            .node(node)
-            .and_then(|mirrored| aria::slider_request(mirrored, value));
-        let published = tree.mirror.spec(node).and_then(|spec| spec.value.clone());
+        let Some(spec) = tree.mirror.spec(node) else {
+            return;
+        };
+        let published = spec.value.clone();
+        let request = match spec.tag {
+            Tag::Range => element
+                .dyn_ref::<HtmlInputElement>()
+                .map(HtmlInputElement::value_as_number)
+                .and_then(|value| {
+                    let mirrored = tree.mirror.node(node)?;
+                    aria::slider_request(mirrored, value)
+                }),
+            Tag::Line | Tag::Area => None,
+            Tag::Node | Tag::Link => return,
+        };
         drop(tree);
         if let Some(published) = published {
-            input.set_value(&published);
+            set_value(&element, &published);
         }
         if let Some((action, data)) = request {
             self.submit(Work::Action(ActionRequest {
@@ -821,6 +862,8 @@ impl Page {
     fn retire(&self) {
         let stage = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Retired);
         self.work.borrow_mut().clear();
+        // The text input goes back to an editor of its own.
+        self.field.name(None);
         match stage {
             Stage::Placeholder(placeholder) => placeholder.element.remove(),
             Stage::Host(host) => {
@@ -857,6 +900,7 @@ fn event_node(event: &web_sys::Event) -> Option<(NodeId, Element)> {
 fn run(
     document: &Document,
     host: &HtmlElement,
+    field: &FocusedField,
     elements: &mut HashMap<NodeId, HtmlElement>,
     scrolled: &mut Vec<(HtmlElement, Scroll)>,
     op: Op,
@@ -894,7 +938,7 @@ fn run(
         }
         Op::Update { id, old, new } => {
             if let Some(element) = elements.get(&id) {
-                write(element, Some(&old), &new)?;
+                write(element, Some(&old), &new, field.serves(element))?;
                 if let Some(scroll) = new.scroll.filter(|scroll| old.scroll != Some(*scroll)) {
                     scrolled.push((element.clone(), scroll));
                 }
@@ -946,13 +990,19 @@ fn create(document: &Document, id: NodeId, spec: &ElementSpec) -> Result<HtmlEle
     ] {
         style.set_property(property, value)?;
     }
-    if spec.tag == Tag::Range {
-        // The input's own look would size it; its box is the slider's.
-        for (property, value) in [("appearance", "none"), ("padding", "0"), ("border", "0")] {
+    if matches!(spec.tag, Tag::Range | Tag::Line | Tag::Area) {
+        // The input's own look would size it; its box is the node's.
+        for (property, value) in [
+            ("appearance", "none"),
+            ("padding", "0"),
+            ("border", "0"),
+            ("box-sizing", "border-box"),
+            ("resize", "none"),
+        ] {
             style.set_property(property, value)?;
         }
     }
-    write(&element, None, spec)?;
+    write(&element, None, spec, false)?;
     Ok(element)
 }
 
@@ -967,11 +1017,15 @@ fn scroll_to(element: &Element, scroll: &Scroll) {
     }
 }
 
-/// Bring `element` from `old` (nothing, for a new element) to `new`.
+/// Bring `element` from `old` (nothing, for a new element) to `new`. The
+/// value of a field the window's text input edits through (`served`) is the
+/// store's, which the text input writes; the published one, which can lag
+/// it (a composition in progress), is left out.
 fn write(
     element: &HtmlElement,
     old: Option<&ElementSpec>,
     new: &ElementSpec,
+    served: bool,
 ) -> Result<(), JsValue> {
     let before: &[(&str, String)] = old.map_or(&[], |old| &old.attributes);
     for (name, _) in before {
@@ -993,10 +1047,11 @@ fn write(
     }
     // An input sanitizes its value against its range as `min`, `max` and
     // `step` are written, so a changed attribute writes the value again.
-    if old.map(|old| (&old.value, &old.attributes)) != Some((&new.value, &new.attributes))
-        && let (Some(value), Some(input)) = (&new.value, element.dyn_ref::<HtmlInputElement>())
+    if !served
+        && old.map(|old| (&old.value, &old.attributes)) != Some((&new.value, &new.attributes))
+        && let Some(value) = &new.value
     {
-        input.set_value(value);
+        set_value(element, value);
     }
     if old.map(|old| old.placement) != Some(new.placement) {
         place(element, &new.placement)?;
@@ -1005,6 +1060,15 @@ fn write(
         write_extent(element, new.scroll.as_ref())?;
     }
     Ok(())
+}
+
+/// Write `value` to an input's or a textarea's `value` property.
+fn set_value(element: &Element, value: &str) {
+    if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
+        input.set_value(value);
+    } else if let Some(area) = element.dyn_ref::<HtmlTextAreaElement>() {
+        area.set_value(value);
+    }
 }
 
 /// Make `element` a scroller over content of `scroll`'s size, or a plain
