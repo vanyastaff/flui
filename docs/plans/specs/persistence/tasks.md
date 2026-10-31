@@ -3,9 +3,10 @@
 - **Статус:** Утверждена владельцем 2026-10-28; исполнение
 - **Design:** [design.md](design.md) (раздел «Решения владельца 2026-10-28»); требования —
   [requirements.md](requirements.md); контракт закрытия — [teardown/tasks.md](../teardown/tasks.md)
-- **Итог:** сделаны P1, P2, P3, P10; P6 сделана в части; P7, P8, P9 (Notes) устарели и
-  заменены P10–P12. Осталось пять задач: P4, P5 и остаток P6 строятся на шве
-  возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52.
+- **Итог:** сделаны P1, P2, P3, P10, P11; P6 сделана в части; P7, P8, P9 (Notes) устарели и
+  заменены P10–P12. Осталось четыре задачи: P4, P5 и остаток P6 строятся на шве
+  возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52; P12 ждёт
+  flui-driver FD11.
 - **Приложение приёмки** — задача P10 этой спеки. Его строки пишут три спеки: persistence (P11),
   teardown (T18), text-ime (T11).
 
@@ -150,7 +151,7 @@ graph LR
 | R11 | `a_held_write_keeps_typing_and_scrolling_live`; `a_blocked_store_keeps_frames_and_input_live` | P11; teardown T4 | C, L |
 | R12 | `user_close_waits_for_an_in_flight_save`; прогон | P5; P12 | L, D |
 | R13 | `hidden_writes_the_session_and_resume_does_not_reread`; сворачивание | P11; P12 | C, D |
-| R14 | `close_with_a_failed_write_requires_a_decision`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
+| R14 | `close_with_a_failed_write_requires_a_decision`, `close_during_a_save_waits_for_it`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
 | R15 | `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit`; `taskkill /F` | P5; P12 | L, D |
 | R16 | `busy_retry_follows_the_runtime_clock` | P5 | L |
 | R17 | `corrupt_bytes_are_kept_until_start_over`; `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones`, `each_load_failure_offers_its_way_on` | P5; P11 | L, C |
@@ -196,7 +197,7 @@ graph LR
 - [ ] P4 — загрузка на шве (после LY50, LY52)
 - [ ] P6 — остаток: реестр сброса хоста (после LY52)
 - [ ] P5 — запись и удержание закрытия
-- [ ] P11 — строки приёмки persistence. Четыре PR: (a) данные, (b) сеанс, (c) экраны отказов
+- [x] P11 — строки приёмки persistence. Четыре PR: (a) данные, (b) сеанс, (c) экраны отказов
   и `Listenable` у `Persisted` (форма одобрена координатором 2026-10-31: уведомление только
   при настоящем изменении `status()`/`committed()`, изменения одной доставки — одним вызовом,
   слушатель может звать `set`/`retry` без рекурсии), (d) решение при закрытии.
@@ -258,4 +259,14 @@ graph LR
     `retry`, без `start_over`, баннер без «Saving failed», «Retry saving» без `retry` —
     роняют свою строку. Слушатели `Persisted` узнают и об изменении, вернувшемся к сказанному
     до доставки (`listeners_hear_a_change_that_came_back_before_the_delivery`).
+  - [x] (d) решение при закрытии: экраны держат `CloseGuard` и `CloseWatch` (задача на
+    `AsyncDriver` будит `ChangeNotifier` на каждом `CloseGuard::changed`); при записанном
+    закрытии — «Close without saving» (`discard_and_close`) и «Keep open» (`stay_open`),
+    Retry saving на баннере закрывает окно после успешной записи. В набор тестов добавлен
+    `LaidOut::is_closed` (закрытие, выполненное сразу, после снятия удержания или решением).
+    Строки: `close_with_a_failed_write_requires_a_decision` (R14),
+    `close_during_a_save_waits_for_it`, `hidden_writes_the_session_and_resume_does_not_reread`
+    (R13, хар.: сеанс пишется на каждом изменении, `set_window_visible`), в flui-testing
+    `a_decided_close_is_carried_out_past_the_hold`. Откаты — без панели решения, кнопки без
+    `discard_and_close` или `stay_open` — роняют строку R14.
 - [ ] P12 — нативный прогон (после flui-driver FD11)

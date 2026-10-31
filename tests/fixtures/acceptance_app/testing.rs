@@ -94,6 +94,13 @@ impl AppRun {
         self.request_close();
         drop(self);
     }
+
+    /// Whether the window has closed: at once, or once what held its close
+    /// was released or decided.
+    pub fn is_closed(&self) -> bool {
+        self.laid.is_closed()
+    }
+
     /// The operating system ends the session.
     pub fn end_session(&mut self) {
         self.laid.end_session();

@@ -714,3 +714,101 @@ fn start_over_drops_the_place_taken_in_the_notes_given_up() {
         "nor does a later launch restore it over the fresh notes"
     );
 }
+
+/// A close while the notes could not be saved holds the window and offers
+/// the user's ways out: Keep open, Retry saving (which then closes), or
+/// Close without saving.
+#[test]
+fn close_with_a_failed_write_requires_a_decision() {
+    let failed_save = || {
+        let mut run = AppRun::start(app());
+        run.tap("Note 2");
+        run.replace_title("Groceries");
+        run.storage().fail_next(StorageError::Full);
+        run.tap("Save note");
+        assert!(run.shows_starting("Saving failed: "));
+        run.request_close();
+        assert!(!run.is_closed(), "the failed save holds the window");
+        assert!(
+            run.shows("Close without saving") && run.shows("Keep open"),
+            "and the decision is shown"
+        );
+        run
+    };
+
+    let mut run = failed_save();
+    run.tap("Keep open");
+    assert!(!run.is_closed() && !run.shows("Keep open"), "kept open");
+    run.request_close();
+    assert!(!run.is_closed(), "a later close is held again");
+    run.tap("Retry saving");
+    assert!(
+        run.is_closed(),
+        "a save that succeeds carries the close out"
+    );
+    assert!(
+        run.storage()
+            .contents(&Saved::NAME)
+            .is_some_and(|stored| String::from_utf8_lossy(&stored).contains("\"Groceries\"")),
+        "with the notes stored"
+    );
+
+    let mut run = failed_save();
+    run.tap("Close without saving");
+    assert!(run.is_closed(), "the user's choice closes the window");
+    assert!(
+        run.storage().contents(&Saved::NAME).is_none(),
+        "and nothing is written"
+    );
+}
+
+/// A close during a save waits for it, asks nothing, and closes once the
+/// notes are stored.
+#[test]
+fn close_during_a_save_waits_for_it() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    let held = run.storage().hold_writes();
+    run.tap("Save note");
+    run.request_close();
+    assert!(!run.is_closed(), "the save in flight holds the window");
+    drop(held);
+    run.settle();
+    assert!(
+        run.is_closed(),
+        "the close is carried out once it is stored"
+    );
+    assert!(run.storage().contents(&Saved::NAME).is_some());
+}
+
+/// Hiding the window leaves the place stored; showing it again reads
+/// nothing back over what is in memory.
+#[test]
+fn hidden_writes_the_session_and_resume_does_not_reread() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.laid().set_window_visible(false);
+    run.settle();
+    let stored = run
+        .storage()
+        .contents(&Session::NAME)
+        .expect("the session is stored while hidden");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("\"Groceries\""),
+        "with the draft"
+    );
+
+    edit_session(run.storage(), |session| {
+        session["draft"]["title"] = json!("Changed elsewhere");
+    });
+    run.storage().put(&Saved::NAME, "not notes");
+    run.laid().set_window_visible(true);
+    run.settle();
+    assert_eq!(run.title(), "Groceries", "the draft in memory stays");
+    assert!(
+        !run.shows_starting("Load failed: "),
+        "and nothing is read back"
+    );
+}

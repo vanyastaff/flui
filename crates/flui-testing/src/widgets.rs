@@ -577,6 +577,19 @@ impl LaidOut {
         true
     }
 
+    /// Whether the tree's presentation has closed: a close carried out at
+    /// once by [`request_close`](Self::request_close), one carried out by a
+    /// pump after its last hold was released or a decision closed it, or a
+    /// session end. A close refused and still recorded is not one.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        let runtime = self.host.ui_runtime();
+        runtime
+            .ui_runtime()
+            .presentation_closing_for_test(runtime.ui_runtime().presentation_id())
+            .unwrap_or(true)
+    }
+
     /// End the session the tree runs in, as the operating system does at log
     /// off or shut down once the session is ending: what the documents
     /// published is written, then the presentation closes, past every hold
