@@ -369,9 +369,9 @@ pub struct Session {
     offset: f64,
     /// The title being edited and the note it belongs to.
     draft: Option<Draft>,
-    /// The number of the data revision the draft was taken against
-    /// ([`Revision::get`]); `None` while the data in memory was not stored.
-    data_revision: Option<u64>,
+    /// The data revision the draft was taken against; `None` while the data
+    /// in memory was not stored.
+    data_revision: Option<Revision>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -432,13 +432,12 @@ impl Session {
             Route::Note { id } => Some(*id),
             Route::Home | Route::Settings => None,
         });
-        let taken_against = revision.map(Revision::get);
         let draft = self
             .draft
             .clone()
             .filter(|draft| {
                 self.data_revision.is_some()
-                    && self.data_revision == taken_against
+                    && self.data_revision == revision
                     && notebook.title(draft.note).is_some()
                     && open.is_none_or(|open| open == draft.note)
             })
@@ -545,7 +544,7 @@ impl Place {
                 note,
                 title: self.draft.text(),
             }),
-            data_revision: self.data.revision().map(Revision::get),
+            data_revision: self.data.revision(),
         };
         if *self.stored.borrow() == session {
             return;

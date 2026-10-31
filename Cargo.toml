@@ -952,14 +952,14 @@ path = "tests/wasm_consumer.rs"
 [[example]]
 name = "acceptance_app"
 path = "examples/acceptance_app.rs"
-required-features = ["material"]
+required-features = ["material", "serde"]
 
 # The same application with the fault its argument names (ADR-0258 §4), for
 # the native runs that check what a panic leaves behind.
 [[example]]
 name = "acceptance_app_faults"
 path = "examples/acceptance_app_faults.rs"
-required-features = ["material"]
+required-features = ["material", "serde"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
