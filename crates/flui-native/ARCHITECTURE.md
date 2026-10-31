@@ -3800,8 +3800,11 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`,
 `a_session_enters_an_older_target_in_its_version`,
 `a_session_started_over_a_target_enters_it_at_once`,
-`a_session_whose_window_unmaps_ends_cancelled` and
-`only_the_dropped_on_client_reads_the_session_data`.
+`a_session_whose_window_unmaps_ends_cancelled`,
+`only_the_dropped_on_client_reads_the_session_data`; and in `tests/x11_input.rs`,
+with the host's own loop and window, XTest holding and moving the pointer:
+`an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
+that the window's press ends cancelled and its next click arrives whole.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

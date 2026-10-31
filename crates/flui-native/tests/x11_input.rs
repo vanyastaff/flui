@@ -47,6 +47,10 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "a_window_follows_its_focus_when_a_handler_panics_at_its_loss",
         a_window_follows_its_focus_when_a_handler_panics_at_its_loss,
     ),
+    (
+        "an_xtest_drag_from_the_window_drops_on_another_client",
+        an_xtest_drag_from_the_window_drops_on_another_client,
+    ),
 ];
 
 /// `dead_acute` (`keysymdef.h`).
@@ -577,5 +581,235 @@ fn a_window_shows_the_cursor_it_asks_for() {
     assert_eq!(
         refused.unsupported().map(|unsupported| unsupported.reason),
         Some(UnsupportedReason::NoWindow)
+    );
+}
+
+/// A client of its own that is an XDND target: an override-redirect window
+/// at `(x, y)` of the root window, `XdndAware` in version 5.
+struct DropTarget {
+    connection: x11rb::rust_connection::RustConnection,
+    xid: u32,
+}
+
+impl DropTarget {
+    fn open(x: i16, y: i16) -> Self {
+        use x11rb::protocol::xproto::{CreateWindowAux, PropMode, WindowClass};
+        use x11rb::wrapper::ConnectionExt as _;
+        let (connection, screen) =
+            x11rb::rust_connection::RustConnection::connect(None).expect("the X server answers");
+        let root = connection.setup().roots[screen].root;
+        let xid = connection.generate_id().expect("an X id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                xid,
+                root,
+                x,
+                y,
+                200,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new().override_redirect(1),
+            )
+            .expect("request");
+        let aware = crate::cases::atom(&connection, "XdndAware");
+        connection
+            .change_property32(
+                PropMode::REPLACE,
+                xid,
+                aware,
+                x11rb::protocol::xproto::AtomEnum::ATOM,
+                &[5],
+            )
+            .expect("request");
+        connection.map_window(xid).expect("request");
+        connection
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the window is mapped");
+        Self { connection, xid }
+    }
+
+    fn atom(&self, name: &str) -> u32 {
+        crate::cases::atom(&self.connection, name)
+    }
+
+    /// The next client message of `kind` the target hears, turning the
+    /// host's loop meanwhile.
+    fn expect(&self, fixture: &X11Fixture, kind: &str) -> [u32; 5] {
+        let kind = self.atom(kind);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            run_for(&fixture.platform, Duration::from_millis(10)).expect("the loop turns");
+            while let Some(event) = self.connection.poll_for_event().expect("the connection") {
+                if let x11rb::protocol::Event::ClientMessage(message) = event
+                    && message.type_ == kind
+                {
+                    return message.data.as_data32();
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the target heard no {kind}"
+            );
+        }
+    }
+
+    fn send(&self, to: u32, kind: &str, data: [u32; 5]) {
+        let event = x11rb::protocol::xproto::ClientMessageEvent::new(32, to, self.atom(kind), data);
+        self.connection
+            .send_event(
+                false,
+                to,
+                x11rb::protocol::xproto::EventMask::NO_EVENT,
+                event,
+            )
+            .expect("request");
+        self.connection.flush().expect("flush");
+    }
+
+    /// Convert `XdndSelection` to `UTF8_STRING` into the target's window and
+    /// read what the source wrote, turning the host's loop meanwhile.
+    fn read_text(&self, fixture: &X11Fixture, time: u32) -> Option<String> {
+        let selection = self.atom("XdndSelection");
+        let utf8 = self.atom("UTF8_STRING");
+        let property = self.atom("FLUI_TEST_DROP");
+        self.connection
+            .convert_selection(self.xid, selection, utf8, property, time)
+            .expect("request");
+        self.connection.flush().expect("flush");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            run_for(&fixture.platform, Duration::from_millis(10)).expect("the loop turns");
+            while let Some(event) = self.connection.poll_for_event().expect("the connection") {
+                if let x11rb::protocol::Event::SelectionNotify(notify) = event {
+                    if notify.property == x11rb::NONE {
+                        return None;
+                    }
+                    let reply = self
+                        .connection
+                        .get_property(true, self.xid, property, utf8, 0, u32::MAX / 4)
+                        .expect("request")
+                        .reply()
+                        .expect("the property");
+                    return Some(String::from_utf8(reply.value).expect("UTF-8"));
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the source never answered the conversion"
+            );
+        }
+    }
+}
+
+/// A drag the window starts while XTest holds its button runs on the
+/// pointer the server moves: the target another client shows is entered and
+/// told the position, the release drops there, the target reads the text
+/// and finishes, and the session ends with the target's action. The press
+/// the session took is ended for the window, and its next click reaches it
+/// whole.
+fn an_xtest_drag_from_the_window_drops_on_another_client() {
+    use std::cell::RefCell;
+    use std::num::NonZeroU64;
+
+    use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
+    use flui_platform::data_transfer::{
+        RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
+    };
+    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+
+    park_pointer();
+    let handler = RecordingWindowHandler::new();
+    let fixture = X11Fixture::open_with("xtest drag source", Rc::clone(&handler));
+    let target = DropTarget::open(900, 700);
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(50, 40);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+
+    let ended = Rc::new(RefCell::new(None));
+    let end = Rc::clone(&ended);
+    fixture
+        .window
+        .drag_source()
+        .expect("the window has a drag source")
+        .start(OsDragRequest {
+            key: DragSessionKey::new(
+                ProcessNonce::from_raw(NonZeroU64::MIN),
+                UiRuntimeId::new(1),
+                IdMint::<DragSessionId>::new().next().expect("fresh mint"),
+            ),
+            pointer: None,
+            representations: vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }],
+            allowed: TransferActions::COPY,
+            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            on_end: Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
+        })
+        .expect("the session starts");
+
+    xtest.move_to_root(950, 750);
+    let enter = target.expect(&fixture, "XdndEnter");
+    let source = enter[0];
+    assert_eq!(enter[1] >> 24, 5, "the enter names version 5");
+    let position = target.expect(&fixture, "XdndPosition");
+    assert_eq!(position[0], source);
+    assert_eq!(
+        (position[2] >> 16, position[2] & 0xffff),
+        (950, 750),
+        "the server's pointer"
+    );
+    let copy = target.atom("XdndActionCopy");
+    target.send(source, "XdndStatus", [target.xid, 1, 0, 0, copy]);
+
+    xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
+    let dropped = target.expect(&fixture, "XdndDrop");
+    assert_eq!(dropped[0], source);
+    assert_eq!(
+        target.read_text(&fixture, dropped[2]).as_deref(),
+        Some("dragged")
+    );
+    target.send(source, "XdndFinished", [target.xid, 1, copy, 0, 0]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while ended.borrow().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session never ended"
+        );
+        run_for(&fixture.platform, Duration::from_millis(10)).expect("the loop turns");
+    }
+    assert_eq!(
+        *ended.borrow(),
+        Some(OsDragEnd::Dropped(TransferActions::COPY))
+    );
+
+    let taken = pointer_events(&handler);
+    assert!(
+        taken
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Cancel(_))),
+        "the press the session took ends for the window: {taken:?}"
+    );
+    assert!(
+        !taken
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Up(_))),
+        "the release was the session's: {taken:?}"
+    );
+    let before = taken.len();
+    xtest.move_to(60, 40);
+    xtest.click(1);
+    let lines: Vec<String> = pointer_events(&handler)[before..]
+        .iter()
+        .filter_map(line)
+        .collect();
+    assert!(
+        lines.ends_with(&["down PRIMARY".to_owned(), "up PRIMARY".to_owned()]),
+        "the next click reaches the window: {lines:?}"
     );
 }
