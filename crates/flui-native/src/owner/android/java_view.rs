@@ -141,13 +141,14 @@ pub(crate) enum ViewEvent {
 }
 
 /// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
-/// pixels, the start on the monotonic clock, the length, and the
+/// pixels, the start on the event timeline (`None` for a stamp the monotonic
+/// clock cannot have taken), the length, and the
 /// interpolator's values a quarter, half and three quarters of the way.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct KeyboardReport {
     pub(crate) from: i32,
     pub(crate) to: i32,
-    pub(crate) start_nanos: i64,
+    pub(crate) start: Option<flui_platform::EventTime>,
     pub(crate) duration_millis: i64,
     pub(crate) values: [f32; 3],
 }
@@ -1040,7 +1041,7 @@ extern "system" fn native_keyboard_motion<'local>(
             view.push_event(ViewEvent::KeyboardMotion(KeyboardReport {
                 from,
                 to,
-                start_nanos,
+                start: rebased_start(start_nanos),
                 duration_millis,
                 values: [q1, q2, q3],
             }));
@@ -1151,4 +1152,20 @@ extern "system" fn native_perform_action<'local>(
             }
         },
     )
+}
+
+/// `start_nanos`, a `System.nanoTime()` reading (`CLOCK_MONOTONIC`), on the
+/// event timeline: as far from this reading of the event clock as it is from
+/// this reading of the monotonic one.
+fn rebased_start(start_nanos: jlong) -> Option<flui_platform::EventTime> {
+    let nanos = |value: i64| {
+        u64::try_from(value)
+            .ok()
+            .map(std::time::Duration::from_nanos)
+    };
+    let platform_now = nanos(super::frame_clock::monotonic_nanos())?;
+    Some(crate::owner::handlers::rebased(
+        platform_now,
+        nanos(start_nanos)?,
+    ))
 }

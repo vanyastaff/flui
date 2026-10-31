@@ -77,19 +77,19 @@ pub(crate) struct KeyboardMotion {
 }
 
 impl KeyboardMotion {
-    /// A motion from `from` to `to` (bottom edges in device pixels) that
-    /// started at `start_nanos` on the monotonic clock and lasts
-    /// `duration_millis`, along the interpolator that took `values` at
-    /// [`PROBES`]. `None` for a motion with no length of time, which a user
+    /// started at `start` on the event timeline and lasts `duration_millis`,
+    /// along the interpolator that took `values` at [`PROBES`]. `None` for a
+    /// motion with no start or no length of time, which a user drives frame
+    /// by frame.
     /// drives frame by frame, or a start before the clock began.
     pub(crate) fn try_from_report(
         from: i32,
         to: i32,
-        start_nanos: i64,
+        start: Option<EventTime>,
         duration_millis: i64,
         values: [f32; 3],
     ) -> Option<Self> {
-        let start = EventTime::from_nanos(u64::try_from(start_nanos).ok()?);
+        let start = start?;
         let duration = Duration::from_millis(u64::try_from(duration_millis).ok()?);
         if duration.is_zero() {
             return None;
@@ -150,8 +150,14 @@ mod tests {
 
     #[test]
     fn a_motion_moves_the_sample_that_is_its_end() {
-        let motion = KeyboardMotion::try_from_report(0, 900, 1_000_000, 285, values(CURVES[0]))
-            .expect("a motion with a duration");
+        let motion = KeyboardMotion::try_from_report(
+            0,
+            900,
+            Some(EventTime::from_nanos(1_000_000)),
+            285,
+            values(CURVES[0]),
+        )
+        .expect("a motion with a duration");
         let target = EdgeInsets::new(0.0, 0.0, 300.0, 0.0);
         let keyboard = motion
             .keyboard(target, 900, 3.0)
@@ -169,8 +175,14 @@ mod tests {
 
     #[test]
     fn a_motion_leaves_other_samples_and_lengthless_reports_alone() {
-        let motion = KeyboardMotion::try_from_report(900, 0, 0, 340, values(CURVES[4]))
-            .expect("a motion with a duration");
+        let motion = KeyboardMotion::try_from_report(
+            900,
+            0,
+            Some(EventTime::from_nanos(0)),
+            340,
+            values(CURVES[4]),
+        )
+        .expect("a motion with a duration");
         // Sampled before the keyboard began to hide.
         assert_eq!(
             motion.keyboard(EdgeInsets::new(0.0, 0.0, 300.0, 0.0), 900, 3.0),
@@ -182,17 +194,18 @@ mod tests {
             .and_then(|keyboard| keyboard.motion())
             .expect("the hidden keyboard is the motion's end");
         assert_eq!(hiding.from(), EdgeInsets::new(0.0, 0.0, 300.0, 0.0));
-        // A user-driven motion (`getDurationMillis` is -1) and a zero one.
+        // A user-driven motion (`getDurationMillis` is -1), a zero one and one
+        // with no start on the event timeline.
         assert_eq!(
-            KeyboardMotion::try_from_report(0, 900, 0, -1, [0.5; 3]),
+            KeyboardMotion::try_from_report(0, 900, Some(EventTime::from_nanos(0)), -1, [0.5; 3]),
             None
         );
         assert_eq!(
-            KeyboardMotion::try_from_report(0, 900, 0, 0, [0.5; 3]),
+            KeyboardMotion::try_from_report(0, 900, Some(EventTime::from_nanos(0)), 0, [0.5; 3]),
             None
         );
         assert_eq!(
-            KeyboardMotion::try_from_report(0, 900, -5, 285, [0.5; 3]),
+            KeyboardMotion::try_from_report(0, 900, None, 285, [0.5; 3]),
             None
         );
     }

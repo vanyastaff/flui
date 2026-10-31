@@ -343,7 +343,7 @@ impl ActivityWindow for AndroidWindow {
         let motion = KeyboardMotion::try_from_report(
             report.from,
             report.to,
-            report.start_nanos,
+            report.start,
             report.duration_millis,
             report.values,
         );
