@@ -1914,6 +1914,38 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
     );
 }
 
+/// A pushed page the router names is announced when it covers the one
+/// before, and the page it uncovers when it pops (ADR-0204 §5): the
+/// presentation's announcer speaks the route's name where the platform has
+/// no notice of a new screen.
+pub(crate) fn a_named_page_is_announced_when_pushed_and_when_uncovered() {
+    let (mut laid, home) = two_screen_app();
+    laid.pipeline_owner()
+        .with_mut(flui_rendering::pipeline::PipelineOwner::announcements)
+        .expect("the presentation has an announcement queue");
+    settle(&mut laid);
+    let router = home.handle();
+    let polite = |laid: &LaidOut| {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .announcement(flui_widgets::Urgency::Polite)
+            .map(str::to_owned)
+    };
+    assert_eq!(polite(&laid), None, "the first page is not announced");
+
+    router.push(AppRoute::Note { id: 7 }).expect("mounted");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 7"));
+
+    router.push(AppRoute::Note { id: 8 }).expect("mounted");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 8"));
+
+    assert_eq!(router.pop(), Ok(true), "a page to pop");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 7"));
+}
+
 /// A listener that holds its router's handle keeps nothing alive once the
 /// router unmounts: the router lets go of its listeners then, and refuses a
 /// listener added afterwards, even by a capture's `Drop` while it lets go.

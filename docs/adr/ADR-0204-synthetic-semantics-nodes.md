@@ -4,7 +4,7 @@
 - **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing
 - **Date:** 2026-10-12
 - **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
-  inside a `SelectionArea`)
+  inside a `SelectionArea`); amended 2026-10-31 (§5: route changes)
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the editing path assistive edits share),
@@ -84,6 +84,24 @@ an index that is never reused).
    bridge FLUI builds. An announcement's urgency (`Polite`, `Assertive`) is its own type, apart
    from a node's live setting, which also has `Off`: an absent live setting inherits the
    parent's, so a `Timer` inside a polite region publishes `Off` explicitly.
+5. **Route changes.** A route is a node that scopes one (`scopes_route`) or a modal `Dialog` or
+   `AlertDialog`; the innermost is the last such rooted node in reading order. Its name is the
+   label of the first node in its scope that names the route (`names_route`), else, for a modal
+   dialog, its own label or the labels of the nodes it is labelled by. `SemanticsOwner::flush`
+   raises one `RouteChange` (route, name, `RouteChangeKind::Pushed`, `Popped` or `Replaced`)
+   when the innermost route's identity differs from the one the last delivered update showed:
+   never for the first route a tree publishes, nor for a republish of the same route, and once
+   for several changes inside one flush. An adapter states its `RouteChangeSupport`. Where it is
+   `Native` (the platform has a notice of a new screen or pane: iOS
+   `UIAccessibilityScreenChangedNotification`, Android `TYPE_WINDOW_STATE_CHANGED` with a pane
+   title), the composition root installs a sink that calls `PlatformAccessibility::route_changed`
+   after the update showing the route is delivered; a panic in it is contained and nothing is
+   spoken in its place. Where it is `Announced` (AT-SPI, UI Automation, NSAccessibility and the
+   Web have no such notice), the polite announcer (§4) speaks the name in the update that shows
+   the route, and in that update only; a route nothing names says nothing. The owner does not move
+   focus into the route: that is the focus system's. An undelivered update leaves the route
+   change to its retry, which tells the route the tree then shows. Only published nodes count: a
+   route under a node with no identity is not told, and an unpublished dialog title names nothing.
 
 ## Consequences
 
@@ -91,6 +109,7 @@ an index that is never reused).
   selection; assistive edits cannot bypass the editor's rules.
 - Run geometry is computed when a field's text or layout changes, not per frame; the cost is
   measured in the semantics assembly benchmark.
+- A screen reader hears a pushed, popped or replaced page and a modal dialog by name, on platforms with a native notice through it and elsewhere as a polite announcement.
 - The id range is a fixed 4 294 967 295 synthetic nodes per owner lifetime; exhaustion is
   terminal and observable rather than a silent collision.
 - Published word starts are the editor's word stops: `flui_painting::text_boundaries::word_starts`,
@@ -105,4 +124,4 @@ existing runs and an overlong grapheme cluster) and
 `obscured_fields_publish_only_the_mask` through the owner's public API;
 `published_word_starts_match_editor_word_stops`; `assistive_edits_use_the_keyboard_path` in the
 widget suite; a `TextPattern` fixture in [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) reading a field by
-character and word and moving the selection; `announcements_reach_the_live_region_value`.
+character and word and moving the selection; `announcements_reach_the_live_region_value`; `each_change_of_the_innermost_route_is_told_once`, `without_a_sink_a_named_route_is_announced`, `a_failed_sink_or_delivery_loses_no_change_and_speaks_once` and `a_new_adapter_hears_changes_from_the_route_it_was_handed` through the owner's public API, and `a_named_page_is_announced_when_pushed_and_when_uncovered` in the widget suite.
