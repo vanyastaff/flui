@@ -1042,11 +1042,12 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
     assert_same!(read, Ok(TransferPayload::Text("fresh".to_owned())));
 }
 
-/// An atom the server cannot name is not kept: a client sending fresh
-/// invalid atoms grows nothing in the transfer, and the type the server
-/// names still offers.
+/// A type the server cannot name, or names past the longest media type, is
+/// neither kept nor offered: a client sending fresh invalid atoms, or atoms
+/// with 64 KiB names, grows nothing in the transfer, and the type the server
+/// names as a media type still offers.
 #[test]
-fn an_atom_the_server_cannot_name_is_not_kept() {
+fn a_type_unnamed_or_named_past_a_media_type_is_not_kept() {
     let _server = SERVER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1056,14 +1057,30 @@ fn an_atom_the_server_cannot_name_is_not_kept() {
     target.answer(Some(TransferActions::COPY));
     let source = Source::new();
     let atoms = &source.atoms;
-    let invalid = [0x0FFF_FFF0, 0x0FFF_FFF1];
-    source.enter(target.xid, &[invalid[0], atoms.utf8, invalid[1]]);
+    let long = format!("text/{}", "x".repeat(super::MAX_NAME_LEN));
+    let long = source
+        .connection
+        .intern_atom(false, long.as_bytes())
+        .expect("intern")
+        .reply()
+        .expect("interned")
+        .atom;
+    let dropped = [0x0FFF_FFF0, long, 0x0FFF_FFF1];
+    source.enter(
+        target.xid,
+        &[dropped[0], atoms.utf8, dropped[1], dropped[2]],
+    );
     source.position(target.xid, (20, 30), 10, atoms.copy);
     source.expect_message(&target, atoms.status);
     let names = &target.drag.state.lock().names;
     assert!(
-        invalid.iter().all(|atom| !names.contains_key(atom)),
+        dropped.iter().all(|atom| !names.contains_key(atom)),
         "kept {names:?}"
     );
     assert!(names.contains_key(&atoms.utf8));
+    let heard = target.heard();
+    let Some(DragDropEvent::Entered { offer, .. }) = heard.first() else {
+        panic!("not entered: {heard:?}");
+    };
+    assert_eq!(offer.representations().len(), 1, "only the text offers");
 }

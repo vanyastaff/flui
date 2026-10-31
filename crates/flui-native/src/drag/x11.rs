@@ -81,10 +81,15 @@ const MAX_FETCHES: usize = 4;
 const RESERVED: usize = 4 * 1024 * 1024;
 
 /// The most types read of a source's `XdndTypeList`.
-const MAX_TYPES: u32 = 256;
+const MAX_TYPES: u32 = 100;
 
 /// The most atom names the transfer keeps, of the types sources offered.
 const MAX_NAMES: usize = 1024;
+
+/// The longest type name read as a type: a media type's type and subtype are
+/// at most 127 characters each (RFC 6838), so a longer name offers nothing,
+/// and no name held or compared is longer.
+const MAX_NAME_LEN: usize = 255;
 
 /// The most actions read of a source's `XdndActionList`.
 const MAX_ACTIONS: u32 = 16;
@@ -808,7 +813,10 @@ impl X11Drag {
             .zip(cookies)
             .filter_map(|(atom, cookie)| {
                 let reply = cookie?.reply().ok()?;
-                Some((atom, String::from_utf8(reply.name).ok()?))
+                (reply.name.len() <= MAX_NAME_LEN)
+                    .then(|| String::from_utf8(reply.name).ok())
+                    .flatten()
+                    .map(|name| (atom, name))
             })
             .collect();
         let mut state = self.state.lock();
