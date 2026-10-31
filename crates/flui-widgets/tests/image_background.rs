@@ -139,13 +139,69 @@ fn without_background_lanes_a_decode_job_runs_on_the_owner_thread() {
     assert_eq!(host.pending_background(), 0);
 }
 
+/// Refuses every spawn, as a saturated lane does.
+struct Saturated;
+
+impl flui_platform::executor::Executor for Saturated {
+    fn spawn_compute(
+        &self,
+        _job: flui_platform::executor::ComputeJob,
+    ) -> Result<(), flui_platform::executor::SpawnError> {
+        Err(flui_platform::executor::SpawnError::Saturated)
+    }
+
+    fn spawn_io(
+        &self,
+        _future: flui_platform::executor::IoFuture,
+    ) -> Result<(), flui_platform::executor::SpawnError> {
+        Err(flui_platform::executor::SpawnError::Saturated)
+    }
+}
+
+/// A lane too full to take the decode does not leave the image blank: the
+/// widget runs a fresh job on the owner thread.
+///
+/// Red-check: answer the refusal as the load's failure (nothing runs).
+fn a_saturated_lane_decodes_on_the_owner_thread() {
+    use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
+    use flui_runtime::capability::CapabilityRegistry;
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_view::background::{Background, BackgroundCapability};
+
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<BackgroundCapability>(|cx: &ProviderContext<'_>| {
+        Ok(Background::new(
+            Arc::new(Saturated),
+            cx.completions().clone(),
+        ))
+    });
+    let registry = CapabilityRegistry::builder()
+        .overrides(registrar)
+        .build()
+        .expect("one provider");
+    let mut host = HeadlessHost::with_capabilities(HeadlessWindow::new(10, 10), registry);
+    let provider = CountedDecode::default();
+    host.attach(&Image::new(provider.clone()))
+        .expect("root attaches");
+    for _ in 0..3 {
+        let _ = host.pump(Duration::ZERO);
+    }
+    assert_eq!(provider.jobs.load(Ordering::SeqCst), 2, "a fresh job");
+    assert_eq!(
+        provider.ran.load(Ordering::SeqCst),
+        1,
+        "the fresh job ran on the owner thread"
+    );
+}
+
 /// `Image::memory` and `Image::file` decode once per key on the background
-/// lanes, a new key cancels the waiting decode, and a host without lanes
-/// runs the decode on the owner thread.
+/// lanes, a new key shows only the new image, and a host without lanes
+/// runs the decode on the owner thread, as does a lane too full to take it.
 #[test]
 fn image_decodes_in_the_background() {
     memory_image_decodes_in_the_background_once_per_bytes();
     file_image_reads_and_decodes_in_the_background();
     a_new_key_shows_only_the_new_bytes();
     without_background_lanes_a_decode_job_runs_on_the_owner_thread();
+    a_saturated_lane_decodes_on_the_owner_thread();
 }
