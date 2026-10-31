@@ -31,7 +31,9 @@ use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCommand, Window
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 use crate::version::gate::Gate;
 #[cfg(any(target_os = "android", test))]
-use crate::version::gate::android::{AndroidApi, BackgroundBlur, PointerIcons};
+use crate::version::gate::android::{
+    AndroidApi, BackgroundBlur, PointerIcons, SystemGestureInsets,
+};
 #[cfg(any(target_os = "ios", test))]
 use crate::version::gate::apple::AppleVersion;
 #[cfg(any(target_os = "macos", test))]
@@ -166,7 +168,8 @@ pub(crate) struct ActivityFacts {
 /// What an Activity's window honours: no command, as the system owns the
 /// surface and the Activity's lifetime, and a refresh-rate request where the
 /// system takes one. The material is missing for the reason
-/// [`material_absence`] gives.
+/// [`material_absence`] gives. The window reports the keyboard's occlusion,
+/// and the system gesture regions from API 29.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE
@@ -174,10 +177,13 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
             &MATERIAL,
             material_absence(facts.api, facts.cross_window_blur),
         )
-        .without_presentation_feedback(PRESENTATION)
-        // `WindowInsetsCompat` (IME and system gestures) is not read yet.
-        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
-        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
+        .without_presentation_feedback(PRESENTATION);
+    capabilities.reports_keyboard_inset = Availability::Native;
+    if facts.api.since::<SystemGestureInsets>().is_some() {
+        capabilities.reports_system_gestures = Availability::Native;
+    } else {
+        capabilities = capabilities.without_system_gestures(CapabilityAbsence::NotOnThisDevice);
+    }
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
 }
@@ -271,6 +277,18 @@ mod tests {
             })
     }
 
+    /// The reason `answer` gives for a missing report, or `None` when it reports.
+    fn report(
+        answer: Result<flui_platform::Availability, flui_platform::Unsupported>,
+    ) -> Option<CapabilityAbsence> {
+        use flui_platform::UnsupportedReason;
+        answer.err().map(|absent| match absent.reason {
+            UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+            UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
+            _ => CapabilityAbsence::NotOnThisPlatform,
+        })
+    }
+
     fn activity(level: u32, cross_window_blur: bool) -> ActivityFacts {
         ActivityFacts {
             api: AndroidApi::from_level(level),
@@ -287,7 +305,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 19] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 22] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -351,6 +369,21 @@ mod tests {
             (
                 "AppKit presentation report",
                 presentation(&appkit_window_capabilities(true)),
+                None,
+            ),
+            (
+                "Activity keyboard inset, API 23",
+                report(activity_capabilities(activity(23, false)).keyboard_inset()),
+                None,
+            ),
+            (
+                "Activity system gestures, API 28",
+                report(activity_capabilities(activity(28, false)).system_gestures()),
+                Some(NotOnThisDevice),
+            ),
+            (
+                "Activity system gestures, API 29",
+                report(activity_capabilities(activity(29, false)).system_gestures()),
                 None,
             ),
             (

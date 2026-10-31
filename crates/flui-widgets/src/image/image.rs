@@ -9,9 +9,6 @@ use flui_painting::paint::Image as PixelImage;
 use flui_painting::paint::ImageRepeat;
 use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_rendering::protocol::BoxProtocol;
-#[cfg(not(feature = "asset-images"))]
-use flui_view::prelude::StatelessView;
-#[cfg(feature = "asset-images")]
 use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
 use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
 
@@ -36,8 +33,8 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// | Constructor | Source | Path |
 /// |-------------|--------|------|
 /// | [`from_image`] | Already-decoded [`PixelImage`] | Sync, O(1) Arc clone |
-/// | [`memory`] | Encoded bytes in memory | Sync, full decode per rebuild |
-/// | [`file`] | Local file read + decode | Sync, blocking I/O + decode |
+/// | [`memory`] | Encoded bytes in memory | Async — decoded on the compute lane, once per bytes |
+/// | [`file`] | Local file read + decode | Async — read on the IO lane, decoded on the compute lane, once per path |
 /// | `asset` | `flui-assets` asset path | Async — cached, coalesced, off-thread |
 /// | `network` | HTTP/HTTPS URL | Async — cached, coalesced, off-thread |
 /// | [`new`] | Any [`ImageProvider`] impl | Provider-dependent |
@@ -47,9 +44,6 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// in this doc build); both are off by default so stable builds do not pull
 /// in `flui-assets` unless asked for.
 ///
-/// For static or frequently-rebuilt sync images, pre-decode once and use
-/// [`from_image`] to avoid per-rebuild cost.
-///
 /// # Async dispatch
 ///
 /// When [`ImageProvider::cache_key`] returns `Some(key)`, `Image` subscribes
@@ -57,8 +51,12 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// [`ImageProvider::cached`] synchronously — a hit (e.g. after
 /// unmount+remount, or a second widget mounted with the same key) renders
 /// immediately with **no placeholder frame**. A miss shows the same empty-box
-/// placeholder a sync failure would, and the render updates in place once
-/// [`ImageProvider::resolve_async`] completes. For `asset`/`network`, the
+/// placeholder a sync failure would, and the render updates in place once the
+/// load answers: the provider's [`DecodeJob`](super::DecodeJob), run on the
+/// UI runtime's background lanes, or else its
+/// [`ImageProvider::resolve_async`]. On a host without background lanes a
+/// decode job runs on the owner thread, so the image still shows, a frame
+/// late. `memory` and `file` decode per widget; for `asset`/`network`, the
 /// asset registry keeps the decoded images, and two widgets mounted with the
 /// same source while a load is in flight share ONE load rather than starting
 /// two; unmounting the last of them cancels it.
@@ -93,8 +91,10 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 ///
 /// Deferred (tracked, not silently missing): frame, loading and error
 /// builders (an error renders the same empty box as no data, with a
-/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, and font
-/// unification.
+/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, font
+/// unification, and a decoded-image cache owned by the UI runtime that
+/// `memory` and `file` widgets with equal keys would share (`docs/gaps.md`
+/// entry 41).
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
@@ -102,13 +102,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// [`new`]: Image::new
 /// [`width`]: Image::width
 /// [`height`]: Image::height
-#[derive(Clone, Debug)]
-// Async resolution is a subscription with lifecycle (start, cancel, retire),
-// so `Image` is stateful exactly where that subscription exists: without `asset-images`
-// there is no async provider to subscribe to and every provider resolves inline
-// in `build`.
-#[cfg_attr(feature = "asset-images", derive(StatefulView))]
-#[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
+#[derive(Clone, Debug, StatefulView)]
 pub struct Image {
     provider: Arc<dyn ImageProvider + Send + Sync>,
     placement: ImagePlacement,
@@ -145,22 +139,23 @@ impl Image {
         Self::new(DirectImageProvider::new(decoded))
     }
 
-    /// Creates an `Image` that decodes `bytes` (PNG, JPEG, GIF, …) on each
-    /// rebuild.
+    /// Creates an `Image` that decodes `bytes` (PNG, JPEG, GIF, …) on the
+    /// compute lane, once for as long as a rebuild passes equal bytes.
     ///
-    /// Requires the `flui-widgets/images` feature; without it the widget
-    /// renders an empty box. For static images in frequently-rebuilt trees,
-    /// pre-decode once and use [`from_image`](Image::from_image) instead.
+    /// Shows the placeholder until the decode answers. Requires the
+    /// `flui-widgets/images` feature; without it the widget renders an empty
+    /// box.
     pub fn memory(bytes: impl Into<Vec<u8>>) -> Self {
         Self::new(MemoryImage::new(bytes))
     }
 
-    /// Creates an `Image` that reads and decodes a local file synchronously
-    /// on each rebuild.
+    /// Creates an `Image` that reads a local file on the IO lane and decodes
+    /// it on the compute lane, once for as long as a rebuild passes the same
+    /// path.
     ///
-    /// Requires the `flui-widgets/images` feature; without it the widget
-    /// renders an empty box. For static file images, pre-decode once and use
-    /// [`from_image`](Image::from_image) instead.
+    /// Shows the placeholder until the decode answers. Requires the
+    /// `flui-widgets/images` feature; without it the widget renders an empty
+    /// box.
     pub fn file(path: impl Into<PathBuf>) -> Self {
         Self::new(FileImage::new(path))
     }
@@ -279,9 +274,10 @@ impl Image {
     /// that are all views of the same thing, where a placeholder flash is the
     /// worse artifact.
     ///
-    /// Only reached on the async path — a provider with no
-    /// [`cache_key`](ImageProvider::cache_key) resolves inline on every build
-    /// and has no frame to hold on to.
+    /// Applies to every provider with a [`cache_key`](ImageProvider::cache_key),
+    /// [`memory`](Image::memory) and [`file`](Image::file) among them. A
+    /// provider with no key resolves inline on every build and has no frame
+    /// to hold on to.
     #[must_use]
     pub fn gapless_playback(mut self, gapless: bool) -> Self {
         self.gapless_playback = gapless;
@@ -320,11 +316,8 @@ impl Image {
     }
 }
 
-/// Async dispatch — only compiled under `asset-images`, the feature that
-/// brings in the asynchronous providers. Without this feature `Image` always takes the `build_sync` path,
-/// even for a custom provider that overrides [`ImageProvider::cache_key`] —
-/// see that method's doc for the honest fallback contract.
-#[cfg(feature = "asset-images")]
+/// Async resolution is a subscription with a lifecycle (start, cancel,
+/// retire), held in the state.
 impl StatefulView for Image {
     type State = ImageState;
 
@@ -347,13 +340,11 @@ impl StatefulView for Image {
 /// [`StatefulView`] impl and Rust forbids a crate-private type there. It has
 /// no public fields and no public methods; construct it only through
 /// `Image::create_state`.
-#[cfg(feature = "asset-images")]
 #[derive(Debug)]
 pub struct ImageState {
     resolver: super::resolve::ImageResolver,
 }
 
-#[cfg(feature = "asset-images")]
 impl ViewState<Image> for ImageState {
     /// Resolve the provider the widget mounted with.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
@@ -363,8 +354,7 @@ impl ViewState<Image> for ImageState {
     /// Paint whatever frame the resolver has published.
     ///
     /// A provider that opted out of async resolution (no cache key) never
-    /// publishes anything, and resolves inline here instead — the same
-    /// `build_sync` path a build without `asset-images` takes.
+    /// publishes anything, and resolves inline here instead.
     fn build(&self, view: &Image, _ctx: &dyn BuildContext) -> impl IntoView {
         if !self.resolver.is_subscribed() {
             return view.build_sync();
@@ -381,13 +371,6 @@ impl ViewState<Image> for ImageState {
     /// Cancel the load this widget owns.
     fn dispose(&mut self) {
         self.resolver.dispose();
-    }
-}
-
-#[cfg(not(feature = "asset-images"))]
-impl StatelessView for Image {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.build_sync()
     }
 }
 

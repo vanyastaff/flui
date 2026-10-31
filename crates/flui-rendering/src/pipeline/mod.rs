@@ -30,8 +30,9 @@ pub use local_invalidation::LocalRenderInvalidationHandle;
 pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
-    DetachedRenderSubtrees, LayoutPremise, PipelineCell, PipelineCounters, PipelineOwner,
-    ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
+    DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, PipelineCell,
+    PipelineCounters, PipelineOwner, ReleaseDetachedRenderSubtreesError,
+    ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 pub(crate) use text_context::lend as lend_text;

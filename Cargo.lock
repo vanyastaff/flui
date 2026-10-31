@@ -2565,6 +2565,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-runtime",
  "flui-scheduler",
  "flui-testing",
  "flui-view",

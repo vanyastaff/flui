@@ -1,20 +1,24 @@
 //! [`ImageProvider`] trait and built-in implementations for the
 //! [`Image`](crate::Image) widget.
 //!
-//! # Sync-first, async-capable design
+//! # Sync baseline, three ways off the owner thread
 //!
 //! [`ImageProvider::resolve`] is synchronous and remains the required
-//! baseline — the FLUI view layer's most common image sources (an
-//! already-decoded [`PixelImage`], in-memory bytes, a local file) have no
-//! reason to leave the thread. [`resolve_async`](ImageProvider::resolve_async)
-//! and [`cache_key`](ImageProvider::cache_key) are defaulted extension
-//! points: a provider that never overrides them behaves exactly as before
-//! (`resolve_async`'s default is `Box::pin(future::ready(self.resolve()))` —
-//! sync-in-async-clothing, evaluated blocking at the poll site, same thread
-//! as today; `cache_key`'s default `None` keeps the provider on the
-//! sync-only path). `AssetImage` (behind the `asset-images` feature) and
-//! `NetworkImage` (behind `network-images`) override both to genuinely load
-//! off-thread.
+//! baseline. A provider that also returns a [`cache_key`](ImageProvider::cache_key)
+//! is resolved by a subscription instead, and leaves the owner thread in one
+//! of two ways:
+//!
+//! - [`decode_job`](ImageProvider::decode_job): a [`DecodeJob`] the widget
+//!   runs through the UI runtime's background capability, reading on the IO
+//!   lane and decoding on the compute lane. [`MemoryImage`] and
+//!   [`FileImage`] take this way, so neither decodes on the owner thread.
+//! - [`resolve_async`](ImageProvider::resolve_async): a future of the
+//!   provider's own, for a source with its own loader. `AssetImage` (behind
+//!   the `asset-images` feature) and `NetworkImage` (behind
+//!   `network-images`) take this way.
+//!
+//! A provider with no key, such as [`DirectImageProvider`], resolves inline
+//! on every build.
 //!
 //! FLUI's `Image` widget is a one-shot resolver, not an image stream: it has
 //! no chunk/progress events and no multi-frame (animated-image) support,
@@ -25,8 +29,9 @@
 //!
 //! Not yet built (tracked, not silently missing): frame, loading and error
 //! builders (an error currently renders the same empty box as no data, with a
-//! `tracing::warn!`), device-pixel-ratio-based cache-key scaling, and font
-//! unification.
+//! `tracing::warn!`), device-pixel-ratio-based cache-key scaling, font
+//! unification, and a decoded-image cache owned by the UI runtime that
+//! [`MemoryImage`] and [`FileImage`] widgets with equal keys would share.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -97,19 +102,125 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// The subscription identity for asynchronous resolution, or `None` to
     /// stay on the synchronous-only path.
     ///
-    /// The default `None` preserves today's behavior exactly: [`Image`](crate::Image)
-    /// never probes [`cached`](Self::cached), never spawns a load, and always
-    /// calls [`resolve`](Self::resolve) directly. A provider backed by
-    /// genuinely asynchronous I/O (disk via a background runtime, network)
-    /// overrides this to opt into the subscription-driven path.
-    ///
-    /// Note: [`Image`](crate::Image) only *acts* on a `Some` key — probing
-    /// [`cached`](Self::cached) and holding a subscription — when the
-    /// `asset-images` feature is enabled, the feature that makes `Image`
-    /// stateful. A custom provider overriding this method without
-    /// `asset-images` enabled falls back to [`resolve`](Self::resolve).
+    /// With the default `None`, [`Image`](crate::Image) never probes
+    /// [`cached`](Self::cached), never starts a load, and calls
+    /// [`resolve`](Self::resolve) on every build. A provider whose source
+    /// costs a read or a decode returns a key, and `Image` resolves it once
+    /// per key, through [`decode_job`](Self::decode_job) or else
+    /// [`resolve_async`](Self::resolve_async).
     fn cache_key(&self) -> Option<ImageCacheKey> {
         None
+    }
+
+    /// The work that resolves this provider off the owner thread, run through
+    /// the UI runtime's background lanes.
+    ///
+    /// Asked once per subscription, before [`resolve_async`](Self::resolve_async),
+    /// and only when [`cache_key`](Self::cache_key) is `Some`. The default
+    /// `None` leaves resolution to `resolve_async`.
+    ///
+    /// On a host without background lanes `Image` runs the job on the owner
+    /// thread instead, so the image still shows (at the cost of a frame).
+    fn decode_job(&self) -> Option<DecodeJob> {
+        None
+    }
+}
+
+/// The result of one step of a [`DecodeJob`].
+type StepResult<T> = Result<T, ImageProviderError>;
+
+/// Work that turns a provider's source into a decoded image, split by the
+/// lane each step belongs on: blocking or awaiting reads on the IO lane,
+/// decoding on the compute lane.
+///
+/// Returned from [`ImageProvider::decode_job`]. Its steps are chosen through
+/// its constructors and stay opaque, so a new kind of step (a progressive
+/// decode, a GPU upload) is a new constructor rather than a change to every
+/// provider.
+pub struct DecodeJob {
+    steps: DecodeSteps,
+}
+
+enum DecodeSteps {
+    Decode(Box<dyn FnOnce() -> StepResult<PixelImage> + Send>),
+    ReadThenDecode {
+        read: Pin<Box<dyn Future<Output = StepResult<Vec<u8>>> + Send>>,
+        decode: Box<dyn FnOnce(Vec<u8>) -> StepResult<PixelImage> + Send>,
+    },
+}
+
+impl DecodeJob {
+    /// Decodes a source the provider already holds, on the compute lane.
+    pub fn decode(decode: impl FnOnce() -> StepResult<PixelImage> + Send + 'static) -> Self {
+        Self {
+            steps: DecodeSteps::Decode(Box::new(decode)),
+        }
+    }
+
+    /// Reads the source on the IO lane, then decodes what it read on the
+    /// compute lane.
+    ///
+    /// `read` may block for as long as an IO read does (a file) or await (a
+    /// socket); it never runs on the compute lane, where a blocking read
+    /// would hold a decode worker.
+    pub fn read_then_decode(
+        read: impl Future<Output = StepResult<Vec<u8>>> + Send + 'static,
+        decode: impl FnOnce(Vec<u8>) -> StepResult<PixelImage> + Send + 'static,
+    ) -> Self {
+        Self {
+            steps: DecodeSteps::ReadThenDecode {
+                read: Box::pin(read),
+                decode: Box::new(decode),
+            },
+        }
+    }
+
+    /// The job as a future polled on the owner thread: through `background`'s
+    /// lanes when there is one, else step by step on the owner thread.
+    /// Dropping the future cancels the step in flight.
+    pub(super) fn run(
+        self,
+        background: Option<flui_view::background::Background>,
+    ) -> Pin<Box<dyn Future<Output = StepResult<PixelImage>>>> {
+        let Some(background) = background else {
+            return Box::pin(async move {
+                match self.steps {
+                    DecodeSteps::Decode(decode) => decode(),
+                    DecodeSteps::ReadThenDecode { read, decode } => decode(read.await?),
+                }
+            });
+        };
+        Box::pin(async move {
+            match self.steps {
+                DecodeSteps::Decode(decode) => background
+                    .compute(decode)
+                    .into_future()
+                    .await
+                    .map_err(ImageProviderError::Background)?,
+                DecodeSteps::ReadThenDecode { read, decode } => {
+                    let bytes = background
+                        .io(read)
+                        .into_future()
+                        .await
+                        .map_err(ImageProviderError::Background)??;
+                    background
+                        .compute(move || decode(bytes))
+                        .into_future()
+                        .await
+                        .map_err(ImageProviderError::Background)?
+                }
+            }
+        })
+    }
+}
+
+impl std::fmt::Debug for DecodeJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let steps = match self.steps {
+            DecodeSteps::Decode(_) => "decode",
+            DecodeSteps::ReadThenDecode { .. } => "read_then_decode",
+        };
+        f.debug_struct("DecodeJob").field("steps", &steps).finish()
     }
 }
 
@@ -193,6 +304,11 @@ pub enum ImageProviderError {
         /// The underlying `flui-assets::AssetError`'s message.
         reason: String,
     },
+
+    /// A [`DecodeJob`] step ended without an answer: its lane refused it, it
+    /// panicked, or the UI runtime ended first.
+    #[error("image decode did not finish: {0}")]
+    Background(flui_view::background::BackgroundError),
 }
 
 impl ImageProviderError {
@@ -213,6 +329,7 @@ impl ImageProviderError {
             Self::RequiresAsyncResolve { .. } => "requires-async-resolve",
             Self::SourceNotFound { .. } => "source-not-found",
             Self::AssetLoadFailed { .. } => "asset-load-failed",
+            Self::Background(_) => "background",
         }
     }
 }
@@ -274,13 +391,12 @@ impl ImageProvider for DirectImageProvider {
 /// An [`ImageProvider`] that decodes an encoded image (PNG, JPEG, GIF, …)
 /// from owned bytes.
 ///
-/// Decoding is synchronous and occurs on **every** call to
-/// [`resolve`](ImageProvider::resolve). For static images in
-/// frequently-rebuilt trees, pre-decode once with
-/// [`Image::from_image`](crate::Image::from_image) to avoid per-build cost.
+/// [`Image`](crate::Image) decodes it once per key on the compute lane: two
+/// providers made from equal bytes share a key, so a rebuild with the same
+/// bytes decodes nothing again. [`resolve`](ImageProvider::resolve) still
+/// decodes synchronously, for a caller outside the widget.
 ///
-/// Requires the `flui-widgets/images` feature. Without it,
-/// [`resolve`](ImageProvider::resolve) returns
+/// Requires the `flui-widgets/images` feature. Without it, decoding answers
 /// [`ImageProviderError::DecoderUnavailable`].
 ///
 /// Prefer [`Image::memory`](crate::Image::memory) as the ergonomic
@@ -288,17 +404,26 @@ impl ImageProvider for DirectImageProvider {
 #[derive(Debug, Clone)]
 pub struct MemoryImage {
     /// Encoded image bytes. Stored in `Arc` so cloning the provider is O(1).
-    bytes: Arc<Vec<u8>>,
+    bytes: Arc<[u8]>,
+    /// The bytes' hash, taken once so a key compares in O(1) until two
+    /// distinct buffers hash alike.
+    hash: u64,
 }
 
 impl MemoryImage {
-    /// Creates a provider that decodes `bytes` on each resolution.
+    /// Creates a provider that decodes `bytes`.
     ///
-    /// The bytes are moved into an `Arc` so subsequent clones of the provider
-    /// share the buffer.
+    /// Hashes the bytes once, so a rebuild that makes an equal provider is
+    /// recognised without decoding.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        use std::hash::{Hash, Hasher};
+
+        let bytes: Arc<[u8]> = Arc::from(bytes.into());
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
         Self {
-            bytes: Arc::new(bytes.into()),
+            bytes,
+            hash: hasher.finish(),
         }
     }
 
@@ -312,18 +437,26 @@ impl ImageProvider for MemoryImage {
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
         decode_bytes(&self.bytes)
     }
+
+    fn cache_key(&self) -> Option<ImageCacheKey> {
+        Some(ImageCacheKey::memory(Arc::clone(&self.bytes), self.hash))
+    }
+
+    fn decode_job(&self) -> Option<DecodeJob> {
+        let bytes = Arc::clone(&self.bytes);
+        Some(DecodeJob::decode(move || decode_bytes(&bytes)))
+    }
 }
 
-/// An [`ImageProvider`] that reads and decodes a local image file
-/// synchronously.
+/// An [`ImageProvider`] that reads and decodes a local image file.
 ///
-/// Both I/O and decoding are synchronous and block the calling thread on
-/// every [`resolve`](ImageProvider::resolve) call. For static file images in
-/// frequently-rebuilt trees, pre-decode once with
-/// [`Image::from_image`](crate::Image::from_image).
+/// [`Image`](crate::Image) reads the file on the IO lane and decodes it on
+/// the compute lane, once per path. A file that changes on disk under the
+/// same path shows its new content only once the widget's key changes.
+/// [`resolve`](ImageProvider::resolve) still reads and decodes synchronously,
+/// for a caller outside the widget.
 ///
-/// Requires the `flui-widgets/images` feature. Without it,
-/// [`resolve`](ImageProvider::resolve) returns
+/// Requires the `flui-widgets/images` feature. Without it, decoding answers
 /// [`ImageProviderError::DecoderUnavailable`].
 ///
 /// Prefer [`Image::file`](crate::Image::file) as the ergonomic constructor.
@@ -333,8 +466,7 @@ pub struct FileImage {
 }
 
 impl FileImage {
-    /// Creates a provider that reads and decodes the image at `path` on each
-    /// resolution.
+    /// Creates a provider that reads and decodes the image at `path`.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -347,20 +479,36 @@ impl FileImage {
 
 impl ImageProvider for FileImage {
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        let bytes = std::fs::read(&self.path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ImageProviderError::FileNotFound {
-                    path: self.path.clone(),
-                }
-            } else {
-                ImageProviderError::ReadFailed {
-                    path: self.path.clone(),
-                    reason: e.to_string(),
-                }
-            }
-        })?;
-        decode_bytes(&bytes)
+        decode_bytes(&read_file(&self.path)?)
     }
+
+    fn cache_key(&self) -> Option<ImageCacheKey> {
+        Some(ImageCacheKey::file(self.path.clone()))
+    }
+
+    fn decode_job(&self) -> Option<DecodeJob> {
+        let path = self.path.clone();
+        Some(DecodeJob::read_then_decode(
+            async move { read_file(&path) },
+            |bytes| decode_bytes(&bytes),
+        ))
+    }
+}
+
+/// Reads `path` whole, telling a missing file from one that cannot be read.
+fn read_file(path: &std::path::Path) -> Result<Vec<u8>, ImageProviderError> {
+    std::fs::read(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ImageProviderError::FileNotFound {
+                path: path.to_path_buf(),
+            }
+        } else {
+            ImageProviderError::ReadFailed {
+                path: path.to_path_buf(),
+                reason: e.to_string(),
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ mod diagnostics;
 mod hit_slop;
 mod input_regions;
 mod layout;
+mod leader_watch;
 mod paint;
 mod poison;
 mod query;
@@ -28,6 +29,8 @@ mod transform_path;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
+pub(crate) use leader_watch::LeaderWatches;
+pub use leader_watch::{LeaderGeometry, LeaderWatch};
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
@@ -258,6 +261,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// composite, one frame stale by design.
     last_follower_transforms: FxHashMap<RenderId, Matrix4>,
 
+    /// The live [`LeaderWatch`]es of this pipeline, checked against each
+    /// layer tree paint commits. Shared with the [`PipelineCell`], which
+    /// registers them without checking the owner out.
+    leader_watches: Rc<LeaderWatches>,
+
     /// Painted output kept per repaint boundary, reused when that boundary is
     /// clean on a later frame.
     ///
@@ -420,6 +428,7 @@ where
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
         last_follower_transforms: from.last_follower_transforms,
+        leader_watches: from.leader_watches,
         retained_boundaries: from.retained_boundaries,
         retained_pixel_ratio: from.retained_pixel_ratio,
         root_content: from.root_content,
