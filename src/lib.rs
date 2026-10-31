@@ -197,6 +197,16 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
+/// OS services from capability crates (ADR-0154 §8), each behind the feature
+/// of its name.
+///
+/// `system` (`flui-system`): the providers of the launcher, whose handle is
+/// [`platform::launch::Launcher`], and the file dialogs. An application
+/// registers `services::system::SystemPlugin`.
+#[cfg(feature = "system")]
+pub mod services {
+    pub use flui_system as system;
+}
 /// What one operating system's windows offer beyond the window contract
 /// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
 /// (ADR-0089 §5).

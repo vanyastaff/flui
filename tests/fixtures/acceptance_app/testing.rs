@@ -94,6 +94,13 @@ impl AppRun {
         self.request_close();
         drop(self);
     }
+
+    /// Whether the window has closed: at once, or once what held its close
+    /// was released or decided.
+    pub fn is_closed(&self) -> bool {
+        self.laid.is_closed()
+    }
+
     /// The operating system ends the session.
     pub fn end_session(&mut self) {
         self.laid.end_session();
@@ -147,6 +154,15 @@ impl AppRun {
             .unwrap_or_else(|| panic!("{text:?} is not on screen"));
         self.laid.dispatch_pointer_down(x, y);
         self.laid.dispatch_pointer_up(x, y);
+        self.settle();
+    }
+
+    /// Type `text` into the focused field, one key per character, then
+    /// settle.
+    pub fn type_text(&mut self, text: &str) {
+        for character in text.chars() {
+            self.press(Key::character(character.to_string()), Modifiers::NONE);
+        }
         self.settle();
     }
 

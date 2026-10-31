@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use flui_platform::{ClipboardError, ClipboardRead};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 
 use crate::host::{SyncClipboard, host_text};
 
@@ -132,7 +132,9 @@ impl SyncClipboard for ArboardClipboard {
         }
     }
 
-    fn write_now(&self, text: String) {
+    fn write_now(&self, write: ClipboardWrite) {
+        let concealed = write.is_concealed();
+        let text = write.into_text();
         let mut clipboard = self.clipboard.lock();
         let Some(clipboard) = clipboard.as_mut() else {
             tracing::warn!(
@@ -142,13 +144,83 @@ impl SyncClipboard for ArboardClipboard {
             return;
         };
 
-        match clipboard_session(|| clipboard.set_text(&text)) {
+        match clipboard_session(|| {
+            let set = clipboard.set();
+            let set = if concealed {
+                exclude_from_history(set)
+            } else {
+                set
+            };
+            set.text(text.as_str())
+        }) {
             Ok(()) => {
-                tracing::debug!(len = text.len(), "Wrote text to clipboard");
+                tracing::debug!(len = text.len(), concealed, "Wrote text to clipboard");
             }
             Err(err) => {
                 tracing::error!(?err, "Failed to write clipboard text");
             }
         }
+    }
+
+    fn concealment(&self) -> Concealment {
+        CONCEALMENT
+    }
+}
+
+/// What `arboard` does with a concealed write: Windows' history formats,
+/// which the system honours; the nspasteboard.org concealed type on macOS
+/// and KDE's password-manager hint on the other Unix desktops, which only
+/// clipboard managers that read them honour. The cfgs are `arboard`'s own.
+const CONCEALMENT: Concealment = if cfg!(windows) {
+    Concealment::Honored
+} else if cfg!(any(
+    target_os = "macos",
+    all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "android",
+            target_os = "emscripten"
+        ))
+    )
+)) {
+    Concealment::HintOnly
+} else {
+    Concealment::Unavailable
+};
+
+/// `set` marked to stay out of the clipboard's history, as `arboard` marks it
+/// on this host ([`CONCEALMENT`]).
+fn exclude_from_history(set: arboard::Set<'_>) -> arboard::Set<'_> {
+    #[cfg(windows)]
+    {
+        use arboard::SetExtWindows as _;
+        set.exclude_from_monitoring()
+            .exclude_from_history()
+            .exclude_from_cloud()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use arboard::SetExtApple as _;
+        set.exclude_from_history()
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    {
+        use arboard::SetExtLinux as _;
+        set.exclude_from_history()
+    }
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        )
+    )))]
+    {
+        set
     }
 }

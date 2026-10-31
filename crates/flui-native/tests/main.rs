@@ -27,6 +27,9 @@ use flui_native::testing::app;
 mod app_handler;
 #[path = "backend_conformance.rs"]
 mod backend_conformance;
+#[path = "clipboard.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod clipboard;
 #[path = "contract.rs"]
 mod contract;
 #[path = "displays.rs"]

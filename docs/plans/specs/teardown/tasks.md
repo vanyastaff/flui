@@ -172,7 +172,7 @@ graph LR
 | R20 | `device_loss_on_the_closing_frame_still_exits_ok` | T10 | хар. | L |
 | R21 | `closing_during_composition_commits_before_detached`; нативная строка 3 | T13; T19 | fix | L, D |
 | R22 | `session_end_flushes_the_registry_within_the_framework_budget`, `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`; нативная строка 4 | T14; T19 | fix | L, D |
-| R23 | `a_vetoed_close_disposes_nothing`; есть `a_panicking_handler_vetoes_and_stays_registered`; строка со счётчиками `Drop` | T11; T18 | хар. | L, A |
+| R23 | `a_vetoed_close_disposes_nothing`; есть `a_panicking_handler_vetoes_and_stays_registered`; `a_held_close_drops_nothing_until_the_user_decides` | T11; T18 | хар. | L, A |
 | R24 | строка README | T17 | — | — |
 | — | `close_delivery_is_idempotent` (T8); `drop_ledger_counts_each_sentinel_once` (T18); контрактные тесты `flui-view` (T4); `a_cancelled_logoff_withdraws_only_the_session_entry` (T14) | — | fix | L |
 
@@ -314,7 +314,7 @@ graph LR
   `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
 - [ ] T14 — остаток: завершение сеанса
-- [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
+- [x] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
   - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
     `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
     приёмки; `facade_consumer` требует их по имени автоматически). Шов учёта `Drop` —
@@ -327,7 +327,10 @@ graph LR
     (`FailingEditor`), чтобы заголовок с Back оставался. Клавиша Back (Alt+Left) с экрана ошибки на
     всю страницу раньше никуда не доходила: действия маршрута стояли внутри его focus scope, а фокус
     лежит на самом scope; исправлено в `flui-widgets` (`back_keys_leave_a_page_with_nothing_focusable`).
-  - [ ] R23 со счётчиками `Drop` при вето: у приложения приёмки пока нет вето закрытия (guard
-    появляется со строками persistence P11); строка — вместе с ним.
+  - [x] R23 `a_held_close_drops_nothing_until_the_user_decides` (модуль `teardown`, хар.): закрытие,
+    удержанное сбоем Save, не роняет ни одного сторожа ни при самом закрытии, ни после Keep open,
+    ни при повторном закрытии; Close without saving закрывает окно, выход роняет всё. Вето
+    обработчиком и удержанием без приложения покрывает `a_vetoed_close_disposes_nothing`
+    (`runner_close`).
 - [ ] T17 — README, Win32-строка R5, закрытие
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

@@ -130,6 +130,7 @@ mod input;
 pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
+pub mod launch;
 mod locale;
 pub mod os_options;
 mod placement;
@@ -151,7 +152,7 @@ mod window_insets;
 mod window_state;
 
 pub use brightness::Brightness;
-pub use clipboard::{ClipboardError, ClipboardRead};
+pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;

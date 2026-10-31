@@ -62,8 +62,8 @@ impl AndroidHost for Android {
     }
 
     /// The system `ClipboardManager`, through JNI.
-    fn clipboard(app: &AndroidApp) -> Arc<dyn SharedClipboard> {
-        Arc::new(AndroidClipboard::new(app.clone()))
+    fn clipboard(app: &AndroidApp, api: AndroidApi) -> Arc<dyn SharedClipboard> {
+        Arc::new(AndroidClipboard::new(app.clone(), api))
     }
 
     /// `FluiView`'s drag and drop.

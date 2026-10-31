@@ -285,6 +285,10 @@ fn capability_seam() {
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),
             (
+                "capability_seam::a_concealed_write_reaches_the_host_marked",
+                capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
+            ),
+            (
                 "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
                 capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
             ),
