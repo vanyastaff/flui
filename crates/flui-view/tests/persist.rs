@@ -905,6 +905,65 @@ fn busy_retry_follows_the_runtime_clock() {
     assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
 }
 
+/// An edit made while an older edit waits out a long back-off starts its own
+/// retries: refused as busy, it is tried again 50 ms later, not when the
+/// older wait ends.
+#[test]
+fn a_later_edit_refused_as_busy_starts_its_own_back_off() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    for _ in 0..3 {
+        storage.fail_next(StorageError::Busy);
+    }
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    for backoff in [50, 100] {
+        laid.pump_for(Duration::from_millis(backoff));
+        laid.pump();
+    }
+    assert_eq!(notes.status(), SaveStatus::Saving, "waiting 200 ms");
+
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    laid.pump_for(Duration::from_millis(49));
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump();
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(3, "third")),
+        "retried after its own first back-off"
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+}
+
+/// Hiding the application while nothing is retried hurries nothing later: a
+/// write refused as busy after the application is shown again waits its
+/// first back-off.
+#[test]
+fn a_hide_while_clean_does_not_hurry_a_later_busy_retry() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    laid.set_window_visible(false);
+    laid.pump();
+    laid.set_window_visible(true);
+    laid.pump();
+
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(1, "first")),
+        "the earlier hide is not carried into this write"
+    );
+    laid.pump_for(Duration::from_millis(50));
+    laid.pump();
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+}
+
 /// A case of a retry hurried: its name and what hurries it.
 struct HurryCase(&'static str, fn(&LaidOut));
 

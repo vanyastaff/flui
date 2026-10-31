@@ -13,6 +13,7 @@ use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use flui_platform::{
     StorageError, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
 };
+use flui_scheduler::Instant;
 
 use super::{CodecStep, Document, PersistError, ReadOnlyReason, Revision, SaveStatus};
 use super::{StorageCapability, StorageHandle};
@@ -103,8 +104,10 @@ struct DocumentState<D> {
     watching: bool,
     /// How many times the latest bytes were tried again after a busy store.
     busy_retries: usize,
-    /// Whether a retry after a busy store is waiting out its back-off.
-    busy_waiting: bool,
+    /// When the retry waiting out a busy store's back-off is due, if one
+    /// waits. A wait that ends is matched against it, so a wait made for
+    /// an earlier edit never retries a later one.
+    busy_deadline: Option<Instant>,
 }
 
 /// A loaded value and the stored file it came from.
@@ -204,7 +207,7 @@ impl<D: Document> Persisted<D> {
                     watch: None,
                     watching: false,
                     busy_retries: 0,
-                    busy_waiting: false,
+                    busy_deadline: None,
                 }),
             }),
         }
@@ -293,8 +296,7 @@ impl<D: Document> Persisted<D> {
             loaded.revision = revision;
             let replaced = std::mem::replace(&mut loaded.value, Rc::new(value));
             state.failure = None;
-            state.busy_retries = 0;
-            state.busy_waiting = false;
+            document.clear_busy(&mut state);
             state.published = Some(Published {
                 bytes: Arc::clone(&bytes),
                 mode,
@@ -337,8 +339,7 @@ impl<D: Document> Persisted<D> {
                 return;
             }
             state.failure = None;
-            state.busy_retries = 0;
-            state.busy_waiting = false;
+            document.clear_busy(&mut state);
             let republish = state.published.as_ref().map(|published| {
                 (
                     Arc::clone(&published.bytes),
@@ -476,14 +477,23 @@ impl<D: Document> OpenDocument<D> {
         Ok((revision, mode))
     }
 
-    /// Try the latest bytes again once a busy store's back-off is over.
-    fn retry_busy(self: &Rc<Self>) {
+    /// End a busy store's retries: the next refusal starts from the first
+    /// back-off, and a hurry asked for before it is not carried into it.
+    fn clear_busy(&self, state: &mut DocumentState<D>) {
+        state.busy_retries = 0;
+        state.busy_deadline = None;
+        self.hurry.disarm();
+    }
+
+    /// Try the latest bytes again once the back-off that ends at `deadline`
+    /// is over, unless that wait was replaced since.
+    fn retry_busy(self: &Rc<Self>, deadline: Instant) {
         let republish = {
             let mut state = self.state.borrow_mut();
-            if !state.busy_waiting {
+            if state.busy_deadline != Some(deadline) {
                 return;
             }
-            state.busy_waiting = false;
+            state.busy_deadline = None;
             state.busy_retries += 1;
             state.published.as_ref().map(|published| {
                 (
@@ -527,8 +537,7 @@ impl<D: Document> OpenDocument<D> {
                 let flush = publisher.state();
                 match &flush {
                     FlushState::Clean => {
-                        state.busy_retries = 0;
-                        state.busy_waiting = false;
+                        self.clear_busy(&mut state);
                         if matches!(state.failure, Some(PersistError::Storage(_))) {
                             state.failure = None;
                         }
@@ -537,11 +546,25 @@ impl<D: Document> OpenDocument<D> {
                     // A busy store is tried again on the runtime's clock, up
                     // to the last back-off; the status stays `Saving`.
                     FlushState::Failed(StorageError::Busy)
-                        if state.failure.is_none()
-                            && self.timer.is_some()
-                            && (state.busy_waiting || state.busy_retries < BUSY_BACKOFF.len()) =>
+                        if let Some(timer) = &self.timer
+                            && state.failure.is_none()
+                            && (state.busy_deadline.is_some()
+                                || state.busy_retries < BUSY_BACKOFF.len()) =>
                     {
-                        state.busy_waiting = true;
+                        if state.busy_deadline.is_none() {
+                            let backoff = BUSY_BACKOFF[state.busy_retries];
+                            // A clock with no room for the back-off fails the
+                            // write instead of waiting forever.
+                            match timer.now().checked_add(backoff) {
+                                Some(deadline) => {
+                                    state.busy_deadline = Some(deadline);
+                                    self.hurry.arm();
+                                }
+                                None => {
+                                    state.failure = Some(PersistError::Storage(StorageError::Busy));
+                                }
+                            }
+                        }
                     }
                     FlushState::Failed(error) => {
                         if state.failure.is_none() {
@@ -605,15 +628,15 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
             return;
         };
         open.refresh();
-        let backoff = {
+        let deadline = {
             let mut state = open.state.borrow_mut();
             if state.status != SaveStatus::Saving {
                 state.watching = false;
                 return;
             }
-            state.busy_waiting.then(|| BUSY_BACKOFF[state.busy_retries])
+            state.busy_deadline
         };
-        let Some(delay) = backoff else {
+        let Some(deadline) = deadline else {
             drop(open);
             changed.await;
             continue;
@@ -626,60 +649,95 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
             open.guard.clone(),
         );
         drop(open);
-        wait_or_hurry(&timer, delay, &hurry, guard.as_ref()).await;
+        // A registry change can replace the wait (a newer edit, or one that
+        // went through): the loop reads the deadline again.
+        let woke = wait_or_hurry(&timer, deadline, &hurry, guard.as_ref(), changed).await;
         let Some(open) = document.upgrade() else {
             return;
         };
-        open.retry_busy();
+        if woke == Woke::Due {
+            open.retry_busy(deadline);
+        }
     }
 }
 
-/// Wait `delay` on the runtime's clock, or less: until the application is
-/// hidden or paused, or a close is recorded while it waits.
+/// Why [`wait_or_hurry`] returned.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Woke {
+    /// The deadline passed, or the retry was hurried.
+    Due,
+    /// The registry changed first.
+    Changed,
+}
+
+/// Wait until `deadline` on the runtime's clock, or less: until the
+/// application is hidden or paused, or a close is recorded while it waits;
+/// or until the registry changes.
 async fn wait_or_hurry(
     timer: &TimerHandle,
-    delay: Duration,
+    deadline: Instant,
     hurry: &Hurry,
     guard: Option<&CloseGuard>,
-) {
-    let mut sleep = std::pin::pin!(timer.sleep(delay));
+    registry_changed: impl Future<Output = ()>,
+) -> Woke {
+    let mut sleep = std::pin::pin!(timer.sleep_until(deadline));
+    let mut registry_changed = std::pin::pin!(registry_changed);
     let mut changed = guard.map(|guard| Box::pin(guard.changed()));
     std::future::poll_fn(|cx| {
         if hurry.due.replace(false) || guard.is_some_and(|guard| guard.pending().is_some()) {
-            return Poll::Ready(());
+            return Poll::Ready(Woke::Due);
         }
-        let replaced = hurry.waker.replace(Some(cx.waker().clone()));
+        let waker = cx.waker().clone();
+        let replaced = hurry.waker.replace(Some(waker));
         drop(replaced);
         if sleep.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(());
+            return Poll::Ready(Woke::Due);
         }
         if let (Some(guard), Some(future)) = (guard, changed.as_mut())
             && future.as_mut().poll(cx).is_ready()
         {
             if guard.pending().is_some() {
-                return Poll::Ready(());
+                return Poll::Ready(Woke::Due);
             }
             *future = Box::pin(guard.changed());
             if future.as_mut().poll(cx).is_ready() {
                 cx.waker().wake_by_ref();
             }
         }
+        if registry_changed.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Woke::Changed);
+        }
         Poll::Pending
     })
-    .await;
+    .await
 }
 
-/// Asks a backed-off retry to run now; set when the application is hidden or
-/// paused.
+/// Asks a backed-off retry to run now; requested when the application is
+/// hidden or paused, and kept only while a busy store's retries run.
 #[derive(Default)]
 struct Hurry {
+    /// Whether a busy store's retries run: a request outside them is
+    /// dropped, so it never hurries a later write's first back-off.
+    armed: Cell<bool>,
     due: Cell<bool>,
     /// The waiting retry's waker.
     waker: RefCell<Option<Waker>>,
 }
 
 impl Hurry {
+    fn arm(&self) {
+        self.armed.set(true);
+    }
+
+    fn disarm(&self) {
+        self.armed.set(false);
+        self.due.set(false);
+    }
+
     fn request(&self) {
+        if !self.armed.get() {
+            return;
+        }
         self.due.set(true);
         let waker = self.waker.take();
         if let Some(waker) = waker {
