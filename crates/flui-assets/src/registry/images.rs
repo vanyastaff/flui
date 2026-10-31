@@ -57,6 +57,7 @@ use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
 use flui_platform::executor::{Executor, SpawnError};
+use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
@@ -89,7 +90,7 @@ pub(crate) fn default_decode_threads() -> NonZeroUsize {
 const FILE_READ_CHUNK: usize = 256 * 1024;
 
 /// The largest encoded image file a load reads: 256 MiB, the same bound
-/// `NetworkLoader::load_url` puts on a response body. A larger file fails
+/// a network image's request puts on its response body. A larger file fails
 /// before it is buffered.
 const MAX_ENCODED_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -108,25 +109,109 @@ const MAX_HANDOVERS: u8 = 4;
 pub enum ImageSource {
     /// An asset path, read from the file system.
     Asset(Arc<str>),
-    /// An HTTP or HTTPS URL.
-    #[cfg(feature = "network")]
-    Network(Arc<str>),
+    /// An HTTP or HTTPS URL, as one client's authority answers it.
+    Network(NetworkSource),
 }
 
 impl ImageSource {
+    /// The image at `url` as `http` fetches it: two clients with different
+    /// authorities may answer one URL with different images, so they never
+    /// share a decoded image or a load (ADR-0118, ADR-0280 §6).
+    #[must_use]
+    pub fn network(url: impl Into<Arc<str>>, http: &Http) -> Self {
+        Self::Network(NetworkSource {
+            url: url.into(),
+            authority: Some(http.authority()),
+        })
+    }
+
     /// The path or URL, for error messages.
     pub(crate) fn label(&self) -> &Arc<str> {
         match self {
             Self::Asset(path) => path,
-            #[cfg(feature = "network")]
-            Self::Network(url) => url,
+            Self::Network(network) => &network.url,
         }
+    }
+}
+
+/// A network image's URL and the authority of the client that fetches it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetworkSource {
+    url: Arc<str>,
+    /// `None` for a load with no client: it fails, and shares nothing with
+    /// a load that has one.
+    authority: Option<HttpAuthority>,
+}
+
+impl NetworkSource {
+    /// The URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
 /// The background lanes a load runs on, or none to run it where its
 /// [`ImageLoad`] is polled.
-pub(crate) type Lanes = Option<Arc<dyn Executor>>;
+type Lanes = Option<Arc<dyn Executor>>;
+
+/// What an image load runs on: the caller's background lanes and HTTP
+/// client.
+///
+/// A request that becomes a load's lead runs it on its own services, so a
+/// load handed over runs on those of the request that took it.
+///
+/// ```rust,ignore
+/// let services = LoadServices::new().with_lanes(lanes).with_http(http);
+/// let load = registry.load_network_image(url, services);
+/// ```
+#[derive(Clone, Default)]
+pub struct LoadServices {
+    lanes: Lanes,
+    http: Option<Http>,
+}
+
+impl LoadServices {
+    /// No lanes and no HTTP client: a file load runs where its
+    /// [`ImageLoad`] is polled, and a network load answers
+    /// [`AssetError::HttpUnavailable`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read on the IO lane of `lanes` and decode on their compute lane.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_lanes(mut self, lanes: Arc<dyn Executor>) -> Self {
+        self.lanes = Some(lanes);
+        self
+    }
+
+    /// Fetch network images with `http`.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_http(mut self, http: Http) -> Self {
+        self.http = Some(http);
+        self
+    }
+
+    /// The source of a load of `url` with these services' client, or with
+    /// none.
+    pub(crate) fn network_source(&self, url: Arc<str>) -> ImageSource {
+        ImageSource::Network(NetworkSource {
+            url,
+            authority: self.http.as_ref().map(Http::authority),
+        })
+    }
+}
+
+impl std::fmt::Debug for LoadServices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadServices")
+            .field("lanes", &self.lanes.is_some())
+            .field("http", &self.http.is_some())
+            .finish()
+    }
+}
 
 /// The bytes of one source, read on the IO lane.
 type Fetch = Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>;
@@ -200,10 +285,6 @@ pub(crate) struct DecodedImages {
     /// One slot per decode allowed to run at once, handed out in admission
     /// order.
     decodes: Arc<OrderedSlots>,
-    /// One HTTP connection pool per registry, initialized on the first IO
-    /// lane that fetches an image.
-    #[cfg(feature = "network")]
-    network: Arc<tokio::sync::OnceCell<crate::NetworkLoader>>,
 }
 
 /// Loads a registry lets read or wait to decode per decode thread: enough to
@@ -238,11 +319,7 @@ enum Admission {
 }
 
 impl DecodedImages {
-    pub(crate) fn new(
-        budget: usize,
-        decode_threads: NonZeroUsize,
-        #[cfg(feature = "network")] network: Option<crate::NetworkLoader>,
-    ) -> Self {
+    pub(crate) fn new(budget: usize, decode_threads: NonZeroUsize) -> Self {
         Self {
             state: Mutex::new(State {
                 entries: lru::LruCache::unbounded(),
@@ -255,8 +332,6 @@ impl DecodedImages {
                 decode_threads.get().saturating_mul(LOADS_PER_DECODE_THREAD),
             )),
             decodes: Arc::new(OrderedSlots::new(decode_threads.get())),
-            #[cfg(feature = "network")]
-            network: Arc::new(tokio::sync::OnceCell::new_with(network)),
         }
     }
 
@@ -266,16 +341,16 @@ impl DecodedImages {
     }
 
     /// Serves `source` from the cache, joins its load in flight, or starts
-    /// one on `lanes`.
-    pub(crate) fn load(self: &Arc<Self>, source: ImageSource, lanes: Lanes) -> ImageLoad {
+    /// one on `services`.
+    pub(crate) fn load(self: &Arc<Self>, source: ImageSource, services: LoadServices) -> ImageLoad {
         let mut load = ImageLoad {
             state: LoadState::Unadmitted,
             images: Arc::clone(self),
             source,
-            lanes,
+            services,
             handovers: 0,
         };
-        if load.lanes.is_some() {
+        if load.services.lanes.is_some() {
             load.admit();
         }
         load
@@ -283,7 +358,7 @@ impl DecodedImages {
 
     /// Serves `source` from the cache, joins its load in flight, or opens a
     /// new pending entry and builds the run that settles it.
-    fn admit(self: &Arc<Self>, source: &ImageSource, lanes: &Lanes) -> Admission {
+    fn admit(self: &Arc<Self>, source: &ImageSource, services: &LoadServices) -> Admission {
         let mut state = self.state.lock();
         if let Some(image) = state.entries.get(source) {
             return Admission::Cached(image.clone());
@@ -331,13 +406,14 @@ impl DecodedImages {
         };
         Admission::Lead {
             subscription: Subscription::new(rx, Arc::clone(self), source, ticket),
-            run: self.run(completion, load_slot, lanes.clone()),
+            run: Self::run(completion, load_slot, services.clone()),
         }
     }
 
     /// Reads the source, decodes it and settles every waiter.
-    fn run(&self, completion: Completion, load_slot: Reservation, lanes: Lanes) -> Run {
-        let fetch = self.fetch(&completion.source);
+    fn run(completion: Completion, load_slot: Reservation, services: LoadServices) -> Run {
+        let fetch = fetch(&completion.source, services.http);
+        let lanes = services.lanes;
         Box::pin(async move {
             // Granted before the read starts and held until the decode
             // returns: reads past admission, and the encoded bytes waiting
@@ -354,45 +430,6 @@ impl DecodedImages {
             };
             completion.settle(outcome);
         })
-    }
-
-    /// The bytes of `source`, read where the run is polled.
-    #[cfg_attr(
-        not(feature = "network"),
-        expect(
-            clippy::unused_self,
-            reason = "only a network fetch reads the registry's client"
-        )
-    )]
-    fn fetch(&self, source: &ImageSource) -> Fetch {
-        match source {
-            ImageSource::Asset(path) => Box::pin(read_in_chunks(Arc::clone(path))),
-            #[cfg(feature = "network")]
-            ImageSource::Network(url) => {
-                let network = Arc::clone(&self.network);
-                let url = Arc::clone(url);
-                Box::pin(async move {
-                    // reqwest's connections live on a tokio reactor; on a
-                    // lane without one it would panic at the first poll.
-                    if tokio::runtime::Handle::try_current().is_err() {
-                        return Err(AssetError::ReactorUnavailable {
-                            url: url.to_string(),
-                        });
-                    }
-                    let loader = network
-                        .get_or_try_init(|| async {
-                            crate::NetworkLoader::try_new().map_err(|error| {
-                                AssetError::LoadFailed {
-                                    path: url.to_string(),
-                                    reason: format!("HTTP client initialization failed: {error}"),
-                                }
-                            })
-                        })
-                        .await?;
-                    loader.load_url(&url).await
-                })
-            }
-        }
     }
 
     /// Records the cancel signal of the load `ticket` names, spawned on an IO
@@ -577,6 +614,40 @@ impl DecodedImages {
     }
 }
 
+/// The bytes of `source`, read where the run is polled; a network image is
+/// fetched with `http`.
+fn fetch(source: &ImageSource, http: Option<Http>) -> Fetch {
+    match source {
+        ImageSource::Asset(path) => Box::pin(read_in_chunks(Arc::clone(path))),
+        ImageSource::Network(network) => Box::pin(fetch_over_http(Arc::clone(&network.url), http)),
+    }
+}
+
+/// The body of a `GET` for `url`, within [`MAX_ENCODED_FILE_BYTES`].
+async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
+    let Some(http) = http else {
+        return Err(AssetError::HttpUnavailable {
+            url: url.to_string(),
+        });
+    };
+    let failed = |source: HttpError| AssetError::Http {
+        url: url.to_string(),
+        source,
+    };
+    let response = http
+        .send(HttpRequest::get(url.as_ref()).with_body_limit(MAX_ENCODED_FILE_BYTES))
+        .await
+        .map_err(failed)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AssetError::HttpStatus {
+            url: url.to_string(),
+            status,
+        });
+    }
+    response.into_body().into_bytes().await.map_err(failed)
+}
+
 /// Reads the file at `path` one [`FILE_READ_CHUNK`] at a time, yielding
 /// between chunks so a cancelled load stops at the next one, and never more
 /// than [`MAX_ENCODED_FILE_BYTES`].
@@ -706,10 +777,10 @@ pub struct ImageLoad {
     state: LoadState,
     images: Arc<DecodedImages>,
     source: ImageSource,
-    /// The lanes this subscriber leads a load on, should it have to;
-    /// `None` once they refused for want of room, so the next lead runs
+    /// What this subscriber leads a load on, should it have to; without
+    /// lanes once they refused for want of room, so the next lead runs
     /// here.
-    lanes: Lanes,
+    services: LoadServices,
     /// Loads closed under this subscriber so far.
     handovers: u8,
 }
@@ -770,11 +841,11 @@ impl Drop for Subscription {
 impl ImageLoad {
     /// Joins or starts the load of this subscriber's source.
     fn admit(&mut self) {
-        self.state = match self.images.admit(&self.source, &self.lanes) {
+        self.state = match self.images.admit(&self.source, &self.services) {
             Admission::Cached(image) => LoadState::Ready(Some(Ok(image))),
             Admission::Joined(subscription) => LoadState::Waiting(subscription),
             Admission::Lead { subscription, run } => {
-                let Some(lanes) = &self.lanes else {
+                let Some(lanes) = &self.services.lanes else {
                     self.state = LoadState::Leading {
                         run: Some(run),
                         subscription,
@@ -793,7 +864,7 @@ impl ImageLoad {
                     // on it, once polled.
                     Err(SpawnError::Saturated | SpawnError::Unavailable) => {
                         drop(subscription);
-                        self.lanes = None;
+                        self.services.lanes = None;
                         LoadState::Unadmitted
                     }
                     Err(reason) => LoadState::Ready(Some(Err(AssetError::LanesRefused {

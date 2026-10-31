@@ -15,7 +15,7 @@
 //! - [`resolve_async`](ImageProvider::resolve_async): a future of the
 //!   provider's own, for a source with its own loader, handed the same
 //!   background lanes. `AssetImage` (behind the `asset-images` feature) and
-//!   `NetworkImage` (behind `network-images`) take this way: their registry
+//!   `NetworkImage` (behind the same feature) take this way: their registry
 //!   reads and decodes on those lanes.
 //!
 //! A provider with no key, such as [`DirectImageProvider`], resolves inline
@@ -42,9 +42,68 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use flui_painting::paint::Image as PixelImage;
+use flui_platform::http::Http;
 use flui_view::background::Background;
 
 use super::cache_key::ImageCacheKey;
+
+/// What a provider's own loader runs on: the UI runtime's background lanes
+/// and the host's HTTP client, as [`Image`](crate::Image) acquired them in
+/// `init_state`. Either is absent on a host that does not provide it.
+///
+/// Cheap to clone. A caller outside a widget builds one from what it has.
+#[derive(Clone, Debug, Default)]
+pub struct ImageServices {
+    background: Option<Background>,
+    http: Option<Http>,
+}
+
+impl ImageServices {
+    /// Neither lanes nor an HTTP client.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run on `background`'s lanes.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_background(mut self, background: Background) -> Self {
+        self.background = Some(background);
+        self
+    }
+
+    /// Fetch with `http`.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_http(mut self, http: Http) -> Self {
+        self.http = Some(http);
+        self
+    }
+
+    /// The background lanes, if the host has them.
+    #[must_use]
+    pub fn background(&self) -> Option<&Background> {
+        self.background.as_ref()
+    }
+
+    /// The HTTP client, if the host has one.
+    #[must_use]
+    pub fn http(&self) -> Option<&Http> {
+        self.http.as_ref()
+    }
+
+    /// The services as an asset registry's load takes them.
+    #[cfg(feature = "asset-images")]
+    pub(crate) fn load_services(&self) -> flui_assets::LoadServices {
+        let mut services = flui_assets::LoadServices::new();
+        if let Some(background) = &self.background {
+            services = services.with_lanes(Arc::clone(background.executor()));
+        }
+        if let Some(http) = &self.http {
+            services = services.with_http(http.clone());
+        }
+        services
+    }
+}
 
 /// Describes how to obtain a decoded image, synchronously or asynchronously.
 ///
@@ -85,16 +144,16 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// [`cache_key`](Self::cache_key) to return `Some`, or [`Image`](crate::Image)
     /// never calls this method at all.
     ///
-    /// `background` is the UI runtime's background lanes, for a provider
-    /// whose loader runs its own work on them; [`Image`](crate::Image) passes
-    /// `None` on a host without them, and a caller outside a widget passes
-    /// what it has.
+    /// `services` are the UI runtime's background lanes and the host's HTTP
+    /// client, for a provider whose loader runs its own work on them;
+    /// [`Image`](crate::Image) leaves out what its host does not provide, and
+    /// a caller outside a widget passes what it has.
     fn resolve_async(
         &self,
-        background: Option<&Background>,
+        services: &ImageServices,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let _ = background;
+        let _ = services;
         Box::pin(std::future::ready(self.resolve()))
     }
 
@@ -104,7 +163,8 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     ///
     /// Must not block. The default `None` always starts
     /// [`resolve_async`](Self::resolve_async).
-    fn cached(&self) -> Option<PixelImage> {
+    fn cached(&self, services: &ImageServices) -> Option<PixelImage> {
+        let _ = services;
         None
     }
 
@@ -531,7 +591,7 @@ fn read_file(path: &std::path::Path) -> Result<Vec<u8>, ImageProviderError> {
 /// the widget renders an empty box without a compile error.
 ///
 /// Used by [`MemoryImage`] and [`FileImage`] only — `AssetImage`/`NetworkImage`
-/// (`asset-images`/`network-images` features) decode through `flui-assets`'
+/// (`asset-images` feature) decode through `flui-assets`'
 /// own `image`-crate usage instead, not this helper.
 fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
     #[cfg(feature = "images")]

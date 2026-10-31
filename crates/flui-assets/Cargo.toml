@@ -25,12 +25,12 @@ autotests = false
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The `Executor` a decoded-image load runs on: the caller's background lanes
-# (ADR-0047), so the registry starts no runtime or thread of its own.
+# (ADR-0047), so the registry starts no runtime or thread of its own, and the
+# HTTP client a network image is fetched with (ADR-0280).
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 
 # Async runtime. "sync" backs the decoded-image load channels and slots
-# (`registry::images`); "rt" lets a network load find the tokio reactor its
-# IO lane runs it in, and backs the typed cache's `tokio::fs` loaders.
+# (`registry::images`); "rt" backs the typed cache's `tokio::fs` loaders.
 tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
 
 # High-performance cache
@@ -47,16 +47,15 @@ image = { workspace = true, optional = true }
 # The registry's byte-budgeted decoded-image LRU (`registry::images`).
 lru = { workspace = true, optional = true }
 
-# Optional: Network loading
-reqwest = { workspace = true, optional = true }
-
 [dev-dependencies]
-# "macros" backs `#[tokio::test]`; "time" backs `tokio::time::timeout` — the
-# hermetic network-loader test's hang guard (a wedged exchange must fail the
-# test, not wedge CI); "rt-multi-thread" builds the runtime the tests' lanes
-# (`tests/lanes.rs`) drive network loads on, as a native host's default IO
+# "macros" backs `#[tokio::test]`; "time" backs `tokio::time::timeout`, the
+# decode-scheduling tests' hang guard; "rt-multi-thread" builds the runtime the
+# tests' lanes (`tests/lanes.rs`) run IO on, as a native host's default IO
 # lane does.
 tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
+# `ScriptedHttp`, the scripted HTTP client network-image tests fetch with.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
+flui-platform = { path = "../flui-platform", features = ["testing"] }
 
 [features]
 default = []
@@ -67,9 +66,6 @@ default = []
 
 # Enable image loading (PNG, JPEG, GIF, WebP, etc.)
 images = ["dep:image", "dep:lru"]
-
-# Enable network-based asset loading via HTTP/HTTPS
-network = ["dep:reqwest"]
 
 ## Future Features (Coming Soon)
 ##
@@ -87,7 +83,7 @@ network = ["dep:reqwest"]
 ## Convenience Feature Sets
 
 # Enable all stable features (recommended for applications)
-full = ["images", "network"]
+full = ["images"]
 
 [lints]
 workspace = true

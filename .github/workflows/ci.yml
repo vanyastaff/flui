@@ -586,7 +586,7 @@ jobs:
       # precedent as `cargo clippy -p flui-engine --features
       # testing` above.
       #
-      # `asset-images`/`network-images` extend the same gap to the
+      # `asset-images` extends the same gap to the
       # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
       # `image::decode_cache`): those tests only compile under their own
       # feature, so they need their own explicit run too, or they are as
@@ -600,7 +600,7 @@ jobs:
           cargo nextest run
           -p flui-assets -p flui-widgets
           --locked --no-fail-fast
-          --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images
+          --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images
 
       # The one configuration the run above does not cover: `images` without
       # `asset-images`, which a consumer decoding only `Image::memory` and

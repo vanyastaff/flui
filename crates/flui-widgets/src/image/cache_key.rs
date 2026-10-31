@@ -53,20 +53,29 @@ impl ImageCacheKey {
         Self(Repr::File(path))
     }
 
-    /// The key of `source` loaded through `registry`.
+    /// The key of the asset at `path` loaded through `registry`.
     #[cfg(feature = "asset-images")]
-    pub(super) fn registry(
-        registry: &Arc<flui_assets::AssetRegistry>,
-        source: flui_assets::ImageSource,
-    ) -> Self {
+    pub(super) fn asset(registry: &Arc<flui_assets::AssetRegistry>, path: Arc<str>) -> Self {
         Self(Repr::Registry(RegistryImageKey {
             registry: Arc::downgrade(registry),
-            source,
+            entry: RegistryEntry::Asset(path),
+        }))
+    }
+
+    /// The key of the image at `url` loaded through `registry`, with
+    /// whatever client the [`Image`](super::Image) holding it acquired: one
+    /// `Image`'s client does not change while it is mounted, so the key need
+    /// not name it, while the registry keeps two clients' images apart.
+    #[cfg(feature = "asset-images")]
+    pub(super) fn network(registry: &Arc<flui_assets::AssetRegistry>, url: Arc<str>) -> Self {
+        Self(Repr::Registry(RegistryImageKey {
+            registry: Arc::downgrade(registry),
+            entry: RegistryEntry::Network(url),
         }))
     }
 }
 
-/// A source within one asset registry.
+/// An image within one asset registry.
 ///
 /// The registry is compared by allocation. The key keeps a weak reference to
 /// it, so the address cannot be reused by another registry while the key is
@@ -75,13 +84,22 @@ impl ImageCacheKey {
 #[derive(Debug, Clone)]
 struct RegistryImageKey {
     registry: std::sync::Weak<flui_assets::AssetRegistry>,
-    source: flui_assets::ImageSource,
+    entry: RegistryEntry,
+}
+
+/// What a registry key names: an asset path and a URL with the same text are
+/// two images.
+#[cfg(feature = "asset-images")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RegistryEntry {
+    Asset(Arc<str>),
+    Network(Arc<str>),
 }
 
 #[cfg(feature = "asset-images")]
 impl PartialEq for RegistryImageKey {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source && self.registry.ptr_eq(&other.registry)
+        self.entry == other.entry && self.registry.ptr_eq(&other.registry)
     }
 }
 
@@ -92,7 +110,7 @@ impl Eq for RegistryImageKey {}
 impl Hash for RegistryImageKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.registry.as_ptr().hash(state);
-        self.source.hash(state);
+        self.entry.hash(state);
     }
 }
 

@@ -39,10 +39,10 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// | `network` | HTTP/HTTPS URL | Async — cached, coalesced, off-thread |
 /// | [`new`] | Any [`ImageProvider`] impl | Provider-dependent |
 ///
-/// `asset`/`network` require the `asset-images`/`network-images` features
-/// respectively (hence the plain, non-linked names above — they do not exist
-/// in this doc build); both are off by default so stable builds do not pull
-/// in `flui-assets` unless asked for.
+/// `asset`/`network` require the `asset-images` feature (hence the plain,
+/// non-linked names above — they do not exist in this doc build); it is off
+/// by default so stable builds do not pull in `flui-assets` unless asked
+/// for.
 ///
 /// # Async dispatch
 ///
@@ -178,8 +178,9 @@ impl Image {
     ///
     /// Same registry-injection contract as [`asset`](Image::asset).
     ///
-    /// Requires the `flui-widgets/network-images` feature.
-    #[cfg(feature = "network-images")]
+    /// Requires the `flui-widgets/asset-images` feature. The URL is fetched with
+    /// the host's HTTP capability (`flui_platform::http::HttpCapability`).
+    #[cfg(feature = "asset-images")]
     pub fn network(registry: Arc<flui_assets::AssetRegistry>, url: impl Into<String>) -> Self {
         Self::new(super::NetworkImage::new(registry, url))
     }

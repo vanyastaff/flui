@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-31)
 - **Date:** 2026-10-31
+- **Superseded-by:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §5 (the reactor
+  check), and §1 only for the shape of what a load is given.
 - **Supersedes:** [ADR-0105](ADR-0105-asset-validation-and-bridge-progress.md) "Decision", its
   second and third paragraphs only (the bridge's runtime selection and its owned runtime);
   [ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md) §2 only for how a load is aborted

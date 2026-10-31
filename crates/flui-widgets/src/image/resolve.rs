@@ -43,15 +43,16 @@ use std::sync::Arc;
 
 use flui_painting::paint::Image as PixelImage;
 use flui_platform::executor::SpawnError;
+use flui_platform::http::HttpCapability;
 use flui_scheduler::{AsyncDriver, TaskToken};
-use flui_view::background::{Background, BackgroundCapability, BackgroundError};
+use flui_view::background::{BackgroundCapability, BackgroundError};
 use flui_view::context::LifecycleContext;
 use flui_view::prelude::LifecycleContextExt as _;
 use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
 use super::cache_key::ImageCacheKey;
-use super::provider::{ImageProvider, ImageProviderError};
+use super::provider::{ImageProvider, ImageProviderError, ImageServices};
 
 /// The frame the widget displays, plus the generation allowed to write it.
 #[derive(Debug, Default)]
@@ -99,9 +100,9 @@ pub(super) struct ImageResolver {
     handle: Option<RebuildHandle>,
     /// The binding's async driver, likewise captured in `init_state`.
     driver: Option<AsyncDriver>,
-    /// The UI runtime's background lanes, likewise captured in `init_state`;
-    /// `None` on a host without them, where decode jobs run on this thread.
-    background: Option<Background>,
+    /// The UI runtime's background lanes and the host's HTTP client, likewise
+    /// captured in `init_state`; without lanes, decode jobs run on this thread.
+    services: ImageServices,
     /// Cancels the live load on drop.
     token: Option<TaskToken>,
     /// The key the live subscription was created for. `None` means no async
@@ -140,7 +141,7 @@ impl ImageResolver {
             published: Arc::new(Mutex::new(Published::default())),
             handle: None,
             driver: None,
-            background: None,
+            services: ImageServices::new(),
             token: None,
             key: None,
             provider,
@@ -152,16 +153,22 @@ impl ImageResolver {
     pub(super) fn init(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
-        self.background = match ctx.capability::<BackgroundCapability>() {
-            Ok(background) => Some(background),
-            Err(unsupported) => {
-                tracing::debug!(
-                    %unsupported,
-                    "Image: no background lanes; decode jobs run on the owner thread"
-                );
-                None
-            }
-        };
+        let mut services = ImageServices::new();
+        match ctx.capability::<BackgroundCapability>() {
+            Ok(background) => services = services.with_background(background),
+            Err(unsupported) => tracing::debug!(
+                %unsupported,
+                "Image: no background lanes; decode jobs run on the owner thread"
+            ),
+        }
+        match ctx.capability::<HttpCapability>() {
+            Ok(http) => services = services.with_http(http),
+            Err(unsupported) => tracing::debug!(
+                %unsupported,
+                "Image: no HTTP client; a network image fails to load"
+            ),
+        }
+        self.services = services;
         let key = self.provider.cache_key();
         self.start(key);
     }
@@ -227,7 +234,7 @@ impl ImageResolver {
 
         // An image the provider already holds resolves in this very frame,
         // with no placeholder.
-        if let Some(hit) = self.provider.cached() {
+        if let Some(hit) = self.provider.cached(&self.services) {
             self.published.lock().publish(generation, hit);
             return;
         }
@@ -256,7 +263,7 @@ impl ImageResolver {
             match self.provider.decode_job() {
                 Some(job) => {
                     let provider = Arc::clone(&self.provider);
-                    let on_lanes = job.run(self.background.clone());
+                    let on_lanes = job.run(self.services.background().cloned());
                     Box::pin(async move {
                         match on_lanes.await {
                             // A lane too full, or unable, to take a step would
@@ -278,7 +285,7 @@ impl ImageResolver {
                         }
                     })
                 }
-                None => self.provider.resolve_async(self.background.as_ref()),
+                None => self.provider.resolve_async(&self.services),
             };
         let published = Arc::clone(&self.published);
         self.published.lock().inline_window = true;

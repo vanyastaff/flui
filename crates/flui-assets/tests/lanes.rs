@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
+use flui_assets::LoadServices;
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use parking_lot::Mutex;
 
@@ -70,6 +71,11 @@ impl ThreadLanes {
     /// The lanes as a load takes them.
     pub fn lanes(self: &Arc<Self>) -> Arc<dyn Executor> {
         Arc::clone(self) as Arc<dyn Executor>
+    }
+
+    /// The lanes as a load's services take them.
+    pub fn services(self: &Arc<Self>) -> LoadServices {
+        LoadServices::new().with_lanes(self.lanes())
     }
 
     /// The IO lane's runtime.
@@ -142,6 +148,11 @@ impl QueuedLanes {
     /// The lanes as a load takes them.
     pub fn lanes(self: &Arc<Self>) -> Arc<dyn Executor> {
         Arc::clone(self) as Arc<dyn Executor>
+    }
+
+    /// The lanes as a load's services take them.
+    pub fn services(self: &Arc<Self>) -> LoadServices {
+        LoadServices::new().with_lanes(self.lanes())
     }
 
     /// Refuse every later spawn with `refusal`.

@@ -51,22 +51,31 @@ pub enum AssetError {
         reason: String,
     },
 
-    /// Network error occurred while fetching the asset.
-    #[error("Network error for '{url}': {reason}")]
-    NetworkError {
-        /// The URL that failed.
-        url: String,
-        /// The reason for the network error.
-        reason: String,
-    },
-
-    /// A network image load ran on an IO lane without a tokio reactor, which
-    /// the HTTP client needs. A native host's default lanes have one; a
-    /// host's own executor, or a load with no lanes, may not.
-    #[error("Network error for '{url}': its IO lane has no tokio reactor")]
-    ReactorUnavailable {
+    /// A network image was requested without an HTTP client: the caller's
+    /// host provides none.
+    #[error("No HTTP client to fetch '{url}'")]
+    HttpUnavailable {
         /// The URL that was not fetched.
         url: String,
+    },
+
+    /// The HTTP request for a network image failed.
+    #[error("Fetching '{url}' failed: {source}")]
+    Http {
+        /// The URL that failed.
+        url: String,
+        /// Why the request failed.
+        source: flui_platform::http::HttpError,
+    },
+
+    /// The server answered a network image's request with a status other
+    /// than 2xx.
+    #[error("Fetching '{url}' answered HTTP {status}")]
+    HttpStatus {
+        /// The URL that was fetched.
+        url: String,
+        /// The status the server answered.
+        status: flui_platform::http::StatusCode,
     },
 
     /// The background lanes refused a load because they are shutting down.
