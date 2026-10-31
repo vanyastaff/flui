@@ -375,7 +375,12 @@ impl Frame {
                     clipped = false;
                     let bounds = DamageExtent::rect(backdrop.bounds());
                     if let Some(rect) = place(bounds, &ctx, full, false) {
-                        let reach = device_reach(backdrop.filter(), &ctx.transform);
+                        // A transform reads where its inverse sends the
+                        // bounds; past the surface it reads all of it.
+                        let read = (transform_reach(backdrop.filter(), backdrop.bounds())
+                            * max_scale(&ctx.transform))
+                        .min(full.width() + full.height());
+                        let reach = device_reach(backdrop.filter(), &ctx.transform).max(read);
                         frame.backdrops.push((rect, reach));
                     }
                     Some(bounds)
@@ -665,6 +670,42 @@ fn device_reach(filter: &ImageFilter, transform: &Matrix4) -> f64 {
     (filter_reach(filter) * max_scale(transform)).max(renderer_growth(filter))
 }
 
+/// How far past `bounds` a transform filter reads, in local units: where its
+/// inverse sends the bounds, beyond them. A magnifier about a point inside
+/// reads within them; a shrinking or displacing transform reads outside.
+fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>) -> f64 {
+    match filter {
+        ImageFilter::Transform { transform, .. } => {
+            let [xx, yx, xy, yy, x0, y0] = transform.inverse_coefficients();
+            let corners = [
+                bounds.top_left(),
+                bounds.top_right(),
+                bounds.bottom_left(),
+                bounds.bottom_right(),
+            ]
+            .map(|corner| {
+                (
+                    xx * corner.x + xy * corner.y + x0,
+                    yx * corner.x + yy * corner.y + y0,
+                )
+            });
+            corners
+                .iter()
+                .map(|&(x, y)| {
+                    (bounds.left() - x)
+                        .max(x - bounds.right())
+                        .max(bounds.top() - y)
+                        .max(y - bounds.bottom())
+                })
+                .fold(0.0, f64::max)
+        }
+        ImageFilter::Compose(filters) => filters
+            .iter()
+            .map(|filter| transform_reach(filter, bounds))
+            .sum(),
+        _ => 0.0,
+    }
+}
 /// The growth the GPU renderer gives `filter`, in physical pixels.
 fn renderer_growth(filter: &ImageFilter) -> f64 {
     match filter {

@@ -1,7 +1,7 @@
 use flui_foundation::RenderId;
-use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_painting::Canvas;
-use flui_painting::paint::{BlendMode, Clip, ImageFilter, Paint};
+use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform, Paint};
 use flui_painting::styling::Color;
 
 use super::{DamageMode, LayerDiffer};
@@ -714,13 +714,21 @@ fn a_leader_move_damages_its_follower() {
 }
 
 fn backdrop_scene(tokens: &[ContentToken; 2], changed_at: Offset<f64>) -> Scene {
+    filtered_backdrop_scene(tokens, changed_at, ImageFilter::blur(2.0))
+}
+
+fn filtered_backdrop_scene(
+    tokens: &[ContentToken; 2],
+    changed_at: Offset<f64>,
+    filter: ImageFilter,
+) -> Scene {
     let mut frame = Frame::new(1.0, &tokens[0]);
     let parent = frame.root();
     frame.boundary(parent, 2, &tokens[1], changed_at, Size::new(20.0, 20.0));
     frame.push(
         parent,
         BackdropFilterLayer::new(
-            ImageFilter::blur(2.0),
+            filter,
             BlendMode::SrcOver,
             Rect::from_xywh(200.0, 200.0, 100.0, 100.0),
         ),
@@ -827,4 +835,35 @@ fn a_boundary_stamped_twice_is_full() {
     let mut differ = LayerDiffer::default();
     differ.diff(&build(), SURFACE);
     assert_eq!(differ.diff(&build(), SURFACE), DamageRegion::Full);
+}
+
+/// A transform backdrop reads where its inverse sends its bounds: shrunk to
+/// half about its centre, the backdrop over 200..300 shows 150..350, so a
+/// change at 160..180 outside it still repaints it, and a magnifier about the
+/// centre, which reads 225..275, leaves the same change alone.
+#[test]
+fn damage_under_a_transform_backdrop_follows_what_it_reads() {
+    let centre = Point::new(250.0, 250.0);
+    let shrink = ImageFilter::Transform {
+        transform: ImageTransform::try_scale_about(centre, 0.5, 0.5).expect("a valid scale"),
+        sampling: ImageSampling::Linear,
+    };
+    let magnify = ImageFilter::try_magnify(centre, 2.0).expect("a valid scale");
+    let at = Offset::new(160.0, 160.0);
+    for (filter, expected) in [
+        (shrink, covering(160.0, 160.0, 300.0, 300.0)),
+        (magnify, covering(160.0, 160.0, 180.0, 180.0)),
+    ] {
+        let root = ContentToken::mint();
+        let mut differ = LayerDiffer::default();
+        differ.diff(
+            &filtered_backdrop_scene(&[root.clone(), ContentToken::mint()], at, filter.clone()),
+            SURFACE,
+        );
+        let region = differ.diff(
+            &filtered_backdrop_scene(&[root, ContentToken::mint()], at, filter.clone()),
+            SURFACE,
+        );
+        assert_eq!(partial(region), expected, "{filter:?}");
+    }
 }

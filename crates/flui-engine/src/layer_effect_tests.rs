@@ -13,6 +13,8 @@ use flui_painting::{
 
 #[path = "layer_effect_tests/backdrop_rotation.rs"]
 mod backdrop_rotation;
+#[path = "layer_effect_tests/backdrop_transform.rs"]
+mod backdrop_transform;
 #[path = "layer_effect_tests/radial_circles.rs"]
 mod radial_circles;
 #[path = "layer_effect_tests/reflected_shapes.rs"]
@@ -1632,6 +1634,10 @@ fn layer_effects_capture_as_specified() {
         (
             "quarter-turn backdrop axes",
             backdrop_rotation::quarter_turn_backdrops_match_baked_axes,
+        ),
+        (
+            "magnified backdrop",
+            backdrop_transform::magnified_backdrop_doubles_the_stripes_it_covers,
         ),
         #[cfg(feature = "testing")]
         (
