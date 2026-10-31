@@ -10,6 +10,8 @@
 //! feed. System preferences belong to the installed host's observation source
 //! (ADR-0172); semantics collection belongs to each presentation.
 
+mod fallback_rescan;
+
 use std::sync::atomic::Ordering;
 
 use std::cell::{Cell, OnceCell, RefCell};
@@ -17,10 +19,11 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Receiver;
 use std::thread::ThreadId;
 
 use flui_native::OwnerPlatform;
-use flui_painting::{FontCollection, HostFontFeed};
+use flui_painting::{FallbackOrder, FontCollection, HostFontFeed};
 #[cfg(target_os = "android")]
 use flui_platform::WindowExecutionState;
 use flui_platform::{PlatformWindow, RedrawRequester};
@@ -32,6 +35,7 @@ use super::lifecycle::{
     ServiceShutdownReport, ServiceStartError,
 };
 use super::runner::{FontRegistrationError, InstalledHost};
+use fallback_rescan::{AskHost, FallbackRescan};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_runtime::execution::SpawnError;
 use flui_runtime::execution::{ExecutionServices, HostExecutors};
@@ -60,6 +64,14 @@ pub(crate) struct SharedEngineServices {
     /// The feed that adds the host's faces to `fonts`, until
     /// [`AppRuntime::resolved_services`] launches it.
     host_feed: Cell<Option<HostFontFeed>>,
+    /// Where the app asks for the fallback order of a new locale
+    /// (ADR-0271 §4).
+    fallback: FallbackRescan,
+    /// The requests the feed's thread serves once it has run, launched with
+    /// the feed.
+    fallback_requests: Cell<Option<Receiver<String>>>,
+    /// The host's fallback query, asked by the feed and by every rescan.
+    ask_host: AskHost,
 }
 
 impl SharedEngineServices {
@@ -80,12 +92,22 @@ impl SharedEngineServices {
         // fed the collection; nothing process-global keeps it. The feed asks
         // the host which faces it falls back on, on its own thread, and puts
         // that answer ahead of FLUI's tables (ADR-0271).
+        // The thread the feed runs on keeps the fallback order it hands
+        // on, and asks the host again when the app's locale changes.
+        let ask_host: AskHost = Arc::new(flui_native::fonts::system_fallback);
         let (fonts, feed) = FontCollection::with_host_feed();
-        let feed = feed.with_system_fallback(flui_native::fonts::system_fallback);
+        let feed = feed.with_system_fallback({
+            let ask = Arc::clone(&ask_host);
+            move |locale: &str| ask(locale)
+        });
+        let (fallback, requests) = FallbackRescan::new();
 
         Self {
             fonts,
             host_feed: Cell::new(Some(feed)),
+            fallback,
+            fallback_requests: Cell::new(Some(requests)),
+            ask_host,
         }
     }
 }
@@ -375,6 +397,9 @@ pub(crate) struct AppRuntime {
     /// The collection's generation the UI runtimes were last told of
     /// ([`Self::take_font_change`]).
     fonts_announced: Cell<u64>,
+    /// The locale the fallback order should follow, accepted before
+    /// `services` resolved; handed to them when they do.
+    fallback_locale: RefCell<Option<String>>,
     /// The loop-scoped background execution services (issue #557): both
     /// background work-class lanes, their bounded admission, and the
     /// shutdown protocol. Built at UI runtime install
@@ -548,6 +573,7 @@ impl AppRuntime {
             services: OnceCell::new(),
             fonts: RefCell::new(FontRegistrations::default()),
             fonts_announced: Cell::new(0),
+            fallback_locale: RefCell::new(None),
             execution: OnceCell::new(),
             #[cfg(not(target_arch = "wasm32"))]
             service_registry: ServiceRegistry::new(),
@@ -644,11 +670,38 @@ impl AppRuntime {
                 tracing::warn!(%error, "a font registered before the first ui_runtime was refused");
             }
         }
+        if let Some(tag) = self.fallback_locale.take() {
+            services.fallback.follow(tag);
+        }
         if let Some(feed) = services.host_feed.take() {
             self.fonts_announced.set(services.fonts.generation());
-            LAUNCH_HOST_FEED(feed, self.frame_wake_callback());
+            let requests = services
+                .fallback_requests
+                .take()
+                .expect("BUG: the fallback requests are launched with the feed");
+            let ask = Arc::clone(&services.ask_host);
+            if let Some((order, requests)) =
+                LAUNCH_HOST_FEED(feed, requests, Arc::clone(&ask), self.frame_wake_callback())
+            {
+                // Before the first frame: the generation the change raises
+                // is announced like the feed's own.
+                services.fallback.keep_inline(order, requests, ask);
+            }
         }
         services
+    }
+
+    /// Has the app's fallback order follow `tag`, the host's first preferred
+    /// locale now (ADR-0271 §4). An unchanged tag asks nothing; one equal to
+    /// the locale the order is already for is skipped where it is served.
+    pub(super) fn follow_locale(&self, tag: String) {
+        let Some(services) = self.services.get() else {
+            self.fallback_locale.replace(Some(tag));
+            return;
+        };
+        if services.fallback.follow(tag) {
+            (self.frame_wake_callback())();
+        }
     }
 
     /// Whether the app's font collection changed since the UI runtimes were last
@@ -1349,20 +1402,33 @@ impl AppRuntime {
 }
 
 /// How [`AppRuntime::resolved_services`] starts the host font feed, given
-/// the feed and the wake to call once it has landed: on a thread of its own
-/// ([`spawn_host_feed`]). This crate's unit tests park it instead
-/// (`park_host_feed`), so no feed lands in the middle of a test that
-/// counts generations or redraws; `spawn_host_feed` has its own test.
-#[cfg(not(test))]
-const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = spawn_host_feed;
-#[cfg(test)]
-const LAUNCH_HOST_FEED: fn(HostFontFeed, Arc<dyn Fn() + Send + Sync>) = park_host_feed;
+/// the feed, the locale requests its thread serves afterwards, the host's
+/// fallback query and the wake to call once it has landed: on a thread of
+/// its own ([`spawn_host_feed`]). It returns the fallback order when the
+/// feed ran on the owner thread, so the owner serves the requests. This
+/// crate's unit tests park it instead (`park_host_feed`), so no feed lands
+/// in the middle of a test that counts generations or redraws;
+/// `spawn_host_feed` has its own test.
+type LaunchHostFeed = fn(
+    HostFontFeed,
+    Receiver<String>,
+    AskHost,
+    Arc<dyn Fn() + Send + Sync>,
+) -> Option<(FallbackOrder, Receiver<String>)>;
 
-/// A feed [`park_host_feed`] held, with the wake the runtime launched it
-/// with: a test runs the feed, then calls the wake as the launcher would.
+#[cfg(not(test))]
+const LAUNCH_HOST_FEED: LaunchHostFeed = spawn_host_feed;
+#[cfg(test)]
+const LAUNCH_HOST_FEED: LaunchHostFeed = park_host_feed;
+
+/// A feed [`park_host_feed`] held, with what the runtime launched it with:
+/// a test runs the feed, then calls the wake and serves the requests as the
+/// launcher would.
 #[cfg(test)]
 pub(super) struct ParkedHostFeed {
     pub(super) feed: HostFontFeed,
+    pub(super) requests: Receiver<String>,
+    pub(super) ask: AskHost,
     pub(super) wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -1373,12 +1439,25 @@ thread_local! {
     static PARKED_HOST_FEEDS: RefCell<Vec<ParkedHostFeed>> = const { RefCell::new(Vec::new()) };
 }
 
-/// A launcher that runs nothing: it keeps the feed and its wake on this
-/// thread for [`take_parked_host_feeds`], so a test decides when, and
-/// whether, the host's faces land.
+/// A launcher that runs nothing: it keeps the feed and what it was launched
+/// with on this thread for [`take_parked_host_feeds`], so a test decides
+/// when, and whether, the host's faces land.
 #[cfg(test)]
-pub(super) fn park_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
-    PARKED_HOST_FEEDS.with(|parked| parked.borrow_mut().push(ParkedHostFeed { feed, wake }));
+pub(super) fn park_host_feed(
+    feed: HostFontFeed,
+    requests: Receiver<String>,
+    ask: AskHost,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> Option<(FallbackOrder, Receiver<String>)> {
+    PARKED_HOST_FEEDS.with(|parked| {
+        parked.borrow_mut().push(ParkedHostFeed {
+            feed,
+            requests,
+            ask,
+            wake,
+        });
+    });
+    None
 }
 
 /// Every feed [`park_host_feed`] has held on this thread since the last
@@ -1389,12 +1468,15 @@ pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
 }
 
 /// Runs the host font feed on a thread of its own, named `flui-host-fonts`,
-/// then wakes the owner, whose next turn tells every UI runtime.
+/// then wakes the owner, whose next turn tells every UI runtime. The thread
+/// then keeps the fallback order and serves `requests` with `ask` until the
+/// runtime drops its end ([`fallback_rescan::serve`]).
 ///
 /// The wake is called even if the feed panics, since the generation still
-/// rises then. If no thread can be started the feed runs here, before the
-/// first frame; on wasm32, which has no threads (and where fontdb finds no
-/// host fonts), it always does.
+/// rises then; a feed that panicked hands on no order, so no request is
+/// served. If no thread can be started the feed runs here, before the
+/// first frame, and the order comes back to the caller; on wasm32, which
+/// has no threads (and where fontdb finds no host fonts), it always does.
 #[cfg_attr(
     all(test, target_os = "ios"),
     expect(
@@ -1402,43 +1484,59 @@ pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
         reason = "iOS tests park the host feed instead of spawning it"
     )
 )]
-fn spawn_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
-    fn feed_then_wake(feed: HostFontFeed, wake: &(dyn Fn() + Send + Sync)) {
+fn spawn_host_feed(
+    feed: HostFontFeed,
+    requests: Receiver<String>,
+    ask: AskHost,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> Option<(FallbackOrder, Receiver<String>)> {
+    fn feed_then_wake(
+        feed: HostFontFeed,
+        wake: &(dyn Fn() + Send + Sync),
+    ) -> Option<FallbackOrder> {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        if catch_unwind(AssertUnwindSafe(|| feed.run())).is_err() {
+        let order = catch_unwind(AssertUnwindSafe(|| feed.run())).ok();
+        if order.is_none() {
             tracing::error!("the host font feed panicked; the faces it added are kept");
         }
         if catch_unwind(AssertUnwindSafe(wake)).is_err() {
             tracing::error!("the wake after the host font feed panicked");
         }
+        order
     }
 
     #[cfg(target_arch = "wasm32")]
-    feed_then_wake(feed, &*wake);
+    {
+        let _ = ask;
+        feed_then_wake(feed, &*wake).map(|order| (order, requests))
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The feed goes to the thread only once it has started, so a failed
         // start leaves it here to run inline.
-        let (send, receive) = std::sync::mpsc::channel::<HostFontFeed>();
+        let (send, receive) = std::sync::mpsc::channel::<(HostFontFeed, Receiver<String>)>();
         let thread_wake = Arc::clone(&wake);
         let spawned = std::thread::Builder::new()
             .name("flui-host-fonts".to_owned())
             .spawn(move || {
-                if let Ok(feed) = receive.recv() {
-                    feed_then_wake(feed, &*thread_wake);
+                if let Ok((feed, requests)) = receive.recv()
+                    && let Some(order) = feed_then_wake(feed, &*thread_wake)
+                {
+                    fallback_rescan::serve(order, &requests, &ask, &*thread_wake);
                 }
             });
         match spawned {
-            Ok(_) => {
-                if let Err(std::sync::mpsc::SendError(feed)) = send.send(feed) {
+            Ok(_) => match send.send((feed, requests)) {
+                Ok(()) => None,
+                Err(std::sync::mpsc::SendError((feed, requests))) => {
                     tracing::warn!("the host font thread ended before its feed; feeding here");
-                    feed_then_wake(feed, &*wake);
+                    feed_then_wake(feed, &*wake).map(|order| (order, requests))
                 }
-            }
+            },
             Err(error) => {
                 tracing::warn!(%error, "no thread for the host font feed; feeding here");
-                feed_then_wake(feed, &*wake);
+                feed_then_wake(feed, &*wake).map(|order| (order, requests))
             }
         }
     }
@@ -1461,7 +1559,10 @@ impl Drop for AppRuntime {
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod font_collection_tests {
-    use flui_painting::testing::{PROBE_MONO_100, feed_with_host, host_fed, host_fonts_from};
+    use flui_painting::testing::{
+        PROBE_MONO_100, feed_with_host, host_family_names, host_fed, host_fonts_from,
+    };
+    use flui_painting::{FaceRef, SystemFallback};
 
     use super::*;
 
@@ -1496,7 +1597,13 @@ mod font_collection_tests {
         );
         let mut feeds = take_parked_host_feeds();
         assert_eq!(feeds.len(), 1, "one feed per app");
-        let ParkedHostFeed { feed, wake } = feeds.remove(0);
+        let ParkedHostFeed {
+            feed, ask, wake, ..
+        } = feeds.remove(0);
+        assert!(
+            Arc::ptr_eq(&ask, &runtime.ensure_services().ask_host),
+            "the feed thread re-asks with the query the feed was given"
+        );
         runtime.needs_redraw.store(false, Ordering::Relaxed);
 
         feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
@@ -1522,7 +1629,14 @@ mod font_collection_tests {
             let _ = send.send(std::thread::current().id());
         });
 
-        spawn_host_feed(feed, wake);
+        // No requests: the thread ends once the feed has landed.
+        let (_, requests) = std::sync::mpsc::channel::<String>();
+        let ask: AskHost = Arc::new(|locale: &str| SystemFallback::none(locale));
+
+        assert!(
+            spawn_host_feed(feed, requests, ask, wake).is_none(),
+            "the order stays with the thread"
+        );
 
         let waker = woken
             .recv_timeout(std::time::Duration::from_secs(60))
@@ -1537,6 +1651,137 @@ mod font_collection_tests {
             woken.recv().is_err(),
             "the thread ends without a second wake"
         );
+    }
+
+    /// A host query standing in for the platform's: it records each locale
+    /// it is asked for, panics for `de-DE`, and names the probe face for
+    /// emoji under `ja-JP` only, so moving to `ja-JP` and away from it
+    /// changes the order.
+    fn host_answering_ja() -> (AskHost, Arc<Mutex<Vec<String>>>) {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let family = host_family_names(&host_fonts_from(&[PROBE_MONO_100]))
+            .into_iter()
+            .next()
+            .expect("the probe face names its family");
+        let ask: AskHost = Arc::new({
+            let asked = Arc::clone(&asked);
+            move |locale: &str| {
+                asked.lock().push(locale.to_owned());
+                assert_ne!(locale, "de-DE", "the host's query fails for de-DE");
+                let answer = SystemFallback::none(locale);
+                if locale == "ja-JP" {
+                    answer.with_emoji(vec![FaceRef::Family(family.clone())])
+                } else {
+                    answer
+                }
+            }
+        });
+        (ask, asked)
+    }
+
+    /// A new first locale asks the host again (ADR-0271 §4): the runtime
+    /// hands each accepted locale to the fallback order, one accepted before
+    /// the services resolved as soon as the feed has landed, and the change
+    /// is announced once, with a turn of the loop. Served on the owner
+    /// thread, as where the feed could not get a thread of its own. Fails if
+    /// a locale accepted before the launch is lost, a new locale is not
+    /// asked, an unchanged one is asked twice, or the change is not
+    /// announced.
+    fn a_new_locale_asks_the_host_again_once() {
+        let _ = take_parked_host_feeds();
+        let mut runtime = AppRuntime::new();
+        runtime.follow_locale("ja-JP".to_owned());
+        let _ = runtime.font_collection();
+        let ParkedHostFeed { feed, requests, .. } = take_parked_host_feeds()
+            .pop()
+            .expect("the services launched their feed");
+        let order = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        assert_eq!(order.locale(), "en-US");
+        let (ask, asked) = host_answering_ja();
+        let services = runtime.ensure_services();
+        assert!(
+            services.fallback.keep_inline(order, requests, ask),
+            "the locale accepted before the launch is installed"
+        );
+        assert_eq!(*asked.lock(), ["ja-JP"]);
+        assert!(runtime.take_font_change());
+        runtime.needs_redraw.store(false, Ordering::Relaxed);
+
+        runtime.follow_locale("ja-JP".to_owned());
+        assert_eq!(*asked.lock(), ["ja-JP"], "an unchanged locale is not asked");
+        assert!(!runtime.take_font_change());
+
+        runtime.follow_locale("en-US".to_owned());
+        assert_eq!(*asked.lock(), ["ja-JP", "en-US"], "a new locale is asked");
+        assert!(
+            runtime.needs_redraw.load(Ordering::Relaxed),
+            "the change asks the loop for a turn"
+        );
+        assert!(runtime.take_font_change(), "the new order is announced");
+        assert!(!runtime.take_font_change(), "once");
+    }
+
+    /// A query that panics for one locale is contained to that request: the
+    /// owner is still told, since lists may have been written, and the next
+    /// locale is asked and installed. A locale equal to the one the feed
+    /// asked with is not asked again, so the first preference snapshot does
+    /// not ask twice. Fails if the panic escapes or ends the rescans, or the
+    /// feed's own locale is asked again.
+    fn a_query_that_panics_leaves_later_locales_served() {
+        let (fonts, feed) = FontCollection::with_host_feed();
+        let order = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        let (rescan, requests) = FallbackRescan::new();
+        let (ask, asked) = host_answering_ja();
+        assert!(!rescan.keep_inline(order, requests, ask));
+        let fed = fonts.generation();
+
+        assert!(!rescan.follow("en-US".to_owned()));
+        assert!(
+            asked.lock().is_empty(),
+            "the feed's own locale is not asked again"
+        );
+        assert!(rescan.follow("de-DE".to_owned()), "the owner is told");
+        assert!(rescan.follow("ja-JP".to_owned()));
+        assert_eq!(*asked.lock(), ["de-DE", "ja-JP"]);
+        assert_eq!(fonts.generation(), fed + 1, "the ja-JP order is installed");
+    }
+
+    /// On the feed's own thread, of the locales sent while it was busy only
+    /// the newest is asked, and the owner is woken once for it after the
+    /// landing's wake; the thread ends when the runtime drops its end.
+    /// Fails if a superseded locale is asked, the thread misses the newest,
+    /// or it outlives the runtime's end.
+    fn the_feed_thread_asks_only_for_the_newest_locale() {
+        let (fonts, feed) = FontCollection::with_host_feed();
+        let feed = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100]));
+        let (rescan, requests) = FallbackRescan::new();
+        for tag in ["fr-FR", "ko-KR", "ja-JP"] {
+            assert!(
+                !rescan.follow(tag.to_owned()),
+                "the thread wakes, not the caller"
+            );
+        }
+        let (ask, asked) = host_answering_ja();
+        let (send, woken) = std::sync::mpsc::channel();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = send.send(());
+        });
+
+        assert!(spawn_host_feed(feed, requests, ask, wake).is_none());
+        for _ in 0..2 {
+            woken
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("a wake for the landing, then one for ja-JP");
+        }
+        drop(rescan);
+
+        assert_eq!(
+            woken.recv_timeout(std::time::Duration::from_secs(60)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+            "the thread ends without another wake"
+        );
+        assert_eq!(*asked.lock(), ["ja-JP"]);
+        assert!(host_fed(&fonts));
     }
 
     /// Two runtimes, as on two owner threads, each hold a collection of
@@ -1565,6 +1810,18 @@ mod font_collection_tests {
                 (
                     "the_host_feed_runs_off_the_owner_thread_and_wakes_once",
                     the_host_feed_runs_off_the_owner_thread_and_wakes_once as fn(),
+                ),
+                (
+                    "a_new_locale_asks_the_host_again_once",
+                    a_new_locale_asks_the_host_again_once as fn(),
+                ),
+                (
+                    "a_query_that_panics_leaves_later_locales_served",
+                    a_query_that_panics_leaves_later_locales_served as fn(),
+                ),
+                (
+                    "the_feed_thread_asks_only_for_the_newest_locale",
+                    the_feed_thread_asks_only_for_the_newest_locale as fn(),
                 ),
                 (
                     "two_runtimes_hold_different_collections",

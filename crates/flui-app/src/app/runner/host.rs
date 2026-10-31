@@ -183,7 +183,16 @@ pub(super) fn refresh_preferences_with(
         return Ok(());
     }
     let values = observation?;
+    // The fallback order follows the first locale the host prefers
+    // (ADR-0271 §4), once the snapshot carrying it is accepted.
+    let locale = values
+        .locales()
+        .and_then(<[flui_platform::Locale]>::first)
+        .map(flui_platform::Locale::to_language_tag);
     host.logical().update_preferences(values, host.effects())?;
+    if let Some(tag) = locale {
+        APP_RUNTIME.with(|slot| slot.borrow().follow_locale(tag));
+    }
     Ok(())
 }
 

@@ -1277,6 +1277,63 @@ fn deferred_native_reads_preserve_accepted_preferences() {
         .expect("deferred source recovery");
 }
 
+/// An accepted snapshot hands its first locale to the host font feed's
+/// thread, which re-asks the host's fallback order for it (ADR-0271 §4): an
+/// unchanged locale or a deferred read sends nothing, and a new one is sent.
+/// The feed goes back to the launcher's hold for the rows after this one.
+/// Fails if the trigger reads the locale from anywhere but accepted
+/// preferences, drops it, or repeats a locale.
+fn an_accepted_locale_reaches_the_host_font_feed() {
+    let _clear = OwnerHostClearGuard::arm();
+    let in_locale = |tag: &str| {
+        let locale = tag.parse::<flui_platform::Locale>().expect("valid tag");
+        move |_: &flui_native::OwnerPlatform| {
+            Ok(flui_platform::SystemPreferences::default().with_locales(vec![locale.clone()]))
+        }
+    };
+    // What the feed's thread was sent after each step, checked once the
+    // loop has ended so a failed check is this row's.
+    let sent = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
+    let seen = Rc::clone(&sent);
+    flui_native::headless_platform()
+        .run(crate::app::runner::app_handler(move |owner| {
+            install_owner_platform(owner)?;
+            super::super::host::refresh_preferences_with(in_locale("ja-JP"))?;
+            let _ = super::super::host::runtime_font_collection();
+            let crate::app::runtime::ParkedHostFeed {
+                feed,
+                requests,
+                ask,
+                wake,
+            } = crate::app::runtime::take_parked_host_feeds()
+                .pop()
+                .expect("the runtime launched its host feed when its services resolved");
+            let mut seen = seen.borrow_mut();
+            seen.push(requests.try_iter().collect());
+            super::super::host::refresh_preferences_with(in_locale("ja-JP"))?;
+            super::super::host::refresh_preferences_with(|_| {
+                Err(flui_native::PlatformError::PreferencesDeferred)
+            })?;
+            seen.push(requests.try_iter().collect());
+            super::super::host::refresh_preferences_with(in_locale("fr-FR"))?;
+            seen.push(requests.try_iter().collect());
+            let _ = crate::app::runtime::park_host_feed(feed, requests, ask, wake);
+            teardown_platform_ui_runtime();
+            Ok(())
+        }))
+        .expect("locale reaches the host font feed");
+
+    assert_eq!(
+        *sent.borrow(),
+        [
+            vec!["ja-JP".to_owned()],
+            Vec::new(),
+            vec!["fr-FR".to_owned()]
+        ],
+        "the first locale is sent once per change"
+    );
+}
+
 fn preferences_wake_each_isolated_window() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_native::{HeadlessPlatform, Platform};
@@ -2857,7 +2914,7 @@ fn a_landed_host_feed_wakes_every_ui_runtime_window() {
         clear_redraw(dispatcher);
     }
     let generation = super::super::host::runtime_font_collection().generation();
-    let crate::app::runtime::ParkedHostFeed { feed, wake } =
+    let crate::app::runtime::ParkedHostFeed { feed, wake, .. } =
         crate::app::runtime::take_parked_host_feeds()
             .pop()
             .expect("the runtime launched its host feed when its services resolved");
@@ -3081,6 +3138,10 @@ fn owner_dispatch_matrix() {
             (
                 "deferred_native_reads_preserve_accepted_preferences",
                 deferred_native_reads_preserve_accepted_preferences as fn(),
+            ),
+            (
+                "an_accepted_locale_reaches_the_host_font_feed",
+                an_accepted_locale_reaches_the_host_font_feed as fn(),
             ),
             (
                 "preferences_wake_each_isolated_window",
