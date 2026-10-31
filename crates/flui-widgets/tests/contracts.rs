@@ -140,6 +140,62 @@ fn drag_and_drop() {
     );
 }
 
+/// `ReorderableList`: a row moved by its handle and a touch long press,
+/// reported once, the drags that move nothing, the preview, the move commands
+/// and a dragged row that scrolls out of the built band.
+#[test]
+fn reorderable_list() {
+    run_cases(
+        "reorderable_list",
+        &[
+            (
+                "reorderable::a_handle_drag_reports_one_move_counted_after_removal",
+                crate::reorderable::a_handle_drag_reports_one_move_counted_after_removal as fn(),
+            ),
+            (
+                "reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle",
+                crate::reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle,
+            ),
+            (
+                "reorderable::a_drag_that_does_not_drop_moves_nothing",
+                crate::reorderable::a_drag_that_does_not_drop_moves_nothing,
+            ),
+            (
+                "reorderable::the_preview_follows_the_drag_over_the_rows",
+                crate::reorderable::the_preview_follows_the_drag_over_the_rows,
+            ),
+            (
+                "reorderable::a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row",
+                crate::reorderable::a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row,
+            ),
+            (
+                "reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size",
+                crate::reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size,
+            ),
+            (
+                "reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis",
+                crate::reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis,
+            ),
+            (
+                "reorderable::the_move_commands_move_a_row_and_announce_it",
+                crate::reorderable::the_move_commands_move_a_row_and_announce_it,
+            ),
+            (
+                "reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops",
+                crate::reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops,
+            ),
+            (
+                "reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags",
+                crate::reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags,
+            ),
+            (
+                "reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus",
+                crate::reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus,
+            ),
+        ],
+    );
+}
+
 /// The editable-text capability: selection gestures, obscuring, IME, clipboard, keys.
 #[test]
 fn text_editing() {
@@ -1639,6 +1695,10 @@ fn gesture_alternatives() {
             (
                 "context_menu_area::context_menu_area_right_to_left",
                 crate::context_menu_area::context_menu_area_right_to_left,
+            ),
+            (
+                "reorderable::reorderable_list",
+                crate::reorderable::reorderable_list,
             ),
         ],
     );

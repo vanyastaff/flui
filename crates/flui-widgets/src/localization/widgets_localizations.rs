@@ -77,6 +77,9 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     fn autoplay_pause_label(&self) -> &'static str;
     /// Semantics label of a carousel's control that resumes its paused autoplay.
     fn autoplay_resume_label(&self) -> &'static str;
+    /// What assistive technology hears after an item moved in a reorderable
+    /// list: the item, when it is named, at `position` (1-based) of `count`.
+    fn reorder_item_moved(&self, item: Option<&str>, position: usize, count: usize) -> String;
 }
 
 /// US English localizations for the widgets library — the only locale FLUI
@@ -163,6 +166,13 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
 
     fn autoplay_pause_label(&self) -> &'static str {
         "Pause autoplay"
+    }
+
+    fn reorder_item_moved(&self, item: Option<&str>, position: usize, count: usize) -> String {
+        match item {
+            Some(item) => format!("Moved {item} to position {position} of {count}"),
+            None => format!("Moved to position {position} of {count}"),
+        }
     }
 
     fn autoplay_resume_label(&self) -> &'static str {
