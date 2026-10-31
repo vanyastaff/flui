@@ -12,6 +12,10 @@
 //! - A failed load leaves the displayed frame alone. With the default
 //!   (non-gapless) policy there is nothing left to leave alone — the swap
 //!   already cleared it.
+//! - The load is the provider's `DecodeJob`, run on the UI runtime's
+//!   background lanes (on this thread when the host has none), or else its
+//!   `resolve_async` future. Either way it is one future the driver polls,
+//!   so the rules below hold for both.
 //!
 //! # Cancellation, and the generation guard behind it
 //!
@@ -37,7 +41,9 @@ use std::sync::Arc;
 
 use flui_painting::paint::Image as PixelImage;
 use flui_scheduler::{AsyncDriver, TaskToken};
+use flui_view::background::{Background, BackgroundCapability};
 use flui_view::context::LifecycleContext;
+use flui_view::prelude::LifecycleContextExt as _;
 use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
@@ -90,6 +96,9 @@ pub(super) struct ImageResolver {
     handle: Option<RebuildHandle>,
     /// The binding's async driver, likewise captured in `init_state`.
     driver: Option<AsyncDriver>,
+    /// The UI runtime's background lanes, likewise captured in `init_state`;
+    /// `None` on a host without them, where decode jobs run on this thread.
+    background: Option<Background>,
     /// Cancels the live load on drop.
     token: Option<TaskToken>,
     /// The key the live subscription was created for. `None` means no async
@@ -128,6 +137,7 @@ impl ImageResolver {
             published: Arc::new(Mutex::new(Published::default())),
             handle: None,
             driver: None,
+            background: None,
             token: None,
             key: None,
             provider,
@@ -139,6 +149,16 @@ impl ImageResolver {
     pub(super) fn init(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
+        self.background = match ctx.capability::<BackgroundCapability>() {
+            Ok(background) => Some(background),
+            Err(unsupported) => {
+                tracing::debug!(
+                    %unsupported,
+                    "Image: no background lanes; decode jobs run on the owner thread"
+                );
+                None
+            }
+        };
         let key = self.provider.cache_key();
         self.start(key);
     }
@@ -227,7 +247,12 @@ impl ImageResolver {
             .clone()
             .expect("BUG: image resolve started before init_state captured the rebuild handle");
 
-        let future = self.provider.resolve_async();
+        // A decode job runs on the background lanes (or, without them, on
+        // this thread); any other provider loads through its own future.
+        let future = match self.provider.decode_job() {
+            Some(job) => job.run(self.background.clone()),
+            None => Box::pin(self.provider.resolve_async()),
+        };
         let published = Arc::clone(&self.published);
         self.published.lock().inline_window = true;
 
