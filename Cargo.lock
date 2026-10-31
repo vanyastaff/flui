@@ -2173,7 +2173,6 @@ dependencies = [
 name = "flui-macros"
 version = "0.2.0-dev"
 dependencies = [
- "flui-foundation",
  "proc-macro-crate",
  "proc-macro2",
  "quote",

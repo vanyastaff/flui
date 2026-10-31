@@ -1708,8 +1708,7 @@ impl LaidOut {
                 .iter()
                 .filter_map(|(id, _node)| {
                     let node = inspect::node_snapshot(owner, id);
-                    (node.kind == "RenderParagraph" && node.get::<&str>("text") == Ok(text))
-                        .then_some(id)
+                    (inspect::paragraph_text(&node).as_deref() == Some(text)).then_some(id)
                 })
                 .collect()
         })

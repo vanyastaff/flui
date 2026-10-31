@@ -1364,3 +1364,40 @@ fn a_node_reference_prints_and_parses_as_one_text() {
 fn nz32(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("a generation is not zero")
 }
+
+/// A positioned value states its unit, and the diff compares it within that unit's tolerance: a
+/// change of a hundredth of a fraction is a change, a change of a hundredth of a pixel is not.
+///
+/// Fails when a compound value is always compared in pixels, which hides an alignment moving by
+/// half a percent of the free space.
+#[test]
+fn a_compound_value_is_compared_within_the_tolerance_of_its_unit() {
+    let with = |x: f64, unit: Unit| {
+        let mut root = whole(&sample(8.0));
+        root.fields.push(flui_foundation::inspect::OwnedField {
+            name: "position",
+            value: OwnedValue::Offset(Offset::new(x, 0.0)),
+            level: Level::Summary,
+            unit: Some(unit),
+            default: None,
+        });
+        root
+    };
+    let fraction = |x| with(x, Unit::Fraction);
+    assert_eq!(
+        diff(&fraction(0.0), &fraction(0.005), DiffOptions::default()).len(),
+        1,
+        "half a percent of the free space is a change"
+    );
+    assert_eq!(
+        diff(&fraction(0.0), &fraction(1e-9), DiffOptions::default()),
+        vec![],
+        "a billionth is not"
+    );
+    let pixels = |x| with(x, Unit::LogicalPx);
+    assert_eq!(
+        diff(&pixels(0.0), &pixels(0.005), DiffOptions::default()),
+        vec![],
+        "half a hundredth of a pixel is not a change"
+    );
+}

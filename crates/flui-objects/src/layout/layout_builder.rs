@@ -117,9 +117,21 @@ impl flui_foundation::inspect::Inspect for RenderLayoutBuilder {
             &constraints.as_ref().map(BoxConstraints::smallest),
         )
         .unit(unit);
+        // An unbounded maximum is absent, not infinite: a published size is finite.
         out.field(
-            "published_max",
-            &constraints.as_ref().map(BoxConstraints::biggest),
+            "published_max_width",
+            &constraints
+                .as_ref()
+                .map(|c| c.max_width)
+                .filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "published_max_height",
+            &constraints
+                .as_ref()
+                .map(|c| c.max_height)
+                .filter(|h| h.is_finite()),
         )
         .unit(unit);
         out.field("needs_build", &self.cell.needs_build());

@@ -275,3 +275,29 @@ pub trait Probe {
         hit_path_with_transforms(self.pipeline(), x, y)
     }
 }
+
+/// The plain text a `RenderParagraph` snapshot describes: its `text` field, or its `text_runs`
+/// joined in reading order when the paragraph has several runs. `None` for any other node, and
+/// for a paragraph with no text.
+#[must_use]
+pub fn paragraph_text(node: &SnapshotNode) -> Option<String> {
+    use flui_foundation::inspect::OwnedValue;
+
+    if node.kind != "RenderParagraph" {
+        return None;
+    }
+    if let Ok(text) = node.get::<&str>("text") {
+        return Some(text.to_owned());
+    }
+    match &node.field("text_runs")?.value {
+        OwnedValue::Seq(runs) => Some(
+            runs.iter()
+                .filter_map(|run| match run {
+                    OwnedValue::Str(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}

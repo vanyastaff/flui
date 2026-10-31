@@ -25,12 +25,12 @@ pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
-use flui_foundation::inspect::{Fields, Inspect, Value};
+use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Value};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{
-    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition,
+    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition, TextSpan,
 };
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
@@ -657,11 +657,46 @@ impl Inspect for RenderParagraph {
         out.field("max_lines", &self.painter.max_lines());
         out.field("ellipsis", &self.painter.ellipsis());
         // The plain text lets a test find a paragraph by its content without walking the
-        // `InlineSpan` tree, and the style lets it read a resolved text color back out.
+        // `InlineSpan` tree, and the style lets it read a resolved text color back out. The text
+        // is borrowed from the span: one run is the `text` field, several are the `text_runs`
+        // sequence in reading order, so describing a paragraph allocates only in the sink.
         if let Some(span) = self.painter.text() {
-            out.field("text", &span.to_plain_text());
+            match span {
+                InlineSpan::Text(root) if root.children.is_empty() => {
+                    if let Some(text) = root.text.as_deref() {
+                        out.field("text", text);
+                    }
+                }
+                InlineSpan::Text(root) => {
+                    out.field("text_runs", &TextRuns(root));
+                }
+                InlineSpan::Placeholder(_) => {}
+            }
             out.value("style", Value::Debug(&span.style()));
         }
+    }
+}
+
+/// The text of every run of a span tree, in reading order.
+struct TextRuns<'a>(&'a TextSpan);
+
+impl Seq for TextRuns<'_> {
+    fn each(&self, item: &mut dyn FnMut(Value<'_>)) {
+        fn walk(span: &TextSpan, item: &mut dyn FnMut(Value<'_>)) {
+            if let Some(text) = span.text.as_deref() {
+                item(Value::Str(text));
+            }
+            for child in &span.children {
+                walk(child, item);
+            }
+        }
+        walk(self.0, item);
+    }
+}
+
+impl FieldValue for TextRuns<'_> {
+    fn payload(&self) -> Payload<'_> {
+        Payload::Seq(self)
     }
 }
 

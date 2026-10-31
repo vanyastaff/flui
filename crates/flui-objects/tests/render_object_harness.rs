@@ -131,7 +131,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
-use flui_foundation::inspect::{Fields, Inspect, Rgba, Variant};
+use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
 use flui_interaction::InteractionLane;
 use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
@@ -1720,6 +1720,42 @@ fn harness_paragraph_paints_text_frame() {
     assert!(run.painted());
 }
 
+/// A paragraph describes its text from the span, without building a string: one run is the
+/// `text` field and several are the `text_runs` sequence, which `paragraph_text` joins.
+fn harness_paragraph_describes_one_run_as_text_and_several_as_runs() {
+    use flui_rendering::testing::inspect::paragraph_text;
+
+    let single = RenderTester::mount(box_node(RenderParagraph::new(
+        TextSpan::new("one run"),
+        TextDirection::Ltr,
+    )))
+    .with_size(Size::new(200.0, 100.0))
+    .run_frame();
+    let snapshot = single.render_snapshot();
+    let node = snapshot
+        .find_by_kind("RenderParagraph")
+        .unique()
+        .expect("one paragraph");
+    assert_eq!(node.get::<&str>("text"), Ok("one run"));
+    assert!(node.get::<&str>("text_runs").is_err());
+
+    let rich = TextSpan::new("Hello, ")
+        .with_child(TextSpan::new("rich ").with_child(TextSpan::new("text")));
+    let several = RenderTester::mount(box_node(RenderParagraph::new(rich, TextDirection::Ltr)))
+        .with_size(Size::new(200.0, 100.0))
+        .run_frame();
+    let snapshot = several.render_snapshot();
+    let node = snapshot
+        .find_by_kind("RenderParagraph")
+        .unique()
+        .expect("one paragraph");
+    assert!(
+        node.get::<&str>("text").is_err(),
+        "several runs are not one string"
+    );
+    assert_eq!(paragraph_text(node).as_deref(), Some("Hello, rich text"));
+}
+
 /// A selectable paragraph merges its descendants, declares its anchor and
 /// publishes its laid-out text as runs; the same paragraph not selectable
 /// publishes none (ADR-0214).
@@ -2863,7 +2899,30 @@ fn harness_constrained_box_enforces_minimums() {
     assert_descendant_properties(
         &run.render_snapshot(),
         "RenderConstrainedBox",
-        &["additional_min", "additional_max"],
+        &["additional_min", "additional_max_width"],
+    );
+    // The unbounded maximum is absent from the description, not published as infinity: the
+    // protocol's numbers are finite.
+    let snapshot = run.render_snapshot();
+    let mut stack = vec![&snapshot];
+    while let Some(node) = stack.pop() {
+        for field in node.facts.iter().chain(&node.fields) {
+            let finite = match &field.value {
+                OwnedValue::Float(v) => v.is_finite(),
+                OwnedValue::Size(s) => s.width.is_finite() && s.height.is_finite(),
+                _ => true,
+            };
+            assert!(finite, "{} {} is not finite", node.kind, field.name);
+        }
+        stack.extend(&node.children);
+    }
+    let constrained = snapshot
+        .find_by_kind("RenderConstrainedBox")
+        .unique()
+        .expect("one constrained box");
+    assert!(
+        constrained.get::<f64>("additional_max_width").is_err(),
+        "an unbounded maximum is absent"
     );
 }
 
@@ -13161,6 +13220,10 @@ fn family_text_and_image() {
             (
                 "paragraph_paints_text_frame",
                 harness_paragraph_paints_text_frame,
+            ),
+            (
+                "paragraph_describes_one_run_as_text_and_several_as_runs",
+                harness_paragraph_describes_one_run_as_text_and_several_as_runs,
             ),
             (
                 "paragraph_publishes_runs_only_while_selectable",

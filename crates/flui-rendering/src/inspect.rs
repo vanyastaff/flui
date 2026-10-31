@@ -132,9 +132,19 @@ impl InspectTree for RenderInspect<'_> {
                     out.field("constraints_min", &constraints.smallest())
                         .unit(Unit::LogicalPx)
                         .level(Level::Detail);
-                    out.field("constraints_max", &constraints.biggest())
-                        .unit(Unit::LogicalPx)
-                        .level(Level::Detail);
+                    // An unbounded maximum is absent, not infinite: a published size is finite.
+                    out.field(
+                        "constraints_max_width",
+                        &Some(constraints.max_width).filter(|w| w.is_finite()),
+                    )
+                    .unit(Unit::LogicalPx)
+                    .level(Level::Detail);
+                    out.field(
+                        "constraints_max_height",
+                        &Some(constraints.max_height).filter(|h| h.is_finite()),
+                    )
+                    .unit(Unit::LogicalPx)
+                    .level(Level::Detail);
                 }
                 if let Some(size) = entry.state().geometry() {
                     out.field("size", &size).unit(Unit::LogicalPx);
