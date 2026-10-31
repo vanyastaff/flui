@@ -514,6 +514,8 @@ struct Platform;
 impl PlatformTextInput for Platform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -2945,6 +2947,8 @@ impl PlatformTextInput for FailsToEnable {
         );
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -2992,6 +2996,8 @@ impl PlatformTextInput for FailsToEnableOnce {
             .push(allowed);
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3151,6 +3157,8 @@ impl PlatformTextInput for FailsToDisable {
         }
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3253,6 +3261,8 @@ impl PlatformTextInput for ClosesOnCursor {
         }
         panic!("platform failure placing the cursor");
     }
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3292,6 +3302,8 @@ struct ParksThenFailsToDiscard;
 impl PlatformTextInput for ParksThenFailsToDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
         if let Some(store) = store {
@@ -3326,6 +3338,8 @@ struct ClosesOnDiscard;
 impl PlatformTextInput for ClosesOnDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
         if let Some(owner) = owner {
@@ -3864,6 +3878,8 @@ struct PanicsWhenDestroyed;
 impl PlatformTextInput for PanicsWhenDestroyed {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 

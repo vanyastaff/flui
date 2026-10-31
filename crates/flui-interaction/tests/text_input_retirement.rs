@@ -28,6 +28,8 @@ impl PlatformTextInput for Platform {
     }
 
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -505,6 +507,8 @@ struct UnwindProbePlatform(Arc<parking_lot::Mutex<Option<bool>>>);
 impl PlatformTextInput for UnwindProbePlatform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
