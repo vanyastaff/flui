@@ -31,9 +31,9 @@
 //!   concealment differs offers other types, which only a new source can:
 //!   it is set over the current one, which answers the new write too until
 //!   a sync tells which of the two the compositor holds (a `cancelled` to
-//!   the old one first means the new one). A concealed write that a
-//!   compositor keeps the old source for goes without the hint, with a
-//!   warning. Each `send` is written by a thread of its own, at most
+//!   the old one first means the new one). A concealed write never goes
+//!   out through a source without the hint: where the compositor keeps
+//!   such a source, the write is not put on the clipboard, with a warning. Each `send` is written by a thread of its own, at most
 //!   [`MAX_WRITERS`] at once, from the text encoded once per form;
 //!   `cancelled` (another client took the selection) ends that seat's
 //!   ownership. With no user input yet the text is held here only, and a
@@ -133,25 +133,28 @@ struct Owned {
     text: Arc<str>,
     source: Option<WlDataSource>,
     serial: Option<u32>,
-    /// The source `source` was set over under the same serial, answering
-    /// the same write, until the compositor says which of the two it holds:
-    /// `cancelled` here means it took `source`, a sync answered first means
-    /// it kept this one (see [`SelectionCheck`]).
-    superseded: Option<WlDataSource>,
+    /// The sources set before `source` under the same serial, oldest first,
+    /// until the compositor says which one it holds: `cancelled` to one of
+    /// them means it took a later one, a [`SelectionCheck`] answered while
+    /// one is still here means it kept that one.
+    superseded: Vec<WlDataSource>,
 }
 
 impl Owned {
     fn release(self) {
-        for source in [self.source, self.superseded].into_iter().flatten() {
+        for source in self.source.into_iter().chain(self.superseded) {
             source.destroy();
         }
     }
 
     /// Answer with `text` from now on, through every source this selection
-    /// holds.
+    /// holds that can carry it: a concealed write never goes out through a
+    /// source that does not offer the hint.
     fn replace(&mut self, text: Arc<str>, concealed: bool) {
-        for source in [&self.source, &self.superseded].into_iter().flatten() {
-            if let Some(data) = source.data::<SourceData>() {
+        for source in self.source.iter().chain(&self.superseded) {
+            if let Some(data) = source.data::<SourceData>()
+                && data.carries(concealed)
+            {
                 data.replace(Arc::clone(&text), concealed);
             }
         }
@@ -453,15 +456,21 @@ impl NativeClipboard for SeatClipboard {
                 held.replace(Arc::clone(&text), concealed);
                 // The offered types change with concealment, and only a new
                 // source changes them. The current one keeps answering the
-                // new write in case the compositor keeps it; a check already
-                // pending keeps the two it weighs.
+                // new write in case the compositor keeps it, unless the write
+                // is concealed and it offers no hint.
                 if offers_hint != concealed
-                    && held.superseded.is_none()
                     && let Some(source) = create(&text)
-                    && set(&source, &input.seat, input.serial).is_some()
                 {
-                    held.superseded = held.source.replace(source);
-                    SelectionCheck::send(&current, Arc::downgrade(&self.shared), queue.as_ref());
+                    if set(&source, &input.seat, input.serial).is_some() {
+                        held.superseded.extend(held.source.replace(source));
+                        SelectionCheck::send(
+                            &current,
+                            Arc::downgrade(&self.shared),
+                            queue.as_ref(),
+                        );
+                    } else {
+                        source.destroy();
+                    }
                 }
                 return None;
             }
@@ -490,7 +499,7 @@ impl NativeClipboard for SeatClipboard {
                     text,
                     source,
                     serial,
-                    superseded: None,
+                    superseded: Vec::new(),
                 },
             )
         });
@@ -645,10 +654,16 @@ impl SourceData {
         });
     }
 
-    /// Whether the write the source answers is concealed while it offers no
-    /// hint: a clipboard manager sees it as an ordinary one.
-    fn conceals_unmarked(&self) -> bool {
-        !self.offers_hint && self.content.with(|content| content.concealed) == Some(true)
+    /// Whether the source can answer a write `concealed` or not: a concealed
+    /// one only while it offers the hint, or a clipboard manager would take
+    /// it for an ordinary one.
+    fn carries(&self, concealed: bool) -> bool {
+        self.offers_hint || !concealed
+    }
+
+    /// The text the source answers with.
+    fn text(&self) -> Option<Arc<str>> {
+        self.content.with(|content| Arc::clone(&content.text))
     }
 
     /// What a `send` of `mime` answers: the text in that form, the hint's
@@ -798,18 +813,18 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                         // the one set over it, which goes on.
                         if let Some(held) = state
                             .owned
-                            .find_mut(|owned| owned.superseded.as_ref() == Some(source))
+                            .find_mut(|owned| owned.superseded.contains(source))
                         {
-                            held.superseded = None;
+                            held.superseded.retain(|held| held != source);
                             return;
                         }
                         // Only this source's seat lost its selection; it is
-                        // destroyed below, not by the entry's release, and a
-                        // source it superseded goes with it.
+                        // destroyed below, not by the entry's release, and the
+                        // sources it superseded go with it.
                         let lost = state
                             .owned
                             .remove(|owned| owned.source.as_ref() == Some(source));
-                        if let Some(superseded) = lost.and_then(|lost| lost.superseded) {
+                        for superseded in lost.into_iter().flat_map(|lost| lost.superseded) {
                             superseded.destroy();
                         }
                     });
@@ -839,28 +854,34 @@ impl Dispatch<WlCallback, SelectionCheck> for WaylandState {
             return;
         };
         // Still superseded once the compositor has handled the `set_selection`:
-        // it kept this source and dropped the one set over it, which no event
-        // reports. The kept source answers the latest write already.
-        let unmarked = shared.state.with(|state| {
+        // it kept this source and dropped every one set over it, which no
+        // event reports. The selection's text is what the kept source
+        // answers: a concealed write it cannot carry was not put on the
+        // clipboard.
+        let dropped_write = shared.state.with(|state| {
             let held = state
                 .owned
-                .find_mut(|owned| owned.superseded.as_ref() == Some(&check.superseded))?;
-            let kept = held.superseded.take()?;
-            // The kept source offers the types of the write it was set for.
-            let unmarked = kept
-                .data::<SourceData>()
-                .is_some_and(SourceData::conceals_unmarked);
-            if let Some(dropped) = held.source.replace(kept) {
+                .find_mut(|owned| owned.superseded.contains(&check.superseded))?;
+            let at = held
+                .superseded
+                .iter()
+                .position(|source| *source == check.superseded)?;
+            let mut sources = std::mem::take(&mut held.superseded);
+            let kept = sources.remove(at);
+            for dropped in sources.into_iter().chain(held.source.replace(kept.clone())) {
                 dropped.destroy();
             }
-            Some(unmarked)
+            let text = kept.data::<SourceData>().and_then(SourceData::text)?;
+            let dropped_write = !Arc::ptr_eq(&text, &held.text);
+            held.text = text;
+            Some(dropped_write)
         });
         // The subscriber runs with the clipboard's state let go.
-        if unmarked.flatten() == Some(true) {
+        if dropped_write.flatten() == Some(true) {
             tracing::warn!(
                 target: "flui.clipboard.wayland",
                 "the compositor kept the selection set earlier under this input: the concealed \
-                 write it now answers is offered without the password-manager hint"
+                 write made since was not put on the clipboard"
             );
         }
     }
@@ -1116,11 +1137,7 @@ mod tests {
                 (offered_hint && concealed).then_some(CONCEALED_HINT_VALUE),
                 "{row}"
             );
-            assert_eq!(
-                data.conceals_unmarked(),
-                !offered_hint && concealed,
-                "{row}"
-            );
+            assert_eq!(data.carries(concealed), offered_hint || !concealed, "{row}");
         }
     }
 }
