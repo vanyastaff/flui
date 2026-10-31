@@ -209,4 +209,26 @@ graph LR
     (R9: ничего не пишет при чтении, первая правка пишет начальное состояние),
     `a_note_id_is_never_reused_across_a_restart`. Откаты — `set` убран, экраны с `initial()`
     вместо загруженного — роняют каждую строку, кроме R9 во втором откате.
+  - [x] (b) сеанс: документ `Session` (`machine_local("session")`: стек путей, смещение
+    списка, черновик с его заметкой, `data_revision` как `Revision::get` данных). Загрузка —
+    данные, затем сеанс; нечитаемый сеанс — `start_over` и `initial()`. `Session::restore`:
+    стек — только если все пути разбираются, начинается с Home и все заметки есть, иначе
+    Home; черновик — только при той же ревизии, с существующей заметкой и если выше не
+    открыта другая заметка, иначе открытая заметка редактирует сохранённый заголовок;
+    смещение — если конечное, раскладка зажимает. Черновик, `editing` и смещение задаются в
+    `init_state` до первой раскладки, стек — `Router::from_stack`. `Place` пишет сеанс от
+    слушателей `RouterHandle` (подписка со страницы Home, снимается в её `dispose`),
+    черновика и данных (новая ревизия после Save), без записи при неизменном сеансе;
+    слушатели держат его слабо. «Delete note» в редакторе. `editing` стал `Rc<Cell>`:
+    слушатели без контекста. Строки: `unsaved_draft_reopens_its_note_without_changing_the_list`
+    (R3), `settings_over_editor_restores_and_backs_out_twice` (R4),
+    `list_offset_and_route_are_restored_on_the_first_loaded_frame` (R5, ворота загрузки,
+    покадрово), `failed_data_load_leaves_session_unread_and_unwritten` (R6),
+    `deleted_note_then_crash_drops_the_draft_and_trims_the_stack` и таблица
+    `restored_values_that_no_longer_fit_fall_back` (R7: смещение за концом и до начала, путь
+    без маршрута, стек не от Home, черновик под другой заметкой, другая ревизия),
+    `unreadable_session_starts_home_at_zero` (R8). Откаты — без проверки заметок стека, без
+    проверки Home внизу, без сравнения ревизий, без проверки открытой заметки, без
+    `start_over` — роняют свою строку. Зависит от `Listenable` у `RouterHandle` и `Persisted`
+    и от `Persisted::revision`.
 - [ ] P12 — нативный прогон (после flui-driver FD11)

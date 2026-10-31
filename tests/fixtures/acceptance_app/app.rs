@@ -3,12 +3,15 @@
 //!
 //! Three screens under one [`Router`]: Home lists the notes and toggles compact
 //! rows, Note edits a title through a [`TextFormField`] and keeps its draft
-//! after Back, Settings sits over either. The notes and the compact flag are
-//! one [`Persisted`] document, [`Saved`], encoded as JSON: readiness is a keyed
-//! [`FutureBuilder`] above the router that waits for the [`Loader`] gate, then
-//! loads the document, with Loading, an error and Retry. Saving a title, adding
-//! a note and toggling compact rows each write the document, so a restart over
-//! the same storage finds them.
+//! after Back, Settings sits over either. Two [`Persisted`] documents, encoded
+//! as JSON, hold what a restart finds. [`Saved`] is the data: the notes and
+//! the compact flag, written by saving a title, adding or deleting a note and
+//! toggling compact rows. [`Session`] is where the user was: the route stack,
+//! the list's offset and the unsaved draft, written whenever one of them
+//! changes and restored on the first frame after the data loads. Readiness is
+//! a keyed [`FutureBuilder`] above the router that waits for the [`Loader`]
+//! gate, then loads the data, then the session, with Loading, an error and
+//! Retry.
 //!
 //! [`Faults`] is the constructor's seam for injected failures, a set of
 //! [`Fault`]s: a panic in the Note editor's `build`, in the Save handler, or in
@@ -16,14 +19,15 @@
 //! state, page and listener it makes, which a test turns into a drop sentinel.
 
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::future::poll_fn;
 use std::num::ParseIntError;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{ConnectionState, Listenable, ValueKey, ViewKey};
+use flui::foundation::{ConnectionState, Listenable, ListenerId, ValueKey, ViewKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
@@ -31,7 +35,7 @@ use flui::platform::StorageName;
 use flui::prelude::*;
 use flui::view::View;
 use flui::view::element::ElementKind;
-use flui::view::persist::{DecodeError, Document, Persisted};
+use flui::view::persist::{DecodeError, Document, Persisted, Revision};
 use flui::widgets::{
     BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
     column,
@@ -354,19 +358,223 @@ impl Notebook {
     }
 }
 
+/// Where the user was when the application last ran: what a restart restores
+/// over the data. It is machine-local, so it stays on this device when the
+/// data follows the user to another one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    /// The router's stack, bottom to top, as the routes' paths.
+    stack: Vec<String>,
+    /// The notes list's scroll offset.
+    offset: f64,
+    /// The title being edited and the note it belongs to.
+    draft: Option<Draft>,
+    /// The number of the data revision the draft was taken against
+    /// ([`Revision::get`]); `None` while the data in memory was not stored.
+    data_revision: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Draft {
+    note: NoteId,
+    title: String,
+}
+
+impl Document for Session {
+    const NAME: StorageName = StorageName::machine_local("session");
+    const VERSION: u32 = 1;
+
+    fn initial() -> Self {
+        Self::default()
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("BUG: the session serializes to JSON")
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, DecodeError> {
+        serde_json::from_slice::<Self>(body).map_err(|error| DecodeError::new(error.to_string()))
+    }
+}
+
+/// What a stored session restores over the loaded data.
+struct Restored {
+    stack: Vec<Route>,
+    offset: f64,
+    draft: Option<Draft>,
+}
+
+impl Session {
+    /// What of this session still fits `notebook`, stored as `revision`.
+    ///
+    /// The stack is kept only if every path parses, it starts at Home and
+    /// every note it opens exists; otherwise it is Home alone. The draft is
+    /// kept only if it was taken against this very revision, its note exists
+    /// and no other note is open above it; an open note without its draft
+    /// edits its stored title. The offset is kept if it is finite, and the
+    /// list's layout clamps it to the extent it has now.
+    fn restore(&self, notebook: &Notebook, revision: Option<Revision>) -> Restored {
+        let stack = self
+            .stack
+            .iter()
+            .map(|path| Route::parse(path))
+            .collect::<Result<Vec<Route>, _>>()
+            .ok()
+            .filter(|stack| {
+                stack.first() == Some(&Route::Home)
+                    && stack.iter().all(|route| match route {
+                        Route::Note { id } => notebook.title(*id).is_some(),
+                        Route::Home | Route::Settings => true,
+                    })
+            })
+            .unwrap_or_else(|| vec![Route::Home]);
+        let open = stack.iter().rev().find_map(|route| match route {
+            Route::Note { id } => Some(*id),
+            Route::Home | Route::Settings => None,
+        });
+        let taken_against = revision.map(Revision::get);
+        let draft = self
+            .draft
+            .clone()
+            .filter(|draft| {
+                self.data_revision.is_some()
+                    && self.data_revision == taken_against
+                    && notebook.title(draft.note).is_some()
+                    && open.is_none_or(|open| open == draft.note)
+            })
+            .or_else(|| {
+                let note = open?;
+                Some(Draft {
+                    note,
+                    title: notebook.title(note)?.to_owned(),
+                })
+            });
+        Restored {
+            stack,
+            offset: if self.offset.is_finite() {
+                self.offset
+            } else {
+                0.0
+            },
+            draft,
+        }
+    }
+}
+
+/// Writes the session whenever where the user is changes: a route change, an
+/// edit of the draft, or a data write the draft is now taken against.
+///
+/// Its listeners hold it weakly, and it holds the router only while Home,
+/// the bottom page, is mounted, so it keeps nothing alive past the tree.
+struct Place {
+    session: Persisted<Session>,
+    data: Persisted<Saved>,
+    draft: TextEditingController,
+    editing: Rc<Cell<Option<NoteId>>>,
+    scroll: ScrollController,
+    router: RefCell<Option<(RouterHandle<Route>, ListenerId)>>,
+    /// The listeners on `data` and `draft`.
+    listening: RefCell<Option<(ListenerId, ListenerId)>>,
+    /// The session as last read or written, so a write that changes
+    /// nothing is not made.
+    stored: RefCell<Session>,
+}
+
+impl Place {
+    /// A listener that writes the session, if the place still exists.
+    fn listener(self: &Rc<Self>) -> Rc<dyn Fn()> {
+        let place = Rc::downgrade(self);
+        Rc::new(move || {
+            if let Some(place) = place.upgrade() {
+                place.store();
+            }
+        })
+    }
+
+    /// Listen to the data and the draft.
+    fn listen(self: &Rc<Self>) {
+        let ids = (
+            self.data.add_listener(self.listener()),
+            self.draft.add_listener(self.listener()),
+        );
+        *self.listening.borrow_mut() = Some(ids);
+    }
+
+    /// Stop listening to anything.
+    fn stop(&self) {
+        if let Some((data, draft)) = self.listening.take() {
+            self.data.remove_listener(data);
+            self.draft.remove_listener(draft);
+        }
+        self.detach();
+    }
+
+    /// Follow the stack of the router Home's page sits under.
+    fn attach(self: &Rc<Self>, router: RouterHandle<Route>) {
+        let id = router.add_listener(self.listener());
+        if let Some((old, id)) = self.router.replace(Some((router, id))) {
+            old.remove_listener(id);
+        }
+    }
+
+    /// Stop following the router: Home's page is gone.
+    fn detach(&self) {
+        if let Some((router, id)) = self.router.take() {
+            router.remove_listener(id);
+        }
+    }
+
+    /// Write the session as it stands. Nothing is written before Home
+    /// mounts, nor when nothing changed.
+    fn store(&self) {
+        let Some(stack) = self
+            .router
+            .borrow()
+            .as_ref()
+            .map(|(router, _id)| router.stack())
+        else {
+            return;
+        };
+        let session = Session {
+            stack: stack
+                .iter()
+                .map(|route| route.to_path().to_string())
+                .collect::<Vec<String>>(),
+            offset: self.scroll.pixels(),
+            draft: self.editing.get().map(|note| Draft {
+                note,
+                title: self.draft.text(),
+            }),
+            data_revision: self.data.revision().map(Revision::get),
+        };
+        if *self.stored.borrow() == session {
+            return;
+        }
+        // A write that fails is reported by the session's status; the place
+        // is written again on the next change.
+        if self.session.set(session.clone()).is_ok() {
+            *self.stored.borrow_mut() = session;
+        }
+    }
+}
+
 /// The application state every screen shares. Signals are handles, and the
 /// two controllers share their storage between clones.
 #[derive(Clone)]
 struct Shared {
     notebook: Signal<Notebook>,
-    /// The note the draft belongs to.
-    editing: Signal<Option<NoteId>>,
+    /// The note the draft belongs to. A cell, not a signal: the session
+    /// reads it from listeners, which have no context.
+    editing: Rc<Cell<Option<NoteId>>>,
     compact: Signal<bool>,
     status: Signal<String>,
     draft: TextEditingController,
     scroll: ScrollController,
     /// Where the notebook and the compact flag are stored.
     data: Persisted<Saved>,
+    /// What writes the session; weak, since the router's pages hold this
+    /// state and the place holds the router.
+    place: Weak<Place>,
     faults: Faults,
     planter: Option<Planter>,
 }
@@ -399,18 +607,28 @@ struct Root {
 }
 
 struct RootState {
-    data: Option<Persisted<Saved>>,
+    documents: Option<Documents>,
     attempt: Signal<u32>,
     first_attempt: u32,
     _kept: Option<Rc<dyn Any>>,
 }
+
+/// The two stored documents.
+#[derive(Clone)]
+struct Documents {
+    data: Persisted<Saved>,
+    session: Persisted<Session>,
+}
+
+/// What a load reads: the data, then the session over it.
+type Read = (Rc<Saved>, Rc<Session>);
 
 impl StatefulView for Root {
     type State = RootState;
 
     fn create_state(&self) -> Self::State {
         RootState {
-            data: None,
+            documents: None,
             attempt: Signal::default(),
             first_attempt: self.first_attempt,
             _kept: plant(self.planter.as_ref(), Kept::State),
@@ -421,26 +639,44 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.attempt = cx.signal(self.first_attempt);
-        self.data = Some(Persisted::<Saved>::open(cx));
+        self.documents = Some(Documents {
+            data: Persisted::<Saved>::open(cx),
+            session: Persisted::<Session>::open(cx),
+        });
     }
 
     fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
-        let data = self.data.clone().expect("BUG: init_state precedes build");
+        let documents = self
+            .documents
+            .clone()
+            .expect("BUG: init_state precedes build");
         let attempt = self.attempt;
         let current = attempt.get(cx);
         let loader = Rc::clone(&view.loader);
-        let load = data.clone();
+        let load = documents.clone();
         let faults = view.faults;
         let planter = view.planter.clone();
         let ready = FutureBuilder::keyed(
             Some(current),
             Rc::new(move || {
                 let gate = loader(current);
-                let data = load.clone();
+                let Documents { data, session } = load.clone();
                 Box::pin(async move {
                     gate.await?;
-                    data.load().await.map_err(|error| error.to_string())
-                }) as BoxedResultFuture<Rc<Saved>, String>
+                    // The session is read only over loaded data: a failed
+                    // data load leaves it unread and unwritten.
+                    let saved = data.load().await.map_err(|error| error.to_string())?;
+                    // A session that cannot be read loses the place, never the
+                    // data: an unreadable one is kept aside and started over.
+                    let place = match session.load().await {
+                        Ok(place) => place,
+                        Err(_unreadable) => {
+                            session.start_over();
+                            Rc::new(Session::initial())
+                        }
+                    };
+                    Ok((saved, place))
+                }) as BoxedResultFuture<Read, String>
             }),
             Rc::new(move |_cx, snapshot| {
                 if snapshot.connection_state() != ConnectionState::Done {
@@ -455,13 +691,13 @@ impl ViewState<Root> for RootState {
                     ])
                     .boxed();
                 }
-                let saved = snapshot
+                let read = snapshot
                     .data()
                     .cloned()
                     .expect("BUG: a load done without an error has its value");
                 Loaded {
-                    saved,
-                    data: data.clone(),
+                    read,
+                    documents: documents.clone(),
                     faults,
                     planter: planter.clone(),
                 }
@@ -472,19 +708,22 @@ impl ViewState<Root> for RootState {
     }
 }
 
-/// The screens over the loaded document: their state starts from it.
+/// The screens over the loaded documents: their state starts from them.
 #[derive(Clone, StatefulView)]
 struct Loaded {
-    saved: Rc<Saved>,
-    data: Persisted<Saved>,
+    read: Read,
+    documents: Documents,
     faults: Faults,
     planter: Option<Planter>,
 }
 
 struct LoadedState {
     /// What `init_state` starts the shared state from.
-    start: Option<(Rc<Saved>, Persisted<Saved>)>,
+    start: Option<(Read, Documents)>,
     shared: Option<Shared>,
+    /// The stack the router opens on.
+    stack: Vec<Route>,
+    place: Option<Rc<Place>>,
     faults: Faults,
     planter: Option<Planter>,
     _kept: Option<Rc<dyn Any>>,
@@ -495,8 +734,10 @@ impl StatefulView for Loaded {
 
     fn create_state(&self) -> Self::State {
         LoadedState {
-            start: Some((Rc::clone(&self.saved), self.data.clone())),
+            start: Some((self.read.clone(), self.documents.clone())),
             shared: None,
+            stack: Vec::new(),
+            place: None,
             faults: self.faults,
             planter: self.planter.clone(),
             _kept: plant(self.planter.as_ref(), Kept::State),
@@ -506,36 +747,72 @@ impl StatefulView for Loaded {
 
 impl ViewState<Loaded> for LoadedState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        let (saved, data) = self.start.take().expect("BUG: init_state runs once");
+        let (
+            (saved, session),
+            Documents {
+                data,
+                session: stored,
+            },
+        ) = self.start.take().expect("BUG: init_state runs once");
+        // Everything restored is in place before the first layout, so the
+        // first loaded frame already shows it.
+        let restored = session.restore(&saved.notebook, data.revision());
         let draft = TextEditingController::new();
+        if let Some(Draft { title, .. }) = &restored.draft {
+            draft.set_text(title.clone());
+        }
         if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
             draft.add_listener(Rc::new(move || {
                 let _kept = &kept;
             }));
         }
+        let editing = Rc::new(Cell::new(restored.draft.map(|draft| draft.note)));
+        let scroll = ScrollController::with_initial_scroll_offset(restored.offset);
+        let place = Rc::new(Place {
+            session: stored,
+            data: data.clone(),
+            draft: draft.clone(),
+            editing: Rc::clone(&editing),
+            scroll: scroll.clone(),
+            router: RefCell::new(None),
+            listening: RefCell::new(None),
+            stored: RefCell::new(Session::clone(&session)),
+        });
+        place.listen();
         self.shared = Some(Shared {
             notebook: cx.signal(saved.notebook.clone()),
-            editing: cx.signal(None),
+            editing,
             compact: cx.signal(saved.compact),
             status: cx.signal(String::new()),
             draft,
-            scroll: ScrollController::new(),
+            scroll,
             data,
+            place: Rc::downgrade(&place),
             faults: self.faults,
             planter: self.planter.clone(),
         });
+        self.stack = restored.stack;
+        self.place = Some(place);
     }
 
     fn build(&self, _view: &Loaded, _cx: &dyn BuildContext) -> impl IntoView {
         let shared = self.shared.clone().expect("BUG: init_state precedes build");
-        WidgetsApp::router(Router::new(Route::Home, move |route: &Route, _cx| {
+        let router = Router::from_stack(self.stack.clone(), move |route: &Route, _cx| {
             Screen {
                 route: route.clone(),
                 shared: shared.clone(),
                 _kept: plant(shared.planter.as_ref(), Kept::Page),
             }
             .boxed()
-        }))
+        })
+        .expect("BUG: a restored stack holds Home at least");
+        WidgetsApp::router(router)
+    }
+
+    fn dispose(&mut self) {
+        if let Some(place) = self.place.take() {
+            place.stop();
+        }
     }
 }
 
@@ -551,6 +828,9 @@ struct ScreenState {
     form: FormHandle,
     focus: Rc<FocusNode>,
     panic_on_dispose: bool,
+    /// On Home's page, the bottom one: what writes the session, which
+    /// follows the router while the page is mounted.
+    place: Option<Weak<Place>>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -564,6 +844,7 @@ impl StatefulView for Screen {
             focus: FocusNode::new(),
             panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
+            place: (self.route == Route::Home).then(|| Weak::clone(&self.shared.place)),
             _kept: plant(self.shared.planter.as_ref(), Kept::State),
         }
     }
@@ -571,7 +852,11 @@ impl StatefulView for Screen {
 
 impl ViewState<Screen> for ScreenState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.router = Some(Router::<Route>::handle(cx).expect("BUG: a screen is under the Router"));
+        let router = Router::<Route>::handle(cx).expect("BUG: a screen is under the Router");
+        if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
+            place.attach(router.clone());
+        }
+        self.router = Some(router);
     }
 
     fn build(&self, view: &Screen, cx: &dyn BuildContext) -> impl IntoView {
@@ -594,6 +879,9 @@ impl ViewState<Screen> for ScreenState {
     }
 
     fn dispose(&mut self) {
+        if let Some(place) = self.place.take().as_ref().and_then(Weak::upgrade) {
+            place.detach();
+        }
         assert!(
             !self.panic_on_dispose,
             "injected fault: the Note screen's dispose panics"
@@ -657,20 +945,15 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
 }
 
 fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>, id: NoteId) {
-    let editing = shared
-        .editing
-        .peek(cx, |editing| *editing)
-        .expect("BUG: the loaded state's signals outlive its screens");
-    if editing != Some(id) {
+    if shared.editing.get() != Some(id) {
         let title = shared
             .notebook
             .peek(cx, |notebook| notebook.title(id).map(str::to_owned))
             .expect("BUG: the loaded state's signals outlive its screens");
+        // The draft names its note before its text changes, so the session
+        // written for the new text names the right note.
+        shared.editing.set(Some(id));
         shared.draft.set_text(title.unwrap_or_default());
-        shared
-            .editing
-            .set(cx, Some(id))
-            .expect("BUG: the loaded state's signals outlive its screens");
     }
     router
         .push(Route::Note { id })
@@ -819,6 +1102,7 @@ fn editor(
         return Text::new(format!("Note {id} does not exist")).boxed();
     }
     let save = shared.clone();
+    let delete = shared.clone();
     let validate = form.clone();
     Form::new(Column::new(column![
         Text::new(format!("Editing note {id}")),
@@ -857,6 +1141,26 @@ fn editor(
                 save.status
                     .set(cx, message)
                     .expect("BUG: the loaded state's signals outlive its screens");
+            }
+        ),
+        on_current_page(
+            "Delete note",
+            router,
+            &Route::Note { id },
+            move |cx, router| {
+                delete
+                    .notebook
+                    .update(cx, |notebook| notebook.notes.retain(|note| note.id != id))
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                if delete.editing.get() == Some(id) {
+                    delete.editing.set(None);
+                }
+                delete.store(cx);
+                delete
+                    .status
+                    .set(cx, format!("Deleted note {id}"))
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                router.pop().expect("BUG: mounted Router");
             }
         ),
     ]))
