@@ -126,11 +126,13 @@ position slider's `RangeValue` and reads no position.
 
 **Change** (`accesskit_windows.patch`, the whole difference from the published crate):
 
-- `IScrollProvider` on a node that publishes finite scroll extents on either axis. An axis
+- `IScrollProvider` on a node that publishes finite scroll extents on either axis and takes a
+  scroll action (a position slider with the same extents does not get one). An axis
   scrolls when its maximum is past its minimum. Its `ScrollPercent` is the position along the
   extents, and `UIA_ScrollPatternNoScroll` when the axis doesn't scroll or has no position. Its
   `ViewSize` is the node's extent over that extent plus the scroll range. The six properties
-  raise their change events, as every pattern's do;
+  raise their change events, as every pattern's do. The percentages and targets are computed
+  without intermediate overflow, so a range wider than `f64::MAX` stays finite;
 - `Scroll` asks `ScrollUp`/`ScrollDown`/`ScrollLeft`/`ScrollRight` with `ScrollUnit::Item` for
   a small step and `ScrollUnit::Page` for a large one. Both axes are checked before either is
   asked, and an axis that doesn't scroll, or whose action the node doesn't take, refuses;
@@ -154,8 +156,8 @@ upstream pull request is below; it has not been sent.
 > and the macOS and Unix adapters expose them, but the Windows adapter implements only
 > `ScrollItemPattern`.
 >
-> This adds `IScrollProvider` on a node that publishes finite extents on either axis. The
-> percentages and view sizes come from the position, the extents and the node's bounds. `Scroll`
+> This adds `IScrollProvider` on a node that publishes finite extents on either axis and takes
+> a scroll action. The percentages and view sizes come from the position, the extents and the node's bounds. `Scroll`
 > maps small and large steps to `ScrollUnit::Item` and `ScrollUnit::Page`, and
 > `SetScrollPercent` asks `SetScrollOffset`, keeping an axis given `UIA_ScrollPatternNoScroll`
 > where it is. An axis that does not scroll returns `UIA_E_INVALIDOPERATION`, and a percentage

@@ -20,12 +20,15 @@ const WINDOW_TITLE: &str = "Scroll test";
 const WINDOW_ID: NodeId = NodeId(0);
 const LIST_ID: NodeId = NodeId(1);
 const LABEL_ID: NodeId = NodeId(2);
+const SLIDER_ID: NodeId = NodeId(3);
+const WIDE_ID: NodeId = NodeId(4);
 
-/// A list 100 high that scrolls 300 vertically, scrolled to 75, and a label
-/// that does not scroll.
+/// A list 100 high that scrolls 300 vertically, scrolled to 75; a label that
+/// does not scroll; the list's position slider, with its extents and no
+/// scroll action; and a strip whose horizontal range is wider than `f64::MAX`.
 fn get_initial_state() -> TreeUpdate {
     let mut root = Node::new(Role::Window);
-    root.set_children(vec![LIST_ID, LABEL_ID]);
+    root.set_children(vec![LIST_ID, LABEL_ID, SLIDER_ID, WIDE_ID]);
     let mut list = Node::new(Role::List);
     list.set_author_id("list");
     list.set_bounds(Rect::new(0.0, 0.0, 200.0, 100.0));
@@ -42,8 +45,30 @@ fn get_initial_state() -> TreeUpdate {
     let mut label = Node::new(Role::Label);
     label.set_author_id("label");
     label.set_value("Not a scroller");
+    let mut slider = Node::new(Role::Slider);
+    slider.set_author_id("slider");
+    slider.set_numeric_value(75.0);
+    slider.set_min_numeric_value(0.0);
+    slider.set_max_numeric_value(300.0);
+    slider.set_scroll_y(75.0);
+    slider.set_scroll_y_min(0.0);
+    slider.set_scroll_y_max(300.0);
+    slider.add_action(Action::SetValue);
+    let mut wide = Node::new(Role::ScrollView);
+    wide.set_author_id("wide");
+    wide.set_bounds(Rect::new(0.0, 100.0, 200.0, 140.0));
+    wide.set_scroll_x(0.0);
+    wide.set_scroll_x_min(-1e308);
+    wide.set_scroll_x_max(1e308);
+    wide.add_action(Action::SetScrollOffset);
     TreeUpdate {
-        nodes: vec![(WINDOW_ID, root), (LIST_ID, list), (LABEL_ID, label)],
+        nodes: vec![
+            (WINDOW_ID, root),
+            (LIST_ID, list),
+            (LABEL_ID, label),
+            (SLIDER_ID, slider),
+            (WIDE_ID, wide),
+        ],
         tree: Some(TreeInfo::new(WINDOW_ID)),
         tree_id: TreeId::ROOT,
         focus: WINDOW_ID,
@@ -90,6 +115,13 @@ fn scroll_pattern() -> Result<()> {
                 unsafe { label.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
                     .is_err(),
                 "a node without scroll extents has no scroll pattern"
+            );
+
+            let slider = find(s, "slider")?;
+            assert!(
+                unsafe { slider.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
+                    .is_err(),
+                "an adjuster with scroll extents and no scroll action has no scroll pattern"
             );
 
             let list = find(s, "list")?;
@@ -144,6 +176,29 @@ fn scroll_pattern() -> Result<()> {
                 "a percentage past the end is refused"
             );
             assert!(requests.lock().is_empty(), "and nothing is asked");
+
+            let wide = find(s, "wide")?;
+            let wide: IUIAutomationScrollPattern =
+                unsafe { wide.GetCurrentPatternAs(UIA_ScrollPatternId) }?;
+            assert_eq!(
+                unsafe { wide.CurrentHorizontalScrollPercent() }?,
+                50.0,
+                "a range wider than f64::MAX reads finite"
+            );
+            unsafe { wide.SetScrollPercent(100.0, UIA_ScrollPatternNoScroll) }?;
+            let recorded: Vec<_> = requests
+                .lock()
+                .drain(..)
+                .map(|request| (request.target_node, request.data))
+                .collect();
+            assert_eq!(
+                recorded,
+                [(
+                    WIDE_ID,
+                    Some(ActionData::SetScrollOffset(Point::new(1e308, 0.0)))
+                )],
+                "and scrolls to a finite position"
+            );
             Ok(())
         },
     )

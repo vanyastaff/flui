@@ -666,8 +666,19 @@ impl NodeWrapper<'_> {
         position.filter(|position| position.is_finite())
     }
 
+    /// A node with scroll extents on either axis that takes a scroll: a
+    /// range-value adjuster published with the same extents does not.
     fn is_scroll_pattern_supported(&self) -> bool {
-        self.scroll_extents(true).is_some() || self.scroll_extents(false).is_some()
+        (self.scroll_extents(true).is_some() || self.scroll_extents(false).is_some())
+            && [
+                Action::ScrollUp,
+                Action::ScrollDown,
+                Action::ScrollLeft,
+                Action::ScrollRight,
+                Action::SetScrollOffset,
+            ]
+            .into_iter()
+            .any(|action| self.node.supports_action(action, &filter))
     }
 
     fn is_scrollable(&self, horizontal: bool) -> bool {
@@ -692,7 +703,14 @@ impl NodeWrapper<'_> {
             self.scroll_position(horizontal),
         ) {
             (Some((min, max)), Some(position)) if max > min => {
-                ((position - min) / (max - min) * 100.0).clamp(0.0, 100.0)
+                // Halved first, so a range wider than `f64::MAX` stays finite.
+                let along = (position / 2.0 - min / 2.0) / (max / 2.0 - min / 2.0);
+                let percent = along * 100.0;
+                if percent.is_finite() {
+                    percent.clamp(0.0, 100.0)
+                } else {
+                    UIA_ScrollPatternNoScroll
+                }
             }
             _ => UIA_ScrollPatternNoScroll,
         }
@@ -744,7 +762,16 @@ impl NodeWrapper<'_> {
             return Err(invalid_arg());
         }
         match self.scroll_extents(horizontal) {
-            Some((min, max)) if max > min => Ok(Some(min + (max - min) * percent / 100.0)),
+            Some((min, max)) if max > min => {
+                // Weighted, not offset by the range, which can overflow.
+                let along = percent / 100.0;
+                let target = min * (1.0 - along) + max * along;
+                if target.is_finite() {
+                    Ok(Some(target))
+                } else {
+                    Err(invalid_operation())
+                }
+            }
             _ => Err(invalid_operation()),
         }
     }
