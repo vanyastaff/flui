@@ -1957,6 +1957,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     .unwrap_or_else(no_op_semantics_update_callback);
                 let mut owner = flui_semantics::SemanticsOwner::new(callback);
                 owner.set_device_pixel_ratio(self.device_pixel_ratio);
+                owner.set_route_change_sink(self.semantics_route_change_sink.clone());
                 if let Some(announcements) = self.semantics_regions.existing_announcements() {
                     owner.set_announcements(announcements.clone());
                 }
@@ -1994,6 +1995,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             owner.set_callback(callback.clone());
         }
         self.semantics_update_callback = Some(callback);
+    }
+
+    /// Installs the sink told each route change (ADR-0204 §5) on this
+    /// pipeline's semantics owner, now and on each one it creates later.
+    ///
+    /// The composition root installs one where the platform bridge conveys
+    /// route changes natively; `None` makes the owner announce each named
+    /// route instead.
+    pub fn set_semantics_route_change_sink(
+        &mut self,
+        sink: Option<flui_semantics::platform::RouteChangeSink>,
+    ) {
+        if let Some(owner) = self.semantics_owner.as_mut() {
+            owner.set_route_change_sink(sink.clone());
+        }
+        self.semantics_route_change_sink = sink;
     }
 
     /// Schedules a self-contained full semantics publish, re-seeding the
