@@ -4,6 +4,9 @@
   the drop target, the drag source, the content receiver and the handwriting request; run on a
   Galaxy S21 (Android 15) through [`cargo xtask device android-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 - **Date:** 2026-10-17
+- **Amended:** 2026-10-31: item 4 lays the view over the whole window as the decor view's first
+  child, not over the content frame with `addContentView`, which sits below the status bar on a
+  window that is not edge to edge while FLUI places everything in window pixels.
 - **Superseded-by:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) for item 1's embedding of the dex
   in the library with `include_bytes!` and its "every packager ships that copy" (the sources, the
   checked-in dex, the digest gate and "no JDK" stand), item 2 except its first sentence (the
@@ -52,7 +55,9 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    which searches the system loader on a native thread. Its native methods are bound with
    `RegisterNatives`. The view holds a handle to the native bridge, which the platform clears on
    the Java main thread before it frees the bridge.
-4. **One `FluiView` per Activity**, laid over the whole content with `addContentView`, focusable
+4. **One `FluiView` per Activity**, laid over the whole window as the decor view's first child,
+   so that its pixels are the window surface's FLUI draws in (the input method's caret and
+   character boxes, a drop's point and the semantics bounds need no offset), focusable
    and drawing nothing. It takes no touch FLUI handles (the native input queue sees input
    first), and it is the only Java input method target, drop target, drag source, receiver of
    pasted and keyboard content, and handwriting editor.
