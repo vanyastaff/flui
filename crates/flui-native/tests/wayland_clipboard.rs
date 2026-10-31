@@ -85,6 +85,10 @@ mod cases {
             Ok(())
         );
         write(&first, "written by the first");
+        // A turn sends the new selection before the second client connects:
+        // otherwise the compositor still holds the concealed one, which a
+        // read of the client's own selection does not go through.
+        first.turn();
         assert_eq!(
             read(&first).as_deref(),
             Some("written by the first"),
