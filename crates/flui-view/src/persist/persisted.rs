@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
+use flui_foundation::ListenerId;
+use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
@@ -58,6 +60,13 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// the platform cannot wait (the web, Android, iOS), what changed after the
 /// last confirmed write is lost if the process is killed before the
 /// application is hidden.
+///
+/// It is [`Listenable`]: its listeners are told when [`status`](Self::status)
+/// or [`committed`](Self::committed) changes, so a widget can rebuild with
+/// them. They are told on a later turn of the UI runtime's tasks, never from
+/// inside a call on the document, and once for all the changes since the
+/// last time they were told; a change undone before then tells nobody. A
+/// listener may call any method of the document.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
@@ -80,6 +89,8 @@ struct OpenDocument<D> {
     /// The presentation's close guard, which a write in flight or a failed
     /// one holds.
     guard: Option<CloseGuard>,
+    /// Tells the document's listeners of changes.
+    announcer: Announcer,
     /// Borrowed only between codec calls, storage requests and wakes.
     state: RefCell<DocumentState<D>>,
 }
@@ -157,6 +168,22 @@ enum HoldKind {
     Decision,
 }
 
+/// What a document's listeners are told about: its status and the latest
+/// revision the storage confirmed.
+type Reported = (SaveStatus, Option<Revision>);
+
+/// Tells a document's listeners of changes, one delivery at a time on the
+/// UI runtime's tasks.
+struct Announcer {
+    notifier: ChangeNotifier,
+    /// What the listeners were last told, or what stood at open.
+    told: RefCell<Reported>,
+    /// Whether a delivery is queued and has not started yet.
+    queued: Cell<bool>,
+    /// The latest delivery's task.
+    delivery: RefCell<Option<TaskToken>>,
+}
+
 impl<D: Document> Clone for Persisted<D> {
     fn clone(&self) -> Self {
         Self {
@@ -195,6 +222,10 @@ impl<D: Document> Persisted<D> {
                     (registry, publisher)
                 })
         });
+        let committed = registry
+            .as_ref()
+            .and_then(|(_, publisher)| publisher.committed())
+            .map(|(revision, _)| revision);
         let hurry = Rc::new(Hurry::default());
         let lifecycle = cx.lifecycle_handle().and_then(|handle| {
             let hurry = Rc::downgrade(&hurry);
@@ -218,6 +249,12 @@ impl<D: Document> Persisted<D> {
                 hurry,
                 _lifecycle: lifecycle,
                 guard: cx.close_guard(),
+                announcer: Announcer {
+                    notifier: ChangeNotifier::new(),
+                    told: RefCell::new((status.clone(), committed)),
+                    queued: Cell::new(false),
+                    delivery: RefCell::new(None),
+                },
                 state: RefCell::new(DocumentState {
                     status,
                     generation: 0,
@@ -344,8 +381,7 @@ impl<D: Document> Persisted<D> {
     /// The latest revision the storage confirmed, if any.
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
-        let (_, publisher) = self.document.registry.as_ref()?;
-        publisher.committed().map(|(revision, _)| revision)
+        self.document.committed()
     }
 
     /// Where the document stands against its storage.
@@ -439,6 +475,20 @@ impl<D: Document> Persisted<D> {
     }
 }
 
+impl<D: Document> Listenable for Persisted<D> {
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.document.announcer.notifier.add_observer(observer)
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.document.announcer.notifier.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.document.announcer.notifier.remove_all_listeners();
+    }
+}
+
 /// A load in flight: its generation and the storage read.
 type LoadStart = (u64, StorageFuture<Stored>);
 
@@ -463,7 +513,7 @@ impl<D: Document> OpenDocument<D> {
     /// Apply a finished load if it is still the latest, and hand its
     /// outcome to the caller either way.
     fn settle(
-        &self,
+        self: &Rc<Self>,
         generation: u64,
         outcome: Result<Loaded<D>, PersistError>,
         read: Option<StoredVersion>,
@@ -508,6 +558,7 @@ impl<D: Document> OpenDocument<D> {
         drop(state);
         // A replaced value's drop is application code: no borrow is held.
         drop(replaced);
+        self.announce();
         result
     }
 
@@ -771,6 +822,62 @@ impl<D: Document> OpenDocument<D> {
             let token = driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())));
             self.state.borrow_mut().watch = Some(token);
         }
+        self.announce();
+    }
+
+    /// The latest revision the storage confirmed, if any.
+    fn committed(&self) -> Option<Revision> {
+        let (_, publisher) = self.registry.as_ref()?;
+        publisher.committed().map(|(revision, _)| revision)
+    }
+
+    /// Queue a delivery to the listeners if what they were told no longer
+    /// stands and none is queued. Runs no listener: they run in the
+    /// delivery, on a later turn of the runtime's tasks.
+    fn announce(self: &Rc<Self>) {
+        let announcer = &self.announcer;
+        let Some(driver) = &self.driver else {
+            return;
+        };
+        if announcer.queued.get() {
+            return;
+        }
+        let now = (self.state.borrow().status.clone(), self.committed());
+        if *announcer.told.borrow() == now {
+            return;
+        }
+        announcer.queued.set(true);
+        let document = Rc::downgrade(self);
+        let token = driver.spawn_local(Box::pin(async move { deliver(&document) }));
+        // The task it replaces has run, or is the delivery running now,
+        // whose cancellation is honoured once its poll returns.
+        let finished = announcer.delivery.borrow_mut().replace(token);
+        drop(finished);
+    }
+}
+
+/// Tell `document`'s listeners what changed since they were last told, if
+/// anything still differs.
+fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
+    let Some(open) = document.upgrade() else {
+        return;
+    };
+    // Brought in line with the registry while still queued, so the refresh
+    // queues nothing more.
+    open.refresh();
+    let announcer = &open.announcer;
+    announcer.queued.set(false);
+    let now = (open.state.borrow().status.clone(), open.committed());
+    let changed = {
+        let mut told = announcer.told.borrow_mut();
+        let changed = *told != now;
+        *told = now;
+        changed
+    };
+    // Recorded before the listeners run: a change they make queues the
+    // next delivery, and a panic in one leaves the next delivery to come.
+    if changed {
+        announcer.notifier.notify_listeners();
     }
 }
 

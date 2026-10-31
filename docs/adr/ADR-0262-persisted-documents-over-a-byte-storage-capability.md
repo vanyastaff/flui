@@ -151,6 +151,7 @@ impl<D: Document> Persisted<D> {
     pub fn retry(&self);
     pub fn start_over(&self);
 }
+impl<D: Document> Listenable for Persisted<D> { /* status() and committed() changes */ }
 ```
 
 The framework writes a one-line header, `flui-document <name> <version> <revision>\n`, before the
@@ -170,6 +171,13 @@ thread with no borrow of the document held, and publishes the bytes to the flush
 confirmation, after the rename. `Busy` is retried on the UI runtime's clock, at 50, 100, 200, 400
 and 800 ms, then `Failed`; a hidden or paused application and a close request retry at once.
 
+The document is `Listenable`, so a widget rebuilds with its status. A delivery runs on a later turn
+of the UI runtime's tasks, never inside a call on the document, and tells the listeners once for
+all the changes to `status()` and `committed()` since they were last told. A status that stands
+tells nobody and queues nothing, so a document at rest wakes no frame. A listener may call any
+method of the document: what it changes is told in the next delivery, and a listener that panics
+leaves the next delivery to come.
+
 ### §4. A codec panic fails one save and keeps the document
 
 ```rust
@@ -179,7 +187,8 @@ pub enum PersistError {
     Panicked { during: CodecStep, message: String },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodecStep { Encode, Decode }
+#[non_exhaustive]
+pub enum CodecStep { Encode, Decode, Initial }
 ```
 
 `encode` and `decode` run under `catch_unwind`, each with no borrow of the document held:
@@ -238,7 +247,9 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
   `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
   `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
-  `start_over_never_writes_over_a_file_replaced_since_the_load`.
+  `start_over_never_writes_over_a_file_replaced_since_the_load`,
+  `listeners_hear_each_change_once_and_nothing_while_it_stands`,
+  `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.

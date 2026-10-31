@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use flui_foundation::notifier::Listenable;
 use flui_objects::RenderSizedBox;
 use flui_platform::StorageName;
 use flui_platform::{StorageError, UnsupportedReason};
@@ -1253,4 +1254,140 @@ fn an_initial_value_that_panics_fails_the_fresh_start() {
     laid.pump();
     assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
     assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+}
+
+/// Count each time `notes` tells its listeners, and what the status was
+/// then.
+fn listen(notes: &Persisted<Note>) -> Rc<RefCell<Vec<SaveStatus>>> {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&heard);
+    let reader = notes.clone();
+    notes.add_listener(Rc::new(move || log.borrow_mut().push(reader.status())));
+    heard
+}
+
+#[test]
+fn listeners_hear_each_change_once_and_nothing_while_it_stands() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "first"));
+    let (mut laid, notes) = mount(&storage);
+    let heard = listen(&notes);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
+    laid.pump();
+    assert_eq!(*heard.borrow(), [SaveStatus::Clean], "the load is told");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    assert!(notes.set(Note("third".into())).is_ok());
+    assert_eq!(heard.borrow().len(), 1, "never told from inside a call");
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[1..],
+        [SaveStatus::Saving],
+        "two edits in one turn are told once"
+    );
+
+    barrier.commit();
+    // The registry's change is seen in one turn and told in the next.
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[2..],
+        [SaveStatus::Clean],
+        "the commit is told"
+    );
+    assert_eq!(notes.committed().map(Revision::get), Some(3));
+
+    for _ in 0..3 {
+        assert_eq!(notes.status(), SaveStatus::Clean);
+        laid.pump();
+    }
+    assert_eq!(
+        heard.borrow().len(),
+        3,
+        "a status that stands is not told again"
+    );
+    assert!(
+        !laid.scheduler().is_frame_scheduled(),
+        "reading a status that stands wakes no frame"
+    );
+}
+
+#[test]
+fn a_listener_that_writes_and_retries_settles() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+
+    let calls = Rc::new(Cell::new(0_usize));
+    let count = Rc::clone(&calls);
+    let writer = notes.clone();
+    notes.add_listener(Rc::new(move || {
+        count.set(count.get() + 1);
+        writer.retry();
+        // Bounded only so a delivery that recursed fails here instead of
+        // overflowing the stack.
+        if writer.status() == SaveStatus::Saving && count.get() < 50 {
+            assert!(writer.set(Note("from a listener".into())).is_ok());
+        }
+    }));
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("edited".into())).is_ok());
+    for _ in 0..20 {
+        laid.pump_for(Duration::from_millis(100));
+    }
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert!(
+        calls.get() <= 4,
+        "each delivery is one real change: {} calls",
+        calls.get()
+    );
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(2, "from a listener")),
+        "the listener's edit is stored"
+    );
+}
+
+#[test]
+fn a_listener_panic_leaves_later_changes_told() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    laid.pump();
+
+    let panicked = Rc::new(Cell::new(false));
+    let once = Rc::clone(&panicked);
+    notes.add_listener(Rc::new(move || {
+        assert!(once.replace(true), "a listener panics once");
+    }));
+    let heard = listen(&notes);
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("edited".into())).is_ok());
+    let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    assert!(panicked.get(), "the panicking listener ran");
+    drop(delivery);
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Saving],
+        "the healthy listener is told"
+    );
+
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Saving, SaveStatus::Clean],
+        "a later change is still told"
+    );
 }
