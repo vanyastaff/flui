@@ -77,6 +77,24 @@ impl UiRuntime {
         reading_from(taken)
     }
 
+    /// A submit was classified. `producer`'s staged layer reads are answered when `shown`; every
+    /// other presentation's, and the producer's when not shown, are parked again. A reply that
+    /// panics is kept in `panic` (the first one wins) after every reply was attempted.
+    pub(super) fn settle_layer_reads_after_submit(
+        &self,
+        producer: &PresentationState,
+        shown: bool,
+        panic: &mut Option<Box<dyn std::any::Any + Send>>,
+    ) {
+        for presentation in self.presentations.iter() {
+            super::input::preserve_first_input_panic(
+                panic,
+                presentation.settle_agent_layer_reads(shown && presentation.id() == producer.id()),
+                "agent layer read reply",
+            );
+        }
+    }
+
     /// The owner half of a read of the layer tree: parks it for the window's next scene and asks
     /// for a repaint, so a window with nothing dirty shows one. Answers at once what cannot wait:
     /// a root that is not a layer handle, a reference to another window, a full parking list.

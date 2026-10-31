@@ -855,9 +855,8 @@ impl UiRuntime {
         // Only a scene the screen shows (or already showed: no damage) may
         // change the system bars; a withheld one keeps its style staged.
         let mut deliver_overlay_style = false;
-        // Whether the producer's scene is on the screen: the layer reads staged for it are
-        // answered only then.
-        let mut scene_shown = false;
+        // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
+        let mut hover_panic = None;
         use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
@@ -868,6 +867,16 @@ impl UiRuntime {
             // contract); the direct path borrows it internally and drops it
             // when the render returns.
             let render_verdict = sink.submit(scene);
+            // Before anything else that can panic: the layer reads staged for this scene are
+            // answered if the window showed it, and parked again if it did not.
+            self.settle_layer_reads_after_submit(
+                producer,
+                matches!(
+                    render_verdict,
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
+                ),
+                &mut hover_panic,
+            );
             // Telemetry: sampled AFTER the submit returns, never before
             // it -- a `Presented` verdict means the backend called
             // `output.present()`, and whatever pacing block that call carries
@@ -898,7 +907,6 @@ impl UiRuntime {
             let submit_at = producer.clock().now();
             match render_verdict {
                 SubmitVerdict::Presented => {
-                    scene_shown = true;
                     self.commit_painted_frame(producer);
                     // The frame reached `present()`: frame-aligned haptics
                     // play with it (ADR-0210 §4). Only this arm plays them;
@@ -926,7 +934,6 @@ impl UiRuntime {
                     replay_committed_input = true;
                 }
                 SubmitVerdict::NoPresent => {
-                    scene_shown = true;
                     self.commit_painted_frame(producer);
                     // No frame-aligned haptics: the backend found no damage,
                     // so the screen kept the previous frame and the change a
@@ -1097,18 +1104,9 @@ impl UiRuntime {
             }
         }
 
-        // The layer reads staged for a scene are answered if it was shown and parked again if it
-        // was not (withheld, retried, failed, or never submitted). A reply that panics resumes
-        // with the rest of this tail's panics, after every read was attempted.
-        let mut hover_panic = None;
-        for presentation in self.presentations.iter() {
-            let shown = scene_shown && presentation.id() == producer.id();
-            super::input::preserve_first_input_panic(
-                &mut hover_panic,
-                presentation.settle_agent_layer_reads(shown),
-                "agent layer read reply",
-            );
-        }
+        // A scene that was never submitted (deferred first frame, no `Painted` outcome) shows
+        // nothing: whatever is still staged is parked again.
+        self.settle_layer_reads_after_submit(producer, false, &mut hover_panic);
 
         // Each window refreshes from its own acknowledged tree. A sibling's
         // failed segment cannot substitute its tree or suppress this work.

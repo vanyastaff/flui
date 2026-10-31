@@ -502,8 +502,9 @@ fn every_reply_is_attempted_and_the_first_panic_is_returned() {
     assert!(message.contains("the first receiver panics"), "{message}");
 }
 
-/// A tracing subscriber that panics on every event, scoped to the current thread.
-struct PanicsOnEvent;
+/// A tracing subscriber, scoped to the current thread, that panics on the events whose fields
+/// mention `needle`.
+struct PanicsOnEvent(&'static str);
 
 impl tracing::Subscriber for PanicsOnEvent {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
@@ -514,8 +515,16 @@ impl tracing::Subscriber for PanicsOnEvent {
     }
     fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
     fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, _: &tracing::Event<'_>) {
-        panic!("a subscriber that cannot take a trace");
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Mentions<'a>(&'a str, bool);
+        impl tracing::field::Visit for Mentions<'_> {
+            fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.1 |= format!("{value:?}").contains(self.0);
+            }
+        }
+        let mut mentions = Mentions(self.0, false);
+        event.record(&mut mentions);
+        assert!(!mentions.1, "a subscriber that cannot take this trace");
     }
     fn enter(&self, _: &tracing::span::Id) {}
     fn exit(&self, _: &tracing::span::Id) {}
@@ -548,7 +557,7 @@ fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
     let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(second_window));
     assert!(parked.try_take().is_none());
 
-    let closed = tracing::subscriber::with_default(PanicsOnEvent, || {
+    let closed = tracing::subscriber::with_default(PanicsOnEvent("nobody waits for"), || {
         catch_unwind(AssertUnwindSafe(|| {
             ui_runtime.close_presentation_entered(second)
         }))
@@ -559,4 +568,26 @@ fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
         .expect("closing answers the layer read whatever an earlier reply did")
         .expect_err("the window is gone");
     assert_eq!(error, AgentError::PresentationGone);
+}
+
+/// A panic after the sink showed a scene (here, the trace that follows the commit) must not strand
+/// the layer reads staged for it: they are answered before anything else that can panic.
+#[test]
+fn a_panic_after_the_scene_is_shown_does_not_strand_its_layer_read() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let (ui_runtime, agent) = shown();
+    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+
+    let unwound =
+        tracing::subscriber::with_default(PanicsOnEvent("tree_revision_committed"), || {
+            catch_unwind(AssertUnwindSafe(|| {
+                frame(&ui_runtime, &mut ScriptedSink::always_presents());
+            }))
+        });
+    assert!(unwound.is_err(), "the trace's panic continues");
+    parked
+        .try_take()
+        .expect("the scene was shown, so the read is answered")
+        .expect("the layers are read");
 }
