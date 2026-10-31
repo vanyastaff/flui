@@ -187,9 +187,11 @@ call any method of the document: what it changes is told in the next delivery, a
 panics leaves the next delivery to come. While it has listeners the document follows the registry,
 so a commit by another document of its name in the same runtime is told too. A frame hook that
 panics while the document queues a task leaves it retryable: nothing stays marked queued or
-watching without a task, and an interrupted fresh start is `Failed`. A listener lives as long as
-the document, so one that holds a clone of it keeps both alive for good; it holds a
-`WeakPersisted` from `downgrade()`.
+watching without a task, and an interrupted fresh start is `Failed`. The listeners belong to the
+state that opened the document: its unmount hook
+([ADR-0078, amendment 2026-10-31](ADR-0078-rules-live-in-types-and-lints.md#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens))
+drops them, so one may hold a clone of the document, and one added after that is not kept. A
+`WeakPersisted` from `downgrade()` reads the document without keeping it alive.
 
 `revision()` is the revision of the value in memory only while that value is the stored one: the
 file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
@@ -279,7 +281,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `a_commit_by_another_document_of_its_name_is_told`,
   `a_revision_is_named_only_by_the_document_that_stored_it`,
   `a_reload_whose_replaced_value_panics_in_drop_is_told`,
-  `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`.
+  `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`,
+  `unmounting_the_opening_state_drops_the_listeners`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.

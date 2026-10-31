@@ -423,6 +423,10 @@ pub struct BuildOwner {
     /// and cheap to clone into the split-borrow `ElementOwner`.
     pub(crate) keep_alive: super::KeepAliveHolds,
 
+    /// The hooks states registered to run when their elements unmount
+    /// (`LifecycleContext::on_unmount`).
+    pub(crate) unmount_hooks: super::UnmountHooks,
+
     /// The UI runtime's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
@@ -725,6 +729,7 @@ impl BuildOwner {
             inherited_dependencies: InheritedDependencies::default(),
             reactive: OwnerReactive(Some(crate::reactive::Reactive::new())),
             keep_alive: super::KeepAliveHolds::default(),
+            unmount_hooks: super::UnmountHooks::default(),
             tree_observer: OwnerTreeObserverSlot(None),
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
@@ -1276,6 +1281,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
+            unmount_hooks: self.unmount_hooks.clone(),
             frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1827,6 +1833,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
+                    unmount_hooks: self.unmount_hooks.clone(),
                     frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2050,6 +2057,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
+                    unmount_hooks: self.unmount_hooks.clone(),
                     frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2475,6 +2483,7 @@ impl BuildOwner {
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 inherited_dependencies: &mut self.inherited_dependencies,
                 keep_alive: self.keep_alive.clone(),
+                unmount_hooks: self.unmount_hooks.clone(),
                 frame_wake: super::element_owner::FrameWake::AfterPass,
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2684,6 +2693,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
+            unmount_hooks: self.unmount_hooks.clone(),
             frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
