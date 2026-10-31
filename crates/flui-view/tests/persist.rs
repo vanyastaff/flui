@@ -2,8 +2,9 @@
 //! `init_state`, loaded and written through the UI runtime's storage, with a
 //! `MemoryStorage` standing in for the disk.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
@@ -34,7 +35,7 @@ impl Document for Note {
     const MAX_BYTES: u64 = 64;
 
     fn initial() -> Self {
-        Self(String::new())
+        Self(NOTE_INITIAL.with(Cell::get).to_owned())
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -60,6 +61,10 @@ impl Document for Note {
 }
 
 thread_local! {
+    /// The text of `Note::initial`; a test that needs an initial value whose
+    /// encode panics sets it.
+    static NOTE_INITIAL: Cell<&'static str> = const { Cell::new("") };
+
     /// What a dropped `Note` runs: a destructor that reaches back into its
     /// document, set by the test that needs one.
     static ON_NOTE_DROP: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
@@ -1106,4 +1111,73 @@ fn corrupt_bytes_are_kept_until_start_over() {
     assert_eq!(notes.status(), SaveStatus::Clean);
     assert_eq!(storage.kept_aside(&Note::NAME), Vec::<Vec<u8>>::new());
     assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+}
+
+/// A fresh start writes over the file the failed load read and no other: a
+/// file another writer stored since, here one in a newer format, is kept
+/// and the write is a conflict.
+#[test]
+fn start_over_never_writes_over_a_file_replaced_since_the_load() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+    let newer = b"flui-document notes 3 1\nfrom a newer build".to_vec();
+    storage.put(&Note::NAME, newer.clone());
+
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Conflict))
+    );
+    assert_eq!(storage.contents(&Note::NAME), Some(newer));
+}
+
+/// An initial value whose encode panics fails the fresh start even when its
+/// destructor panics too: the first failure is recorded before the
+/// destructor runs, so the start is not left `Saving` with nothing to finish
+/// it.
+#[test]
+fn an_initial_value_failing_encode_and_drop_fails_the_fresh_start() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+
+    NOTE_INITIAL.with(|initial| initial.set("panic"));
+    let fired = Rc::new(Cell::new(false));
+    let once = Rc::clone(&fired);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(once.replace(true), "the destructor broke");
+        }));
+    });
+    notes.start_over();
+    let pumped = catch_unwind(AssertUnwindSafe(|| {
+        laid.pump();
+        laid.pump();
+    }));
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    NOTE_INITIAL.with(|initial| initial.set(""));
+    assert!(fired.get(), "the destructor ran");
+    drop(pumped);
+
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::Failed(PersistError::Panicked {
+                during: CodecStep::Encode,
+                ..
+            })
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
 }

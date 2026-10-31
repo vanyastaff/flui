@@ -159,9 +159,10 @@ the decoder, and the `Revision` counts the writes across runs (`u64::MAX` makes 
 `Exhausted` for good). A file without the header or with another name is `Corrupt`; a version above
 `D::VERSION` is read-only, never written; a body `decode` refuses is `Decode`, and the file is not
 touched. `start_over` keeps the bytes with `copy_aside`, then writes `initial()` as
-`IfUnchanged(version)` of the copy, so a file another writer replaced meanwhile is a `Conflict`
-rather than lost; the status is `Saving` until both steps finish, and a failed step is `Failed`
-(`retry` resumes it without a second copy). A load applies only its latest attempt.
+`IfUnchanged(version)` of the file the failed load read, so a file another writer replaced since
+that load is a `Conflict` rather than lost; the status is `Saving` until both steps finish, and a
+failed step is `Failed` (`retry` resumes it without a second copy). A load applies only its latest
+attempt.
 
 `set` refuses until a load succeeded (there is no base to write against), encodes on the owner
 thread with no borrow of the document held, and publishes the bytes to the flush registry
@@ -236,7 +237,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `older_version_decodes_or_reports_without_writing`, `oversized_file_is_refused_unread`,
   `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
   `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
-  `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`.
+  `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
+  `start_over_never_writes_over_a_file_replaced_since_the_load`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
