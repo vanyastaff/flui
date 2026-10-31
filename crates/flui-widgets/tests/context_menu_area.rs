@@ -336,9 +336,14 @@ impl Mounted {
     fn text(&self, label: &str) -> (f64, f64, Option<String>) {
         let mut pending = vec![self.laid.root()];
         while let Some(id) = pending.pop() {
-            if self.laid.render_property(id, "text").as_deref() == Some(label) {
+            if self.laid.render_node(id).get::<&str>("text") == Ok(label) {
                 let left = self.laid.absolute_offset(id).dx;
-                let direction = self.laid.render_property(id, "text_direction");
+                let direction = self
+                    .laid
+                    .render_node(id)
+                    .get::<flui_foundation::inspect::Variant<'_>>("text_direction")
+                    .ok()
+                    .map(|variant| variant.name.to_owned());
                 return (left, left + self.laid.size(id).width, direction);
             }
             pending.extend(self.laid.children(id));
@@ -698,7 +703,7 @@ pub(crate) fn a_panicking_item_leaves_no_menu_open() {
     let raised = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mounted.click(pin)));
     let payload = raised.expect_err("the command's panic reaches the caller");
     let text = flui_foundation::panic::payload_text(&*payload).map(str::to_owned);
-    flui_foundation::panic::retain_opaque_payload(payload);
+    flui_foundation::panic::discard_payload(payload);
     assert_eq!(text.as_deref(), Some("pinning failed"));
     mounted.settle();
     assert!(mounted.menu().is_none(), "no menu is left open");

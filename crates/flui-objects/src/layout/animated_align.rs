@@ -170,12 +170,17 @@ impl RenderAnimatedAlign {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedAlign {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderAnimatedAlign {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedAlign"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         let (alignment, width_factor, height_factor) = self.resolved();
-        builder.add_enum("alignment", alignment);
-        builder.add_optional("width_factor", width_factor.map(|f| format!("{f:?}")));
-        builder.add_optional("height_factor", height_factor.map(|f| format!("{f:?}")));
+        out.field("alignment", &alignment)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("width_factor", &width_factor);
+        out.field("height_factor", &height_factor);
     }
 }
 

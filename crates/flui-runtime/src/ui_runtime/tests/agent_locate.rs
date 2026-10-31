@@ -279,7 +279,13 @@ fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner
 
     #[derive(Debug, Default)]
     struct PanicsWhenHitBox;
-    impl flui_foundation::Diagnosticable for PanicsWhenHitBox {}
+    impl flui_foundation::inspect::Inspect for PanicsWhenHitBox {
+        fn kind(&self) -> &'static str {
+            "PanicsWhenHitBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for PanicsWhenHitBox {
         type Arity = Leaf;
         type ParentData = BoxParentData;

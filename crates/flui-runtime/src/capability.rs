@@ -221,6 +221,7 @@ pub(crate) struct OwnerJobs {
     admission: Admission,
     pending: PendingCompletions,
     completions: CompletionSource,
+    locals: flui_platform::capability::RuntimeLocals,
 }
 
 type Admission = Arc<Mutex<Option<Sender<OwnerJob>>>>;
@@ -250,6 +251,7 @@ impl OwnerJobs {
             rx,
             admission,
             completions: CompletionSource::new(poster, pending.clone()),
+            locals: flui_platform::capability::RuntimeLocals::new(),
             pending,
         }
     }
@@ -257,6 +259,11 @@ impl OwnerJobs {
     /// Where providers of this UI runtime make their completions.
     pub(crate) fn completions(&self) -> &CompletionSource {
         &self.completions
+    }
+
+    /// What providers keep for this UI runtime (ADR-0152 §5).
+    pub(crate) fn locals(&self) -> &flui_platform::capability::RuntimeLocals {
+        &self.locals
     }
 
     /// The jobs posted before this call, each run by `run` with the owner's
@@ -284,10 +291,12 @@ impl OwnerJobs {
     }
 
     /// The UI runtime retires: its pending completions end, then the jobs
-    /// still queued are dropped unrun, each under its own catch. Returns the
-    /// first panic for the runtime's teardown to keep with its own first
-    /// failure; after it, or while the thread unwinds, a queued job is
-    /// leaked rather than dropped.
+    /// still queued are dropped unrun, each under its own catch, then what
+    /// providers kept for the runtime (`RuntimeLocals`) ends, last, so a
+    /// completion's closure dropped above still finds its provider's state.
+    /// Returns the first panic for the runtime's teardown to keep with its
+    /// own first failure; after it, or while the thread unwinds, a queued job
+    /// is leaked rather than dropped.
     #[must_use = "the first panic of a retirement belongs to the runtime's teardown"]
     pub(crate) fn retire(&self) -> Option<Box<dyn std::any::Any + Send>> {
         // Close admission first: a post that races this retirement is either
@@ -303,7 +312,16 @@ impl OwnerJobs {
                 first = Some(payload);
             }
         }
-        first
+        let locals = self.locals.retire();
+        match (first, locals) {
+            (Some(first), later) => {
+                if let Some(later) = later {
+                    flui_foundation::panic::discard_payload(later);
+                }
+                Some(first)
+            }
+            (None, locals) => locals,
+        }
     }
 }
 
@@ -313,7 +331,7 @@ impl Drop for OwnerJobs {
         // first failure; this is the backstop for a queue dropped without it.
         if let Some(payload) = self.retire() {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }
@@ -326,6 +344,7 @@ impl Drop for OwnerJobs {
 pub(crate) struct PresentationCapabilities {
     pub(crate) registry: CapabilityRegistry,
     pub(crate) completions: CompletionSource,
+    pub(crate) locals: flui_platform::capability::RuntimeLocals,
     pub(crate) window: std::rc::Weak<dyn PlatformWindow>,
 }
 
@@ -339,7 +358,7 @@ impl CapabilitySource for PresentationCapabilities {
             WindowRef::new(window.id(), scale, window.surface_target())
         });
         let poster = self.completions.poster();
-        let cx = ProviderContext::new(poster, &self.completions, window);
+        let cx = ProviderContext::new(poster, &self.completions, &self.locals, window);
         self.registry.acquire(capability, name, &cx)
     }
 }

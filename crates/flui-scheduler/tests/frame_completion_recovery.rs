@@ -90,7 +90,7 @@ fn delivery(case: &str) {
     let preserve = case == "pipeline preserves successful envelope"
         || case == "post-frame preserves successful envelope";
     let hostile = !case.starts_with("telemetry")
-        && case != "payload competition"
+        && case != "competing wake failure"
         && case != "later successful envelope";
     let first_waker = Waker::from(Arc::new(Probe {
         calls: Arc::clone(&first_calls),
@@ -110,17 +110,11 @@ fn delivery(case: &str) {
     register(&mut first, &first_waker);
     drop(first_waker);
     let secondary_drops = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&secondary_drops);
-    let competition = case == "payload competition";
+    let competition = case == "competing wake failure";
     let tail_waker = Waker::from(Arc::new(Probe {
         calls: Arc::clone(&tail_calls),
         action: Box::new(move || {
-            if competition {
-                std::panic::panic_any((
-                    Bomb(Arc::clone(&payload_drops)),
-                    Bomb(Arc::clone(&payload_drops)),
-                ));
-            }
+            assert!(!competition, "competing wake");
         }),
         _captures: if case == "later successful envelope" {
             vec![
@@ -271,7 +265,7 @@ const CASES: &[&str] = &[
     "teardown",
     "unwinding teardown",
     "ordinary retirement",
-    "payload competition",
+    "competing wake failure",
     "later successful envelope",
     "telemetry competition",
     "telemetry during abort",

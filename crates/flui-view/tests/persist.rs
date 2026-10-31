@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use flui_foundation::notifier::Listenable;
 use flui_objects::RenderSizedBox;
 use flui_platform::StorageName;
 use flui_platform::{StorageError, UnsupportedReason};
@@ -123,6 +124,7 @@ impl View for Leaf {
 struct Opened {
     document: Persisted<Note>,
     guard: Option<CloseGuard>,
+    driver: Option<flui_view::AsyncDriver>,
 }
 
 /// Opens the document in `init_state` and hands it to the test.
@@ -150,11 +152,42 @@ impl ViewState<NoteOpener> for NoteOpenerState {
         *self.opened.borrow_mut() = Some(Opened {
             document: Persisted::open(cx),
             guard: cx.close_guard(),
+            driver: cx.async_driver(),
         });
     }
 
     fn build(&self, _view: &NoteOpener, _cx: &dyn BuildContext) -> impl IntoView {
         Leaf
+    }
+}
+
+/// Opens the document in `init_state` above a [`NoteOpener`] that opens it
+/// again: two documents of one name in one runtime.
+#[derive(Clone, StatefulView)]
+struct TwoOpeners {
+    outer: Rc<RefCell<Option<Persisted<Note>>>>,
+    inner: Rc<RefCell<Option<Opened>>>,
+}
+
+struct TwoOpenersState(TwoOpeners);
+
+impl StatefulView for TwoOpeners {
+    type State = TwoOpenersState;
+
+    fn create_state(&self) -> Self::State {
+        TwoOpenersState(self.clone())
+    }
+}
+
+impl ViewState<TwoOpeners> for TwoOpenersState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        *self.0.outer.borrow_mut() = Some(Persisted::open(cx));
+    }
+
+    fn build(&self, _view: &TwoOpeners, _cx: &dyn BuildContext) -> impl IntoView {
+        NoteOpener {
+            opened: Rc::clone(&self.0.inner),
+        }
     }
 }
 
@@ -167,6 +200,21 @@ fn mount(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>) {
 
 /// [`mount`], with the presentation's close guard the document holds.
 fn mount_guarded(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, CloseGuard) {
+    let (
+        laid,
+        Opened {
+            document, guard, ..
+        },
+    ) = mount_opened(storage);
+    (
+        laid,
+        document,
+        guard.expect("a hosted presentation has a close guard"),
+    )
+}
+
+/// [`mount`], with everything `init_state` took.
+fn mount_opened(storage: &MemoryStorage) -> (LaidOut, Opened) {
     let opened = Rc::new(RefCell::new(None));
     let laid = lay_out_with_storage(
         NoteOpener {
@@ -175,15 +223,11 @@ fn mount_guarded(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, CloseGua
         tight(10.0, 10.0),
         storage.clone(),
     );
-    let Opened { document, guard } = opened
+    let taken = opened
         .borrow_mut()
         .take()
         .expect("init_state opened the document");
-    (
-        laid,
-        document,
-        guard.expect("a hosted presentation has a close guard"),
-    )
+    (laid, taken)
 }
 
 /// Poll `future` between frames until it completes.
@@ -1253,4 +1297,606 @@ fn an_initial_value_that_panics_fails_the_fresh_start() {
     laid.pump();
     assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
     assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+}
+
+/// Count each time `notes` tells its listeners, and what the status was
+/// then.
+fn listen(notes: &Persisted<Note>) -> Rc<RefCell<Vec<SaveStatus>>> {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&heard);
+    let reader = notes.downgrade();
+    notes.add_listener(Rc::new(move || {
+        if let Some(notes) = reader.upgrade() {
+            log.borrow_mut().push(notes.status());
+        }
+    }));
+    heard
+}
+
+/// A listener holding a weak handle keeps neither itself nor the document
+/// alive: both go with the document's last clone.
+#[test]
+fn a_listener_holding_a_weak_handle_lets_the_document_go() {
+    let storage = MemoryStorage::new();
+    let (laid, notes) = mount(&storage);
+    let weak = notes.downgrade();
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = weak.clone();
+    notes.add_listener(Rc::new(move || {
+        let _held = (&alive, reader.upgrade());
+    }));
+    assert!(weak.upgrade().is_some(), "the document is alive while held");
+
+    drop((notes, laid));
+    assert!(
+        weak.upgrade().is_none(),
+        "the document goes with its last clone"
+    );
+    assert!(kept.upgrade().is_none(), "and its listener with it");
+}
+
+#[test]
+fn listeners_hear_each_change_once_and_nothing_while_it_stands() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "first"));
+    let (mut laid, notes) = mount(&storage);
+    let heard = listen(&notes);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
+    laid.pump();
+    assert_eq!(*heard.borrow(), [SaveStatus::Clean], "the load is told");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    assert!(notes.set(Note("third".into())).is_ok());
+    assert_eq!(heard.borrow().len(), 1, "never told from inside a call");
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[1..],
+        [SaveStatus::Saving],
+        "two edits in one turn are told once"
+    );
+
+    barrier.commit();
+    // The registry's change is seen in one turn and told in the next.
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[2..],
+        [SaveStatus::Clean],
+        "the commit is told"
+    );
+    assert_eq!(notes.committed().map(Revision::get), Some(3));
+
+    for _ in 0..3 {
+        assert_eq!(notes.status(), SaveStatus::Clean);
+        laid.pump();
+    }
+    assert_eq!(
+        heard.borrow().len(),
+        3,
+        "a status that stands is not told again"
+    );
+    assert!(
+        !laid.scheduler().is_frame_scheduled(),
+        "reading a status that stands wakes no frame"
+    );
+}
+
+#[test]
+fn a_listener_that_writes_and_retries_settles() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+
+    let calls = Rc::new(Cell::new(0_usize));
+    let count = Rc::clone(&calls);
+    let writer = notes.clone();
+    notes.add_listener(Rc::new(move || {
+        count.set(count.get() + 1);
+        writer.retry();
+        // Bounded only so a delivery that recursed fails here instead of
+        // overflowing the stack.
+        if writer.status() == SaveStatus::Saving && count.get() < 50 {
+            assert!(writer.set(Note("from a listener".into())).is_ok());
+        }
+    }));
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("edited".into())).is_ok());
+    for _ in 0..20 {
+        laid.pump_for(Duration::from_millis(100));
+    }
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert!(
+        calls.get() <= 4,
+        "each delivery is one real change: {} calls",
+        calls.get()
+    );
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(2, "from a listener")),
+        "the listener's edit is stored"
+    );
+}
+
+#[test]
+fn a_listener_panic_leaves_later_changes_told() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    laid.pump();
+
+    let panicked = Rc::new(Cell::new(false));
+    let once = Rc::clone(&panicked);
+    notes.add_listener(Rc::new(move || {
+        assert!(once.replace(true), "a listener panics once");
+    }));
+    let heard = listen(&notes);
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("edited".into())).is_ok());
+    let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    assert!(panicked.get(), "the panicking listener ran");
+    drop(delivery);
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Saving],
+        "the healthy listener is told"
+    );
+
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Saving, SaveStatus::Clean],
+        "a later change is still told"
+    );
+}
+
+/// A frame hook that panics while a document queues its work leaves nothing
+/// stuck: an edit's status is told with the next edit, and a fresh start is
+/// left failed, so `retry` takes it up.
+#[test]
+fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
+    let failing = |driver: &flui_view::AsyncDriver, step: &dyn Fn()| {
+        driver.set_request_frame(|| panic!("frame hook failure"));
+        let failure = catch_unwind(AssertUnwindSafe(step))
+            .expect_err("the frame hook's panic reaches the caller");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("frame hook failure")
+        );
+        driver.set_request_frame(|| {});
+    };
+
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    laid.pump();
+    let heard = listen(&notes);
+    failing(&driver, &|| {
+        let _ = notes.set(Note("edited".into()));
+    });
+    assert!(notes.set(Note("edited again".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "the edit after the panic is told: {:?}",
+        heard.borrow()
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+    failing(&driver, &|| notes.start_over());
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Cancelled)),
+        "the fresh start is not left saving with nothing running"
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "the retry starts over");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+
+    // The hook panics while the save watch tells of a finished write.
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    laid.pump();
+    let heard = listen(&notes);
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("first".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    let hook_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ran = std::sync::Arc::clone(&hook_ran);
+    driver.set_request_frame(move || {
+        ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        panic!("frame hook failure");
+    });
+    let watched = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    driver.set_request_frame(|| {});
+    drop(watched);
+    assert!(
+        hook_ran.load(std::sync::atomic::Ordering::SeqCst),
+        "the watch's announcement woke the panicking hook"
+    );
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "the next write is watched again: {:?}",
+        heard.borrow()
+    );
+
+    // A delivery queued by a load runs while the hook still panics: its
+    // refresh starts the watch an edit's panic left unstarted, and panics.
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let barrier = storage.hold_commits();
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let edit = catch_unwind(AssertUnwindSafe(|| notes.set(Note("unwatched".into()))));
+    assert!(edit.is_err(), "the watch's spawn panics");
+    let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    driver.set_request_frame(|| {});
+    drop(delivery);
+    let heard = listen(&notes);
+    assert!(notes.set(Note("watched".into())).is_ok());
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "a delivery its refresh's panic ended leaves the next one to come: {:?}",
+        heard.borrow()
+    );
+}
+
+/// A document's listeners hear a commit by another document of its name in
+/// the same runtime: both name the same stored value.
+#[test]
+fn a_commit_by_another_document_of_its_name_is_told() {
+    let storage = MemoryStorage::new();
+    let (mut laid, outer, inner) = mount_two(&storage);
+    let heard = listen(&outer);
+
+    assert!(inner.set(Note("from inner".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Clean],
+        "the other document's commit is told"
+    );
+    assert_eq!(outer.committed(), inner.committed());
+    assert_eq!(
+        outer.revision(),
+        None,
+        "the outer document's value is no longer the one on disk"
+    );
+}
+
+/// With two documents of one name, a revision is named only by the document
+/// whose bytes the storage kept.
+#[test]
+fn a_revision_is_named_only_by_the_document_that_stored_it() {
+    let storage = MemoryStorage::new();
+    let (mut laid, first, second) = mount_two(&storage);
+
+    let barrier = storage.hold_commits();
+    assert!(first.set(Note("first, held".into())).is_ok());
+    laid.pump();
+    let replaced = second.set(Note("second, replaced".into()));
+    assert!(replaced.is_ok());
+    let kept = first.set(Note("first again".into()));
+    barrier.commit();
+    for _ in 0..4 {
+        laid.pump();
+    }
+    assert_eq!(second.status(), SaveStatus::Clean, "the value is stored");
+    assert_eq!(
+        storage
+            .contents(&Note::NAME)
+            .map(|bytes| bytes.ends_with(b"first again")),
+        Some(true),
+        "the first document wrote last"
+    );
+    assert_eq!(
+        second.revision(),
+        None,
+        "the second document's bytes were never stored"
+    );
+    assert_eq!(first.revision(), kept.ok(), "the first document's were");
+
+    // A load whose read was issued before another document's write settles
+    // after it: the bytes it read may no longer be stored.
+    let reload = second.load();
+    assert!(first.set(Note("written after the read".into())).is_ok());
+    laid.pump();
+    assert!(drive(&mut laid, reload).is_ok());
+    assert_eq!(
+        second.revision(),
+        None,
+        "a value read before another document's write does not name a revision"
+    );
+}
+
+/// A set whose replaced value panics in its drop while the frame hook its
+/// announcement wakes panics too is contained: the drop's panic reaches the
+/// caller, and the edit is stored and told.
+#[test]
+fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let heard = listen(&notes);
+    laid.pump();
+    laid.pump();
+    heard.borrow_mut().clear();
+
+    let armed = Rc::new(Cell::new(true));
+    let fire = Rc::clone(&armed);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(!fire.replace(false), "the replaced value's drop panics");
+        }));
+    });
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let edit = catch_unwind(AssertUnwindSafe(|| notes.set(Note("edited".into()))));
+    driver.set_request_frame(|| {});
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    let failure = edit.expect_err("a panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("the replaced value's drop panics"),
+        "the drop's panic is raised, the hook's kept"
+    );
+
+    assert!(notes.set(Note("edited again".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(heard.borrow().last(), Some(&SaveStatus::Clean));
+}
+
+/// Mount [`TwoOpeners`] over `storage` and load both documents.
+fn mount_two(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, Persisted<Note>) {
+    let (outer, inner) = (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None)));
+    let mut laid = lay_out_with_storage(
+        TwoOpeners {
+            outer: Rc::clone(&outer),
+            inner: Rc::clone(&inner),
+        },
+        tight(10.0, 10.0),
+        storage.clone(),
+    );
+    let outer = outer
+        .borrow_mut()
+        .take()
+        .expect("the outer document opened");
+    let inner = inner
+        .borrow_mut()
+        .take()
+        .expect("the inner document opened")
+        .document;
+    assert!(drive(&mut laid, outer.load()).is_ok());
+    assert!(drive(&mut laid, inner.load()).is_ok());
+    laid.pump();
+    (laid, outer, inner)
+}
+
+#[test]
+fn revision_names_only_a_value_on_disk() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    assert_eq!(notes.revision(), None, "nothing is loaded yet");
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    assert_eq!(notes.revision(), Some(Revision::NONE), "nothing was stored");
+
+    let barrier = storage.hold_commits();
+    let lost = notes.set(Note("lost".into()));
+    laid.pump();
+    assert_eq!(notes.revision(), None, "a value not yet stored has none");
+    // The process dies before its write replaced the file.
+    drop((laid, notes));
+    drop(barrier);
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the file is as it was: {reloaded:?}");
+    assert_eq!(notes.revision(), Some(Revision::NONE));
+    assert_ne!(
+        notes.revision(),
+        lost.ok(),
+        "the lost edit's revision never matches what is read back"
+    );
+
+    let kept = notes.set(Note("kept".into())).ok();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(notes.revision(), kept, "a confirmed value has its revision");
+    assert_eq!(notes.revision(), notes.committed());
+    drop((laid, notes));
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the kept edit loads: {reloaded:?}");
+    assert_eq!(notes.revision(), kept, "and a load reads it back");
+
+    // A file another process wrote after this runtime's own write is still
+    // named once it is reloaded.
+    assert!(notes.set(Note("local".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    storage.put(&Note::NAME, stored(9, "outside"));
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the outside file loads: {reloaded:?}");
+    assert_eq!(
+        notes.revision().map(Revision::get),
+        Some(9),
+        "a value read from disk names its revision"
+    );
+}
+
+/// A reload whose replaced value panics in its drop still tells the
+/// listeners what the load left.
+#[test]
+fn a_reload_whose_replaced_value_panics_in_drop_is_told() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "one"));
+    let (mut laid, notes) = mount(&storage);
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    laid.pump();
+    let heard = listen(&notes);
+    laid.pump();
+    laid.pump();
+    heard.borrow_mut().clear();
+
+    storage.put(&Note::NAME, b"no header".to_vec());
+    let armed = Rc::new(Cell::new(true));
+    let fire = Rc::clone(&armed);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(!fire.replace(false), "the replaced value's drop panics");
+        }));
+    });
+    let reload = catch_unwind(AssertUnwindSafe(|| drive(&mut laid, notes.load())));
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    assert!(reload.is_err(), "the drop's panic reaches the caller");
+    assert!(!armed.get(), "the replaced value was dropped");
+
+    laid.pump();
+    laid.pump();
+    assert!(
+        matches!(
+            heard.borrow().last(),
+            Some(SaveStatus::NotLoaded(Some(PersistError::Corrupt { .. })))
+        ),
+        "the failed reload is told: {:?}",
+        heard.borrow()
+    );
+}
+
+/// A revision serializes as its number and reads back as the same revision,
+/// so a document can record which revision of another it was taken against.
+#[cfg(feature = "serde")]
+#[test]
+fn a_revision_round_trips_as_its_number() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let revision = notes
+        .set(Note("first".into()))
+        .expect("a loaded document accepts a value");
+    let json = serde_json::to_string(&revision).expect("a revision serializes");
+    assert_eq!(json, revision.get().to_string());
+    let read: Revision = serde_json::from_str(&json).expect("and deserializes");
+    assert_eq!(read, revision);
+    assert_ne!(read, Revision::NONE);
+}
+
+/// The listeners belong to the state that opened the document: its unmount
+/// drops them, so a listener holding a clone of the document lets both go.
+#[test]
+fn unmounting_the_opening_state_drops_the_listeners() {
+    let storage = MemoryStorage::new();
+    let (laid, notes) = mount(&storage);
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = notes.clone();
+    notes.add_listener(Rc::new(move || {
+        let _held = (&alive, reader.status());
+    }));
+    let weak = notes.downgrade();
+
+    drop(laid);
+    assert!(kept.upgrade().is_none(), "the listener goes at unmount");
+    let later = Rc::new(());
+    let added = Rc::downgrade(&later);
+    notes.add_listener(Rc::new(move || {
+        let _held = Rc::clone(&later);
+    }));
+    assert!(
+        added.upgrade().is_none(),
+        "a listener added after it is not kept"
+    );
+    drop(notes);
+    assert!(weak.upgrade().is_none(), "and nothing keeps the document");
+}
+
+/// A state that moves and comes back within one delivery is still told: a
+/// reader may have seen it in between. A retried write that fails the same
+/// way goes from failed to saving and back before the delivery runs.
+#[test]
+fn listeners_hear_a_change_that_came_back_before_the_delivery() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Full);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    let failed = SaveStatus::Failed(PersistError::Storage(StorageError::Full));
+    assert_eq!(notes.status(), failed);
+
+    let heard = listen(&notes);
+    storage.fail_next(StorageError::Full);
+    notes.retry();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Saving,
+        "a reader sees it saving"
+    );
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), failed, "and the write fails again");
+    assert!(
+        heard.borrow().last() == Some(&failed),
+        "the listeners are told where it stands: {:?}",
+        heard.borrow()
+    );
 }

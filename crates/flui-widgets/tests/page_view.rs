@@ -594,6 +594,9 @@ fn the_page_label_comes_from_the_widgets_localizations() {
         fn autoplay_pause_label(&self) -> &'static str {
             DefaultWidgetsLocalizations.autoplay_pause_label()
         }
+        fn reorder_item_moved(&self, item: Option<&str>, position: usize, count: usize) -> String {
+            DefaultWidgetsLocalizations.reorder_item_moved(item, position, count)
+        }
         fn autoplay_resume_label(&self) -> &'static str {
             DefaultWidgetsLocalizations.autoplay_resume_label()
         }

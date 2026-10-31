@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use flui_foundation::Variable;
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
     constraints::{SliverGeometry, child_paint_offset},
@@ -260,18 +260,19 @@ impl Clone for RenderSliverList {
 }
 
 // ============================================================================
-// Diagnosticable + capability impls
+// Inspect + capability impls
 // ============================================================================
 
-impl Diagnosticable for RenderSliverList {
-    fn debug_fill_properties(&self, props: &mut DiagnosticsBuilder) {
-        props.add_int("item_count", self.item_count as i64, None);
-        props.add_int(
-            "attached_child_count",
-            self.attached_child_count as i64,
-            None,
-        );
-        props.add_double("pending_correction", self.pending_correction, Some("px"));
+impl Inspect for RenderSliverList {
+    fn kind(&self) -> &'static str {
+        "RenderSliverList"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("item_count", &self.item_count);
+        out.field("attached_child_count", &self.attached_child_count);
+        out.field("pending_correction", &self.pending_correction)
+            .unit(Unit::LogicalPx);
     }
 }
 

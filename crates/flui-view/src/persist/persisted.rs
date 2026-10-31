@@ -3,13 +3,15 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::ListenerId;
+use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
+use flui_foundation::panic::payload_text;
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,
@@ -24,7 +26,7 @@ use crate::{
     AppLifecycleState, AsyncDriver, CloseGuard, CloseHold, LifecycleSubscription, TaskToken,
     TimerHandle,
 };
-use crate::{LifecycleContext, LifecycleContextExt};
+use crate::{LifecycleContext, LifecycleContextExt, UnmountHook};
 
 /// The first word of a stored document's header line.
 const HEADER_MAGIC: &str = "flui-document";
@@ -58,6 +60,18 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// the platform cannot wait (the web, Android, iOS), what changed after the
 /// last confirmed write is lost if the process is killed before the
 /// application is hidden.
+///
+/// It is [`Listenable`]: its listeners are told when [`status`](Self::status)
+/// or [`committed`](Self::committed) changes, so a widget can rebuild with
+/// them. They are told on a later turn of the UI runtime's tasks, never from
+/// inside a call on the document, and once for all the changes since the
+/// last time they were told, also when the state is back on what they were
+/// told by then: a reader may have seen it in between. A call that changes
+/// nothing tells nobody. A listener may call any method of the document. The
+/// listeners belong to the state that opened the document: they are dropped
+/// when it unmounts, so one may hold a clone of the document, and a listener
+/// added after that is not kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
+/// document without keeping it alive.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
@@ -80,6 +94,10 @@ struct OpenDocument<D> {
     /// The presentation's close guard, which a write in flight or a failed
     /// one holds.
     guard: Option<CloseGuard>,
+    /// The opening state's unmount, which drops the listeners.
+    unmount: RefCell<Option<UnmountHook>>,
+    /// Tells the document's listeners of changes.
+    announcer: Announcer,
     /// Borrowed only between codec calls, storage requests and wakes.
     state: RefCell<DocumentState<D>>,
 }
@@ -92,6 +110,10 @@ struct DocumentState<D> {
     generation: u64,
     /// The value the last applied load produced, and every value set since.
     loaded: Option<Loaded<D>>,
+    /// The registry's last confirmed write when the last applied load
+    /// issued its read: a later one means another document of this name
+    /// wrote.
+    committed_at_load: Option<(Revision, StoredVersion)>,
     /// The latest bytes handed to the registry.
     published: Option<Published>,
     /// The first failure since the last write that succeeded; later ones
@@ -99,7 +121,8 @@ struct DocumentState<D> {
     failure: Option<PersistError>,
     /// The close hold the status calls for.
     hold: Option<(HoldKind, CloseHold)>,
-    /// The watch over the registry while a write is in flight, if one runs.
+    /// The watch over the registry while a write is in flight or the
+    /// document has listeners, if one runs.
     watch: Option<TaskToken>,
     /// Whether the watch is still running.
     watching: bool,
@@ -157,11 +180,79 @@ enum HoldKind {
     Decision,
 }
 
+/// What a document's listeners are told about: its status, the latest
+/// revision the storage confirmed and the revision of the value in memory.
+type Reported = (SaveStatus, Option<Revision>, Option<Revision>);
+
+/// Tells a document's listeners of changes, one delivery at a time on the
+/// UI runtime's tasks.
+struct Announcer {
+    notifier: ChangeNotifier,
+    /// What the listeners were last told, or what stood at open.
+    told: RefCell<Reported>,
+    /// Whether a delivery is queued and has not started yet.
+    queued: Cell<bool>,
+    /// Whether the state moved off what the listeners were told since the
+    /// last delivery, even if it is back there now: a reader may have seen
+    /// the state in between, so the delivery tells them.
+    moved: Cell<bool>,
+    /// The latest delivery's task.
+    delivery: RefCell<Option<TaskToken>>,
+    /// Set when the state that opened the document unmounts: nobody is
+    /// told again, and a listener added later is not kept.
+    closed: Cell<bool>,
+}
+
+impl Announcer {
+    /// The opening state unmounted: drop the queued delivery, then the
+    /// listeners, whose captures may hold clones of the document.
+    fn close(&self) {
+        self.closed.set(true);
+        let delivery = self.delivery.borrow_mut().take();
+        drop(delivery);
+        Listenable::remove_all_listeners(&self.notifier);
+    }
+}
+
 impl<D: Document> Clone for Persisted<D> {
     fn clone(&self) -> Self {
         Self {
             document: Rc::clone(&self.document),
         }
+    }
+}
+
+/// A [`Persisted`] that does not keep its document alive, for a listener of
+/// the document to hold: [`upgrade`](Self::upgrade) gives the document while
+/// another clone still holds it.
+pub struct WeakPersisted<D: Document> {
+    document: Weak<OpenDocument<D>>,
+}
+
+impl<D: Document> WeakPersisted<D> {
+    /// The document, unless every [`Persisted`] of it is gone.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Persisted<D>> {
+        self.document
+            .upgrade()
+            .map(|document| Persisted { document })
+    }
+}
+
+impl<D: Document> Clone for WeakPersisted<D> {
+    fn clone(&self) -> Self {
+        Self {
+            document: Weak::clone(&self.document),
+        }
+    }
+}
+
+impl<D: Document> fmt::Debug for WeakPersisted<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WeakPersisted")
+            .field("name", &D::NAME.as_str())
+            .field("alive", &(self.document.strong_count() > 0))
+            .finish()
     }
 }
 
@@ -195,6 +286,10 @@ impl<D: Document> Persisted<D> {
                     (registry, publisher)
                 })
         });
+        let committed = registry
+            .as_ref()
+            .and_then(|(_, publisher)| publisher.committed())
+            .map(|(revision, _)| revision);
         let hurry = Rc::new(Hurry::default());
         let lifecycle = cx.lifecycle_handle().and_then(|handle| {
             let hurry = Rc::downgrade(&hurry);
@@ -209,32 +304,50 @@ impl<D: Document> Persisted<D> {
                 .ok()
                 .map(|(_, subscription)| subscription)
         });
-        Self {
-            document: Rc::new(OpenDocument {
-                storage,
-                registry,
-                driver: cx.async_driver(),
-                timer: cx.timer(),
-                hurry,
-                _lifecycle: lifecycle,
-                guard: cx.close_guard(),
-                state: RefCell::new(DocumentState {
-                    status,
-                    generation: 0,
-                    loaded: None,
-                    published: None,
-                    failure: None,
-                    hold: None,
-                    watch: None,
-                    watching: false,
-                    busy_retries: 0,
-                    busy_deadline: None,
-                    unreadable: None,
-                    restart: None,
-                    copying: None,
-                }),
+        let document = Rc::new(OpenDocument {
+            storage,
+            registry,
+            driver: cx.async_driver(),
+            timer: cx.timer(),
+            hurry,
+            _lifecycle: lifecycle,
+            guard: cx.close_guard(),
+            unmount: RefCell::new(None),
+            announcer: Announcer {
+                notifier: ChangeNotifier::new(),
+                told: RefCell::new((status.clone(), committed, None)),
+                queued: Cell::new(false),
+                moved: Cell::new(false),
+                delivery: RefCell::new(None),
+                closed: Cell::new(false),
+            },
+            state: RefCell::new(DocumentState {
+                status,
+                generation: 0,
+                loaded: None,
+                published: None,
+                committed_at_load: None,
+                failure: None,
+                hold: None,
+                watch: None,
+                watching: false,
+                busy_retries: 0,
+                busy_deadline: None,
+                unreadable: None,
+                restart: None,
+                copying: None,
             }),
-        }
+        });
+        // The listeners belong to the state that opened the document: they go
+        // when it unmounts, whichever clones of the document live on.
+        let closing = Rc::downgrade(&document);
+        let hook = cx.on_unmount(Box::new(move || {
+            if let Some(document) = closing.upgrade() {
+                document.announcer.close();
+            }
+        }));
+        *document.unmount.borrow_mut() = Some(hook);
+        Self { document }
     }
 
     /// Read the stored document: [`Document::initial`] when nothing is
@@ -258,7 +371,11 @@ impl<D: Document> Persisted<D> {
         document.refresh();
         let start = document.start_load();
         async move {
-            let (generation, read) = start?;
+            let LoadStart {
+                generation,
+                baseline,
+                read,
+            } = start?;
             let (outcome, read) = match read.await {
                 Ok(stored) => {
                     let version = stored.version;
@@ -266,7 +383,7 @@ impl<D: Document> Persisted<D> {
                 }
                 Err(error) => (Err(PersistError::Storage(error)), None),
             };
-            document.settle(generation, outcome, read)
+            document.settle(generation, baseline, outcome, read)
         }
     }
 
@@ -301,7 +418,7 @@ impl<D: Document> Persisted<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 let error = PersistError::Panicked {
                     during: CodecStep::Encode,
                     message,
@@ -333,19 +450,37 @@ impl<D: Document> Persisted<D> {
             replaced
         };
         publisher.publish(bytes, mode, revision);
-        document.refresh();
-        // The replaced value's drop is application code: it runs with no
-        // borrow held and after this edit is published, so an edit it makes
-        // is published after this one and wins.
-        drop(replaced);
+        // The replaced value is dropped after this edit is published, so an
+        // edit its drop makes is published after this one and wins.
+        then_retire(|| document.refresh(), replaced);
         Ok(revision)
+    }
+
+    /// A handle that does not keep this document alive, for its listeners
+    /// to hold.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakPersisted<D> {
+        WeakPersisted {
+            document: Rc::downgrade(&self.document),
+        }
     }
 
     /// The latest revision the storage confirmed, if any.
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
-        let (_, publisher) = self.document.registry.as_ref()?;
-        publisher.committed().map(|(revision, _)| revision)
+        self.document.committed()
+    }
+
+    /// The revision of the value in memory while it is the stored one: the
+    /// stored file's after a load ([`Revision::NONE`] when nothing was
+    /// stored), a set value's once the storage confirms it. `None` before a
+    /// load succeeds and while a value is not yet stored, so a revision read
+    /// here always names bytes on disk: an edit lost before its write
+    /// commits never matches what a later load reads back.
+    #[must_use]
+    pub fn revision(&self) -> Option<Revision> {
+        self.document.refresh();
+        self.document.revision()
     }
 
     /// Where the document stands against its storage.
@@ -439,8 +574,41 @@ impl<D: Document> Persisted<D> {
     }
 }
 
-/// A load in flight: its generation and the storage read.
-type LoadStart = (u64, StorageFuture<Stored>);
+impl<D: Document> Listenable for Persisted<D> {
+    /// The document follows the registry while it has listeners, so a
+    /// commit by another document of this name is told too.
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        let announcer = &self.document.announcer;
+        let id = announcer.notifier.add_observer(observer);
+        if announcer.closed.get() {
+            // The opening state is gone: the listener would never be told,
+            // and is not kept.
+            announcer.notifier.remove_listener(id);
+            return id;
+        }
+        self.document.refresh();
+        id
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.document.announcer.notifier.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.document.announcer.notifier.remove_all_listeners();
+    }
+}
+
+/// A load in flight.
+struct LoadStart {
+    /// The generation that makes it the latest load.
+    generation: u64,
+    /// The registry's last confirmed write when the read was issued: a later
+    /// one means the bytes read may no longer be stored.
+    baseline: Option<(Revision, StoredVersion)>,
+    /// The storage read.
+    read: StorageFuture<Stored>,
+}
 
 impl<D: Document> OpenDocument<D> {
     /// Begin a load: refuse it over unsaved edits or without storage,
@@ -457,14 +625,22 @@ impl<D: Document> OpenDocument<D> {
         state.generation = state.generation.wrapping_add(1);
         let generation = state.generation;
         drop(state);
-        Ok((generation, storage.read(&D::NAME, D::MAX_BYTES)))
+        // Taken before the read is issued, so a write confirmed after it is
+        // never taken for one the bytes read include.
+        let baseline = self.committed_write();
+        Ok(LoadStart {
+            generation,
+            baseline,
+            read: storage.read(&D::NAME, D::MAX_BYTES),
+        })
     }
 
     /// Apply a finished load if it is still the latest, and hand its
     /// outcome to the caller either way.
     fn settle(
-        &self,
+        self: &Rc<Self>,
         generation: u64,
+        baseline: Option<(Revision, StoredVersion)>,
         outcome: Result<Loaded<D>, PersistError>,
         read: Option<StoredVersion>,
     ) -> Result<Rc<D>, PersistError> {
@@ -481,6 +657,7 @@ impl<D: Document> OpenDocument<D> {
                 let value = Rc::clone(&loaded.value);
                 let replaced = if latest {
                     state.status = SaveStatus::Clean;
+                    state.committed_at_load = baseline;
                     state.loaded.replace(loaded)
                 } else {
                     Some(loaded)
@@ -506,8 +683,9 @@ impl<D: Document> OpenDocument<D> {
             }
         };
         drop(state);
-        // A replaced value's drop is application code: no borrow is held.
-        drop(replaced);
+        // Announced before the replaced value's drop: a drop that panics
+        // leaves the settled load told.
+        then_retire(|| self.announce(), replaced);
         result
     }
 
@@ -563,8 +741,29 @@ impl<D: Document> OpenDocument<D> {
                     return;
                 };
                 let copy = storage.copy_aside(&D::NAME);
-                let token =
-                    driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)));
+                // Spawning wakes the frame hook, which may panic; the copy is
+                // then cancelled, and the fresh start is left failed, so
+                // `retry` copies again. The hook's panic is raised, or kept
+                // while a panic already unwinds.
+                let spawned = catch_unwind(AssertUnwindSafe(|| {
+                    driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)))
+                }));
+                let token = match spawned {
+                    Ok(token) => token,
+                    Err(payload) => {
+                        let failed = catch_unwind(AssertUnwindSafe(|| {
+                            self.fail(PersistError::Storage(StorageError::Cancelled));
+                        }));
+                        if let Err(again) = failed {
+                            flui_foundation::panic::discard_payload(again);
+                        }
+                        if std::thread::panicking() {
+                            flui_foundation::panic::discard_payload(payload);
+                            return;
+                        }
+                        resume_unwind(payload);
+                    }
+                };
                 let stale = self.state.borrow_mut().copying.replace(token);
                 drop(stale);
                 self.refresh();
@@ -594,7 +793,7 @@ impl<D: Document> OpenDocument<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // The failure is recorded before the value's drop, which is
                 // application code and may panic in turn.
                 self.fail(PersistError::Panicked {
@@ -628,10 +827,8 @@ impl<D: Document> OpenDocument<D> {
             })
         };
         publisher.publish(bytes, mode, revision);
-        self.refresh();
-        // A replaced value's drop is application code: it runs with no
-        // borrow held and after the initial value is published.
-        drop(replaced);
+        // A replaced value is dropped after the initial value is published.
+        then_retire(|| self.refresh(), replaced);
     }
 
     /// End a busy store's retries: the next refusal starts from the first
@@ -755,7 +952,10 @@ impl<D: Document> OpenDocument<D> {
                 std::mem::replace(&mut state.hold, taken)
             };
             let saving = state.status == SaveStatus::Saving;
-            let spawn = saving && !state.watching && self.driver.is_some();
+            // Listeners follow the registry too: another document of this
+            // name may commit, which changes `committed()` here.
+            let watched = saving || self.announcer.notifier.has_listeners();
+            let spawn = watched && !state.watching && self.driver.is_some();
             let stale_watch = if spawn {
                 state.watching = true;
                 state.watch.take()
@@ -768,16 +968,168 @@ impl<D: Document> OpenDocument<D> {
         drop(released);
         drop(stale_watch);
         if spawn && let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) {
-            let token = driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())));
-            self.state.borrow_mut().watch = Some(token);
+            // Spawning wakes the frame hook, which may panic; the task is then
+            // cancelled, and nothing is left watching, so the next refresh
+            // spawns it again. While a panic already unwinds, the hook's is
+            // kept, not raised.
+            let spawned = catch_unwind(AssertUnwindSafe(|| {
+                driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
+            }));
+            match spawned {
+                Ok(token) => self.state.borrow_mut().watch = Some(token),
+                Err(payload) => {
+                    self.state.borrow_mut().watching = false;
+                    if std::thread::panicking() {
+                        flui_foundation::panic::discard_payload(payload);
+                        return;
+                    }
+                    resume_unwind(payload);
+                }
+            }
         }
+        self.announce();
+    }
+
+    /// The registry's last confirmed write of this value, by any document.
+    fn committed_write(&self) -> Option<(Revision, StoredVersion)> {
+        let (_, publisher) = self.registry.as_ref()?;
+        publisher.committed()
+    }
+
+    /// The latest revision the storage confirmed, if any.
+    fn committed(&self) -> Option<Revision> {
+        let (_, publisher) = self.registry.as_ref()?;
+        publisher.committed().map(|(revision, _)| revision)
+    }
+
+    /// The revision of the value in memory, if it is the stored one.
+    fn revision(&self) -> Option<Revision> {
+        let state = self.state.borrow();
+        let (SaveStatus::Clean, Some(loaded)) = (&state.status, &state.loaded) else {
+            return None;
+        };
+        let Some((_, publisher)) = &self.registry else {
+            return Some(loaded.revision);
+        };
+        // `Clean` is the value's, shared with every document of its name in
+        // the runtime: the bytes on disk are this document's only when it
+        // wrote last, or, when it wrote nothing since its load, while no
+        // document of its name wrote after that load.
+        let on_disk = if state.published.is_some() {
+            publisher.committed_here() == Some(loaded.revision)
+        } else {
+            publisher.committed() == state.committed_at_load
+        };
+        on_disk.then_some(loaded.revision)
+    }
+
+    /// What the listeners are told about, as it stands.
+    fn reported(&self) -> Reported {
+        let status = self.state.borrow().status.clone();
+        (status, self.committed(), self.revision())
+    }
+
+    /// Queue a delivery to the listeners if what they were told no longer
+    /// stands, noting the move for a delivery already queued. Runs no
+    /// listener: they run in the delivery, on a later turn of the runtime's
+    /// tasks.
+    fn announce(self: &Rc<Self>) {
+        let announcer = &self.announcer;
+        let Some(driver) = &self.driver else {
+            return;
+        };
+        if announcer.closed.get() {
+            return;
+        }
+        let now = self.reported();
+        if *announcer.told.borrow() == now {
+            return;
+        }
+        // Kept also while a delivery is queued: the state may be back on
+        // what was told by the time it runs.
+        announcer.moved.set(true);
+        if announcer.queued.get() {
+            return;
+        }
+        let document = Rc::downgrade(self);
+        // Spawning wakes the frame hook, which may panic; the task is then
+        // cancelled, and nothing stays queued, so the next announcement tries
+        // again. While a panic already unwinds, the hook's is kept, not raised.
+        let spawned = catch_unwind(AssertUnwindSafe(|| {
+            driver.spawn_local(Box::pin(async move { deliver(&document) }))
+        }));
+        let token = match spawned {
+            Ok(token) => token,
+            Err(payload) => {
+                if std::thread::panicking() {
+                    flui_foundation::panic::discard_payload(payload);
+                    return;
+                }
+                resume_unwind(payload);
+            }
+        };
+        announcer.queued.set(true);
+        // The task it replaces has run, or is the delivery running now,
+        // whose cancellation is honoured once its poll returns.
+        let finished = announcer.delivery.borrow_mut().replace(token);
+        drop(finished);
     }
 }
 
-/// Follow the registry while `document` has a write in flight: each change
-/// the registry settles brings the status and the close hold in line, and a
-/// busy store is tried again after its back-off.
+/// Run `step`, then drop `replaced`, a value the step's edit replaced, whose
+/// drop is application code: it runs with no borrow held and after the step,
+/// even when the step panics, so a panic in either never drops the other
+/// while unwinding. The drop's panic is raised over the step's, which is
+/// kept.
+fn then_retire<T>(step: impl FnOnce(), replaced: T) {
+    let stepped = catch_unwind(AssertUnwindSafe(step));
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
+        if let Err(first) = stepped {
+            flui_foundation::panic::discard_payload(first);
+        }
+        resume_unwind(payload);
+    }
+    if let Err(payload) = stepped {
+        resume_unwind(payload);
+    }
+}
+
+/// Tell `document`'s listeners what changed since they were last told, if
+/// anything still differs.
+fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
+    let Some(open) = document.upgrade() else {
+        return;
+    };
+    // Brought in line with the registry while still queued, so the refresh
+    // queues nothing more. A refresh that panics (a frame hook it wakes)
+    // ends this delivery, and the next announcement queues another.
+    let announcer = &open.announcer;
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| open.refresh())) {
+        announcer.queued.set(false);
+        resume_unwind(payload);
+    }
+    announcer.queued.set(false);
+    let now = open.reported();
+    let changed = {
+        let mut told = announcer.told.borrow_mut();
+        let changed = announcer.moved.replace(false) || *told != now;
+        *told = now;
+        changed
+    };
+    // Recorded before the listeners run: a change they make queues the
+    // next delivery, and a panic in one leaves the next delivery to come.
+    if changed {
+        announcer.notifier.notify_listeners();
+    }
+}
+
+/// Follow the registry while `document` has a write in flight or listeners:
+/// each change the registry settles brings the status, the close hold and the
+/// listeners in line, and a busy store is tried again after its back-off.
 async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegistry) {
+    // However the watch ends, a panic in user code it runs (a listener's
+    // frame hook) included, the next refresh may start another.
+    let _watching = Watching(document.clone());
     loop {
         // Taken before the state is read, so a change in between resolves it.
         let changed = registry.changed();
@@ -785,14 +1137,18 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
             return;
         };
         open.refresh();
-        let deadline = {
-            let mut state = open.state.borrow_mut();
-            if state.status != SaveStatus::Saving {
-                state.watching = false;
+        let (saving, deadline) = {
+            let state = open.state.borrow();
+            (state.status == SaveStatus::Saving, state.busy_deadline)
+        };
+        if !saving {
+            if !open.announcer.notifier.has_listeners() {
                 return;
             }
-            state.busy_deadline
-        };
+            drop(open);
+            changed.await;
+            continue;
+        }
         let Some(deadline) = deadline else {
             drop(open);
             changed.await;
@@ -814,6 +1170,19 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
         };
         if woke == Woke::Due {
             open.retry_busy(deadline);
+        }
+    }
+}
+
+/// Marks a document's watch ended when the watch's future is dropped.
+struct Watching<D: Document>(Weak<OpenDocument<D>>);
+
+impl<D: Document> Drop for Watching<D> {
+    fn drop(&mut self) {
+        if let Some(open) = self.0.upgrade()
+            && let Ok(mut state) = open.state.try_borrow_mut()
+        {
+            state.watching = false;
         }
     }
 }
@@ -956,7 +1325,7 @@ fn contained_initial<D: Document>() -> Result<D, PersistError> {
         let message = payload_text(&*payload)
             .unwrap_or("a panic without a message")
             .to_owned();
-        retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         PersistError::Panicked {
             during: CodecStep::Initial,
             message,
@@ -972,7 +1341,7 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
         return Ok(Loaded {
             value: Rc::new(contained_initial::<D>()?),
             base: stored.version,
-            revision: Revision::new(0),
+            revision: Revision::NONE,
         });
     };
     let header = parse_header(&bytes, D::NAME.as_str())?;
@@ -991,7 +1360,7 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
             let message = payload_text(&*payload)
                 .unwrap_or("a panic without a message")
                 .to_owned();
-            retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             return Err(PersistError::Panicked {
                 during: CodecStep::Decode,
                 message,

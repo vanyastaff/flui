@@ -185,18 +185,26 @@ pub use flui_cupertino as cupertino;
 #[cfg(feature = "dev-agent")]
 pub use flui_devtools as devtools;
 pub use flui_foundation as foundation;
-/// Structured diagnostic properties for application-defined types.
-pub use flui_foundation::Diagnosticable;
 pub use flui_foundation::geometry;
+/// The typed self-description of a node, and its derive, for application-defined types.
+pub use flui_foundation::inspect::Inspect;
 /// Development hot-reload support. Requires the `hot-reload` feature.
 #[cfg(feature = "hot-reload")]
 pub use flui_hot_reload as hot_reload;
-/// Derive structured diagnostic properties without a direct implementation-crate dependency.
-pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
+/// OS services from capability crates (ADR-0154 §8), each behind the feature
+/// of its name.
+///
+/// `system` (`flui-system`): the providers of the launcher, whose handle is
+/// [`platform::launch::Launcher`], and the file dialogs. An application
+/// registers `services::system::SystemPlugin`.
+#[cfg(feature = "system")]
+pub mod services {
+    pub use flui_system as system;
+}
 /// What one operating system's windows offer beyond the window contract
 /// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
 /// (ADR-0089 §5).

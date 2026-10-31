@@ -38,13 +38,20 @@ struct Channel {
 }
 
 impl Channel {
-    /// The value the node shows once the pending messages are delivered: one
-    /// line per message, marked when it repeats what the node shows.
-    fn next_value(&self) -> Option<String> {
-        if self.pending.is_empty() {
+    /// The value the node shows once the pending messages, and `extra` after
+    /// them, are delivered: one line per message, marked when it repeats what
+    /// the node shows.
+    fn next_value(&self, extra: Option<&str>) -> Option<String> {
+        if self.pending.is_empty() && extra.is_none() {
             return None;
         }
-        let joined = self.pending.join("\n");
+        let joined = self
+            .pending
+            .iter()
+            .map(String::as_str)
+            .chain(extra)
+            .collect::<Vec<&str>>()
+            .join("\n");
         let shown = self.shown.trim_end_matches(REPEAT_MARK);
         Some(if joined == shown && !self.shown.ends_with(REPEAT_MARK) {
             let mut marked = joined;
@@ -132,6 +139,10 @@ pub(crate) struct PreparedAnnouncements {
     /// The assertive node's value.
     pub(crate) assertive: String,
     consumed: [usize; 2],
+    /// A polite message this publication alone carries, after the queued
+    /// ones: it is journaled once delivered and never queued, so an attempt
+    /// that fails leaves nothing to speak on the next one.
+    transient: Option<String>,
 }
 
 /// A presentation's announcement queue and the identities of its two
@@ -204,20 +215,23 @@ impl Announcements {
         !(queue.polite.pending.is_empty() && queue.assertive.pending.is_empty())
     }
 
-    /// The values the next publication carries. Nothing leaves the queue
-    /// until [`Self::commit`].
-    pub(crate) fn prepare(&self) -> PreparedAnnouncements {
+    /// The values the next publication carries, with `transient` spoken
+    /// politely after the queued messages by this publication only. Nothing
+    /// leaves the queue until [`Self::commit`].
+    pub(crate) fn prepare(&self, transient: Option<&str>) -> PreparedAnnouncements {
         let queue = self.lock();
+        let transient = transient.filter(|message| queue.listening && !message.is_empty());
         PreparedAnnouncements {
             polite: queue
                 .polite
-                .next_value()
+                .next_value(transient)
                 .unwrap_or_else(|| queue.polite.shown.clone()),
             assertive: queue
                 .assertive
-                .next_value()
+                .next_value(None)
                 .unwrap_or_else(|| queue.assertive.shown.clone()),
             consumed: [queue.polite.pending.len(), queue.assertive.pending.len()],
+            transient: transient.map(str::to_owned),
         }
     }
 
@@ -249,6 +263,9 @@ impl Announcements {
                 journal.record(urgency, message, revision);
             }
             channel.shown.clone_from(value);
+        }
+        if let Some(message) = &delivered.transient {
+            journal.record(Urgency::Polite, message.clone(), revision);
         }
     }
 

@@ -211,7 +211,7 @@ impl SemanticsActionInvocation {
                             if first.is_none() {
                                 first = Some(payload);
                             } else {
-                                flui_foundation::panic::retain_opaque_payload(payload);
+                                flui_foundation::panic::discard_payload(payload);
                             }
                         }
                     }
@@ -366,6 +366,12 @@ pub struct SemanticsOwner {
     /// The presentation's announcement queue and announcer nodes, published
     /// as the last children of the root (ADR-0204 §4).
     announcements: Option<crate::Announcements>,
+    /// The tree's routes and the innermost one the last delivery showed
+    /// (ADR-0204 §5).
+    routes: crate::route_change::RouteTracker,
+    /// Told each route change once it is delivered, where the adapter has a
+    /// native notice for it; without one the owner announces the route.
+    route_change_sink: Option<crate::platform::RouteChangeSink>,
 }
 
 /// An author error a publication found: published as declared, or left out,
@@ -777,6 +783,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -804,6 +812,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -825,6 +835,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -851,7 +863,7 @@ impl SemanticsOwner {
     /// its adapter holds, so action resolution keeps checking against it.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
         if self.enabled
-            && let Some((update, announced)) = self.full_update(None)
+            && let Some((update, announced)) = self.full_update(None, None)
         {
             callback(&update);
             self.commit_announcements(announced.as_ref(), self.revision);
@@ -863,9 +875,12 @@ impl SemanticsOwner {
             self.focus_claimants = Self::scan_focus_claimants(&self.tree);
             self.relations = RelationIndex::scan(&self.tree);
             let _ = self.tree.take_removed_accessibility_ids();
+            // The new adapter holds this route, which raises nothing.
+            self.routes.reseed(&self.tree);
         } else {
             // The new adapter was told nothing.
             self.published = None;
+            self.routes.forget();
         }
         self.callback = Some(callback);
     }
@@ -921,7 +936,7 @@ impl SemanticsOwner {
         &self,
         focus: Option<SemanticsId>,
     ) -> Option<accesskit::TreeUpdate> {
-        self.full_update(focus).map(|(update, _)| update)
+        self.full_update(focus, None).map(|(update, _)| update)
     }
 
     /// Returns a mutable reference to the semantics tree.
@@ -1717,11 +1732,65 @@ impl SemanticsOwner {
                 _ => true,
             };
 
-        if needs_full {
-            self.publish_full()
+        let routes = self.pending_routes(needs_full);
+        // Without a sink the change is spoken in the update that shows it,
+        // by that update alone: a failed attempt leaves nothing queued, and
+        // the retry speaks the change the tree then shows.
+        let spoken = routes
+            .as_ref()
+            .filter(|_| self.route_change_sink.is_none())
+            .and_then(|routes| routes.change.as_ref())
+            .and_then(crate::platform::RouteChange::name)
+            .map(str::to_owned);
+        let delivered = if needs_full {
+            self.publish_full(spoken.as_deref())
         } else {
-            self.publish_incremental()
+            self.publish_incremental(spoken.as_deref())
+        };
+        // Delivered, or unchanged and so already held: a panic above, or a
+        // tree the full path refused, leaves the routes as last shown, so the
+        // retry raises the change.
+        if delivered.is_some()
+            && let Some(routes) = routes
+        {
+            self.routes.commit(routes.next);
+            if let (Some(change), Some(sink)) = (routes.change, self.route_change_sink.clone())
+                && let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink(change)))
+            {
+                // The sink is the adapter's: its panic, which the panic hook
+                // has reported, is contained before anything else runs, and
+                // nothing is announced in its place, which would speak twice.
+                flui_foundation::panic::discard_payload(payload);
+            }
         }
+        delivered.unwrap_or(0)
+    }
+
+    /// The routes the flush in progress shows (ADR-0204 §5), with the change
+    /// from the last delivered update.
+    fn pending_routes(&mut self, needs_full: bool) -> Option<crate::route_change::PendingRoutes> {
+        if needs_full {
+            self.routes.rescan(&self.tree);
+        } else {
+            for sid in self
+                .tree
+                .dirty_ids()
+                .collect::<SmallVec<[SemanticsId; 16]>>()
+            {
+                if let Some(node) = self.tree.get(sid).filter(|node| node.is_dirty()) {
+                    self.routes.observe(sid, node);
+                }
+            }
+        }
+        self.routes.pending(&self.tree)
+    }
+
+    /// Installs the sink told each route change (ADR-0204 §5), for an adapter
+    /// that conveys route changes natively; `None` makes the owner announce
+    /// each named route instead.
+    pub fn set_route_change_sink(&mut self, sink: Option<crate::platform::RouteChangeSink>) {
+        self.route_change_sink = sink;
     }
 
     /// The stable identity the current root would publish under.
@@ -1734,10 +1803,12 @@ impl SemanticsOwner {
     }
 
     /// The whole rooted tree as one update, the announcer nodes included, and
-    /// the announcements it would deliver. `None` while the tree has no root.
+    /// the announcements it would deliver, `transient` among them (see
+    /// `Announcements::prepare`). `None` while the tree has no root.
     fn full_update(
         &self,
         focus: Option<SemanticsId>,
+        transient: Option<&str>,
     ) -> Option<(
         accesskit::TreeUpdate,
         Option<crate::announce::PreparedAnnouncements>,
@@ -1748,7 +1819,7 @@ impl SemanticsOwner {
             self.device_pixel_ratio,
         )?;
         let prepared = self.announcements.as_ref().map(|announcements| {
-            let prepared = announcements.prepare();
+            let prepared = announcements.prepare(transient);
             let root = update
                 .tree
                 .as_ref()
@@ -1798,11 +1869,12 @@ impl SemanticsOwner {
     }
 
     /// Publishes the complete rooted tree and resets the mirror to it.
-    /// Returns the number of nodes delivered (0 when there is no root yet).
-    fn publish_full(&mut self) -> usize {
+    /// Returns the number of nodes delivered, or `None` when there is no root
+    /// yet or the rooted shape is refused, which leaves the tree dirty.
+    fn publish_full(&mut self, transient: Option<&str>) -> Option<usize> {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
-        let Some((update, announced)) = self.full_update(None) else {
+        let Some((update, announced)) = self.full_update(None, transient) else {
             // No root yet — nothing an adapter could apply. Leave the tree
             // dirty (and any full publish pending) so the next flush retries
             // once assembly has rooted it, rather than silently swallowing
@@ -1815,7 +1887,7 @@ impl SemanticsOwner {
             // representation for "no tree" — so it is defined with the
             // adapter lifecycle rather than invented here without one. See
             // the teardown item in the Linux bridge issue.
-            return 0;
+            return None;
         };
 
         // Clone-and-release: cloning the `Arc` out of `self.callback`
@@ -1858,7 +1930,7 @@ impl SemanticsOwner {
         #[cfg(debug_assertions)]
         self.check_identifier_clashes();
         self.tree.mark_all_clean();
-        published
+        Some(published)
     }
 
     /// Queues each identifier clash in the delivered tree, as assistive
@@ -1931,9 +2003,10 @@ impl SemanticsOwner {
     /// set and derive focus; that walk was the last O(tree) cost on the
     /// publish path.)
     ///
-    /// Returns the number of changed nodes delivered (0 when the diff is
-    /// empty and focus is unchanged, so nothing is delivered).
-    fn publish_incremental(&mut self) -> usize {
+    /// Returns the number of changed nodes delivered (`Some(0)` when the diff
+    /// is empty and focus is unchanged, so nothing is delivered), or `None`
+    /// when the full publish a reshaped tree escalates to is refused.
+    fn publish_incremental(&mut self, transient: Option<&str>) -> Option<usize> {
         let state = self
             .published
             .as_mut()
@@ -2090,7 +2163,7 @@ impl SemanticsOwner {
 
         // An announcement changes only its node's value.
         let announced = self.announcements.as_ref().map(|announcements| {
-            let prepared = announcements.prepare();
+            let prepared = announcements.prepare(transient);
             for (id, node) in Self::announcer_nodes(announcements, &prepared) {
                 if held(&id) != Some(&node) {
                     changed.push((id, node));
@@ -2113,7 +2186,7 @@ impl SemanticsOwner {
             held(id).is_none_or(|published| published.children() != node.children())
         });
         if reshaped {
-            return self.publish_full();
+            return self.publish_full(transient);
         }
         // Resolution mirrors `tree_to_update`'s `focused_node` + stable-id
         // lookup exactly: dead claimants are dropped (the set is tiny, so
@@ -2154,7 +2227,7 @@ impl SemanticsOwner {
             }
             self.tree.mark_all_clean();
             self.queue_diagnostics(findings);
-            return 0;
+            return Some(0);
         }
 
         let update = crate::TreeUpdate {
@@ -2197,7 +2270,7 @@ impl SemanticsOwner {
             self.check_identifier_clashes();
         }
         self.revision = TreeRevision(self.revision.0.saturating_add(1));
-        update.nodes.len()
+        Some(update.nodes.len())
     }
 
     /// How many arena entries the last flush inspected — the scaling

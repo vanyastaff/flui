@@ -158,7 +158,7 @@ impl<'a> Recovery<'a> {
         if self.first.is_none() {
             self.first = Some(payload);
         } else {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 

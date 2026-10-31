@@ -98,7 +98,6 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
 /// The frame-2 retry shape verifies the guard's panic-safety property
 /// without needing a separate mock for the set state.
 pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
-    use flui_foundation::Diagnosticable;
     use flui_foundation::Single;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -113,7 +112,13 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
         already_panicked: bool,
     }
 
-    impl Diagnosticable for PanicOnceWidget {}
+    impl flui_foundation::inspect::Inspect for PanicOnceWidget {
+        fn kind(&self) -> &'static str {
+            "PanicOnceWidget"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for PanicOnceWidget {
         type Arity = Single;

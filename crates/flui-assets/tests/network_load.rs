@@ -336,8 +336,9 @@ fn a_release_wakes_every_held_request_past_a_panicking_waker() {
     let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| http.release(URL)));
     let first = released.expect_err("the first panic is resumed");
     assert!(first.is::<PanicsOnDrop>());
-    // Its destructor panics: kept, as `release` keeps the later ones.
-    std::mem::forget(first);
+    // Its destructor panics: destroyed under containment, as `release` does
+    // with the later ones.
+    flui_foundation::panic::discard_payload(first);
     assert_eq!(
         waker.wakes.load(std::sync::atomic::Ordering::SeqCst),
         3,

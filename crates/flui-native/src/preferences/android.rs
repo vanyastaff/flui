@@ -27,7 +27,10 @@ mod configuration {
 
     use android_activity::AndroidApp;
     use flui_foundation::geometry::DevicePixelRatio;
-    use flui_platform::{Locale, MotionPreference, TextWeightPreference};
+    use flui_platform::{
+        HourCycle, Locale, MotionPreference, NumberingSystem, RegionalFormats,
+        TextWeightPreference, Weekday,
+    };
     use jni::{
         JValue, jni_sig, jni_str,
         objects::{JObject, JString},
@@ -39,7 +42,7 @@ mod configuration {
     use crate::owner::android::activity::with_activity;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::sources::SystemPreferenceSource;
-    use crate::preferences::{locales, read::ReadAdmission};
+    use crate::preferences::{locales, read::ReadAdmission, regional};
     use crate::version::gate::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
     use flui_platform::{
         GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
@@ -123,6 +126,7 @@ mod configuration {
         haptics: Option<bool>,
         locales: Option<Vec<Locale>>,
         high_contrast: Option<bool>,
+        regional: Option<RegionalFormats>,
     }
 
     enum ReadScope {
@@ -297,6 +301,10 @@ mod configuration {
                     contrast(env, activity, api)?,
                 )),
             };
+            let regional = match scope {
+                ReadScope::Geometry => None,
+                ReadScope::Preferences(_) => Some(regional_formats(env, activity)?),
+            };
             Ok((
                 density,
                 touch_slop,
@@ -308,6 +316,7 @@ mod configuration {
                 text_weight,
                 duration_scale_and_haptics,
                 languages_and_contrast,
+                regional,
             ))
         })
         .and_then(
@@ -322,6 +331,7 @@ mod configuration {
                 text_weight,
                 duration_scale_and_haptics,
                 languages_and_contrast,
+                regional,
             )| {
                 let ratio = DevicePixelRatio::try_new(density)
                     .ok_or(flui_platform::InvalidPreference::PixelRatio)?;
@@ -342,6 +352,7 @@ mod configuration {
                     haptics,
                     locales: tags.and_then(|tags| locales::from_language_tags(tags.split(','))),
                     high_contrast: high_contrast.flatten(),
+                    regional,
                 })
             },
         )
@@ -445,6 +456,96 @@ mod configuration {
             None => None,
         };
         Ok(super::contrast::high_contrast(level, high_text))
+    }
+
+    /// The user's regional formats (ADR-0278 §3): the first weekday and the
+    /// numbering system Android 14's regional preferences set as the default
+    /// locale's `fw` and `nu` keywords, the calendar's first weekday below
+    /// that, and the 24-hour setting, which `DateFormat` answers with the
+    /// locale's own clock while the user has not chosen.
+    fn regional_formats(
+        env: &mut jni::Env<'_>,
+        activity: &JObject<'_>,
+    ) -> jni::errors::Result<RegionalFormats> {
+        let mut formats = RegionalFormats::default();
+        let locale = env
+            .call_static_method(
+                jni_str!("java/util/Locale"),
+                jni_str!("getDefault"),
+                jni_sig!("()Ljava/util/Locale;"),
+                &[],
+            )?
+            .l()?;
+        let keyword = unicode_keyword(env, &locale, "fw")?
+            .as_deref()
+            .and_then(Weekday::from_unicode_value);
+        let first_weekday = if keyword.is_some() {
+            keyword
+        } else {
+            let calendar = env
+                .call_static_method(
+                    jni_str!("java/util/Calendar"),
+                    jni_str!("getInstance"),
+                    jni_sig!("()Ljava/util/Calendar;"),
+                    &[],
+                )?
+                .l()?;
+            let day = env
+                .call_method(
+                    &calendar,
+                    jni_str!("getFirstDayOfWeek"),
+                    jni_sig!("()I"),
+                    &[],
+                )?
+                .i()?;
+            usize::try_from(day)
+                .ok()
+                .and_then(regional::sunday_first_weekday)
+        };
+        if let Some(day) = first_weekday {
+            formats = formats.with_first_weekday(day);
+        }
+        let twenty_four = env
+            .call_static_method(
+                jni_str!("android/text/format/DateFormat"),
+                jni_str!("is24HourFormat"),
+                jni_sig!("(Landroid/content/Context;)Z"),
+                &[JValue::Object(activity)],
+            )?
+            .z()?;
+        formats = formats.with_hour_cycle(if twenty_four {
+            HourCycle::H23
+        } else {
+            HourCycle::H12
+        });
+        if let Some(numbering) = unicode_keyword(env, &locale, "nu")?
+            .and_then(|value| NumberingSystem::try_new(&value).ok())
+        {
+            formats = formats.with_numbering(numbering);
+        }
+        Ok(formats)
+    }
+
+    /// The value `locale` carries for the Unicode extension key `key`, if any.
+    fn unicode_keyword(
+        env: &mut jni::Env<'_>,
+        locale: &JObject<'_>,
+        key: &str,
+    ) -> jni::errors::Result<Option<String>> {
+        let key = env.new_string(key)?;
+        let value = env
+            .call_method(
+                locale,
+                jni_str!("getUnicodeLocaleType"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
+                &[JValue::Object(&key)],
+            )?
+            .l()?;
+        let value = env.cast_local::<JString<'_>>(value)?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        value.try_to_string(env).map(Some)
     }
 
     /// The long-press timeout as the secure setting holds it, `fallback` while it
@@ -596,6 +697,9 @@ mod configuration {
         }
         if let Some(locales) = reading.locales {
             preferences = preferences.with_locales(locales);
+        }
+        if let Some(regional) = reading.regional {
+            preferences = preferences.with_regional(regional);
         }
         Ok(match reading.text_weight {
             Some(weight) => preferences.with_text_weight(weight),

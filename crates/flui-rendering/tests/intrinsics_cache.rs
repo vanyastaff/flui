@@ -48,7 +48,13 @@ impl CountingLeaf {
     }
 }
 
-impl flui_foundation::Diagnosticable for CountingLeaf {}
+impl flui_foundation::inspect::Inspect for CountingLeaf {
+    fn kind(&self) -> &'static str {
+        "CountingLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for CountingLeaf {
     type Arity = Leaf;
@@ -102,7 +108,13 @@ impl CountingRoot {
     }
 }
 
-impl flui_foundation::Diagnosticable for CountingRoot {}
+impl flui_foundation::inspect::Inspect for CountingRoot {
+    fn kind(&self) -> &'static str {
+        "CountingRoot"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for CountingRoot {
     type Arity = Variable;

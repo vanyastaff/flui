@@ -28,7 +28,7 @@ use super::shifted_box::AligningShiftedBox;
 // ============================================================================
 
 /// Determines how `RenderConstrainedOverflowBox` computes its own size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum OverflowBoxFit {
     /// Size to the maximum extent allowed by the parent constraints (`constraints.biggest()`).
     /// The child may be smaller or larger than this.
@@ -195,21 +195,20 @@ impl RenderConstrainedOverflowBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderConstrainedOverflowBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        if let Some(v) = self.min_width {
-            builder.add_double("min_width", v, None);
-        }
-        if let Some(v) = self.max_width {
-            builder.add_double("max_width", v, None);
-        }
-        if let Some(v) = self.min_height {
-            builder.add_double("min_height", v, None);
-        }
-        if let Some(v) = self.max_height {
-            builder.add_double("max_height", v, None);
-        }
-        builder.add_enum("fit", self.fit);
+impl flui_foundation::inspect::Inspect for RenderConstrainedOverflowBox {
+    fn kind(&self) -> &'static str {
+        "RenderConstrainedOverflowBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // An override of infinity means "unbounded" (let the child overflow); no override is
+        // absent. The two differ, so both are described as they are.
+        let unit = flui_foundation::inspect::Unit::LogicalPx;
+        out.field("min_width", &self.min_width).unit(unit);
+        out.field("max_width", &self.max_width).unit(unit);
+        out.field("min_height", &self.min_height).unit(unit);
+        out.field("max_height", &self.max_height).unit(unit);
+        out.field("fit", &self.fit);
     }
 }
 
@@ -406,10 +405,16 @@ impl RenderSizedOverflowBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSizedOverflowBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_double("requested_width", self.requested_size.width, None);
-        builder.add_double("requested_height", self.requested_size.height, None);
+impl flui_foundation::inspect::Inspect for RenderSizedOverflowBox {
+    fn kind(&self) -> &'static str {
+        "RenderSizedOverflowBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("requested_width", &self.requested_size.width)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("requested_height", &self.requested_size.height)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 

@@ -5,16 +5,17 @@
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
-//! The portal reports motion, contrast, text scale and the color scheme; the
-//! preferred languages come from the process environment, read once, as
-//! gettext reads them.
+//! The portal reports motion, contrast, text scale, the color scheme and
+//! GNOME's clock format; the preferred languages and the regional formats set
+//! apart from them (`LC_TIME`, `LC_MEASUREMENT`) come from the process
+//! environment, read once, as gettext and glibc read them.
 
 use std::{
     sync::{Arc, Weak, mpsc},
     time::Duration,
 };
 
-use flui_platform::{MotionPreference, SystemPreferences, WindowAppearance};
+use flui_platform::{HourCycle, MotionPreference, SystemPreferences, WindowAppearance};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{OwnedVariant, Proxy};
@@ -22,6 +23,7 @@ use zbus::{OwnedVariant, Proxy};
 use crate::{
     PlatformError, executor::BackgroundExecutor, owner::signal::OwnerSignal,
     owner::sources::SystemPreferenceSource, preferences::locales as preferred_locales,
+    preferences::regional,
 };
 
 const APPEARANCE: &str = "org.freedesktop.appearance";
@@ -114,11 +116,15 @@ impl PreferenceSource {
     /// first answer, so the first sample usually has one.
     pub(crate) fn new(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
         // The environment does not change under a running process.
-        let accepted =
-            match preferred_locales::from_posix_environment(|name| std::env::var(name).ok()) {
-                Some(locales) => SystemPreferences::default().with_locales(locales),
-                None => SystemPreferences::default(),
-            };
+        let var = |name: &str| std::env::var(name).ok();
+        let locales = preferred_locales::from_posix_environment(var);
+        let regional =
+            regional::from_posix_environment(var, locales.as_deref().and_then(<[_]>::first));
+        let accepted = match locales {
+            Some(locales) => SystemPreferences::default().with_locales(locales),
+            None => SystemPreferences::default(),
+        }
+        .with_regional(regional);
         let observation = Arc::new(Mutex::new(Observation {
             active: true,
             accepted,
@@ -217,7 +223,7 @@ async fn observe_connection(
                 if matches!(
                     (namespace, key),
                     (APPEARANCE, "reduced-motion" | "color-scheme" | "contrast")
-                        | (GNOME, "enable-animations" | "text-scaling-factor")
+                        | (GNOME, "enable-animations" | "text-scaling-factor" | "clock-format")
                         | (GNOME_A11Y, "high-contrast")
                 ) {
                     retry = refresh(&proxy, observation, signal).await.is_err();
@@ -287,11 +293,37 @@ async fn refresh(
             }
         });
     }
+    let clock = read_clock_format(proxy).await;
+    if let Ok(Some(hour_cycle)) = clock {
+        publish(observation, signal, |observation| {
+            let changed = observation.accepted.regional().hour_cycle() != Some(hour_cycle);
+            if changed {
+                let regional = observation
+                    .accepted
+                    .regional()
+                    .clone()
+                    .with_hour_cycle(hour_cycle);
+                observation.accepted = observation.accepted.clone().with_regional(regional);
+            }
+            changed
+        });
+    }
     motion
         .and(appearance)
         .and(contrast)
         .and(text_scale)
+        .and(clock)
         .map(|_| ())
+}
+
+/// GNOME's `clock-format`; a desktop without the key, or with a value it
+/// does not name, has no observation.
+async fn read_clock_format(proxy: &Proxy<'_>) -> zbus::Result<Option<HourCycle>> {
+    match read(proxy, GNOME, "clock-format").await {
+        Ok(value) => Ok(regional::gnome_clock_format(&String::try_from(value)?)),
+        Err(error) if missing_key(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// `contrast`: 1 asks for higher contrast, 0 has no preference. Without that

@@ -108,8 +108,6 @@ dependencies = [
 [[package]]
 name = "accesskit_windows"
 version = "0.35.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce63f35d6bdcf59f26b76b3379063f738e6412cef46999cc772d46aa3de35adb"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -490,6 +488,7 @@ checksum = "c77886257be21c9cd89a4ae7e64860c6f0eefca799bb79127913052bd0eefb3d"
 dependencies = [
  "atspi-common",
  "atspi-proxies",
+ "zbus 5.19.0",
 ]
 
 [[package]]
@@ -1840,13 +1839,13 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
- "flui-macros",
  "flui-material",
  "flui-native",
  "flui-objects",
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-system",
  "flui-testing",
  "flui-view",
  "flui-widgets",
@@ -2168,7 +2167,6 @@ dependencies = [
 name = "flui-macros"
 version = "0.2.0-dev"
 dependencies = [
- "flui-foundation",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -2200,6 +2198,8 @@ dependencies = [
  "android-activity",
  "anyhow",
  "arboard",
+ "async-io",
+ "atspi",
  "block2 0.6.2",
  "cfg_aliases",
  "console_error_panic_hook",
@@ -2217,6 +2217,7 @@ dependencies = [
  "flui-protocol",
  "flui-semantics",
  "flui-testing",
+ "futures-lite",
  "futures-util",
  "icu_normalizer",
  "icu_properties",
@@ -2258,6 +2259,7 @@ dependencies = [
  "wayland-client",
  "wayland-cursor",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "web-sys",
  "web-time",
  "windows 0.62.2",
@@ -2473,6 +2475,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-system"
+version = "0.2.0-dev"
+dependencies = [
+ "flui-platform",
+ "flui-sdk",
+ "flui-testing",
+ "futures-util",
+ "libc",
+ "raw-window-handle",
+ "serde",
+ "thiserror 2.0.21",
+ "zbus 6.1.0",
+ "zruntime",
+]
+
+[[package]]
 name = "flui-testing"
 version = "0.2.0-dev"
 dependencies = [
@@ -2520,6 +2538,8 @@ dependencies = [
  "flui-testing",
  "futures-core",
  "parking_lot",
+ "serde",
+ "serde_json",
  "serial_test",
  "slab",
  "smallvec",
@@ -6983,6 +7003,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland-protocols-misc"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
+dependencies = [
+ "bitflags 2.13.2",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-scanner",
+]
+
+[[package]]
 name = "wayland-protocols-plasma"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8070,7 +8103,6 @@ dependencies = [
  "serde",
  "serde_repr",
  "socket2",
- "tokio",
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
@@ -8300,6 +8332,9 @@ checksum = "dfc035df602243402949ddf3dcc5bcfad7edeb732dd49ec6e605431c4eca54ce"
 dependencies = [
  "futures-core",
  "futures-io",
+ "rustix 1.1.5",
+ "socket2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

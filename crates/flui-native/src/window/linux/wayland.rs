@@ -1949,6 +1949,7 @@ mod toplevel {
                         .map_or(1.0, |metrics| metrics.scale().get())
                 }),
                 frame: Arc::clone(&window.frame_record) as _,
+                text: Arc::clone(&window.facets.text).seat_text(),
             });
             // From here a failure retires the window like any other close.
             if let Err(error) = owner.roundtrip() {

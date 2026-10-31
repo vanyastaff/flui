@@ -103,22 +103,14 @@ impl ScriptedHttp {
                 .map(|(_, (_, waker))| waker)
                 .collect()
         };
-        // Woken outside the lock: a waker may poll at once.
-        let mut first_panic = None;
+        // Woken outside the lock: a waker may poll at once. A later panic is
+        // discarded under containment (ADR-0281), the first raised once every
+        // held request is woken.
+        let mut first = flui_foundation::panic::FirstPanic::new();
         for waker in wakers {
-            if let Err(panic) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-            {
-                match first_panic {
-                    None => first_panic = Some(panic),
-                    // Kept, not dropped: its destructor may panic too.
-                    Some(_) => flui_foundation::panic::retain_opaque_payload(panic),
-                }
-            }
+            first.contain(|| waker.wake());
         }
-        if let Some(panic) = first_panic {
-            std::panic::resume_unwind(panic);
-        }
+        first.resume();
     }
 
     /// Every request sent so far, in order.

@@ -15,7 +15,7 @@ use flui_interaction::{
 use flui_native::{NativeClipboard, NativePrimarySelection};
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use flui_platform::{
-    Storage, Unsupported, UnsupportedReason,
+    ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
         Capability, CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
     },
@@ -147,10 +147,7 @@ impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
             // Between loops: no owner platform is installed.
             Unsupported::of::<ClipboardCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(ClipboardHandle::new(
-            NativeBackend(native),
-            cx.completions().clone(),
-        ))
+        Ok(ClipboardHandle::new(NativeBackend(native), cx))
     }
 }
 
@@ -158,12 +155,16 @@ impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
 struct NativeBackend(Rc<dyn NativeClipboard>);
 
 impl ClipboardBackend for NativeBackend {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.0.read_text(answer);
     }
 
-    fn write_text(&self, text: String) {
-        self.0.write_text(text);
+    fn write(&self, write: ClipboardWrite) {
+        self.0.write(write);
+    }
+
+    fn concealment(&self) -> Concealment {
+        self.0.concealment()
     }
 }
 
@@ -223,10 +224,7 @@ impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection
             // a compositor without the protocol).
             Unsupported::of::<PrimarySelectionCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(PrimarySelectionHandle::new(
-            native,
-            cx.completions().clone(),
-        ))
+        Ok(PrimarySelectionHandle::new(native, cx))
     }
 }
 
@@ -262,7 +260,7 @@ impl PrimarySelectionBackend for NativePrimary {
         self.native.owns() && self.claims.borrow().is_current(claim)
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.native.read_text(answer);
     }
 }
@@ -301,7 +299,7 @@ mod tests {
             self.offered.borrow().is_some()
         }
 
-        fn read_text(&self, answer: Resolver<Option<String>>) {
+        fn read_text(&self, answer: Resolver<ClipboardRead>) {
             drop(answer);
         }
     }

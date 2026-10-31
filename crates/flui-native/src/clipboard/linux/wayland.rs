@@ -23,19 +23,31 @@
 //!   [`TextForm::OFFERED`] and sets it as the selection of the last user
 //!   input's seat, under that input's serial: a compositor takes a selection
 //!   only from a client the user is working in, and only that seat's earlier
-//!   selection is replaced: another seat keeps its own. Each `send` is
-//!   written by a thread of its own, at most [`MAX_WRITERS`] at once, from
-//!   the text encoded once per form; `cancelled` (another client took the
-//!   selection) ends that seat's ownership. With no user input yet the text
-//!   is held here only, and a read answers it until another client's
-//!   selection arrives.
+//!   selection is replaced: another seat keeps its own. A write under the
+//!   serial the seat's selection was set under changes what that source
+//!   answers instead of setting a second one, which Weston up to 14 drops:
+//!   the next paste reads the new text, and a clipboard manager that copied
+//!   the selection as it was set keeps the copy it took. A write whose
+//!   concealment differs offers other types, which only a new source can:
+//!   it is set over the current one, which answers the new write too until
+//!   a sync tells which of the two the compositor holds (a `cancelled` to
+//!   the old one first means the new one). A concealed write never goes
+//!   out through a source without the hint: where the compositor keeps
+//!   such a source, the write is not put on the clipboard, with a warning. Each `send` is written by a thread of its own, at most
+//!   [`MAX_WRITERS`] at once, from the text encoded once per form;
+//!   `cancelled` (another client took the selection) ends that seat's
+//!   ownership. With no user input yet the text is held here only, and a
+//!   read answers it until another client's selection arrives.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_platform::capability::Resolver;
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
+};
+use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
@@ -46,8 +58,8 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 use web_time::Instant;
 
 use super::owners::Owners;
-use super::text::TextForm;
-use crate::host::{NativeClipboard, NativePrimarySelection};
+use super::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
+use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 
@@ -59,8 +71,6 @@ const MANAGER_VERSION: u32 = 3;
 /// How long a read waits for the selection's owner to write its text, and a
 /// write for the reader to take it. An owner that hangs answers nothing.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-/// The most text a read takes: past it the selection is not read.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// The most `send`s the application answers at once. Each holds a thread
 /// until its reader has the text or the deadline passes; a client asking
 /// faster than it reads is answered with nothing past this.
@@ -117,18 +127,38 @@ impl SeatDevice {
 }
 
 /// One of the application's selections: its text, and the source the
-/// compositor asks for it through; `None` while it is held in this process
-/// alone, under no seat.
+/// compositor asks for it through, with the serial it was set under; `None`
+/// while it is held in this process alone, under no seat.
 struct Owned {
     text: Arc<str>,
     source: Option<WlDataSource>,
+    serial: Option<u32>,
+    /// The sources set before `source` under the same serial, oldest first,
+    /// until the compositor says which one it holds: `cancelled` to one of
+    /// them means it took a later one, a [`SelectionCheck`] answered while
+    /// one is still here means it kept that one.
+    superseded: Vec<WlDataSource>,
 }
 
 impl Owned {
     fn release(self) {
-        if let Some(source) = self.source {
+        for source in self.source.into_iter().chain(self.superseded) {
             source.destroy();
         }
+    }
+
+    /// Answer with `text` from now on, through every source this selection
+    /// holds that can carry it: a concealed write never goes out through a
+    /// source that does not offer the hint.
+    fn replace(&mut self, text: Arc<str>, concealed: bool) {
+        for source in self.source.iter().chain(&self.superseded) {
+            if let Some(data) = source.data::<SourceData>()
+                && data.carries(concealed)
+            {
+                data.replace(Arc::clone(&text), concealed);
+            }
+        }
+        self.text = text;
     }
 }
 
@@ -261,6 +291,22 @@ impl WaylandClipboard for SeatClipboard {
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    fn selection_offers_hint(&self) -> Option<bool> {
+        let seat = self.shared.last_input.latest().map(|input| input.seat);
+        self.shared
+            .state
+            .with(|state| {
+                let device = state
+                    .devices
+                    .iter()
+                    .find(|device| Some(&device.seat) == seat.as_ref())?;
+                let data = device.selection.as_ref()?.data::<OfferData>()?;
+                data.hint.with(|hint| *hint)
+            })
+            .flatten()
+    }
+
     fn has_primary_selection(&self) -> bool {
         self.shared
             .primary
@@ -286,7 +332,7 @@ impl NativePrimarySelection for SeatClipboard {
         self.owns_primary()
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.read_primary(answer);
     }
 }
@@ -294,13 +340,13 @@ impl NativePrimarySelection for SeatClipboard {
 /// What a read does once the state is let go of.
 enum Read {
     /// The answer is known now.
-    Now(Option<String>),
+    Now(ClipboardRead),
     /// The offer's owner writes the text in `form` to the pipe.
     Pipe(OwnedFd, TextForm),
 }
 
 impl NativeClipboard for SeatClipboard {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         let last_seat = self.shared.last_input.latest().map(|input| input.seat);
         let read = self
             .shared
@@ -319,13 +365,13 @@ impl NativeClipboard for SeatClipboard {
                             .find(|device| device.selection.is_some())
                     });
                 if let Some(owned) = state.owned.read(device.map(|device| &device.seat)) {
-                    return Read::Now(Some(owned.text.to_string()));
+                    return Read::Now(owned_text(&owned.text));
                 }
                 let Some((offer, (form, mime))) = device
                     .and_then(|device| device.selection.as_ref())
                     .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
                 else {
-                    return Read::Now(None);
+                    return Read::Now(Ok(None));
                 };
                 match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
                     Ok((reader, writer)) => {
@@ -339,11 +385,11 @@ impl NativeClipboard for SeatClipboard {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "no pipe for a clipboard read");
-                        Read::Now(None)
+                        Read::Now(Err(ClipboardError::Unavailable))
                     }
                 }
             })
-            .unwrap_or(Read::Now(None));
+            .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
@@ -352,7 +398,7 @@ impl NativeClipboard for SeatClipboard {
                     .name("flui-wayland-clipboard".to_owned())
                     .spawn(move || {
                         let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .map(|bytes| form.decode(bytes));
+                            .and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 // The closure, and the resolver in it, is dropped: the read
@@ -364,44 +410,133 @@ impl NativeClipboard for SeatClipboard {
         }
     }
 
-    fn write_text(&self, text: String) {
-        let text: Arc<str> = text.into();
+    /// A concealed write is offered with KDE's password-manager hint, which
+    /// only a clipboard manager that reads it honours.
+    fn concealment(&self) -> Concealment {
+        Concealment::HintOnly
+    }
+
+    fn write(&self, write: ClipboardWrite) {
+        let concealed = write.is_concealed();
+        let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
-            let source = last.and_then(|input| {
-                let (_, manager) = state.manager.as_ref()?;
-                let queue = state.queue.as_ref()?;
-                let device = state
-                    .devices
-                    .iter()
-                    .find(|device| device.seat == input.seat)?;
+            let State {
+                manager,
+                queue,
+                devices,
+                owned,
+            } = state;
+            let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
+                let device = devices.iter().find(|device| device.seat == *seat)?;
+                device.device.set_selection(Some(source), serial);
+                Some(())
+            };
+            let create = |text: &Arc<str>| {
+                let (_, manager) = manager.as_ref()?;
                 let source = manager.create_data_source(
-                    queue,
-                    SourceData {
-                        shared: Arc::downgrade(&self.shared),
-                        text: Arc::clone(&text),
-                        encoded: OwnerCell::new(),
-                    },
+                    queue.as_ref()?,
+                    SourceData::new(Arc::downgrade(&self.shared), Arc::clone(text), concealed),
                 );
-                for form in TextForm::OFFERED {
-                    source.offer(form.name().to_owned());
+                for mime in offered(concealed) {
+                    source.offer(mime.to_owned());
                 }
-                device.device.set_selection(Some(&source), input.serial);
-                Some((input.seat, source))
+                Some(source)
+            };
+            // A write under the serial the seat's selection was set under
+            // (see the module docs).
+            if let Some(input) = &last
+                && let Some(held) = owned.get_mut(&input.seat)
+                && held.serial == Some(input.serial)
+                && let Some(current) = held.source.clone()
+            {
+                let offers_hint = current
+                    .data::<SourceData>()
+                    .is_some_and(|data| data.offers_hint);
+                held.replace(Arc::clone(&text), concealed);
+                // The offered types change with concealment, and only a new
+                // source changes them. The current one keeps answering the
+                // new write in case the compositor keeps it, unless the write
+                // is concealed and it offers no hint.
+                if offers_hint != concealed
+                    && let Some(source) = create(&text)
+                {
+                    if set(&source, &input.seat, input.serial).is_some() {
+                        held.superseded.extend(held.source.replace(source));
+                        SelectionCheck::send(
+                            &current,
+                            Arc::downgrade(&self.shared),
+                            queue.as_ref(),
+                        );
+                    } else {
+                        source.destroy();
+                    }
+                }
+                return None;
+            }
+            let source = last.as_ref().and_then(|input| {
+                let source = create(&text)?;
+                if set(&source, &input.seat, input.serial).is_none() {
+                    source.destroy();
+                    return None;
+                }
+                Some((input.seat.clone(), source, input.serial))
             });
             if source.is_none() {
                 tracing::debug!(
                     "no user input to set the selection under: the text is held in this process"
                 );
             }
-            let (seat, source) = source.unzip();
+            let (seat, source, serial) = match source {
+                Some((seat, source, serial)) => (Some(seat), Some(source), Some(serial)),
+                None => (None, None, None),
+            };
             // Only this seat's earlier selection is replaced: another seat
             // keeps the source it reads.
-            state.owned.set(seat, Owned { text, source })
+            owned.set(
+                seat,
+                Owned {
+                    text,
+                    source,
+                    serial,
+                    superseded: Vec::new(),
+                },
+            )
         });
         if let Some(previous) = previous.flatten() {
             previous.release();
         }
+    }
+}
+
+/// A sync sent after a source was set over another under the same serial:
+/// the compositor answers it after the `cancelled` it sends the superseded
+/// source if it took the new one, so a source still superseded when it
+/// answers is the one the compositor kept (Weston up to 13 takes no second
+/// selection under one serial).
+pub(crate) struct SelectionCheck {
+    shared: Weak<Shared>,
+    superseded: WlDataSource,
+}
+
+impl SelectionCheck {
+    /// Ask the compositor, through `superseded`'s connection, to answer once
+    /// it has handled the requests sent before.
+    fn send(
+        superseded: &WlDataSource,
+        shared: Weak<Shared>,
+        queue: Option<&QueueHandle<WaylandState>>,
+    ) {
+        let (Some(queue), Some(backend)) = (queue, superseded.backend().upgrade()) else {
+            return;
+        };
+        Connection::from_backend(backend).display().sync(
+            queue,
+            Self {
+                shared,
+                superseded: superseded.clone(),
+            },
+        );
     }
 }
 
@@ -420,6 +555,8 @@ pub(crate) struct OfferData {
     /// under: at most one entry per [`TextForm`], however often the owner
     /// repeats an `offer` event.
     forms: OwnerCell<Vec<(TextForm, String)>>,
+    /// Whether the offer names [`CONCEALED_HINT`].
+    hint: OwnerCell<bool>,
 }
 
 impl OfferData {
@@ -427,12 +564,18 @@ impl OfferData {
     fn new() -> Self {
         Self {
             forms: OwnerCell::new(),
+            hint: OwnerCell::new(),
         }
     }
 
     /// Record an `offer` event: a text form not offered before, under the
-    /// MIME type named. Other types and repeats keep nothing.
+    /// MIME type named, or the concealment hint. Other types and repeats
+    /// keep nothing.
     fn offer(&self, mime_type: String) {
+        if mime_type == CONCEALED_HINT {
+            self.hint.with(|hint| *hint = true);
+            return;
+        }
         let Some(form) = TextForm::named(&mime_type) else {
             return;
         };
@@ -455,24 +598,94 @@ impl OfferData {
     }
 }
 
+/// The MIME types a source offers: each text form, and [`CONCEALED_HINT`]
+/// for a concealed write (ADR-0152 §6).
+fn offered(concealed: bool) -> impl Iterator<Item = &'static str> {
+    TextForm::OFFERED
+        .into_iter()
+        .map(TextForm::name)
+        .chain(concealed.then_some(CONCEALED_HINT))
+}
+
 /// A data source's user data: the text it answers with.
 pub(crate) struct SourceData {
     shared: Weak<Shared>,
+    /// Whether the source offers [`CONCEALED_HINT`], fixed as it is set: a
+    /// type offered after `set_selection` reaches no offer already made.
+    offers_hint: bool,
+    /// What the source answers with now, read on the owner thread alone. A
+    /// later write under the same serial replaces it (see
+    /// [`SeatClipboard::write`](NativeClipboard::write)).
+    content: OwnerCell<Content>,
+}
+
+/// The write a source answers with.
+#[derive(Default)]
+struct Content {
     text: Arc<str>,
+    /// Whether the write was concealed.
+    concealed: bool,
     /// The text in each form asked for so far, encoded once and shared by
-    /// every `send` of that form; read on the owner thread alone.
-    encoded: OwnerCell<Vec<(TextForm, Arc<[u8]>)>>,
+    /// every `send` of that form.
+    encoded: Vec<(TextForm, Arc<[u8]>)>,
 }
 
 impl SourceData {
+    /// A source's data, answering with `text` and offering the hint when the
+    /// write is `concealed`; made on the owner thread.
+    fn new(shared: Weak<Shared>, text: Arc<str>, concealed: bool) -> Self {
+        let data = Self {
+            shared,
+            offers_hint: concealed,
+            content: OwnerCell::new(),
+        };
+        data.replace(text, concealed);
+        data
+    }
+
+    /// Answer with `text` from now on, a write `concealed` or not.
+    fn replace(&self, text: Arc<str>, concealed: bool) {
+        self.content.with(|content| {
+            *content = Content {
+                text,
+                concealed,
+                encoded: Vec::new(),
+            };
+        });
+    }
+
+    /// Whether the source can answer a write `concealed` or not: a concealed
+    /// one only while it offers the hint, or a clipboard manager would take
+    /// it for an ordinary one.
+    fn carries(&self, concealed: bool) -> bool {
+        self.offers_hint || !concealed
+    }
+
+    /// The text the source answers with.
+    fn text(&self) -> Option<Arc<str>> {
+        self.content.with(|content| Arc::clone(&content.text))
+    }
+
+    /// What a `send` of `mime` answers: the text in that form, the hint's
+    /// value while the write it answers with is concealed, or `None` for a
+    /// type not offered.
+    fn answer(&self, mime: &str) -> Option<Arc<[u8]>> {
+        if mime == CONCEALED_HINT {
+            let concealed = self.content.with(|content| content.concealed)?;
+            return (self.offers_hint && concealed)
+                .then(|| Arc::<[u8]>::from(CONCEALED_HINT_VALUE));
+        }
+        TextForm::named(mime).and_then(|form| self.bytes(form))
+    }
+
     /// The text in `form`.
     fn bytes(&self, form: TextForm) -> Option<Arc<[u8]>> {
-        self.encoded.with(|encoded| {
-            if let Some((_, bytes)) = encoded.iter().find(|(held, _)| *held == form) {
+        self.content.with(|content| {
+            if let Some((_, bytes)) = content.encoded.iter().find(|(held, _)| *held == form) {
                 return Arc::clone(bytes);
             }
-            let bytes: Arc<[u8]> = form.encode(&self.text).into();
-            encoded.push((form, Arc::clone(&bytes)));
+            let bytes: Arc<[u8]> = form.encode(&content.text).into();
+            content.encoded.push((form, Arc::clone(&bytes)));
             bytes
         })
     }
@@ -575,10 +788,8 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Send { mime_type, fd } => {
                 // A form the source did not offer is answered with nothing:
                 // dropping the descriptor ends the reader's read.
-                let Some(form) = TextForm::named(&mime_type) else {
-                    return;
-                };
-                let (Some(shared), Some(bytes)) = (data.shared.upgrade(), data.bytes(form)) else {
+                let bytes = data.answer(&mime_type);
+                let (Some(shared), Some(bytes)) = (data.shared.upgrade(), bytes) else {
                     return;
                 };
                 let Some(permit) = shared.writers.permit() else {
@@ -598,11 +809,24 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Cancelled => {
                 if let Some(shared) = data.shared.upgrade() {
                     shared.state.with(|state| {
+                        // A superseded source cancelled: the compositor took
+                        // the one set over it, which goes on.
+                        if let Some(held) = state
+                            .owned
+                            .find_mut(|owned| owned.superseded.contains(source))
+                        {
+                            held.superseded.retain(|held| held != source);
+                            return;
+                        }
                         // Only this source's seat lost its selection; it is
-                        // destroyed below, not by the entry's release.
-                        state
+                        // destroyed below, not by the entry's release, and the
+                        // sources it superseded go with it.
+                        let lost = state
                             .owned
                             .remove(|owned| owned.source.as_ref() == Some(source));
+                        for superseded in lost.into_iter().flat_map(|lost| lost.superseded) {
+                            superseded.destroy();
+                        }
                     });
                 }
                 // After the clipboard's release the source is still the
@@ -610,6 +834,55 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                 source.destroy();
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlCallback, SelectionCheck> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        check: &SelectionCheck,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wl_callback::Event::Done { .. } = event else {
+            return;
+        };
+        let Some(shared) = check.shared.upgrade() else {
+            return;
+        };
+        // Still superseded once the compositor has handled the `set_selection`:
+        // it kept this source and dropped every one set over it, which no
+        // event reports. The selection's text is what the kept source
+        // answers: a concealed write it cannot carry was not put on the
+        // clipboard.
+        let dropped_write = shared.state.with(|state| {
+            let held = state
+                .owned
+                .find_mut(|owned| owned.superseded.contains(&check.superseded))?;
+            let at = held
+                .superseded
+                .iter()
+                .position(|source| *source == check.superseded)?;
+            let mut sources = std::mem::take(&mut held.superseded);
+            let kept = sources.remove(at);
+            for dropped in sources.into_iter().chain(held.source.replace(kept.clone())) {
+                dropped.destroy();
+            }
+            let text = kept.data::<SourceData>().and_then(SourceData::text)?;
+            let dropped_write = !Arc::ptr_eq(&text, &held.text);
+            held.text = text;
+            Some(dropped_write)
+        });
+        // The subscriber runs with the clipboard's state let go.
+        if dropped_write.flatten() == Some(true) {
+            tracing::warn!(
+                target: "flui.clipboard.wayland",
+                "the compositor kept the selection set earlier under this input: the concealed \
+                 write made since was not put on the clipboard"
+            );
         }
     }
 }
@@ -626,6 +899,8 @@ pub(crate) mod transfer {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use rustix::io::Errno;
     use web_time::Instant;
+
+    use flui_platform::ClipboardError;
 
     use super::{MAX_TEXT, MAX_WRITERS};
 
@@ -677,30 +952,31 @@ pub(crate) mod transfer {
         }
     }
 
-    /// Everything the owner writes to `reader` until it closes its end; `None`
-    /// when it is still writing at `deadline`, writes past [`MAX_TEXT`], or
-    /// the read fails.
-    pub(crate) fn read(reader: OwnedFd, deadline: Instant) -> Option<Vec<u8>> {
+    /// Everything the owner writes to `reader` until it closes its end:
+    /// [`ClipboardError::Timeout`] when it is still writing at `deadline`,
+    /// [`ClipboardError::TooLarge`] past [`MAX_TEXT`], and
+    /// [`ClipboardError::Unavailable`] when the read fails.
+    pub(crate) fn read(reader: OwnedFd, deadline: Instant) -> Result<Vec<u8>, ClipboardError> {
         let mut bytes = Vec::new();
         let mut chunk = vec![0_u8; 64 * 1024];
         loop {
             if !ready(&reader, PollFlags::IN, deadline) {
                 tracing::debug!("a clipboard read timed out");
-                return None;
+                return Err(ClipboardError::Timeout);
             }
             match rustix::io::read(&reader, &mut chunk) {
-                Ok(0) => return Some(bytes),
+                Ok(0) => return Ok(bytes),
                 Ok(count) => {
                     if bytes.len() + count > MAX_TEXT {
                         tracing::warn!("a clipboard read past {MAX_TEXT} bytes was dropped");
-                        return None;
+                        return Err(ClipboardError::TooLarge);
                     }
                     bytes.extend_from_slice(&chunk[..count]);
                 }
                 Err(Errno::INTR | Errno::AGAIN) => {}
                 Err(error) => {
                     tracing::debug!(%error, "a clipboard read failed");
-                    return None;
+                    return Err(ClipboardError::Unavailable);
                 }
             }
         }
@@ -767,7 +1043,7 @@ pub(crate) mod transfer {
             let sent = text.clone();
             let deadline = Instant::now() + Duration::from_secs(5);
             let writing = std::thread::spawn(move || write(writer, &sent, deadline));
-            assert_eq!(read(reader, deadline), Some(text));
+            assert_eq!(read(reader, deadline), Ok(text));
             writing.join().expect("the writer ends");
         }
 
@@ -777,7 +1053,10 @@ pub(crate) mod transfer {
         fn a_transfer_ends_at_its_deadline_or_its_peer() {
             let (reader, writer) = pipe();
             let started = Instant::now();
-            assert_eq!(read(reader, started + Duration::from_millis(50)), None);
+            assert_eq!(
+                read(reader, started + Duration::from_millis(50)),
+                Err(ClipboardError::Timeout)
+            );
             assert!(started.elapsed() < Duration::from_secs(2));
             drop(writer);
 
@@ -813,5 +1092,52 @@ mod tests {
             data.preferred(),
             Some((TextForm::PlainUtf8, "text/plain;charset=UTF-8".to_owned()))
         );
+    }
+
+    /// A concealed write offers KDE's password-manager hint beside its text
+    /// and answers it `secret`; an ordinary write offers and answers neither
+    /// (ADR-0152 §6).
+    #[test]
+    fn a_concealed_source_offers_and_answers_the_hint() {
+        for concealed in [false, true] {
+            let offers = offered(concealed).collect::<Vec<&str>>();
+            assert_eq!(offers.contains(&CONCEALED_HINT), concealed, "{concealed}");
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("hunter2"), concealed);
+            assert_eq!(
+                data.answer(CONCEALED_HINT).as_deref(),
+                concealed.then_some(CONCEALED_HINT_VALUE),
+                "{concealed}"
+            );
+            assert_eq!(
+                data.answer("text/plain;charset=utf-8").as_deref(),
+                Some(&b"hunter2"[..]),
+                "{concealed}"
+            );
+        }
+    }
+
+    /// A source changed in place answers the new text in every form, and the
+    /// hint only while it offers it and the write it answers is concealed.
+    #[test]
+    fn a_source_changed_in_place_answers_the_new_write() {
+        for (offered_hint, concealed) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("first"), offered_hint);
+            assert_eq!(data.answer("UTF8_STRING").as_deref(), Some(&b"first"[..]));
+            data.replace(Arc::<str>::from("second"), concealed);
+            let row = format!("offered {offered_hint}, concealed {concealed}");
+            assert_eq!(
+                data.answer("UTF8_STRING").as_deref(),
+                Some(&b"second"[..]),
+                "{row}"
+            );
+            assert_eq!(
+                data.answer(CONCEALED_HINT).as_deref(),
+                (offered_hint && concealed).then_some(CONCEALED_HINT_VALUE),
+                "{row}"
+            );
+            assert_eq!(data.carries(concealed), offered_hint || !concealed, "{row}");
+        }
     }
 }

@@ -47,4 +47,14 @@ pub trait PlatformTextInput: Send + Sync {
     /// commits the store's own copy of the composed text in place, so the
     /// input method must not commit it again.
     fn discard_composition(&self);
+
+    /// The focused field's standing properties: whether it is protected (a
+    /// password the keyboard must not learn from or show), whether it holds
+    /// one line, and what it is for. Told when a field is attached and
+    /// whenever its status changes, since a push platform reads no store.
+    ///
+    /// Required, with no default: a backend that ignored it would let a
+    /// password reach input-method learning without a trace. One with
+    /// nothing to apply it to says why in an empty body.
+    fn set_field_status(&self, status: crate::text_store::TextStoreStatus);
 }

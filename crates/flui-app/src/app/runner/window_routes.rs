@@ -291,7 +291,7 @@ impl WindowHandler for WindowRoutes {
                     "a window's frame failed; the platform asks for it again"
                 );
             });
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             FrameOutcome::Failed
         })
     }

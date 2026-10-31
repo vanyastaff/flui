@@ -100,7 +100,7 @@ pub use input::{
 };
 pub use inspect::{
     InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
-    InspectValue,
+    InspectValue, NonFinite,
 };
 pub use locator::{LocateParams, Locator, Match, Matches, Pick, StateFilter, Target, TextMatch};
 pub use method::{METHODS, Method, MethodEffect, MethodInfo, ServedBy, Tier};

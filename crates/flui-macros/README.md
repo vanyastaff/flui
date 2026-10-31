@@ -148,7 +148,7 @@ dynamic boundary explicit and local.
 
 ## Other Macros
 
-`Animatable` and `Diagnosticable` are also implemented in this crate. They are
+`Animatable` and `Inspect` are also implemented in this crate. They are
 independent of the view derives and are documented in the generated rustdoc for
 their proc-macro entry points.
 

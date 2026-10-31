@@ -34,7 +34,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, capability::Resolver};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use web_time::Instant;
@@ -50,21 +50,20 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
-use crate::clipboard::linux::text::TextForm;
+use crate::clipboard::linux::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
+use crate::host::{MAX_TEXT, owned_text};
 
 /// How long a transfer may wait for its peer: a whole read, or the next
 /// chunk of an `INCR` write.
 pub(super) const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The most text a read takes; an owner offering more answers nothing.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
-
 /// The most `INCR` writes at once: a requestor that never deletes its
 /// property holds one until its timeout, and more are refused.
 const MAX_WRITERS: usize = 4;
 
-/// The most reads waiting at once: each is answered with its own copy of
-/// the text, so more are answered nothing at once.
+/// The most reads waiting at once. A handle shares one read among all its
+/// readers, so each waiting read is another handle's; more are refused at
+/// once as [`ClipboardError::Unavailable`].
 pub(super) const MAX_READERS: usize = 4;
 
 /// The most bytes of text the `INCR` writes hold at once, each shared text
@@ -86,10 +85,10 @@ const READ_ORDER: [TextForm; 3] = [TextForm::Utf8String, TextForm::PlainUtf8, Te
 
 /// What the handle asks of the thread.
 pub(super) enum Command {
-    /// Own the selection with this text.
-    Write(String),
+    /// Own the selection with this write.
+    Write(ClipboardWrite),
     /// Answer with the selection's text.
-    Read(Resolver<Option<String>>),
+    Read(Resolver<ClipboardRead>),
     /// Let go of everything and end.
     Stop,
 }
@@ -101,6 +100,8 @@ struct Atoms {
     timestamp: xproto::Atom,
     incr: xproto::Atom,
     text: xproto::Atom,
+    /// [`CONCEALED_HINT`], offered with a concealed write's text.
+    concealed_hint: xproto::Atom,
     /// The window's properties a read is converted into, one at a time: a
     /// read that timed out retires its property, so an owner that answers
     /// it late writes where no read looks.
@@ -116,12 +117,13 @@ struct Atoms {
 
 impl Atoms {
     fn intern(connection: &RustConnection) -> Result<Self, ReplyOrIdError> {
-        let names: [&[u8]; 11] = [
+        let names: [&[u8]; 12] = [
             b"CLIPBOARD",
             b"TARGETS",
             b"TIMESTAMP",
             b"INCR",
             b"TEXT",
+            CONCEALED_HINT.as_bytes(),
             b"FLUI_CLIPBOARD_CLOCK",
             b"FLUI_CLIPBOARD_READ_CLOCK",
             b"FLUI_CLIPBOARD_0",
@@ -151,6 +153,7 @@ impl Atoms {
             timestamp,
             incr,
             text,
+            concealed_hint,
             clock,
             read_clock,
             first,
@@ -170,6 +173,7 @@ impl Atoms {
             timestamp,
             incr,
             text,
+            concealed_hint,
             destinations: [first, second, third, fourth],
             clock,
             read_clock,
@@ -201,15 +205,18 @@ impl Atoms {
 struct Owned {
     text: Arc<str>,
     time: xproto::Timestamp,
+    /// Whether the write was concealed: [`CONCEALED_HINT`] is offered too.
+    concealed: bool,
     /// The text's length in ISO 8859-1, counted once: each request for the
     /// form would otherwise scan the whole text again.
     latin1_len: OnceCell<usize>,
 }
 
 impl Owned {
-    fn new(text: String, time: xproto::Timestamp) -> Self {
+    fn new(write: ClipboardWrite, time: xproto::Timestamp) -> Self {
         Self {
-            text: text.into(),
+            concealed: write.is_concealed(),
+            text: Arc::<str>::from(write.into_text()),
             time,
             latin1_len: OnceCell::new(),
         }
@@ -257,15 +264,15 @@ pub(super) struct Selections {
     atoms: Atoms,
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
-    pending: Option<String>,
+    pending: Option<ClipboardWrite>,
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
     /// The reads waiting for the read under way, or for one to start.
-    readers: Vec<Resolver<Option<String>>>,
+    readers: Vec<Resolver<ClipboardRead>>,
     /// The reads sent after a pending write: they answer what the write
     /// leaves, so they join no read that began before it.
-    after_write: Vec<Resolver<Option<String>>>,
+    after_write: Vec<Resolver<ClipboardRead>>,
     reading: Option<Reading>,
     /// Which of [`Atoms::destinations`] the reads are converted into now.
     destination: usize,
@@ -324,8 +331,8 @@ impl Selections {
     /// Carry out `command`; `false` once it asks the thread to end.
     fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
         match command {
-            Command::Write(text) => {
-                self.pending = Some(text);
+            Command::Write(write) => {
+                self.pending = Some(write);
                 self.clocks += 1;
                 // The server stamps the property's change with its time.
                 self.connection.change_property8(
@@ -337,12 +344,12 @@ impl Selections {
                 )?;
             }
             Command::Read(answer) => {
-                // Each waiting read is answered with a copy of the text: past
-                // a few, a read answers nothing rather than hold another.
+                // Past a few handles' reads waiting, a read is refused rather
+                // than queue behind them.
                 if self.readers.len() + self.after_write.len() >= MAX_READERS {
                     // A retired owner has nobody left to answer. The read is
                     // settled before the diagnostic, which runs user code.
-                    let _ = answer.resolve(None);
+                    let _ = answer.resolve(Err(ClipboardError::Unavailable));
                     tracing::debug!("an X11 clipboard read past {MAX_READERS} waiting was refused");
                     return Ok(true);
                 }
@@ -379,11 +386,11 @@ impl Selections {
             }
         }
         if let Some(owned) = &self.owned {
-            let text = owned.text.to_string();
+            let text = owned_text(&owned.text);
             if self.reading.is_some() {
                 self.retire_destination();
             }
-            self.answer(Some(text));
+            self.answer(text);
             return Ok(());
         }
         if self.reading.is_none() {
@@ -439,22 +446,15 @@ impl Selections {
         Ok(())
     }
 
-    /// End the read under way, answering every reader with `text`, the last
-    /// with `text` itself rather than a copy. A delivery that panics (the
-    /// owner's wake hook) leaves the others answered, and the first failure
-    /// goes on.
-    fn answer(&mut self, mut text: Option<String>) {
+    /// End the read under way, answering every reader with `text`, one
+    /// shared copy of it. A delivery that panics (the owner's wake hook)
+    /// leaves the others answered, and the first failure goes on.
+    fn answer(&mut self, text: ClipboardRead) {
         self.reading = None;
         let mut failure = FirstPanic::new();
-        let mut readers = std::mem::take(&mut self.readers).into_iter().peekable();
-        while let Some(reader) = readers.next() {
-            let answer = if readers.peek().is_some() {
-                text.clone()
-            } else {
-                text.take()
-            };
+        for reader in std::mem::take(&mut self.readers) {
             // A retired owner has nobody left to answer.
-            failure.contain(|| reader.resolve(answer));
+            failure.contain(|| reader.resolve(text.clone()));
         }
         failure.resume();
     }
@@ -513,7 +513,7 @@ impl Selections {
         if self.clocks > 0 {
             return Ok(());
         }
-        let Some(text) = self.pending.take() else {
+        let Some(write) = self.pending.take() else {
             return Ok(());
         };
         self.connection
@@ -524,7 +524,7 @@ impl Selections {
             .reply()?
             .owner;
         if owner == self.window {
-            self.owned = Some(Owned::new(text, time));
+            self.owned = Some(Owned::new(write, time));
         } else {
             // A client took it at a later time than ours.
             self.owned = None;
@@ -585,7 +585,7 @@ impl Selections {
                     reading.form = form;
                     self.convert()?;
                 }
-                None => self.answer(None),
+                None => self.answer(Ok(None)),
             }
             return Ok(());
         }
@@ -606,7 +606,7 @@ impl Selections {
                 // Deleting the property asked for the first chunk: it lands
                 // where no read looks.
                 self.retire_destination();
-                self.answer(None);
+                self.answer(Err(ClipboardError::TooLarge));
                 return Ok(());
             }
             // Deleting the property asked for the first chunk.
@@ -616,9 +616,9 @@ impl Selections {
             return Ok(());
         }
         let text = if reply.bytes_after == 0 {
-            decode(form, reply.value)
+            form.answer(reply.value)
         } else {
-            None
+            Err(ClipboardError::TooLarge)
         };
         self.answer(text);
         Ok(())
@@ -647,11 +647,11 @@ impl Selections {
         if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
             // The owner's transfer goes on: its chunks land where no read looks.
             self.retire_destination();
-            self.answer(None);
+            self.answer(Err(ClipboardError::TooLarge));
         } else if reply.value.is_empty() {
             let form = reading.form;
             let bytes = std::mem::take(bytes);
-            self.answer(decode(form, bytes));
+            self.answer(form.answer(bytes));
         } else if bytes.capacity() == 0 {
             // Nothing announced: the first chunk is kept as it came.
             *bytes = reply.value;
@@ -722,6 +722,9 @@ impl Selections {
         if target == self.atoms.targets {
             let mut targets = vec![self.atoms.targets, self.atoms.timestamp, self.atoms.text];
             targets.extend(self.atoms.forms);
+            if owned.concealed {
+                targets.push(self.atoms.concealed_hint);
+            }
             self.connection.change_property32(
                 PropMode::REPLACE,
                 request.requestor,
@@ -738,6 +741,19 @@ impl Selections {
                 property,
                 AtomEnum::INTEGER,
                 &[owned.time],
+            )?;
+            return Ok(true);
+        }
+        if target == self.atoms.concealed_hint {
+            if !owned.concealed {
+                return Ok(false);
+            }
+            self.connection.change_property8(
+                PropMode::REPLACE,
+                request.requestor,
+                property,
+                self.atoms.concealed_hint,
+                CONCEALED_HINT_VALUE,
             )?;
             return Ok(true);
         }
@@ -878,7 +894,7 @@ impl Selections {
         {
             tracing::debug!("an X11 clipboard read timed out");
             self.retire_destination();
-            self.answer(None);
+            self.answer(Err(ClipboardError::Timeout));
         }
         let (expired, kept): (Vec<Transfer>, Vec<Transfer>) = std::mem::take(&mut self.transfers)
             .into_iter()
@@ -966,12 +982,6 @@ fn append(bytes: &mut Vec<u8>, chunk: &[u8]) {
         bytes.reserve_exact(grown - bytes.len());
     }
     bytes.extend_from_slice(chunk);
-}
-
-/// `bytes` received in `form` as text, or `None` past [`MAX_TEXT`] bytes of
-/// it: ISO 8859-1 and ill-formed UTF-8 grow as they decode.
-fn decode(form: TextForm, bytes: Vec<u8>) -> Option<String> {
-    (form.decoded_len(&bytes) <= MAX_TEXT).then(|| form.decode(bytes))
 }
 
 fn steps(

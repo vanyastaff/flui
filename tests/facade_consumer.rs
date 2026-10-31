@@ -317,7 +317,8 @@ fn event_setters_infer_cx_through_the_facade() {
 }
 
 /// The acceptance application, `tests/fixtures/acceptance_app/`, runs its rows
-/// as a crate that depends on the facade alone, with `material` for the
+/// as a crate that depends on the facade alone, with `material` and `serde`
+/// (a session records the data revision it was taken against) for the
 /// application and `testing` for its rows. Every `#[test]` in the directory
 /// must report `... ok`, so a row added there is required here without a
 /// second list.
@@ -329,9 +330,25 @@ fn acceptance_app_runs_through_the_facade() {
         table.insert("flui".into(), facade_with_features(root, features));
         table
     };
+    // The application encodes its documents with the consumer's own codec.
+    let mut dependencies = table(&["material", "serde"]);
+    let mut serde = toml::Table::new();
+    serde.insert(
+        String::from("version"),
+        toml::Value::String(String::from("1")),
+    );
+    serde.insert(
+        String::from("features"),
+        toml::Value::Array(vec![toml::Value::String(String::from("derive"))]),
+    );
+    dependencies.insert(String::from("serde"), toml::Value::Table(serde));
+    dependencies.insert(
+        String::from("serde_json"),
+        toml::Value::String(String::from("1")),
+    );
     let project = consumer_project(
-        table(&["material"]),
-        Some(table(&["material", "testing"])),
+        dependencies,
+        Some(table(&["material", "serde", "testing"])),
         "",
     );
     let fixture = root.join("tests/fixtures/acceptance_app");

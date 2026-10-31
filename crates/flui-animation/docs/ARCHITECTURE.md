@@ -110,8 +110,8 @@ peers after a controller or child-registry failure, then resumes that failure.
 Owning controller and typed-value teardown closes admission before user cleanup.
 Outgoing registry, motion and exact-target custody joins this FIFO, including
 release inside a continuation or waiter whose failure has not yet returned to
-the controller. Healthy cleanup retires resources individually; a caught failure
-retains their opaque custody. The public rows
+the controller. Cleanup retires resources individually; after a caught failure
+each remaining destructor still runs under containment (ADR-0281). The public rows
 `owner_retirement_joins_every_delivery_channel`,
 `owner_retirement_keeps_its_first_destructor_failure` and
 `reentrant_owner_retirement_joins_registry_custody` pin closure, failure priority,
@@ -122,8 +122,8 @@ instant-settlement request cannot defer a retired owner's cancellation and
 healthy cleanup. Only an eligible new settlement is limited to the next round.
 
 `status_delivery_contract` pins ordering, A to B to A, late subscription, published
-outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
-captures and competing payloads in a bounded child process. The current ownership
+outcomes and subsequent frames. `status_delivery_failure_custody` covers captures
+and competing payloads dropped under the first failure in a bounded child process. The current ownership
 and foundation value-notifier policies retain their separate contracts.
 
 ### Published samples and run anchors
@@ -342,7 +342,7 @@ registry borrow and drop it after releasing the borrow. The destructor of a last
 therefore reenter the same registry, remove the same token again or register
 fresh work, and removing a child keeps the tick order of the remaining
 children. A panic from that destructor propagates to the caller after the
-registration is already absent (ADR-0127). Destruction of a whole registry is
+registration is already absent (ADR-0281). Destruction of a whole registry is
 not covered by this contract.
 
 Controller registration and removal are private to this crate. Public callers
@@ -629,11 +629,10 @@ simulations, curves and subscriptions from shared state before dropping them, so
 no destructor runs under an internal lock. User parent removal and queries also
 run outside those locks. A registration is owned by the animation as soon as it
 is accepted, so a constructor that fails later still detaches it. After the
-first destructor failure in a retirement, or while the thread is already
-panicking, the remaining owned values are retained rather than dropped
-([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); the
-first failure propagates. Callbacks are owner-shared `Rc`s, so a snapshot
-clone cannot be proven non-last and is retained too.
+first destructor failure in a retirement, the remaining owned values are still
+dropped, each destructor under containment, and the first failure propagates
+([ADR-0281](../../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md));
+a destructor that panics while the thread unwinds aborts, as in std.
 Tested by `controller_sources_allow_reentry_and_preserve_run_ownership`.
 
 `Split` keeps both curves in private fields, behind checked construction and
@@ -1284,10 +1283,10 @@ the older call cannot rewind the controller or finish its replacement run.
 
 Displaced simulations, curves and status callbacks retire after the lock is
 released. Opaque envelopes keep their source alive across sampling and delivery;
-if a call unwinds, its remaining envelopes are retained without invoking user
-`Drop`. On ordinary return they retire normally, so an ordinary destructor panic
-still propagates. This protects other envelopes during that unwind; it does not
-contain competing destructors inside a user's own aggregate.
+if a call unwinds, its envelopes are dropped normally, and a destructor that
+panics during that unwind aborts (ADR-0281). On ordinary return they retire
+under containment, so an ordinary destructor panic still propagates as the
+first failure.
 
 `controller_sources_allow_reentry_and_preserve_run_ownership` tests public source
 queries, replacement, stop, nested ticks, ordinary retirement reentry, competing

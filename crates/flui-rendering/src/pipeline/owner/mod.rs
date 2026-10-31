@@ -14,7 +14,6 @@ mod cell;
 mod compositing;
 mod construction;
 mod counters;
-mod diagnostics;
 mod hit_slop;
 mod input_regions;
 mod layout;
@@ -239,6 +238,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// publishes nowhere (the state before a bridge is installed).
     semantics_update_callback: Option<flui_semantics::SemanticsUpdateCallback>,
 
+    /// The route-change sink for semantics owners this pipeline creates, set
+    /// where the platform bridge conveys route changes natively
+    /// ([`Self::set_semantics_route_change_sink`]); without one an owner
+    /// announces each named route.
+    semantics_route_change_sink: Option<flui_semantics::platform::RouteChangeSink>,
+
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
@@ -425,6 +430,7 @@ where
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
+        semantics_route_change_sink: from.semantics_route_change_sink,
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
         last_follower_transforms: from.last_follower_transforms,
@@ -538,7 +544,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for SemanticBox {}
+    impl flui_foundation::inspect::Inspect for SemanticBox {
+        fn kind(&self) -> &'static str {
+            "SemanticBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     /// A leaf whose label can change between passes — what a live widget
     /// does. `SemanticBox`'s `&'static str` label is frozen at insertion,
@@ -563,7 +575,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for MutableLeaf {}
+    impl flui_foundation::inspect::Inspect for MutableLeaf {
+        fn kind(&self) -> &'static str {
+            "MutableLeaf"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for MutableLeaf {
         type Arity = Leaf;
@@ -885,7 +903,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for PanickingPaintBox {}
+    impl flui_foundation::inspect::Inspect for PanickingPaintBox {
+        fn kind(&self) -> &'static str {
+            "PanickingPaintBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
         fn perform_layout_raw(
@@ -939,7 +963,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for PanickingLayoutBox {}
+    impl flui_foundation::inspect::Inspect for PanickingLayoutBox {
+        fn kind(&self) -> &'static str {
+            "PanickingLayoutBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
         fn perform_layout_raw(
@@ -1053,7 +1083,13 @@ mod tests {
     #[derive(Debug)]
     struct RecursiveTextBox(RecursiveLayoutPayload);
 
-    impl flui_foundation::Diagnosticable for RecursiveTextBox {}
+    impl flui_foundation::inspect::Inspect for RecursiveTextBox {
+        fn kind(&self) -> &'static str {
+            "RecursiveTextBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for RecursiveTextBox {
         type Arity = flui_foundation::Single;
@@ -1073,7 +1109,13 @@ mod tests {
     #[derive(Debug)]
     struct RecursiveTextSliver(RecursiveLayoutPayload);
 
-    impl flui_foundation::Diagnosticable for RecursiveTextSliver {}
+    impl flui_foundation::inspect::Inspect for RecursiveTextSliver {
+        fn kind(&self) -> &'static str {
+            "RecursiveTextSliver"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::traits::RenderSliver for RecursiveTextSliver {
         type Arity = flui_foundation::Single;
@@ -1094,7 +1136,13 @@ mod tests {
     #[derive(Debug)]
     struct TextSliverHost(Rc<std::cell::Cell<crate::constraints::SliverGeometry>>);
 
-    impl flui_foundation::Diagnosticable for TextSliverHost {}
+    impl flui_foundation::inspect::Inspect for TextSliverHost {
+        fn kind(&self) -> &'static str {
+            "TextSliverHost"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for TextSliverHost {
         type Arity = flui_foundation::Single;

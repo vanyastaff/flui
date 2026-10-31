@@ -18,3 +18,6 @@ mod keyboard;
 
 #[cfg(test)]
 mod teardown;
+
+#[cfg(test)]
+mod persistence;

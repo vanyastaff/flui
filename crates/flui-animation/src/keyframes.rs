@@ -526,10 +526,10 @@ fn reject<T: TwoWayConverter>(
     error
 }
 
-/// Drops `value`, retaining the payload if its destructor panics.
+/// Drops `value`; a payload from a panicking destructor is dropped too.
 fn discard<V>(value: V) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

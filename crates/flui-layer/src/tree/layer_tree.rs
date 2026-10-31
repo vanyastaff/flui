@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
-use flui_foundation::{Diagnosticable, LayerId, RenderId};
+use flui_foundation::{LayerId, RenderId};
 
 use super::stamp::{BoundaryStamp, ContentToken};
 use crate::{LayerLink, layer::Layer};
@@ -40,18 +40,6 @@ pub struct LayerNode {
     /// object is itself a repaint boundary (as `RenderView` is); a plain
     /// `RenderFlex` root, as most test fixtures mount, leaves it `None`.
     boundary: Option<BoundaryStamp>,
-}
-
-impl Diagnosticable for LayerNode {
-    /// Names the node by its layer kind and merges the layer's own properties
-    /// with the boundary stamp.
-    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
-        let mut node = self.layer.to_diagnostics_node();
-        if let Some(stamp) = &self.boundary {
-            node = node.property("render_id", format!("{:?}", stamp.render_id()));
-        }
-        node
-    }
 }
 
 impl LayerNode {

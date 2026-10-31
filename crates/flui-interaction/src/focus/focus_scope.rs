@@ -1944,7 +1944,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
             FocusNode::create_with_counter(None, None, &counter)
         }))
         .expect_err("exhausted allocator must permanently refuse");
-        flui_foundation::panic::retain_opaque_payload(failure);
+        flui_foundation::panic::discard_payload(failure);
     }
     let _ = first.request_focus();
     assert_eq!(

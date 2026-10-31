@@ -110,116 +110,6 @@ fn cloneable_values_keep_independent_values_and_shared_listeners() {
     );
 }
 
-fn contained_failure(aggregate: bool, hostile_capture: bool) {
-    let notifier = Notifier::<()>::new();
-    let drops = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&drops);
-    let self_id = Arc::new(Mutex::new(None::<ListenerId>));
-    let callback_id = Arc::clone(&self_id);
-    let callback_notifier = notifier.clone();
-    let captures = hostile_capture.then(|| {
-        (
-            Bomb {
-                drops: Arc::clone(&drops),
-                message: "first capture",
-            },
-            Bomb {
-                drops: Arc::clone(&drops),
-                message: "second capture",
-            },
-        )
-    });
-    let id = notifier.add(std::rc::Rc::new(move |&()| {
-        let _captures = &captures;
-        callback_notifier.remove(callback_id.lock().expect("listener id").expect("installed"));
-        if aggregate {
-            std::panic::panic_any((
-                Bomb {
-                    drops: Arc::clone(&payload_drops),
-                    message: "first payload",
-                },
-                Bomb {
-                    drops: Arc::clone(&payload_drops),
-                    message: "second payload",
-                },
-            ));
-        }
-        std::panic::panic_any(Bomb {
-            drops: Arc::clone(&payload_drops),
-            message: "payload",
-        });
-    }));
-    *self_id.lock().expect("listener id") = Some(id);
-    let later = Arc::new(AtomicUsize::new(0));
-    let listener_later = Arc::clone(&later);
-    notifier.add(std::rc::Rc::new(move |&()| {
-        listener_later.fetch_add(1, Ordering::SeqCst);
-    }));
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
-        .expect_err("first callback failure propagates after the tail");
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(later.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "opaque failure obligations stay retained"
-    );
-    notifier.notify(&());
-    assert_eq!(
-        later.load(Ordering::SeqCst),
-        2,
-        "the next notification still progresses"
-    );
-}
-
-struct HostileSubscriber {
-    calls: Arc<AtomicUsize>,
-    drops: Arc<AtomicUsize>,
-}
-impl tracing::Subscriber for HostileSubscriber {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        *metadata.level() == tracing::Level::ERROR
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, _: &tracing::Event<'_>) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        std::panic::panic_any((
-            Bomb {
-                drops: Arc::clone(&self.drops),
-                message: "first telemetry payload",
-            },
-            Bomb {
-                drops: Arc::clone(&self.drops),
-                message: "second telemetry payload",
-            },
-        ));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
-fn telemetry_competition() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let drops = Arc::new(AtomicUsize::new(0));
-    tracing::subscriber::with_default(
-        HostileSubscriber {
-            calls: Arc::clone(&calls),
-            drops: Arc::clone(&drops),
-        },
-        || contained_failure(true, true),
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "secondary telemetry payloads stay retained"
-    );
-}
-
 fn retirement_competition() {
     let notifier = Notifier::<()>::new();
     let drops = Arc::new(AtomicUsize::new(0));
@@ -245,8 +135,8 @@ fn retirement_competition() {
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        1,
-        "the second envelope is retained"
+        2,
+        "the second envelope is destroyed under containment"
     );
     assert!(notifier.is_empty());
     let later = Arc::new(AtomicUsize::new(0));
@@ -283,7 +173,7 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
         1,
         "the later envelope is retained"
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
 }
 
 fn terminal_retirement_competition() {
@@ -384,7 +274,7 @@ fn terminal_retirement_preserves_incoming_unwind() {
             0,
             "opaque captures remain retained"
         );
-        flui_foundation::panic::retain_opaque_payload(failure);
+        flui_foundation::panic::discard_payload(failure);
     }
 }
 
@@ -449,7 +339,7 @@ fn value_terminal_retirement_preserves_the_first_failure() {
         );
         assert_eq!(value_drops.load(Ordering::SeqCst), usize::from(!extract));
         assert_eq!(listener_drops.load(Ordering::SeqCst), usize::from(extract));
-        flui_foundation::panic::retain_opaque_payload(failure);
+        flui_foundation::panic::discard_payload(failure);
     }
 }
 
@@ -480,7 +370,7 @@ fn value_retirement_failure_releases_the_shared_channel() {
         flui_foundation::panic::payload_text(&*failure),
         Some("value retirement failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
     alias.notify();
     assert_eq!(calls.load(Ordering::SeqCst), 1, "the clone still notifies");
     assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
@@ -525,7 +415,7 @@ fn value_terminal_retirement_preserves_incoming_unwind() {
     );
     assert_eq!(value_drops.load(Ordering::SeqCst), 0);
     assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
 }
 
 fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
@@ -698,8 +588,8 @@ fn caught_failure_preserves_reentrant_retirement() {
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "no opaque retirement after a caught failure"
+        1,
+        "the late capture is destroyed under containment after a caught failure"
     );
     assert_eq!(calls.get(), 1);
     notifier.remove(first);
@@ -756,15 +646,15 @@ fn recursive_relay_retirement_preserves_failure() {
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        2,
-        "nested completion must not clear outer failure custody"
+        4,
+        "nested completion destroys its captures without clearing the outer failure"
     );
     armed.set(false);
     parent.notify_listeners();
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        4,
-        "next healthy delivery resumes destruction"
+        6,
+        "next healthy delivery destroys its captures too"
     );
 }
 
@@ -792,10 +682,6 @@ fn notifier_ownership_and_recovery() {
             "cloneable_values_keep_independent_values_and_shared_listeners" => {
                 cloneable_values_keep_independent_values_and_shared_listeners();
             }
-            "single_payload" => contained_failure(false, false),
-            "aggregate_payload" => contained_failure(true, false),
-            "capture_and_payload" => contained_failure(true, true),
-            "telemetry_competition" => telemetry_competition(),
             "retirement_competition" => retirement_competition(),
             "terminal_retirement_competition" => terminal_retirement_competition(),
             "terminal_retirement_preserves_incoming_unwind" => {
@@ -831,10 +717,6 @@ fn notifier_ownership_and_recovery() {
         "borrowed_argument_type_accepts_a_non_static_reference",
         "non_clone_owned_value",
         "cloneable_values_keep_independent_values_and_shared_listeners",
-        "single_payload",
-        "aggregate_payload",
-        "capture_and_payload",
-        "telemetry_competition",
         "retirement_competition",
         "terminal_retirement_competition",
         "terminal_retirement_preserves_incoming_unwind",

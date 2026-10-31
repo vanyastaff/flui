@@ -44,7 +44,6 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use flui_foundation::Diagnosticable;
 use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderSliverList;
@@ -328,7 +327,13 @@ struct BenchBox {
     height: f64,
 }
 
-impl Diagnosticable for BenchBox {}
+impl flui_foundation::inspect::Inspect for BenchBox {
+    fn kind(&self) -> &'static str {
+        "BenchBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for BenchBox {
     type Arity = Leaf;
@@ -352,7 +357,13 @@ struct BenchSliverHost {
     constraints: SliverConstraints,
 }
 
-impl Diagnosticable for BenchSliverHost {}
+impl flui_foundation::inspect::Inspect for BenchSliverHost {
+    fn kind(&self) -> &'static str {
+        "BenchSliverHost"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for BenchSliverHost {
     type Arity = Variable;

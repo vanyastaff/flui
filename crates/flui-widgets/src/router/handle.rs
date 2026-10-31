@@ -3,6 +3,9 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::ListenerId;
+use flui_foundation::notifier::{Listenable, ListenerObserver};
+
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
 use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
@@ -16,6 +19,16 @@ use crate::navigator::RouteId;
 /// and inert once the router unmounts: every edit then answers
 /// [`RouterError::Disposed`]. Each edit takes effect on the router's navigator
 /// at once; the pages it adds build on the next frame.
+///
+/// It is [`Listenable`]: its listeners are told when the [`stack`](Self::stack)
+/// changes, by an edit through any handle or a pop the navigator makes itself
+/// (a Back key, a back gesture, a barrier). They are told on a later turn of
+/// the UI runtime's tasks, before any transition ends and never from inside
+/// the navigation, and once for all the edits since they were last told; a
+/// popup is not a change, and neither is a stack that stands. A listener may
+/// navigate: that is told in the next delivery. A committed edit is told even
+/// when user code it runs after the commit panics. The router drops its
+/// listeners when it unmounts, so one may hold a handle to its router.
 pub struct RouterHandle<R: Routable> {
     shared: Rc<RouterShared<R>>,
 }
@@ -75,6 +88,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn push(&self, route: R) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         let page = self.shared.page_route(&route);
         self.shared.navigator.push_page(page, |id| {
             self.shared
@@ -93,6 +107,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn replace(&self, route: R) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
         let page = self.shared.page_route(&route);
@@ -147,6 +162,7 @@ impl<R: Routable> RouterHandle<R> {
     /// once the router has unmounted.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
         let mut target = RouterRetiredValues(R::back_stack(&RoutePath::parse(location)?)?);
@@ -256,6 +272,28 @@ impl<R: Routable> RouterHandle<R> {
     #[must_use]
     pub fn can_pop(&self) -> bool {
         self.shared.stack.borrow().len() > 1
+    }
+}
+
+impl<R: Routable> Listenable for RouterHandle<R> {
+    /// Once the router has unmounted the listener is dropped, not kept: it
+    /// would never be told, and one holding this handle would keep the
+    /// router's state alive.
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        let notifier = &self.shared.announcer.notifier;
+        let id = notifier.add_observer(observer);
+        if !self.shared.mounted.get() {
+            notifier.remove_listener(id);
+        }
+        id
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.shared.announcer.notifier.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.shared.announcer.notifier.remove_all_listeners();
     }
 }
 

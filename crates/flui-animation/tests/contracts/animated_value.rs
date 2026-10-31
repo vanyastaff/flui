@@ -555,11 +555,8 @@ fn displaced_exact_endpoints_share_failure_custody() {
             _ => panic!("endpoint retirement did not preserve first failure"),
         }
         assert!(old.is_canceled());
-        assert_eq!(origin_drops.get(), usize::from(!delivery_fails));
-        assert_eq!(
-            target_drops.get(),
-            usize::from(!delivery_fails && !origin_fails)
-        );
+        assert_eq!(origin_drops.get(), 1);
+        assert_eq!(target_drops.get(), 1);
         registry.tick_all(&clock.frame(Duration::from_secs(2)));
         assert_eq!(
             view.value().position,
@@ -1187,7 +1184,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                 "fresh healthy cleanup remains healthy"
             );
             observed.push((channel, earlier_failure, drops.get()));
-            expected.push((channel, earlier_failure, usize::from(!earlier_failure)));
+            expected.push((channel, earlier_failure, 1));
         }
     }
     assert_eq!(
@@ -1252,8 +1249,8 @@ fn owner_retirement_keeps_its_first_destructor_failure() {
     assert_eq!(motion_drops.load(Ordering::Relaxed), 1);
     assert_eq!(
         target_drops.get(),
-        0,
-        "remaining opaque resources are retained"
+        1,
+        "remaining opaque resources are dropped under the first failure"
     );
     assert!(registry.is_empty());
     let mut fresh =

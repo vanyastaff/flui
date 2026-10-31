@@ -924,9 +924,11 @@ fn explicit_finish_retires_sources_with_failure_custody() {
             original.is_complete(),
             "failure cannot turn accepted success into cancellation"
         );
-        assert_eq!(outcomes.get(), 1);
-        let failed_before_retirement = mode.contains("value") || mode.contains("status");
-        assert_eq!(drops.get(), usize::from(!failed_before_retirement));
+        assert_eq!(
+            drops.get(),
+            1,
+            "{mode}: the source is dropped under the first failure"
+        );
         if let Some(listener) = value_listener {
             controller.remove_listener(listener);
         }
@@ -969,7 +971,7 @@ fn controller_robustness_contract() {
             explicit_finish_preserves_success_after_waker_failure,
         ),
         (
-            "explicit finish retains failure custody",
+            "explicit finish retires sources under the first failure",
             explicit_finish_retires_sources_with_failure_custody,
         ),
         (

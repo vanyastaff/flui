@@ -55,13 +55,18 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Platform values: brightness, locale, haptic feedback kinds, the host's
-/// system preferences (its haptics setting among them) and every type its
-/// accessors return, the target platform (the one a gesture preset models),
-/// the window's state and mode, and the system notices the host delivers.
+/// Platform values: brightness, locale, a clipboard read's answer and a write, haptic
+/// feedback kinds, the host's system preferences (its haptics setting among
+/// them) and every type its accessors return, the target platform (the one a
+/// gesture preset models), the window's state and mode, and the system
+/// notices the host delivers.
 pub mod platform {
     pub use flui_platform::AdmissionError;
     pub use flui_platform::Brightness;
+    pub use flui_platform::ClipboardError;
+    pub use flui_platform::ClipboardRead;
+    pub use flui_platform::ClipboardWrite;
+    pub use flui_platform::Concealment;
     pub use flui_platform::DurationScale;
     pub use flui_platform::GesturePreferences;
     pub use flui_platform::HapticFeedback;

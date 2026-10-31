@@ -6,7 +6,7 @@ use core::num::NonZeroU32;
 use core::time::Duration;
 use std::sync::Arc;
 
-use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, Size};
+use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, RelativeRect, Size};
 use crate::id::{ElementId, RenderId, SemanticsId};
 
 use super::tree::{Link, SceneLayer};
@@ -445,6 +445,19 @@ impl ToValue for Rect {
 impl ToValue for EdgeInsets {
     fn to_value(&self) -> Value<'_> {
         Value::EdgeInsets(*self)
+    }
+}
+
+/// A relative rect reports as its four edge offsets, in the order of [`EdgeInsets`]
+/// (`top,right,bottom,left`): each is the distance from the parent's edge of that name.
+impl ToValue for RelativeRect {
+    fn to_value(&self) -> Value<'_> {
+        Value::EdgeInsets(EdgeInsets::new(
+            self.top,
+            self.right,
+            self.bottom,
+            self.left,
+        ))
     }
 }
 

@@ -24,6 +24,7 @@ mod layout_builder;
 mod presentation_capabilities;
 mod rebuild_handle;
 mod recovered_panic;
+mod unmount_hooks;
 
 pub use build_owner::{BuildOwner, FrameBuildReport};
 pub use external_build_inbox::BuildPremise;
@@ -45,6 +46,8 @@ pub(crate) use global_key_scope::ScopedKeyOwner;
 pub(crate) use keep_alive::KeepAliveHolds;
 pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
+pub use unmount_hooks::UnmountHook;
+pub(crate) use unmount_hooks::UnmountHooks;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported
 // here so no call site changes.
@@ -83,7 +86,7 @@ pub(crate) fn emit_observation(
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
         // Retain both opaque obligations before reporting: either one's drop
         // glue may contain several panicking fields.
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         std::mem::forget(slot.take());
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
@@ -91,7 +94,7 @@ pub(crate) fn emit_observation(
             );
         }));
         if let Err(payload) = reported {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

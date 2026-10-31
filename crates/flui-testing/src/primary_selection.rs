@@ -10,14 +10,14 @@
 //! [`refuse`](ScriptedPrimarySelection::refuse) makes the provider refuse,
 //! as a host without a primary selection does.
 
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_interaction::{
     PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
     PrimarySelectionHandle, SelectionText,
 };
 use flui_platform::{
-    Unsupported,
+    ClipboardRead, Unsupported,
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
 
@@ -34,7 +34,7 @@ struct State {
     /// Another application's selection, which holds while no claim does.
     foreign: Option<String>,
     hold: bool,
-    held: Vec<Resolver<Option<String>>>,
+    held: Vec<Resolver<ClipboardRead>>,
     refusal: Option<Unsupported>,
     fail_releases: bool,
     handles: Rc<()>,
@@ -92,7 +92,7 @@ impl ScriptedPrimarySelection {
             state.hold = false;
             std::mem::take(&mut state.held)
         };
-        let text = self.text();
+        let text: ClipboardRead = Ok(self.text().map(Arc::<str>::from));
         let answered = held.len();
         for answer in held {
             // A retired owner has nobody left to tell.
@@ -135,10 +135,7 @@ impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection
             selection: self.clone(),
             _handle: Rc::clone(&state.handles),
         };
-        Ok(PrimarySelectionHandle::new(
-            backend,
-            cx.completions().clone(),
-        ))
+        Ok(PrimarySelectionHandle::new(backend, cx))
     }
 }
 
@@ -186,7 +183,7 @@ impl PrimarySelectionBackend for Backend {
         self.selection.state.borrow().claims.is_current(claim)
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         {
             let mut state = self.selection.state.borrow_mut();
             if state.hold {
@@ -195,6 +192,6 @@ impl PrimarySelectionBackend for Backend {
             }
         }
         // A retired owner has nobody left to tell.
-        let _ = answer.resolve(self.selection.text());
+        let _ = answer.resolve(Ok(self.selection.text().map(Arc::<str>::from)));
     }
 }

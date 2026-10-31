@@ -34,6 +34,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -69,6 +70,9 @@ struct State {
     written: Vec<Write>,
     write_holds: usize,
     commit_holds: usize,
+    copy_holds: usize,
+    /// Copies asked for while a [`CopyHold`] is alive, waiting to run.
+    held_copies: Vec<Waker>,
     /// Errors the next publishes fail with, in order.
     fail_next: VecDeque<StorageError>,
     /// The error every read fails with, if set.
@@ -132,9 +136,23 @@ impl State {
     }
 }
 
+/// Wake every waker, each under its own catch: a waker that panics leaves
+/// the rest woken, and the first panic resumes once they all are. A later
+/// panic's payload is retained, never dropped, so its destructor cannot cut
+/// the loop short.
 fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
+    let mut first = None;
     for waker in wakers {
-        waker.wake();
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
+            if first.is_none() {
+                first = Some(payload);
+            } else {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        }
+    }
+    if let Some(payload) = first {
+        resume_unwind(payload);
     }
 }
 
@@ -237,6 +255,39 @@ impl MemoryStorage {
     /// on, keeping nothing; `None` lets copies succeed again.
     pub fn fail_copies(&self, error: Option<StorageError>) {
         self.state.lock().fail_copies = error;
+    }
+
+    /// Answer no [`copy_aside`](Storage::copy_aside) while the returned hold
+    /// is alive: a copy asked for meanwhile is made when the last hold
+    /// drops, from what is stored then, as a slow disk would make it.
+    ///
+    /// ```
+    /// use std::future::Future;
+    /// use std::pin::pin;
+    /// use std::task::{Context, Poll, Waker};
+    ///
+    /// use flui_platform::{Storage, StorageName};
+    /// use flui_testing::storage::MemoryStorage;
+    ///
+    /// const NOTES: StorageName = StorageName::from_static("notes");
+    /// let storage = MemoryStorage::new();
+    /// storage.put(&NOTES, "old");
+    /// let mut cx = Context::from_waker(Waker::noop());
+    ///
+    /// let held = storage.hold_copies();
+    /// let mut copy = pin!(storage.copy_aside(&NOTES));
+    /// assert!(copy.as_mut().poll(&mut cx).is_pending());
+    /// storage.put(&NOTES, "new");
+    /// drop(held);
+    /// assert!(matches!(copy.as_mut().poll(&mut cx), Poll::Ready(Ok(_))));
+    /// assert_eq!(storage.kept_aside(&NOTES), [b"new".to_vec()]);
+    /// ```
+    #[must_use = "copies are held only while the hold is alive"]
+    pub fn hold_copies(&self) -> CopyHold {
+        self.state.lock().copy_holds += 1;
+        CopyHold {
+            state: Arc::clone(&self.state),
+        }
     }
 
     /// The copies [`copy_aside`](Storage::copy_aside) kept of `name`, oldest
@@ -343,27 +394,11 @@ impl Storage for MemoryStorage {
     }
 
     fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside> {
-        let mut state = self.state.lock();
-        state.live += 1;
-        let answer = match &state.fail_copies {
-            Some(error) => Err(error.clone()),
-            None => match state.values.get(name).cloned() {
-                None => Err(StorageError::NotFound),
-                Some(bytes) => {
-                    let version = StoredVersion::of_bytes(&bytes);
-                    let kept = state.kept.entry(*name).or_default();
-                    kept.push(bytes);
-                    Ok(CopiedAside {
-                        kept_as: format!("{}.corrupt-{}", name.as_str(), kept.len()),
-                        version,
-                    })
-                }
-            },
-        };
-        drop(state);
-        Box::pin(Answered {
+        self.state.lock().live += 1;
+        Box::pin(CopyRequest {
             state: Arc::clone(&self.state),
-            answer: Some(answer),
+            name: *name,
+            answered: false,
         })
     }
 }
@@ -493,5 +528,88 @@ impl Drop for WriteRequest {
         let mut state = self.state.lock();
         state.writes.remove(&self.id);
         state.live -= 1;
+    }
+}
+
+impl State {
+    /// Keep a copy of `name`'s stored bytes, or fail as configured.
+    fn copy_aside(&mut self, name: &StorageName) -> Result<CopiedAside, StorageError> {
+        if let Some(error) = &self.fail_copies {
+            return Err(error.clone());
+        }
+        let bytes = self
+            .values
+            .get(name)
+            .cloned()
+            .ok_or(StorageError::NotFound)?;
+        let version = StoredVersion::of_bytes(&bytes);
+        let kept = self.kept.entry(*name).or_default();
+        kept.push(bytes);
+        Ok(CopiedAside {
+            kept_as: format!("{}.corrupt-{}", name.as_str(), kept.len()),
+            version,
+        })
+    }
+}
+
+/// A copy aside: made when it is first polled with no [`CopyHold`] alive.
+struct CopyRequest {
+    state: Arc<Mutex<State>>,
+    name: StorageName,
+    answered: bool,
+}
+
+impl Future for CopyRequest {
+    type Output = Result<CopiedAside, StorageError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.answered {
+            return Poll::Pending;
+        }
+        // A waker's clone and drop run its owner's code: neither runs under
+        // the storage's lock.
+        let waker = cx.waker().clone();
+        let mut state = self.state.lock();
+        if state.copy_holds > 0 {
+            state.held_copies.push(waker);
+            return Poll::Pending;
+        }
+        let answer = state.copy_aside(&self.name);
+        drop(state);
+        drop(waker);
+        self.answered = true;
+        Poll::Ready(answer)
+    }
+}
+
+impl Drop for CopyRequest {
+    fn drop(&mut self) {
+        self.state.lock().live -= 1;
+    }
+}
+
+/// While alive, [`MemoryStorage`] answers no copy aside; see
+/// [`MemoryStorage::hold_copies`].
+pub struct CopyHold {
+    state: Arc<Mutex<State>>,
+}
+
+impl fmt::Debug for CopyHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CopyHold").finish_non_exhaustive()
+    }
+}
+
+impl Drop for CopyHold {
+    fn drop(&mut self) {
+        let mut state = self.state.lock();
+        state.copy_holds -= 1;
+        let wakers = if state.copy_holds == 0 {
+            std::mem::take(&mut state.held_copies)
+        } else {
+            Vec::new()
+        };
+        drop(state);
+        wake_all(wakers);
     }
 }
