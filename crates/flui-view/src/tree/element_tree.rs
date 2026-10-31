@@ -1676,6 +1676,25 @@ impl ElementTree {
         self.release_inherited_providers(dependent, providers);
     }
 
+    /// Run the unmount hooks `id`'s state registered, right after its
+    /// `dispose`; the first panic among them is recorded as the element's
+    /// `dispose` failure.
+    fn run_unmount_hooks(&self, index: usize, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
+        let Some(payload) = owner.unmount_hooks.run(id) else {
+            return;
+        };
+        let node = &self.nodes[index];
+        let payload = std::mem::ManuallyDrop::new(payload);
+        owner.record_hook_panic(
+            Some(id),
+            node.parent(),
+            node.element().view_type_id(),
+            crate::LifecycleHook::Dispose,
+            payload.as_ref(),
+            "running an unmount hook",
+        );
+        flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+    }
     /// Release every inherited edge and lifecycle marker on permanent teardown.
     fn unmount_inherited_dependencies(
         &mut self,
@@ -1875,6 +1894,7 @@ impl ElementTree {
         // leaves the active tree before its rebuild ever runs.
         self.unmount_inherited_dependencies(id, owner);
         self.nodes[index].element_mut().unmount(owner);
+        self.run_unmount_hooks(index, id, owner);
 
         // ADR-0040: `Element::unmount` ran and the slot is about to free —
         // one of the two primitives every unmount path bottoms out in.
@@ -2101,6 +2121,7 @@ impl ElementTree {
         // the dependent leaves the tree before its rebuild ever runs.
         self.unmount_inherited_dependencies(id, owner);
         self.nodes[index].element_mut().unmount(owner);
+        self.run_unmount_hooks(index, id, owner);
 
         // ADR-0040: the second of the two unmount primitives (finalize
         // drains, subtree evictions, root detach all bottom out here).

@@ -24,6 +24,7 @@ mod layout_builder;
 mod presentation_capabilities;
 mod rebuild_handle;
 mod recovered_panic;
+mod unmount_hooks;
 
 pub use build_owner::{BuildOwner, FrameBuildReport};
 pub use external_build_inbox::BuildPremise;
@@ -45,6 +46,8 @@ pub(crate) use global_key_scope::ScopedKeyOwner;
 pub(crate) use keep_alive::KeepAliveHolds;
 pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
+pub use unmount_hooks::UnmountHook;
+pub(crate) use unmount_hooks::UnmountHooks;
 // Moved to flui-foundation (ADR-0040: observation events carry typed
 // causes, and foundation is the only crate below every emitter); re-exported
 // here so no call site changes.
