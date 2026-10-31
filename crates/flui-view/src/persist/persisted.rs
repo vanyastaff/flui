@@ -579,7 +579,15 @@ impl<D: Document> OpenDocument<D> {
             self.fail(PersistError::Storage(NO_REGISTRY.into()));
             return;
         };
-        let value = D::initial();
+        // A panic in it is contained and recorded: the fresh start is left
+        // failed and retryable, never `Saving` with nothing to finish it.
+        let value = match contained_initial::<D>() {
+            Ok(value) => value,
+            Err(error) => {
+                self.fail(error);
+                return;
+            }
+        };
         let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
             Ok(body) => body,
             Err(payload) => {
@@ -942,13 +950,27 @@ fn framed<D: Document>(revision: Revision, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// [`Document::initial`], with a panic in it contained and reported.
+fn contained_initial<D: Document>() -> Result<D, PersistError> {
+    catch_unwind(D::initial).map_err(|payload| {
+        let message = payload_text(&*payload)
+            .unwrap_or("a panic without a message")
+            .to_owned();
+        retain_opaque_payload(payload);
+        PersistError::Panicked {
+            during: CodecStep::Initial,
+            message,
+        }
+    })
+}
+
 /// The document a storage read holds: [`Document::initial`] when nothing is
 /// stored, otherwise the body under a header naming this document in a
 /// format this build reads, decoded with any codec panic contained.
 fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError> {
     let Some(bytes) = stored.bytes else {
         return Ok(Loaded {
-            value: Rc::new(D::initial()),
+            value: Rc::new(contained_initial::<D>()?),
             base: stored.version,
             revision: Revision::new(0),
         });

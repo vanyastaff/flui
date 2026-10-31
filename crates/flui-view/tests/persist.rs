@@ -35,7 +35,11 @@ impl Document for Note {
     const MAX_BYTES: u64 = 64;
 
     fn initial() -> Self {
-        Self(NOTE_INITIAL.with(Cell::get).to_owned())
+        let text = NOTE_INITIAL.with(Cell::get);
+        if text == "initial panics" {
+            fail_the_codec();
+        }
+        Self(text.to_owned())
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -1169,6 +1173,39 @@ fn an_initial_value_failing_encode_and_drop_fails_the_fresh_start() {
             notes.status(),
             SaveStatus::Failed(PersistError::Panicked {
                 during: CodecStep::Encode,
+                ..
+            })
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+}
+
+/// A `Document::initial` that panics fails the fresh start instead of
+/// leaving it `Saving` with nothing to finish it; a retry once it works
+/// finishes the start.
+#[test]
+fn an_initial_value_that_panics_fails_the_fresh_start() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+
+    NOTE_INITIAL.with(|initial| initial.set("initial panics"));
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    NOTE_INITIAL.with(|initial| initial.set(""));
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::Failed(PersistError::Panicked {
+                during: CodecStep::Initial,
                 ..
             })
         ),

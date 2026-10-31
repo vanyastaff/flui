@@ -7,6 +7,8 @@
 - `Persisted::start_over` keeps a stored document the application cannot read with `copy_aside`,
   then writes `Document::initial` over exactly those bytes; `retry` resumes a failed fresh start
   without a second copy.
+- `CodecStep::Initial`: a panic in `Document::initial`, contained while a missing file is loaded
+  or a fresh start writes the initial value, is reported as `PersistError::Panicked` with it.
 
 ### Security
 
