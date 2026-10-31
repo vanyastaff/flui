@@ -223,10 +223,19 @@ public final class FluiView extends View {
         }
     }
 
-    /** Create the view and lay it over the activity's whole content. */
+    /**
+     * Create the view and lay it over the activity's whole window. FLUI draws
+     * the window's surface and places everything in its pixels, so the view
+     * lies in the decor view, not in the content frame, which a window that is
+     * not edge to edge sets below the status bar: the input method's caret,
+     * the drop point and the semantics tree's bounds are then FLUI's own
+     * coordinates. It is the decor view's first child, which an inset change
+     * reaches before the content frame can consume it (API 29 and lower).
+     */
     public static FluiView install(Activity activity, long handle) {
         FluiView view = new FluiView(activity, handle);
-        activity.addContentView(view, new ViewGroup.LayoutParams(
+        ViewGroup decor = (ViewGroup) activity.getWindow().getDecorView();
+        decor.addView(view, 0, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return view;
     }
@@ -429,11 +438,16 @@ public final class FluiView extends View {
     }
 
     /**
-     * Where the caret and the field are, in this view's pixels, for an input
-     * method that asked for cursor updates. A negative width means unknown.
+     * Where the caret, the field and the composing text's characters are, in
+     * this view's pixels, for an input method that asked for cursor updates. A
+     * negative field width means unknown. {@code characterRects} holds left,
+     * top, right and bottom for each UTF-16 index from {@code charactersStart}
+     * on, and {@code characterFlags} its visibility; a box outside the composing
+     * span the mirror holds now, which the owner had not seen yet, is left out.
      */
     public void updateCursorAnchor(float caretLeft, float caretTop, float caretBottom,
-            float fieldLeft, float fieldTop, float fieldRight, float fieldBottom) {
+            float fieldLeft, float fieldTop, float fieldRight, float fieldBottom,
+            int charactersStart, float[] characterRects, int[] characterFlags) {
         if (!editing) {
             return;
         }
@@ -452,6 +466,14 @@ public final class FluiView extends View {
             int compositionEnd = BaseInputConnection.getComposingSpanEnd(editable);
             builder.setComposingText(compositionStart,
                     editable.subSequence(compositionStart, compositionEnd));
+            for (int unit = 0; unit < characterFlags.length; unit++) {
+                int index = charactersStart + unit;
+                if (index >= compositionStart && index < compositionEnd) {
+                    builder.addCharacterBounds(index, characterRects[unit * 4],
+                            characterRects[unit * 4 + 1], characterRects[unit * 4 + 2],
+                            characterRects[unit * 4 + 3], characterFlags[unit]);
+                }
+            }
         }
         if (Build.VERSION.SDK_INT >= 33 && fieldRight >= fieldLeft) {
             Api33.editorBounds(builder, new RectF(fieldLeft, fieldTop, fieldRight, fieldBottom));
