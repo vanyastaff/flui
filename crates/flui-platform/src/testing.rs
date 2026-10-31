@@ -8,13 +8,20 @@
 //!
 //! Behind the `testing` feature, the doubles of the contracts this crate
 //! owns (ADR-0243 D4): `FakeHaptics`, the recording
-//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against.
+//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against, and
+//! `ScriptedLauncher`, the scripted [`LauncherBackend`](crate::launch::LauncherBackend).
 
 #[cfg(feature = "testing")]
 mod haptics;
 
 #[cfg(feature = "testing")]
 pub use haptics::{FakeHaptics, HapticCall, HapticPlay};
+
+#[cfg(feature = "testing")]
+mod launcher;
+
+#[cfg(feature = "testing")]
+pub use launcher::{LaunchRequest, ScriptedLauncher};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
