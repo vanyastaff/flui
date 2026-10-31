@@ -472,12 +472,12 @@ The primary selection's handle and backend take the same types.
   retirement gets a fresh value kept nowhere.
 - **Containment.** No borrow of the shared state is held while the backend runs. Each reader's
   delivery is contained, so a wake hook that panics leaves the readers after it answered and
-  its failure goes on after them. A write or a primary-selection claim through any handle of
-  the runtime ends the sharing: a read asked after it never joins one asked before. A backend that
-  drops its resolver, or panics and drops it, abandons the read: every reader that joined it
-  settles `Abandoned::ProviderDropped`. A runtime that retires before the answer drops the
-  waiting closure unrun; the readers go with it, and a later read never finds the stale one,
-  because a read clears only its own entry.
+  its failure goes on after them. A write, or a primary-selection claim or its release, through
+  any handle of the runtime ends the sharing: a read asked after it never joins one asked
+  before. A backend that drops its resolver, or panics and drops it, abandons the read: every
+  reader that joined it settles `Abandoned::ProviderDropped`. A runtime that retires before the
+  answer drops the waiting closure unrun; the readers go with it, and a later read never finds
+  the stale one, because a read clears only its own entry.
 - **Ok(None) means no text.** A clipboard that holds nothing, or only data that is not text,
   answers `Ok(None)`. `Unavailable` is a clipboard the host could not reach (another application
   holds it open, the display connection is gone, a host without one). `Denied` is a permission:
@@ -584,6 +584,7 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   `each_runtime_asks_for_its_own_read` (one provider, two runtimes: a read each, and the retired
   one strands nobody),
   `a_read_after_a_write_never_joins_the_read_before_it`,
+  `a_primary_read_after_a_release_never_joins_the_read_before_it`,
   `a_failed_read_reaches_every_reader_that_joined_it` (a failure is no empty clipboard) and
   `an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again`, in the `capability_seam`
   table of `flui-testing`; `runtime_locals_keep_one_value_per_type_until_retirement`

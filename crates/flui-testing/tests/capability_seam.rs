@@ -592,6 +592,24 @@ pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
 /// borrow of the selection held; a newer claim, or another application
 /// selecting, makes it stale, and a stale claim's drop leaves the selection
 /// alone.
+pub(crate) fn a_primary_read_after_a_release_never_joins_the_read_before_it() {
+    let mut host = HeadlessHost::new(window());
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+    let claim = selection.claim(|| Some("withdrawn".to_owned()));
+    // Answered at once, settled at the owner's turn: still in flight.
+    let before = settle_into(selection.read_text());
+    drop(claim);
+    let after = settle_into(selection.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*before.borrow(), Some(Ok(Ok(Some(answered("withdrawn"))))));
+    assert_eq!(
+        *after.borrow(),
+        Some(Ok(Ok(None))),
+        "the released text is not read again"
+    );
+}
+
 pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() {
     let mut host = HeadlessHost::new(window());
     let scripted = host.primary_selection();

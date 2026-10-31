@@ -339,6 +339,11 @@ fn capability_seam() {
                 capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
             ),
             (
+                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
+                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",
                 capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current
                     as fn(),

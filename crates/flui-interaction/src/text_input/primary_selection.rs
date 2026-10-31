@@ -237,6 +237,7 @@ impl PrimarySelectionHandle {
         let claim = PrimaryClaim {
             backend: Rc::clone(&self.backend),
             id,
+            reads: Rc::clone(&self.reads),
         };
         // The replaced captures drop with the new claim guarded: if their
         // `Drop` panics, the unwind drops `claim`, which withdraws it unless
@@ -274,6 +275,9 @@ impl fmt::Debug for PrimarySelectionHandle {
 pub struct PrimaryClaim {
     backend: Rc<dyn PrimarySelectionBackend>,
     id: PrimaryClaimId,
+    /// The runtime's shared read, which a release of the current selection
+    /// ends.
+    reads: Rc<PrimaryReads>,
 }
 
 impl PrimaryClaim {
@@ -287,6 +291,10 @@ impl PrimaryClaim {
 impl Drop for PrimaryClaim {
     fn drop(&mut self) {
         let released = self.backend.release(self.id);
+        // A read asked after the release never joins one that saw the text.
+        if released.is_some() {
+            self.reads.0.changed();
+        }
         // While unwinding, what the claim offered is withdrawn but kept, not
         // dropped into a second panic (ADR-0127).
         if std::thread::panicking() {
