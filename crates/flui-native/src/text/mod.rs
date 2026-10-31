@@ -98,6 +98,13 @@ pub trait TextInput: Send + Sync + 'static {
     /// put on it (an editor, a field the input method edits) is detached. A
     /// later call is a no-op.
     fn detach(&self);
+
+    /// The window's text as the Wayland seats' text inputs reach it;
+    /// `None` for every other platform's.
+    #[cfg(wayland_host)]
+    fn seat_text(self: Arc<Self>) -> Option<Arc<dyn crate::owner::linux::wayland::SeatWindowText>> {
+        None
+    }
 }
 
 /// How a window's text input reaches the focused field.

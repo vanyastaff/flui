@@ -292,7 +292,7 @@ fn a_stale_done_is_applied_and_sends_no_state() {
     client.commit_string(Some("b".into()));
     client.done(stale);
     assert_eq!(store.text(), "ab", "the commit is not dropped");
-    assert!(wire.take().is_empty(), "no state answers a stale done");
+    assert_eq!(wire.take(), [], "no state answers a stale done");
 
     client.done(wire.commits());
     assert_eq!(wire.surroundings(), [around("ab", 2, 2)]);
@@ -476,5 +476,5 @@ fn a_retired_client_sends_nothing_more() {
     assert_eq!(wire.take(), [Sent::Disable, Sent::Commit]);
     client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
     client.focus_store(Some(as_store(&store)));
-    assert!(wire.take().is_empty());
+    assert_eq!(wire.take(), []);
 }
