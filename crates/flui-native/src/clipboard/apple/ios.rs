@@ -11,11 +11,12 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use flui_platform::{ClipboardError, ClipboardRead};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_foundation::NSString;
-use objc2_ui_kit::UIPasteboard;
+use objc2::runtime::AnyObject;
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
+use objc2_ui_kit::{UIPasteboard, UIPasteboardOption, UIPasteboardOptionLocalOnly};
 
 use crate::host::{NativeClipboard, SyncClipboard, host_text};
 
@@ -70,14 +71,42 @@ impl SyncClipboard for IOSClipboard {
         host_text(string.to_string())
     }
 
-    fn write_now(&self, text: String) {
+    fn write_now(&self, write: ClipboardWrite) {
         let Some(pasteboard) = Self::pasteboard() else {
             tracing::warn!("clipboard write dropped: UIPasteboard is main-thread-only");
             return;
         };
-        let string = NSString::from_str(&text);
-        // SAFETY: as above — main thread established, `setString:` is the
-        // documented setter.
-        unsafe { pasteboard.setString(Some(&string)) };
+        let string = NSString::from_str(write.as_text());
+        if !write.is_concealed() {
+            // SAFETY: as above — main thread established, `setString:` is the
+            // documented setter.
+            unsafe { pasteboard.setString(Some(&string)) };
+            return;
+        }
+        // A concealed write stays on this device: iOS keeps no clipboard
+        // history, and `UIPasteboardOptionLocalOnly` keeps the item off the
+        // universal clipboard of the user's other devices (ADR-0152 §6).
+        let kind = NSString::from_str("public.utf8-plain-text");
+        let text: &AnyObject = &string;
+        let item = NSDictionary::<NSString, AnyObject>::from_slices(&[&*kind], &[text]);
+        let items = NSArray::from_retained_slice(&[item]);
+        let local = NSNumber::numberWithBool(true);
+        let local: &AnyObject = &local;
+        // SAFETY: `UIPasteboardOptionLocalOnly` is an immutable `NSString`
+        // constant UIKit exports, which reading never races. The main thread
+        // is established above; `setItems:options:` takes an array of
+        // dictionaries from a type identifier to its value and a dictionary
+        // of `UIPasteboardOption`s to their values, which both are.
+        unsafe {
+            let options = NSDictionary::<UIPasteboardOption, AnyObject>::from_slices(
+                &[UIPasteboardOptionLocalOnly],
+                &[local],
+            );
+            pasteboard.setItems_options(&items, &options);
+        }
+    }
+
+    fn concealment(&self) -> Concealment {
+        Concealment::Honored
     }
 }

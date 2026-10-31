@@ -1793,8 +1793,8 @@ mod terminal_tests {
             if let Some(drops) = competing_drops {
                 assert_eq!(
                     drops.load(Ordering::SeqCst),
-                    0,
-                    "the first failure retains competing outgoing captures"
+                    1,
+                    "the first failure still drops competing outgoing captures"
                 );
             }
             for (_, current) in current_manager.flights.snapshot_all().iter() {
@@ -1904,8 +1904,8 @@ mod terminal_tests {
             assert_eq!(removed.get(), 1, "the failing cancellation is not replayed");
             assert_eq!(
                 capture_drops.load(Ordering::SeqCst),
-                0,
-                "outgoing captures retain the first failure"
+                1,
+                "outgoing captures are dropped after the first failure"
             );
             manager.finish_all();
             manager.drain_retired();
@@ -2006,9 +2006,7 @@ mod terminal_tests {
                 result.expect_err("subscription panic"),
                 "subscription retirement",
             );
-            assert_eq!(drops[0].load(Ordering::SeqCst), 1);
-            assert_eq!(drops[1].load(Ordering::SeqCst), 0);
-            assert_eq!(drops[2].load(Ordering::SeqCst), 0);
+            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));
             if let Some(retired_drops) = retired_drops {
                 assert!(
                     retired_drops
@@ -2021,9 +2019,7 @@ mod terminal_tests {
                 result.expect_err("factory panic"),
                 "rect factory retirement",
             );
-            assert_eq!(drops[0].load(Ordering::SeqCst), 1);
-            assert_eq!(drops[1].load(Ordering::SeqCst), 1);
-            assert_eq!(drops[2].load(Ordering::SeqCst), 0);
+            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));
         } else {
             assert!(result.is_ok());
             assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));

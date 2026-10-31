@@ -85,7 +85,7 @@ mod hooks {
 
         /// The clipboard of `app`'s Activity, made once per loop: the loop
         /// holds it and answers the table's clipboard position from it.
-        fn clipboard(app: &AndroidApp) -> Arc<dyn crate::host::SharedClipboard>;
+        fn clipboard(app: &AndroidApp, api: AndroidApi) -> Arc<dyn crate::host::SharedClipboard>;
 
         /// The drag-and-drop transport of `view`, `FluiView`'s Rust side,
         /// made as the view starts: the view hands it the drag events its

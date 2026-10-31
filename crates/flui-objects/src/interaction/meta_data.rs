@@ -158,10 +158,15 @@ impl fmt::Debug for RenderMetaData {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderMetaData {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("has_metadata", self.metadata.is_some(), "has metadata");
-        builder.add_enum("behavior", self.behavior);
+impl flui_foundation::inspect::Inspect for RenderMetaData {
+    fn kind(&self) -> &'static str {
+        "RenderMetaData"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("has_metadata", &self.metadata.is_some())
+            .default(&false);
+        out.field("behavior", &self.behavior);
     }
 }
 

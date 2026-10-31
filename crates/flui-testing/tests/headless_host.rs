@@ -26,7 +26,13 @@ struct TripwireBox {
     armed: Arc<AtomicBool>,
 }
 
-impl flui_foundation::Diagnosticable for TripwireBox {}
+impl flui_foundation::inspect::Inspect for TripwireBox {
+    fn kind(&self) -> &'static str {
+        "TripwireBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for TripwireBox {
     type Arity = Leaf;

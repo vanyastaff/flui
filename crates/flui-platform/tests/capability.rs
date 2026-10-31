@@ -355,26 +355,8 @@ fn a_capture_panicking_at_retirement_leaves_the_others_retired() {
     );
 }
 
-/// A panic payload whose own destructor panics.
-struct PanickingPayload;
-
-impl Drop for PanickingPayload {
-    fn drop(&mut self) {
-        panic!("payload dropped");
-    }
-}
-
-/// Panics with a [`PanickingPayload`] when dropped.
-struct PanicWithPanickingPayload;
-
-impl Drop for PanicWithPanickingPayload {
-    fn drop(&mut self) {
-        std::panic::panic_any(PanickingPayload);
-    }
-}
-
 #[test]
-fn a_second_retirement_panic_is_retained_not_dropped() {
+fn a_second_retirement_panic_does_not_replace_the_first() {
     let owner = Owner::new();
     let (first, _first_answer) = owner.source.pending::<u32>();
     let capture = PanicOnDrop("first capture dropped at retirement");
@@ -382,13 +364,13 @@ fn a_second_retirement_panic_is_retained_not_dropped() {
         let _ = &capture;
     });
     let (second, _second_answer) = owner.source.pending::<u32>();
-    let panicking = PanicWithPanickingPayload;
+    let panicking = PanicOnDrop("second capture dropped at retirement");
     second.on_complete(move |_| {
         let _ = &panicking;
     });
 
     let retired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.pending.retire()))
-        .expect("a later payload is not dropped inside the retirement");
+        .expect("a later panic does not escape the retirement");
     let payload = retired.expect("the first capture's panic is handed back");
     assert_eq!(
         payload.downcast_ref::<String>().map(String::as_str),

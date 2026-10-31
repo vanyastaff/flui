@@ -601,7 +601,7 @@ fn deliver_session_end_close(deadline: std::time::Instant) {
             panic = flui_foundation::panic::payload_text(&*payload),
             "a Detached observer panicked at the session's end"
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -740,7 +740,7 @@ fn flush_for_session_end(deadline: std::time::Instant) {
                 panic = flui_foundation::panic::payload_text(&*payload),
                 "the session-end flush panicked"
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -769,7 +769,7 @@ fn deliver_contained_while(
             panic = flui_foundation::panic::payload_text(&*payload),
             "a session-end subscriber panicked; the session end is answered regardless"
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     delivery
 }

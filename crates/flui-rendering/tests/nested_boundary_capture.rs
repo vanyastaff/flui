@@ -100,7 +100,13 @@ impl PaintTally {
     }
 }
 
-impl flui_foundation::Diagnosticable for PaintTally {}
+impl flui_foundation::inspect::Inspect for PaintTally {
+    fn kind(&self) -> &'static str {
+        "PaintTally"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for PaintTally {
     type Arity = Leaf;

@@ -31,7 +31,13 @@ impl RenderSliverCrossAxisGroup {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverCrossAxisGroup {}
+impl flui_foundation::inspect::Inspect for RenderSliverCrossAxisGroup {
+    fn kind(&self) -> &'static str {
+        "RenderSliverCrossAxisGroup"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverCrossAxisGroup {
     type Arity = Variable;

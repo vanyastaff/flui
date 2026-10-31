@@ -131,7 +131,8 @@ impl DevReload {
         match catch_unwind(AssertUnwindSafe(|| call(hook.as_mut()))) {
             Ok(value) => {
                 let owed = std::mem::take(&mut self.0.lock().detach_owed);
-                if owed && catch_unwind(AssertUnwindSafe(|| hook.detach())).is_err() {
+                if owed && let Err(payload) = catch_unwind(AssertUnwindSafe(|| hook.detach())) {
+                    flui_foundation::panic::discard_payload(payload);
                     disable("detach", hook);
                     return Lent::Returned(value);
                 }

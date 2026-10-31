@@ -111,10 +111,8 @@ fn transform_nodes(owner: &PipelineOwner) -> Vec<RenderId> {
         .iter()
         .map(|(id, _)| id)
         .filter(|&id| {
-            owner
-                .debug_node_diagnostics(id)
-                .and_then(|diagnostics| diagnostics.name().map(str::to_owned))
-                .is_some_and(|name| name.ends_with("RenderAnimatedTransform"))
+            flui_rendering::testing::inspect::node_snapshot(owner, id).kind
+                == "RenderAnimatedTransform"
         })
         .collect()
 }
@@ -247,12 +245,7 @@ fn render_nodes(owner: &PipelineOwner, type_name: &str) -> Vec<RenderId> {
         .render_tree()
         .iter()
         .map(|(id, _)| id)
-        .filter(|&id| {
-            owner
-                .debug_node_diagnostics(id)
-                .and_then(|diagnostics| diagnostics.name().map(str::to_owned))
-                .is_some_and(|name| name.ends_with(type_name))
-        })
+        .filter(|&id| flui_rendering::testing::inspect::node_snapshot(owner, id).kind == type_name)
         .collect()
 }
 

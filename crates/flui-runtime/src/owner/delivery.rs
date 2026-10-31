@@ -888,7 +888,7 @@ impl OwnerCore {
                     // The operation's own panic, reported above, is the first
                     // failure: contained, its payload is retained (ADR-0127).
                     if contained && let Some(payload) = failure.take() {
-                        flui_foundation::panic::retain_opaque_payload(payload);
+                        flui_foundation::panic::discard_payload(payload);
                     }
                     failure
                 }

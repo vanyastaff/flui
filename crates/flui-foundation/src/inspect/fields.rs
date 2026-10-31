@@ -345,9 +345,15 @@ impl<'v> FieldMeta<'_, 'v> {
 impl Drop for FieldMeta<'_, '_> {
     fn drop(&mut self) {
         match self.payload {
+            // A number the protocol cannot carry (infinity, NaN) is an absent value, whatever the
+            // object holds: an unbounded bound is "no bound", never a published infinity.
             Payload::One(value) => self.sink.field(Field {
                 name: self.name,
-                value,
+                value: if value.is_finite() {
+                    value
+                } else {
+                    Value::None
+                },
                 meta: self.meta,
             }),
             Payload::Seq(items) => self.sink.seq(self.name, self.meta, items),

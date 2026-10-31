@@ -67,57 +67,16 @@ impl MountedProbe {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Secondary {
-    None,
-    Forward,
-    Fanout(usize),
-}
-struct Bomb(Arc<AtomicUsize>);
-impl Drop for Bomb {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("secondary payload retired");
-    }
-}
-struct Aggregate {
-    _first: Bomb,
-    _second: Bomb,
-}
-fn secondary_payload(drops: &Arc<AtomicUsize>) -> ! {
-    std::panic::panic_any(Aggregate {
-        _first: Bomb(Arc::clone(drops)),
-        _second: Bomb(Arc::clone(drops)),
-    });
-}
 fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize) {
-    exercise_with_secondary(
-        completion_fails,
-        forward_fails,
-        fanout_failures,
-        Secondary::None,
-    );
-}
-fn exercise_with_secondary(
-    completion_fails: bool,
-    forward_fails: bool,
-    fanout_failures: usize,
-    secondary: Secondary,
-) {
     let (_harness, handle) = mounted_handle();
     let armed = Arc::new(AtomicBool::new(false));
     let forward_calls = Arc::new(AtomicUsize::new(0));
     let fanout_calls = Arc::new(AtomicUsize::new(0));
-    let drops = Arc::new(AtomicUsize::new(0));
-    let forward_drops = Arc::clone(&drops);
     let forward_armed = Arc::clone(&armed);
     let seen = Arc::clone(&forward_calls);
     let mut forward = MountedProbe::new(move || {
         if forward_armed.load(Ordering::SeqCst) {
             seen.fetch_add(1, Ordering::SeqCst);
-            if matches!(secondary, Secondary::Forward) {
-                secondary_payload(&forward_drops);
-            }
             assert!(!forward_fails, "forward wake failed");
         }
     });
@@ -135,13 +94,9 @@ fn exercise_with_secondary(
     for _ in 0..2 {
         let armed = Arc::clone(&armed);
         let seen = Arc::clone(&fanout_calls);
-        let fanout_drops = Arc::clone(&drops);
         fanout.push(MountedProbe::new(move || {
             if armed.load(Ordering::SeqCst) {
                 let call = seen.fetch_add(1, Ordering::SeqCst);
-                if matches!(secondary, Secondary::Fanout(index) if index == call) {
-                    secondary_payload(&fanout_drops);
-                }
                 if call < fanout_failures {
                     assert!(call != 0, "first fanout wake failed");
                     panic!("second fanout wake failed");
@@ -212,9 +167,6 @@ fn exercise_with_secondary(
         .cloned()
         .expect("first queued");
     front.set_reason(SnackBarClosedReason::Remove);
-    if let Some(marker) = std::env::var_os("FLUI_MESSENGER_READY") {
-        std::fs::write(marker, b"ready").expect("publish completed Messenger setup");
-    }
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.shared.pop_and_advance(ReconcileOrigin::Direct);
     }));
@@ -240,11 +192,6 @@ fn exercise_with_secondary(
         2,
         "every scaffold delivery attempted after a failure"
     );
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "secondary aggregate must remain opaque"
-    );
     armed.store(false, Ordering::SeqCst);
     forward.pump_and_check();
     for probe in &mut fanout {
@@ -263,11 +210,6 @@ fn exercise_with_secondary(
         .on_closed(move |_cx, _reason| seen.set(true));
     handle.remove_current_snack_bar();
     assert!(fresh.get(), "fresh queue operation remains live");
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "later progress must not retire secondary payload"
-    );
 }
 fn completion_alone() {
     exercise(true, false, 0);
@@ -289,57 +231,6 @@ fn forward_then_fanout() {
 }
 fn fanout_then_fanout() {
     exercise(false, false, 2);
-}
-fn completion_then_hostile_forward() {
-    bounded_child("completion_forward");
-}
-fn completion_then_hostile_fanout() {
-    bounded_child("completion_fanout");
-}
-fn forward_then_hostile_fanout() {
-    bounded_child("forward_fanout");
-}
-fn fanout_then_hostile_fanout() {
-    bounded_child("fanout_fanout");
-}
-fn bounded_child(case: &str) {
-    // Readiness is runtime scratch data, independent of Cargo's output layout.
-    let marker = std::env::temp_dir().join(format!(
-        "flui-messenger-{}-{case}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
-    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .arg("scaffold_messenger::tests::a_panicking_completion_does_not_lock_future_queue_operations")
-        .arg("--exact").arg("--nocapture")
-        .env("FLUI_MESSENGER_CHILD", case).env("FLUI_MESSENGER_READY", &marker)
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-        .spawn().expect("spawn isolated Messenger row");
-    let setup_started = std::time::Instant::now();
-    let mut ready_at = None;
-    let result = loop {
-        if ready_at.is_none() && marker.exists() {
-            ready_at = Some(std::time::Instant::now());
-        }
-        if let Some(status) = child.try_wait().expect("child status") {
-            break status.success() && ready_at.is_some();
-        }
-        let timed_out = ready_at.map_or_else(
-            || setup_started.elapsed() > Duration::from_secs(30),
-            |ready: std::time::Instant| ready.elapsed() > Duration::from_secs(5),
-        );
-        if timed_out {
-            child.kill().expect("terminate stalled Messenger child");
-            let _ = child.wait().expect("reap stalled Messenger child");
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let _ = std::fs::remove_file(marker);
-    assert!(result, "Messenger child {case} aborted, failed, or stalled");
 }
 fn a_second_display_timer_retires_the_first() {
     use flui_sdk::animation::{Animation as _, MotionClock};
@@ -469,16 +360,6 @@ fn a_second_display_timer_retires_the_first() {
 }
 
 pub(super) fn run() {
-    if let Ok(case) = std::env::var("FLUI_MESSENGER_CHILD") {
-        match case.as_str() {
-            "completion_forward" => exercise_with_secondary(true, false, 0, Secondary::Forward),
-            "completion_fanout" => exercise_with_secondary(true, false, 0, Secondary::Fanout(0)),
-            "forward_fanout" => exercise_with_secondary(false, true, 0, Secondary::Fanout(0)),
-            "fanout_fanout" => exercise_with_secondary(false, false, 1, Secondary::Fanout(1)),
-            _ => panic!("unknown Messenger child"),
-        }
-        return;
-    }
     let mut failures = Vec::new();
     for (name, row) in [
         (
@@ -492,26 +373,10 @@ pub(super) fn run() {
         ("completion then fanout wake", completion_then_fanout),
         ("forward wake then fanout wake", forward_then_fanout),
         ("fanout wake then fanout wake", fanout_then_fanout),
-        (
-            "completion then hostile forward payload",
-            completion_then_hostile_forward,
-        ),
-        (
-            "completion then hostile fanout payload",
-            completion_then_hostile_fanout,
-        ),
-        (
-            "forward wake then hostile fanout payload",
-            forward_then_hostile_fanout,
-        ),
-        (
-            "fanout wake then hostile fanout payload",
-            fanout_then_hostile_fanout,
-        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             failures.push(name);
-            flui_sdk::foundation::panic::retain_opaque_payload(payload);
+            flui_sdk::foundation::panic::discard_payload(payload);
         }
     }
     assert!(failures.is_empty(), "failed Messenger cases: {failures:?}");

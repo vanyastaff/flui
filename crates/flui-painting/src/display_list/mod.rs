@@ -10,7 +10,7 @@
 use std::ops::Index;
 
 use flui_foundation::geometry::Rect;
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 pub mod command;
 pub mod command_ops;
@@ -84,10 +84,14 @@ fn accumulate_damage(acc: &mut Option<DamageExtent>, extent: DamageExtent) {
     });
 }
 
-impl Diagnosticable for DisplayList {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        properties.add("commands", self.commands.len());
-        properties.add("bounds", format!("{:?}", self.bounds));
+impl Inspect for DisplayList {
+    fn kind(&self) -> &'static str {
+        "DisplayList"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("commands", &self.commands.len());
+        out.field("bounds", &self.bounds).unit(Unit::LogicalPx);
     }
 }
 

@@ -21,7 +21,11 @@ impl ClipboardBackend for Inert {
         let _ = answer.resolve(Ok(None));
     }
 
-    fn write_text(&self, _text: String) {}
+    fn write(&self, _write: flui_platform::ClipboardWrite) {}
+
+    fn concealment(&self) -> flui_platform::Concealment {
+        flui_platform::Concealment::Unavailable
+    }
 }
 
 struct ClipboardPlugin;

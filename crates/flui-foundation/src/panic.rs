@@ -45,22 +45,20 @@ pub fn is_internal_invariant(text: &str) -> bool {
     text.starts_with("BUG:")
 }
 
-/// Retain a discarded opaque panic payload so containment can continue safely.
+/// Drop a caught panic payload that is not propagated.
 ///
-/// A payload may own several fields with panicking destructors. Dropping it
-/// inside `catch_unwind` can still abort when a second field panics during the
-/// first field's unwind. Exceptional-path retention deliberately leaks the
-/// payload; it does not run arbitrary destruction after a caught failure.
-/// Exact `&'static str` and `String` payloads are released instead: their
-/// destruction cannot invoke user code. No other payload type is inspected
-/// for whether its destructor might be safe.
-/// Boundaries that propagate the original failure should use `resume_unwind`
-/// instead. This operation is for a failure already reported or superseded.
-pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
-    if payload.is::<&'static str>() || payload.is::<String>() {
-        drop(payload);
-    } else {
-        std::mem::forget(payload);
+/// A payload's destructor is user code that runs after its failure was
+/// caught, so it runs under containment (ADR-0281 §3): if it panics, that
+/// panic's payload is discarded the same way, and the caller's boundary keeps
+/// its answer and its first failure. A field of the payload that panics while
+/// another field's destructor unwinds still aborts, as in std (ADR-0281 §1).
+pub fn discard_payload(payload: Box<dyn Any + Send>) {
+    let mut pending = Some(payload);
+    while let Some(payload) = pending.take() {
+        if let Err(next) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+        {
+            pending = Some(next);
+        }
     }
 }
 
@@ -68,8 +66,8 @@ pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
 ///
 /// Delivery to several receivers must not stop at the first that panics, and
 /// must not hide it: [`contain`](Self::contain) runs each one, the first
-/// payload is held, later payloads are retained rather than dropped (a payload
-/// destructor may panic too, see [`retain_opaque_payload`]), and
+/// payload is held, later payloads are discarded under containment
+/// ([`discard_payload`]), and
 /// [`resume`](Self::resume) raises the first once everything has run.
 #[derive(Default)]
 pub struct FirstPanic(Option<Box<dyn Any + Send>>);
@@ -100,34 +98,34 @@ impl FirstPanic {
         }
     }
 
-    /// Hold `payload` unless an earlier panic is held; retain it otherwise.
+    /// Hold `payload` unless an earlier panic is held; discard it otherwise.
     pub fn record(&mut self, payload: Box<dyn Any + Send>) {
         Self::fold(&mut self.0, Some(payload));
     }
 
     /// Fold `next` into `first`: the first payload stays, a later one is
-    /// retained.
+    /// discarded under containment.
     pub fn fold(first: &mut Option<Box<dyn Any + Send>>, next: Option<Box<dyn Any + Send>>) {
         if let Some(payload) = next {
             if first.is_none() {
                 *first = Some(payload);
             } else {
-                retain_opaque_payload(payload);
+                discard_payload(payload);
             }
         }
     }
 
     /// The held payload, for a caller that cannot raise it (a native callback
-    /// boundary) and reports it instead. Release it with
-    /// [`retain_opaque_payload`] rather than dropping it.
+    /// boundary) and reports it instead. Dropping a `FirstPanic` destroys a
+    /// held payload under containment ([`discard_payload`]).
     #[must_use]
-    pub fn into_payload(self) -> Option<Box<dyn Any + Send>> {
-        self.0
+    pub fn into_payload(mut self) -> Option<Box<dyn Any + Send>> {
+        self.0.take()
     }
 
     /// Raise the held panic, if there is one.
-    pub fn resume(self) {
-        if let Some(payload) = self.0 {
+    pub fn resume(mut self) {
+        if let Some(payload) = self.0.take() {
             std::panic::resume_unwind(payload);
         }
     }
@@ -136,17 +134,18 @@ impl FirstPanic {
 /// Carries the first failure across nested callback delivery and retirement.
 ///
 /// Framework delivery seams borrow this context from their enclosing owner.
-/// Opaque ownership retires normally until a failure is caught; afterwards it
-/// is retained. Call [`Self::finish`] only once all accepted work is delivered.
-/// An aggregate that double-panics before containment regains control still
-/// follows Rust's abort semantics.
+/// Opaque ownership retires under containment: after a caught failure a
+/// destructor that panics is a competing failure. Call [`Self::finish`] only
+/// once all accepted work is delivered.
+/// A destructor that panics while the thread unwinds aborts, as in std
+/// (ADR-0281).
 #[doc(hidden)]
 pub struct PanicRecovery {
     incoming: bool,
     first: Option<CapturedFailure>,
     blocking_class: Option<FailureClass>,
     /// The text of each panic caught after the first, whose payload is
-    /// retained unreported; [`Self::finish_reporting`] hands it on.
+    /// dropped unreported; [`Self::finish_reporting`] hands it on.
     competing: Vec<String>,
 }
 
@@ -199,7 +198,7 @@ pub enum FailureClass {
 }
 
 /// The first local annotation and independently accumulated publication restriction.
-/// Dropping this receipt retains opaque payload ownership without user destruction.
+/// Dropping this receipt destroys its payload under containment ([`discard_payload`]).
 /// It cannot resume a payload held under an enclosing owner's earlier failure.
 #[doc(hidden)]
 pub struct RecoveryFailure {
@@ -208,7 +207,7 @@ pub struct RecoveryFailure {
 }
 
 impl RecoveryFailure {
-    /// Borrow the original payload while this receipt retains its ownership.
+    /// Borrow the original payload while this receipt owns it.
     ///
     /// # Panics
     ///
@@ -250,10 +249,26 @@ impl std::fmt::Debug for RecoveryFailure {
     }
 }
 
+impl Drop for FirstPanic {
+    fn drop(&mut self) {
+        if let Some(payload) = self.0.take() {
+            discard_payload(payload);
+        }
+    }
+}
+
 impl Drop for RecoveryFailure {
     fn drop(&mut self) {
         if let Some(captured) = self.captured.take() {
-            retain_opaque_payload(captured.into_parts().0);
+            discard_payload(captured.into_parts().0);
+        }
+    }
+}
+
+impl Drop for PanicRecovery {
+    fn drop(&mut self) {
+        if let Some(captured) = self.first.take() {
+            discard_payload(captured.into_parts().0);
         }
     }
 }
@@ -317,7 +332,7 @@ impl PanicRecovery {
 
     /// Preserve a failure already held by the enclosing framework owner.
     /// Delivery continues, while outgoing opaque ownership and later payloads
-    /// are retained. This context does not acquire or resume that outer payload.
+    /// are dropped. This context does not acquire or resume that outer payload.
     pub fn inherit_failure(&mut self) {
         self.incoming = true;
     }
@@ -374,7 +389,7 @@ impl PanicRecovery {
 
     /// [`finish`](Self::finish), first handing `report` the text of every
     /// panic caught after the first, when there was one. The report is
-    /// contained: if it panics, that payload is retained and the first
+    /// contained: if it panics, that payload is dropped and the first
     /// failure is still the one resumed.
     pub fn finish_reporting(mut self, report: impl FnOnce(&[String])) {
         let competing = std::mem::take(&mut self.competing);
@@ -382,7 +397,7 @@ impl PanicRecovery {
             && let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| report(&competing)))
         {
-            retain_opaque_payload(payload);
+            discard_payload(payload);
         }
         self.finish();
     }
@@ -393,7 +408,7 @@ impl PanicRecovery {
                 std::panic::resume_unwind(payload);
             }
             Some(CapturedFailure::InheritedAnnotation { payload, .. }) => {
-                retain_opaque_payload(payload);
+                discard_payload(payload);
             }
             None => {}
         }
@@ -456,7 +471,7 @@ impl RecoveryScope<'_> {
                     .unwrap_or("<non-string panic payload>")
                     .to_owned(),
             );
-            retain_opaque_payload(payload);
+            discard_payload(payload);
         } else {
             self.owner.first = Some(match captured {
                 CapturedFailure::Authoritative { payload, class } if self.owner.incoming => {
@@ -471,11 +486,7 @@ impl RecoveryScope<'_> {
     /// Retire ownership whose postcondition is established by its producer.
     #[doc(hidden)]
     pub fn retire_classified<T>(&mut self, class: FailureClass, value: T) {
-        if self.has_failure() {
-            std::mem::forget(value);
-        } else {
-            self.run_classified(class, |_| drop(value));
-        }
+        self.run_classified(class, |_| drop(value));
     }
 
     /// A channel's outgoing snapshot belongs to the callout already classified
@@ -558,21 +569,10 @@ impl RecoveryScope<'_> {
         self.owner.has_failure()
     }
 
-    /// Drop `value` inside this delivery's custody. After a failure its
-    /// destructor is not run, so user code never executes on a failed path.
+    /// Drop `value` inside this delivery's custody. A destructor that panics
+    /// is a competing failure; one that panics while the thread unwinds
+    /// aborts, as in std (ADR-0281).
     pub fn retire<T>(&mut self, value: T) {
-        if self.has_failure() {
-            std::mem::forget(value);
-        } else {
-            self.run_classified(FailureClass::Unknown, |_| drop(value));
-        }
-    }
-}
-
-impl Drop for PanicRecovery {
-    fn drop(&mut self) {
-        if let Some(captured) = self.first.take() {
-            retain_opaque_payload(captured.into_parts().0);
-        }
+        self.run_classified(FailureClass::Unknown, |_| drop(value));
     }
 }

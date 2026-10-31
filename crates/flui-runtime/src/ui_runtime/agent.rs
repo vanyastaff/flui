@@ -155,10 +155,6 @@ pub enum AgentError {
     /// never looked up here.
     #[error("the node reference names another window")]
     UnknownPresentation,
-    /// The window does not keep a painted scene after the sink takes it, so the layer tree cannot
-    /// be read between frames.
-    #[error("the window keeps no painted scene to read the layer tree from")]
-    LayersNotKept,
 }
 
 impl AgentError {
@@ -182,7 +178,6 @@ impl AgentError {
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::LayersNotKept => ErrorCode::NotSupported,
             Self::Malformed
             | Self::HandlerPanicked { .. }
             | Self::ResolvePanicked { .. }
@@ -708,9 +703,10 @@ impl SemanticsAgent {
     /// bookkeeping: the read is this window's.
     ///
     /// Ids in the answer are the tree's own handles (`v3.2`, `r12`, `l4.37`); `root` takes one,
-    /// or a `p3/v3.2` reference that must name this window. The layer tree is not kept after a
-    /// frame: it answers [`AgentError::LayersNotKept`] (the sink takes the scene). A tree that has nothing yet (no
-    /// scene was painted) answers an empty reading. A node whose own `inspect` panics is
+    /// or a `p3/v3.2` reference that must name this window. The element and render trees are
+    /// read at the owner's turn; the layer tree belongs to the scene a frame paints, so its read
+    /// is parked and answered with the next scene the window shows (the window is asked to
+    /// repaint, and the host must pump it). A node whose own `inspect` panics is
     /// recorded on it and the read goes on; at most 4096 nodes are reported.
     ///
     /// # Errors
@@ -719,7 +715,7 @@ impl SemanticsAgent {
     /// enqueued; the reply carries the rest, among them [`AgentError::UnknownPresentation`] for
     /// a reference to another window, [`AgentError::NodeGone`] for a root that is no longer in
     /// its tree, [`AgentError::TreeBusy`] while a frame holds the tree and
-    /// [`AgentError::LayersNotKept`] for the layer tree.
+    /// `TreeBusy` again when the window already parks as many layer reads as it admits.
     pub fn inspect(
         &self,
         target: InspectTarget,

@@ -78,9 +78,9 @@ use crate::{
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a `RenderBox`",
     label = "missing `impl RenderBox for {Self}`",
-    note = "a box-protocol render object implements `RenderBox` (its `Arity`, `perform_layout`, `paint`, hit-testing) and `flui_foundation::Diagnosticable`; `RenderObject<BoxProtocol>` is then derived automatically"
+    note = "a box-protocol render object implements `RenderBox` (its `Arity`, `perform_layout`, `paint`, hit-testing) and `flui_foundation::inspect::Inspect`; `RenderObject<BoxProtocol>` is then derived automatically"
 )]
-pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable {
+pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspect {
     /// The arity of this render box (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -708,11 +708,11 @@ pub use flui_painting::TextBaseline;
 /// `FragmentRecorder` in the typed `PaintCx<T::Arity>` and calls
 /// `RenderBox::paint`.
 ///
-/// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
+/// Note: This requires T to also implement Inspect since `RenderObject<P>`
 /// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where
-    T: RenderBox + flui_foundation::Diagnosticable,
+    T: RenderBox + flui_foundation::inspect::Inspect,
 {
     fn perform_layout_raw(
         &mut self,

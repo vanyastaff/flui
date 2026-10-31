@@ -59,7 +59,13 @@ impl fmt::Debug for RenderAnnotatedRegion {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnnotatedRegion {}
+impl flui_foundation::inspect::Inspect for RenderAnnotatedRegion {
+    fn kind(&self) -> &'static str {
+        "RenderAnnotatedRegion"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for RenderAnnotatedRegion {
     type Arity = Single;
