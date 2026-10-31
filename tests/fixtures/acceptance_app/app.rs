@@ -720,7 +720,12 @@ impl ViewState<Root> for RootState {
                     gate.await.map_err(LoadFailure::Other)?;
                     // The session is read only over loaded data: a failed
                     // data load leaves it unread and unwritten.
-                    let saved = if fresh.replace(false) {
+                    let saved = if fresh.get() {
+                        // The notes are shown once the fresh start is
+                        // stored, so no edit is refused while the old ones
+                        // are kept aside.
+                        started_over(&data).await.map_err(LoadFailure::Other)?;
+                        fresh.set(false);
                         Rc::new(Saved::initial())
                     } else {
                         match data.load().await {
@@ -755,7 +760,14 @@ impl ViewState<Root> for RootState {
                     return Column::new(column![Text::new("Loading notes"), reload]).boxed();
                 }
                 if let Some(error) = snapshot.error() {
+                    let resume = documents.data.clone();
+                    let resuming = Rc::clone(&starting_over);
                     let retry = TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
+                        // A fresh start that failed is taken up where it
+                        // stopped; the next attempt waits for it.
+                        if resuming.get() {
+                            resume.retry();
+                        }
                         attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
                     });
                     let message = Text::new(format!("Load failed: {error}"));
@@ -1282,4 +1294,47 @@ fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
         _ => SizedBox::shrink().boxed(),
     })
     .boxed()
+}
+
+/// Wait until the fresh start of `data` is stored: its value is loaded and
+/// takes edits from then on. A failed step ends the wait with its error.
+async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
+    /// Removes the waiting listener when the wait ends or is dropped.
+    struct Watch {
+        data: Persisted<Saved>,
+        id: Option<ListenerId>,
+    }
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            if let Some(id) = self.id.take() {
+                self.data.remove_listener(id);
+            }
+        }
+    }
+    let waker = Rc::new(RefCell::new(None::<std::task::Waker>));
+    let mut watch = Watch {
+        data: data.clone(),
+        id: None,
+    };
+    poll_fn(move |cx| {
+        if let SaveStatus::Failed(error) = watch.data.status() {
+            return Poll::Ready(Err(error.to_string()));
+        }
+        if watch.data.revision().is_some() {
+            return Poll::Ready(Ok(()));
+        }
+        *waker.borrow_mut() = Some(cx.waker().clone());
+        if watch.id.is_none() {
+            let waker = Rc::clone(&waker);
+            watch.id = Some(watch.data.add_listener(Rc::new(move || {
+                // Taken before waking: the waker's wake may poll again.
+                let waker = waker.borrow_mut().take();
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            })));
+        }
+        Poll::Pending
+    })
+    .await
 }

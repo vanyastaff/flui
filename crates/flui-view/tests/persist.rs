@@ -1868,3 +1868,35 @@ fn unmounting_the_opening_state_drops_the_listeners() {
     drop(notes);
     assert!(weak.upgrade().is_none(), "and nothing keeps the document");
 }
+
+/// A state that moves and comes back within one delivery is still told: a
+/// reader may have seen it in between. A retried write that fails the same
+/// way goes from failed to saving and back before the delivery runs.
+#[test]
+fn listeners_hear_a_change_that_came_back_before_the_delivery() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Full);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    let failed = SaveStatus::Failed(PersistError::Storage(StorageError::Full));
+    assert_eq!(notes.status(), failed);
+
+    let heard = listen(&notes);
+    storage.fail_next(StorageError::Full);
+    notes.retry();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Saving,
+        "a reader sees it saving"
+    );
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), failed, "and the write fails again");
+    assert!(
+        heard.borrow().last() == Some(&failed),
+        "the listeners are told where it stands: {:?}",
+        heard.borrow()
+    );
+}

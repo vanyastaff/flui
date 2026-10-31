@@ -65,11 +65,12 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// or [`committed`](Self::committed) changes, so a widget can rebuild with
 /// them. They are told on a later turn of the UI runtime's tasks, never from
 /// inside a call on the document, and once for all the changes since the
-/// last time they were told; a change undone before then tells nobody. A
-/// listener may call any method of the document. The listeners belong to the
-/// state that opened the document: they are dropped when it unmounts, so one
-/// may hold a clone of the document, and a listener added after that is not
-/// kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
+/// last time they were told, also when the state is back on what they were
+/// told by then: a reader may have seen it in between. A call that changes
+/// nothing tells nobody. A listener may call any method of the document. The
+/// listeners belong to the state that opened the document: they are dropped
+/// when it unmounts, so one may hold a clone of the document, and a listener
+/// added after that is not kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
 /// document without keeping it alive.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
@@ -191,6 +192,10 @@ struct Announcer {
     told: RefCell<Reported>,
     /// Whether a delivery is queued and has not started yet.
     queued: Cell<bool>,
+    /// Whether the state moved off what the listeners were told since the
+    /// last delivery, even if it is back there now: a reader may have seen
+    /// the state in between, so the delivery tells them.
+    moved: Cell<bool>,
     /// The latest delivery's task.
     delivery: RefCell<Option<TaskToken>>,
     /// Set when the state that opened the document unmounts: nobody is
@@ -312,6 +317,7 @@ impl<D: Document> Persisted<D> {
                 notifier: ChangeNotifier::new(),
                 told: RefCell::new((status.clone(), committed, None)),
                 queued: Cell::new(false),
+                moved: Cell::new(false),
                 delivery: RefCell::new(None),
                 closed: Cell::new(false),
             },
@@ -1024,18 +1030,25 @@ impl<D: Document> OpenDocument<D> {
     }
 
     /// Queue a delivery to the listeners if what they were told no longer
-    /// stands and none is queued. Runs no listener: they run in the
-    /// delivery, on a later turn of the runtime's tasks.
+    /// stands, noting the move for a delivery already queued. Runs no
+    /// listener: they run in the delivery, on a later turn of the runtime's
+    /// tasks.
     fn announce(self: &Rc<Self>) {
         let announcer = &self.announcer;
         let Some(driver) = &self.driver else {
             return;
         };
-        if announcer.queued.get() || announcer.closed.get() {
+        if announcer.closed.get() {
             return;
         }
         let now = self.reported();
         if *announcer.told.borrow() == now {
+            return;
+        }
+        // Kept also while a delivery is queued: the state may be back on
+        // what was told by the time it runs.
+        announcer.moved.set(true);
+        if announcer.queued.get() {
             return;
         }
         let document = Rc::downgrade(self);
@@ -1099,7 +1112,7 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     let now = open.reported();
     let changed = {
         let mut told = announcer.told.borrow_mut();
-        let changed = *told != now;
+        let changed = announcer.moved.replace(false) || *told != now;
         *told = now;
         changed
     };

@@ -634,21 +634,57 @@ fn a_held_write_keeps_typing_and_scrolling_live() {
 }
 
 #[test]
-fn start_over_while_the_copy_is_slow_shows_fresh_notes_at_once() {
+fn start_over_shows_the_notes_once_they_take_edits() {
     let storage = MemoryStorage::new();
     storage.put(&Saved::NAME, "not notes");
     let mut run = AppRun::start_over(app(), storage);
     let held = run.storage().hold_copies();
     run.tap("Start over");
     assert!(
-        run.shows("Note 1") && !run.shows_starting("Load failed: "),
-        "the initial notes are shown before the old ones are kept aside"
+        run.shows("Loading notes") && !run.shows("Note 1"),
+        "no editable notes while the old ones are being kept aside"
     );
     drop(held);
     run.settle();
     assert_eq!(
         run.storage().kept_aside(&Saved::NAME),
         [b"not notes".to_vec()],
-        "and the unreadable notes are kept aside once the copy is made"
+        "the unreadable notes are kept aside"
+    );
+
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    let run = run.restart();
+    assert!(
+        run.shows("Groceries"),
+        "the first edit after the fresh start is stored"
+    );
+}
+
+#[test]
+fn a_start_over_whose_copy_fails_offers_retry() {
+    let storage = MemoryStorage::new();
+    storage.put(&Saved::NAME, "not notes");
+    let mut run = AppRun::start_over(app(), storage);
+    run.storage().fail_copies(Some(StorageError::Full));
+    run.tap("Start over");
+    assert!(
+        run.shows_starting("Load failed: ") && run.shows("Retry"),
+        "the failed copy is shown with Retry"
+    );
+    assert_eq!(
+        run.storage().contents(&Saved::NAME).as_deref(),
+        Some(&b"not notes"[..]),
+        "the unreadable notes are not written over"
+    );
+
+    run.storage().fail_copies(None);
+    run.tap("Retry");
+    assert!(run.shows("Note 1"), "Retry takes up the fresh start");
+    assert_eq!(
+        run.storage().kept_aside(&Saved::NAME),
+        [b"not notes".to_vec()]
     );
 }

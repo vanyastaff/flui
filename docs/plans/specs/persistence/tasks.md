@@ -238,19 +238,22 @@ graph LR
     `MemoryStorage::hold_copies`). Без каждого слушателя его строка падает.
   - [x] (c) экраны отказов: загрузка данных отличает нечитаемые заметки (`Corrupt`, `Decode`)
     от прочих отказов (`LoadFailure`); экран «Load failed» даёт Retry, а нечитаемым заметкам —
-    ещё «Start over» (`start_over`, затем показ `initial()` сразу, не дожидаясь копии).
+    ещё «Start over» (`start_over`; заметки показываются, когда свежий старт сохранён и
+    документ принимает правки, а отказ копии даёт Retry, который зовёт `retry`).
     Без хранилища (`Unavailable`) заметки живут в памяти. Баннер на `AnimatedBuilder` над
     `Persisted`: «Storage is unavailable», «Read only», «Saving failed» с «Retry saving»
     (`retry`). На экране загрузки — Reload (следующая попытка, прежняя загрузка брошена).
     Строки: таблица `each_load_failure_offers_its_way_on` (повреждённые байты, неразбираемое
     тело, новая версия, недоступный файл: Start over только у первых двух, файл не тронут),
     `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones` (R17),
-    `start_over_while_the_copy_is_slow_shows_fresh_notes_at_once`,
+    `start_over_shows_the_notes_once_they_take_edits`, `a_start_over_whose_copy_fails_offers_retry`,
     `without_storage_the_notes_run_in_memory_with_a_banner`,
     `a_failed_save_shows_a_banner_whose_retry_stores_the_notes` (R20),
     `reload_replaces_a_pending_load` (R10), `a_held_write_keeps_typing_and_scrolling_live`
     (R11). `AppRun::shows_starting` сверяет начало текста: прежние проверки
     `!shows("Load failed: ")` сравнивали весь текст и не могли упасть. Откаты — Start over у
-    всех отказов, без ветки `Unavailable`, без показа `initial()` после Start over, без
-    `start_over`, баннер без «Saving failed», «Retry saving» без `retry` — роняют свою строку.
+    всех отказов, без ветки `Unavailable`, заметки до конца свежего старта, Retry без
+    `retry`, без `start_over`, баннер без «Saving failed», «Retry saving» без `retry` —
+    роняют свою строку. Слушатели `Persisted` узнают и об изменении, вернувшемся к сказанному
+    до доставки (`listeners_hear_a_change_that_came_back_before_the_delivery`).
 - [ ] P12 — нативный прогон (после flui-driver FD11)
