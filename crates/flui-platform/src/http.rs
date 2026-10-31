@@ -621,8 +621,8 @@ pub enum HttpError {
         /// What the network stack reported.
         detail: String,
     },
-    /// The host dropped the request unanswered: its lanes shut down under
-    /// it.
+    /// The host dropped the request before it was answered, or its body
+    /// before it ended: its lanes shut down under it.
     #[error("the request was cancelled")]
     Cancelled,
     /// The host's lanes refused to send the request: they are full, unable

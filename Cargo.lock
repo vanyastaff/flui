@@ -1909,6 +1909,7 @@ dependencies = [
  "parking_lot",
  "pollster",
  "reqwest",
+ "rustls",
  "static_assertions",
  "tempfile",
  "thiserror 2.0.21",

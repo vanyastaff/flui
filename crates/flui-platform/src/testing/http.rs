@@ -142,23 +142,25 @@ impl HttpClient for ScriptedHttp {
             answered: false,
         };
         Box::pin(std::future::poll_fn(move |cx| {
+            // Cloned, and dropped when unused, outside the lock: a waker's
+            // clone and drop run its owner's code, which may call back here.
+            let waker = cx.waker().clone();
             let mut state = pending.state.lock();
             if state.holding.contains(&url) {
-                state
-                    .held
-                    .entry(url.clone())
-                    .or_default()
-                    .push(cx.waker().clone());
+                state.held.entry(url.clone()).or_default().push(waker);
                 return Poll::Pending;
             }
             pending.answered = true;
-            Poll::Ready(match state.scripts.get(&url) {
+            let scripted = state.scripts.get(&url).cloned();
+            drop(state);
+            drop(waker);
+            Poll::Ready(match scripted {
                 Some(ScriptedResponse::Respond { status, body }) => Ok(HttpResponse::new(
-                    *status,
+                    status,
                     Headers::new(),
-                    ResponseBody::new(Script(Some(body.clone())), limit),
+                    ResponseBody::new(Script(Some(body)), limit),
                 )),
-                Some(ScriptedResponse::Fail(error)) => Err(error.clone()),
+                Some(ScriptedResponse::Fail(error)) => Err(error),
                 None => Err(HttpError::Connect {
                     detail: format!("no scripted response for {url}"),
                 }),

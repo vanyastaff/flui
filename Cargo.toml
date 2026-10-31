@@ -459,6 +459,9 @@ moka = { version = "0.12.16", features = ["future"] }
 # charset/http2/system-proxy opt-in. Asset loading only needs binary responses;
 # the provider example enables JSON at its own development dependency.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# The TLS stack reqwest runs, to recognise its handshake errors; no features of
+# its own.
+rustls = { version = "0.23", default-features = false }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"

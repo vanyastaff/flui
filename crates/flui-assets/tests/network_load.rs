@@ -182,3 +182,59 @@ fn eventually(done: impl Fn() -> bool, what: &str) {
         std::thread::sleep(Duration::from_millis(2));
     }
 }
+
+thread_local! {
+    /// The client a [`reentering_waker`]'s clone calls back into.
+    static REENTERED: std::cell::RefCell<Option<ScriptedHttp>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A waker whose clone asks [`REENTERED`] for its requests, as an
+/// executor's clone may run code that reaches the client. Safe `Wake`
+/// cannot customise clone.
+#[expect(
+    unsafe_code,
+    reason = "exercise an executor's clone through the public Future API"
+)]
+fn reentering_waker() -> std::task::Waker {
+    use std::task::{RawWaker, RawWakerVTable, Waker};
+
+    unsafe fn clone(data: *const ()) -> RawWaker {
+        REENTERED.with(|http| {
+            if let Some(http) = http.borrow().as_ref() {
+                let _ = http.requests_to(URL);
+            }
+        });
+        RawWaker::new(data, &VTABLE)
+    }
+    unsafe fn noop(_: *const ()) {}
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    // SAFETY: no vtable function dereferences `data`, and each is safe to call
+    // from any thread any number of times.
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+/// A held request polled by a waker whose clone calls back into the client
+/// stays pending instead of deadlocking on the client's own state.
+#[test]
+fn a_held_request_may_be_polled_by_a_waker_that_reenters_the_client() {
+    let client = ScriptedHttp::new();
+    client.hold(URL);
+    let (done, polled) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        REENTERED.with(|reentered| *reentered.borrow_mut() = Some(client.clone()));
+        let mut request = client
+            .handle()
+            .send(flui_platform::http::HttpRequest::get(URL));
+        let waker = reentering_waker();
+        let poll = request
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker));
+        let _ = done.send(poll.is_pending());
+    });
+    assert_eq!(
+        polled.recv_timeout(Duration::from_secs(5)),
+        Ok(true),
+        "the held request registers its waker without holding the client's lock"
+    );
+}

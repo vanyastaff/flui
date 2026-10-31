@@ -189,20 +189,24 @@ mod lanes {
         };
         let (body_tx, body_rx) = mpsc::channel(BODY_CHUNKS_IN_FLIGHT);
         let (status, headers) = head;
-        let answered =
-            HttpResponse::new(status, headers, ResponseBody::new(Chunks(body_rx), limit));
+        let chunks = Chunks {
+            receiver: body_rx,
+            ended: false,
+        };
+        let answered = HttpResponse::new(status, headers, ResponseBody::new(chunks, limit));
         if head_tx.send(Ok(answered)).is_err() {
             return;
         }
         loop {
             let next = unless_closed(response.chunk(), body_tx.closed()).await;
             let chunk = match next {
-                None | Some(Ok(None)) => return,
-                Some(Ok(Some(bytes))) => Ok(bytes.to_vec()),
-                Some(Err(error)) => Err(transport(&error)),
+                None => return,
+                Some(Ok(None)) => Chunk::End,
+                Some(Ok(Some(bytes))) => Chunk::Bytes(bytes.to_vec()),
+                Some(Err(error)) => Chunk::Failed(transport(&error)),
             };
-            let failed = chunk.is_err();
-            if body_tx.send(chunk).await.is_err() || failed {
+            let last = !matches!(chunk, Chunk::Bytes(_));
+            if body_tx.send(chunk).await.is_err() || last {
                 return;
             }
         }
@@ -289,6 +293,10 @@ mod lanes {
     fn transport(error: &reqwest::Error) -> HttpError {
         if error.is_timeout() {
             HttpError::Timeout
+        } else if let Some(tls) = tls_failure(error) {
+            HttpError::Tls {
+                detail: tls.to_string(),
+            }
         } else if error.is_connect() {
             HttpError::Connect {
                 detail: error.to_string(),
@@ -298,15 +306,65 @@ mod lanes {
         }
     }
 
+    /// The TLS failure behind `error`, if a handshake or certificate check
+    /// failed. Rustls reports it inside an `io::Error`, often one wrapped in
+    /// another, and an `io::Error`'s `source` skips the error it wraps, so
+    /// the walk steps into each wrapped error instead.
+    fn tls_failure(error: &reqwest::Error) -> Option<&rustls::Error> {
+        let mut link: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(current) = link {
+            if let Some(tls) = current.downcast_ref::<rustls::Error>() {
+                return Some(tls);
+            }
+            link = match current.downcast_ref::<std::io::Error>() {
+                Some(io) => io
+                    .get_ref()
+                    .map(|wrapped| wrapped as &(dyn std::error::Error + 'static)),
+                None => current.source(),
+            };
+        }
+        None
+    }
+
+    /// What the lane forwards of a response's body.
+    enum Chunk {
+        Bytes(Vec<u8>),
+        /// The body ended where its server ended it.
+        End,
+        Failed(HttpError),
+    }
+
     /// The body chunks the lane forwards.
-    struct Chunks(mpsc::Receiver<Result<Vec<u8>, HttpError>>);
+    struct Chunks {
+        receiver: mpsc::Receiver<Chunk>,
+        /// Whether the lane reported the body's end or its failure.
+        ended: bool,
+    }
 
     impl BodySource for Chunks {
         fn poll_chunk(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
-            self.0.poll_recv(cx)
+            if self.ended {
+                return Poll::Ready(None);
+            }
+            Poll::Ready(match std::task::ready!(self.receiver.poll_recv(cx)) {
+                Some(Chunk::Bytes(bytes)) => Some(Ok(bytes)),
+                Some(Chunk::End) => {
+                    self.ended = true;
+                    None
+                }
+                Some(Chunk::Failed(error)) => {
+                    self.ended = true;
+                    Some(Err(error))
+                }
+                // The lane dropped the exchange mid-body: the host shut down.
+                None => {
+                    self.ended = true;
+                    Some(Err(HttpError::Cancelled))
+                }
+            })
         }
     }
 }
@@ -383,8 +441,9 @@ mod tests {
     }
 
     /// The table of what a request on the run's lanes answers: a body, a
-    /// status, a body past its limit, a URL that is not HTTP, and the
-    /// host-executor gap; each polled on a thread with no async runtime.
+    /// status, a body past its limit, a failed TLS handshake, a URL that is
+    /// not HTTP, and the host-executor gap; each polled on a thread with no
+    /// async runtime.
     #[test]
     fn requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers() {
         let (address, _seen) = serve(|path| match path {
@@ -413,6 +472,12 @@ mod tests {
         assert!(
             matches!(too_large, Err(HttpError::TooLarge { limit: 16 })),
             "{too_large:?}"
+        );
+
+        let handshake = block_on(http.send(HttpRequest::get(format!("https://{address}/image"))));
+        assert!(
+            matches!(handshake, Err(HttpError::Tls { .. })),
+            "a server that does not speak TLS fails the handshake: {handshake:?}"
         );
 
         let not_http = block_on(http.send(HttpRequest::get("file:///etc/hosts")));
@@ -469,6 +534,19 @@ mod tests {
             seen.recv_timeout(wait),
             Ok("closed"),
             "a dropped body closes its connection"
+        );
+
+        let shut_down = Arc::new(ExecutionServices::with_defaults());
+        let response = block_on(
+            http_over(&shut_down).send(HttpRequest::get(format!("http://{address}/stream"))),
+        )
+        .expect("the head arrives");
+        assert_eq!(seen.recv_timeout(wait), Ok("accepted"));
+        drop(shut_down);
+        assert_eq!(
+            block_on(response.into_body().into_bytes()),
+            Err(HttpError::Cancelled),
+            "a body cut off by the host's shutdown is not a short success"
         );
 
         let services_gone = Arc::new(ExecutionServices::with_defaults());
