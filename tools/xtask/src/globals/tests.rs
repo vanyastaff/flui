@@ -343,6 +343,17 @@ fn counter_rule_rejects_each_non_fetch_add_use() {
         "C",
     );
     assert_eq!(exemption(&public), None, "a `pub` counter is never exempt");
+    for narrow in ["AtomicU32", "AtomicUsize", "AtomicI32", "AtomicU8"] {
+        let defs = defs_of(
+            &format!(
+                "use std::sync::atomic::{{{narrow}, Ordering::Relaxed}};\n\
+                 static C: {narrow} = {narrow}::new(1);\n\
+                 pub fn f() {{ C.fetch_add(1, Relaxed); }}"
+            ),
+            "C",
+        );
+        assert_eq!(exemption(&defs), None, "a {narrow} counter can wrap");
+    }
     let computed = defs_of(
         "static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(START);\n\
          pub fn f() -> u64 { C.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }",

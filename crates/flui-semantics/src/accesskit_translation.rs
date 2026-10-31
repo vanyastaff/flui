@@ -226,6 +226,51 @@ fn live_atomic(atomic: Option<bool>, role: SemanticsRole) -> bool {
     atomic.unwrap_or(matches!(role, SemanticsRole::Alert | SemanticsRole::Status))
 }
 
+/// The scroll position and extents, along the node's axis and in the order
+/// AccessKit reads them, from the top or left edge (UI Automation's scroll
+/// percent, a browser's `scrollTop`). A scrollable that grows up or to the
+/// left publishes its pixels mirrored inside its extent, `min + max − pixels`;
+/// with an unbounded or unknown extent its position has no such place and is
+/// left out.
+fn publish_scroll(node: &mut Node, attrs: &SemanticsAttributes) {
+    use flui_foundation::geometry::{Axis, AxisDirection};
+
+    let direction = attrs
+        .scroll_axis_direction
+        .unwrap_or(AxisDirection::TopToBottom);
+    let (min, max) = (attrs.scroll_extent_min, attrs.scroll_extent_max);
+    let position = attrs.scroll_position.and_then(|pixels| {
+        if !direction.is_reversed() {
+            return Some(pixels);
+        }
+        let (min, max) = (min?, max?);
+        let mirrored = min + max - pixels;
+        mirrored.is_finite().then_some(mirrored)
+    });
+    let vertical = direction.axis() == Axis::Vertical;
+    if let Some(position) = position {
+        if vertical {
+            node.set_scroll_y(position);
+        } else {
+            node.set_scroll_x(position);
+        }
+    }
+    if let Some(min) = min {
+        if vertical {
+            node.set_scroll_y_min(min);
+        } else {
+            node.set_scroll_x_min(min);
+        }
+    }
+    if let Some(max) = max {
+        if vertical {
+            node.set_scroll_y_max(max);
+        } else {
+            node.set_scroll_x_max(max);
+        }
+    }
+}
+
 /// Translate one node's states onto the AccessKit node.
 fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
     // Exhaustive: a new state does not compile until it is published here
@@ -657,7 +702,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         heading_level: _,
         text_direction: _,
         scroll_position: _,
-        scroll_axis: _,
+        scroll_axis_direction: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
         // Published by `apply_collection`.
@@ -787,34 +832,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         y1: data.rect.bottom(),
     });
 
-    match data
-        .attrs
-        .scroll_axis
-        .unwrap_or(flui_foundation::geometry::Axis::Vertical)
-    {
-        flui_foundation::geometry::Axis::Vertical => {
-            if let Some(position) = data.attrs.scroll_position {
-                node.set_scroll_y(position);
-            }
-            if let Some(max) = data.attrs.scroll_extent_max {
-                node.set_scroll_y_max(max);
-            }
-            if let Some(min) = data.attrs.scroll_extent_min {
-                node.set_scroll_y_min(min);
-            }
-        }
-        flui_foundation::geometry::Axis::Horizontal => {
-            if let Some(position) = data.attrs.scroll_position {
-                node.set_scroll_x(position);
-            }
-            if let Some(max) = data.attrs.scroll_extent_max {
-                node.set_scroll_x_max(max);
-            }
-            if let Some(min) = data.attrs.scroll_extent_min {
-                node.set_scroll_x_min(min);
-            }
-        }
-    }
+    publish_scroll(&mut node, data.attrs);
 
     apply_collection(&mut node, &data.attrs.collection);
 

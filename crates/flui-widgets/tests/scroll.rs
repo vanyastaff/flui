@@ -253,6 +253,77 @@ pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
     }
 }
 
+/// A platform reads a scroll position from the top or left edge: a
+/// scrollable growing up or to the left publishes its pixels mirrored inside
+/// its extent, and a platform's offset in that order is mirrored back.
+pub(crate) fn scroll_offsets_reach_platforms_from_the_top_or_left_edge() {
+    use flui_foundation::geometry::{Axis, AxisDirection};
+    use flui_testing::a11y::{A11yPoint as Point, Action, ActionData, ActionRequest, Role, TreeId};
+
+    for (axis, reverse) in [
+        (Axis::Vertical, false),
+        (Axis::Vertical, true),
+        (Axis::Horizontal, false),
+        (Axis::Horizontal, true),
+    ] {
+        let case = format!("{axis:?}, reversed {reverse}");
+        let controller = ScrollController::new();
+        let mut scrollable = Scrollable::new()
+            .scroll_direction(axis)
+            .controller(controller.clone());
+        if reverse {
+            scrollable = scrollable
+                .axis_direction(AxisDirection::from_axis(axis, true))
+                .viewport_builder(Rc::new(move |position| {
+                    flui_widgets::SingleChildScrollView::new()
+                        .scroll_direction(axis)
+                        .reverse(true)
+                        .position(position)
+                        .child(SizedBox::new(1000.0, 1000.0))
+                        .boxed()
+                }));
+        } else {
+            scrollable = scrollable.child(SizedBox::new(1000.0, 1000.0));
+        }
+        let mut laid = lay_out(scrollable, tight(200.0, 200.0));
+        laid.enable_semantics();
+        laid.tick();
+        controller.jump_to(120.0).expect("no build is running");
+        laid.tick();
+        let tree = laid.a11y_tree().expect("mounted scrollable publishes");
+        let (id, view) = tree
+            .raw()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == Role::ScrollView)
+            .expect("the viewport is a scroll view");
+        let published = match axis {
+            Axis::Vertical => view.scroll_y(),
+            Axis::Horizontal => view.scroll_x(),
+        };
+        let edge = if reverse { 680.0 } else { 120.0 };
+        assert_eq!(published, Some(edge), "{case}: published from the edge");
+        assert!(
+            view.supports_action(Action::SetScrollOffset),
+            "{case}: a platform can scroll to an offset"
+        );
+        let target = match axis {
+            Axis::Vertical => Point::new(0.0, 300.0),
+            Axis::Horizontal => Point::new(300.0, 0.0),
+        };
+        laid.invoke_semantics_action(ActionRequest {
+            action: Action::SetScrollOffset,
+            target_tree: TreeId::ROOT,
+            target_node: *id,
+            data: Some(ActionData::SetScrollOffset(target)),
+        })
+        .expect("the scroll view takes an offset");
+        laid.tick();
+        let pixels = if reverse { 500.0 } else { 300.0 };
+        assert_eq!(controller.pixels(), pixels, "{case}: mirrored back");
+    }
+}
+
 pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
     let profile = |min, max| {
         flui_interaction::GestureSettings::default()

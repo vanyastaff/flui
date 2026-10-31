@@ -682,6 +682,16 @@ impl std::fmt::Debug for HeadlessHost {
     }
 }
 
+/// The storage a headless host gives its UI runtime: the host's own, and
+/// the storage the application provides as the [`StorageCapability`] in its
+/// place, if any. The host's flush writes each document's bytes to the
+/// storage that document acquired.
+#[derive(Clone)]
+pub(crate) struct KitStorage {
+    pub(crate) host: Arc<dyn flui_platform::Storage>,
+    pub(crate) provided: Option<Arc<dyn flui_platform::Storage>>,
+}
+
 impl HeadlessHost {
     /// A UI runtime over `window`, whose surface has the window's size.
     ///
@@ -734,16 +744,13 @@ impl HeadlessHost {
 
     /// [`Self::new`], its widgets acquiring `storage` as
     /// the [`StorageCapability`].
-    pub(crate) fn with_storage(
-        window: HeadlessWindow,
-        storage: Option<Arc<dyn flui_platform::Storage>>,
-    ) -> Self {
+    pub(crate) fn with_storage(window: HeadlessWindow, storage: Option<KitStorage>) -> Self {
         Self::assemble(window, storage, None, None)
     }
 
     fn assemble(
         window: HeadlessWindow,
-        storage: Option<Arc<dyn flui_platform::Storage>>,
+        storage: Option<KitStorage>,
         capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
         scripted: Option<ScriptedBuiltIns>,
     ) -> Self {
@@ -770,10 +777,9 @@ impl HeadlessHost {
         let needs_redraw = Arc::new(AtomicBool::new(false));
         let wake_flag = Arc::clone(&needs_redraw);
         let flush_writes = Arc::new(Mutex::new(Vec::new()));
-        let flush = storage.as_ref().map(|storage| {
+        let flush = storage.as_ref().map(|_| {
             let queued = Arc::clone(&flush_writes);
             FlushHost::new(
-                Arc::clone(storage),
                 Box::new(move |write| {
                     queued.lock().push(write);
                     Ok(())
@@ -790,18 +796,28 @@ impl HeadlessHost {
         );
         let registry = capabilities.unwrap_or_else(|| {
             let mut built_ins = scripted.registrar();
-            if let Some(storage) = &storage {
-                let storage = Arc::clone(storage);
+            let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
+            if let Some(KitStorage { host, provided }) = &storage {
+                let host = Arc::clone(host);
                 built_ins.provide::<StorageCapability>(
                     move |_: &flui_platform::capability::ProviderContext<'_>| {
-                        Ok(StorageHandle::new(Arc::clone(&storage)))
+                        Ok(StorageHandle::new(Arc::clone(&host)))
                     },
                 );
+                if let Some(provided) = provided {
+                    let provided = Arc::clone(provided);
+                    overrides.provide::<StorageCapability>(
+                        move |_: &flui_platform::capability::ProviderContext<'_>| {
+                            Ok(StorageHandle::new(Arc::clone(&provided)))
+                        },
+                    );
+                }
             }
             flui_runtime::capability::CapabilityRegistry::builder()
+                .overrides(overrides)
                 .built_ins(built_ins)
                 .build()
-                .expect("BUG: one built-in per capability cannot conflict")
+                .expect("BUG: one built-in and one override per capability cannot conflict")
         });
         host = host.with_capabilities(registry);
         if let Some(flush) = &flush {
