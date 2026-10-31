@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-31)
 - **Date:** 2026-10-31
+- **Amended-by:** [ADR-0283](ADR-0283-overridden-spans-in-selectable-text-hold-their-own-runs.md) — §2 and
+  §5: a selectable paragraph's overridden spans are regions too, a silenced one hidden.
 - **Amends:** [ADR-0214](ADR-0214-selection-area-text-runs.md) §2, whose runs are published as
   the paragraph's children; for a paragraph with routed links they are now its regions' children.
 - **Related:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md) (synthetic run nodes and their
@@ -90,7 +92,7 @@ the selection path does not change.
 - Bad, because a linked paragraph publishes one more node per text region between links.
 - Bad, because in the cases of decision 5 a link holds no runs: its text is selected and read
   by the paragraph's runs, not under the link.
-- Neutral, because spans with accessibility overrides still publish no runs (ADR-0214 status).
+- Neutral, because spans with accessibility overrides host their runs the same way (ADR-0283).
 
 ### Confirmation
 
@@ -134,5 +136,5 @@ the selection path does not change.
 
 ## More information
 
-Revisit when runs carry span accessibility overrides: an overridden span would host its runs the
-same way, with its replacement reading.
+Spans with accessibility overrides host their runs the same way, with their override as the
+reading ([ADR-0283](ADR-0283-overridden-spans-in-selectable-text-hold-their-own-runs.md)).
