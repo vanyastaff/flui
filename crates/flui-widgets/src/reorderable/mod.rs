@@ -786,7 +786,15 @@ impl StatelessView for ReorderRow {
         let strings: &dyn WidgetsLocalizations = localizations
             .as_deref()
             .map_or(&DefaultWidgetsLocalizations, |boxed| &**boxed);
-        let commands = commands(strings, &view, index, rtl);
+        let moves = moves(strings, &view, index, rtl);
+        // The menu, controls and assistive actions offer the moves that apply
+        // now; the keys are bound for every move, and the action decides when
+        // it runs from where the model has the row then.
+        let commands = moves
+            .iter()
+            .filter(|(_, _, _, applies)| *applies)
+            .map(|(command, intent, key, _)| (command.clone(), *intent, key.clone()))
+            .collect::<Vec<_>>();
         let label = view.item_label.as_ref().map(|label| label(index));
         let row = match commands.split_first() {
             None => target.boxed(),
@@ -825,9 +833,9 @@ impl StatelessView for ReorderRow {
         // keys: ADR-0216 §1 keeps arrows, Home and End from gesture commands
         // for text editing, and a text field inside the row still takes them
         // first, since it handles its keys before they reach the row.
-        let row = commands
+        let row = moves
             .iter()
-            .fold(Shortcuts::new(row), |shortcuts, (_, intent, key)| {
+            .fold(Shortcuts::new(row), |shortcuts, (_, intent, key, _)| {
                 shortcuts.shortcut(key.clone(), *intent)
             });
         Actions::new(row).action(RowMoves {
@@ -884,16 +892,17 @@ fn arrow(intent: ReorderIntent) -> &'static str {
     }
 }
 
-/// The moves that apply to the row at `index` of `view`, in menu order.
-fn commands(
+/// Every move of a row of `view`, in menu order, with whether it applies to
+/// the row at `index`: Start and back need a row before it, forward and End
+/// one after it.
+fn moves(
     strings: &dyn WidgetsLocalizations,
     view: &ReorderableList,
     index: usize,
     rtl: bool,
-) -> Vec<(GestureCommand, ReorderIntent, SingleActivator)> {
+) -> Vec<(GestureCommand, ReorderIntent, SingleActivator, bool)> {
     let last = view.item_count.saturating_sub(1);
     let key = |named: NamedKey| SingleActivator::named(named).alt();
-    let mut commands = Vec::new();
     let (back, back_key, forward, forward_key) = match (view.scroll_direction, rtl) {
         (Axis::Vertical, _) => (
             (strings.reorder_item_up(), ReorderIntent::Up),
@@ -914,26 +923,33 @@ fn commands(
             NamedKey::ArrowLeft,
         ),
     };
-    let mut push = |label: &str, intent: ReorderIntent, named: NamedKey| {
-        commands.push((GestureCommand::new(label, intent), intent, key(named)));
-    };
-    if index > 0 {
-        push(
+    let (after_start, before_end) = (index > 0, index < last);
+    [
+        (
             strings.reorder_item_to_start(),
             ReorderIntent::Start,
             NamedKey::Home,
-        );
-        push(back.0, back.1, back_key);
-    }
-    if index < last {
-        push(forward.0, forward.1, forward_key);
-        push(
+            after_start,
+        ),
+        (back.0, back.1, back_key, after_start),
+        (forward.0, forward.1, forward_key, before_end),
+        (
             strings.reorder_item_to_end(),
             ReorderIntent::End,
             NamedKey::End,
-        );
-    }
-    commands
+            before_end,
+        ),
+    ]
+    .into_iter()
+    .map(|(label, intent, named, applies)| {
+        (
+            GestureCommand::new(label, intent),
+            intent,
+            key(named),
+            applies,
+        )
+    })
+    .collect::<Vec<_>>()
 }
 
 /// Performs a row's moves.

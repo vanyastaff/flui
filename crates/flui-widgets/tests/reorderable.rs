@@ -630,6 +630,21 @@ pub(crate) fn the_move_commands_move_a_row_and_announce_it() {
         [(1, 2, ReorderCause::Command), (2, 1, ReorderCause::Command)]
     );
     assert_eq!(shelf.items(), strings(&["c", "b", "d", "a"]));
+
+    // The first row binds Alt+Up too: after Alt+Down it is no longer first.
+    let shelf = Shelf::new(&["a", "b", "c"]);
+    let mut laid = shelf.mount();
+    laid.enable_semantics();
+    laid.pump();
+    focus_row(&mut laid, "a", "Move down");
+    press(&laid, &SingleActivator::named(NamedKey::ArrowDown).alt());
+    press(&laid, &SingleActivator::named(NamedKey::ArrowUp).alt());
+    settle(&mut laid);
+    assert_eq!(
+        shelf.moves(),
+        [(0, 1, ReorderCause::Command), (1, 0, ReorderCause::Command)]
+    );
+    assert_eq!(shelf.items(), strings(&["a", "b", "c"]));
 }
 
 /// A dragged row scrolled out of the built band keeps its drag: resting at
