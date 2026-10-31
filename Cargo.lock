@@ -2487,7 +2487,13 @@ dependencies = [
  "flui-platform",
  "flui-sdk",
  "flui-testing",
+ "futures-util",
+ "libc",
+ "raw-window-handle",
+ "serde",
  "thiserror 2.0.21",
+ "zbus 6.1.0",
+ "zruntime",
 ]
 
 [[package]]

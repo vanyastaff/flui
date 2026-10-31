@@ -179,3 +179,32 @@ impl Plugin for ScriptedSystem {
         });
     }
 }
+
+/// The system services' real Linux providers, over the desktop portal on the
+/// bus at an address rather than the session bus: a scenario that serves a
+/// stand-in portal on a private bus registers it to run the providers end to
+/// end.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+pub struct PortalOnBus {
+    address: std::sync::Arc<str>,
+}
+
+#[cfg(target_os = "linux")]
+impl PortalOnBus {
+    /// The providers on the bus at `address`, a D-Bus address such as
+    /// `unix:path=/tmp/bus`.
+    #[must_use]
+    pub fn new(address: impl Into<std::sync::Arc<str>>) -> Self {
+        Self {
+            address: address.into(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Plugin for PortalOnBus {
+    fn register(&self, registrar: &mut CapabilityRegistrar) {
+        crate::portal::register(registrar, Some(std::sync::Arc::clone(&self.address)));
+    }
+}
