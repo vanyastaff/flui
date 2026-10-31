@@ -49,6 +49,8 @@ mod layout_builder_seam;
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
+#[path = "memory_storage.rs"]
+mod memory_storage;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
@@ -296,6 +298,27 @@ fn capability_seam() {
                 capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
             ),
             (
+                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
+                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
+            ),
+            (
+                "capability_seam::each_runtime_asks_for_its_own_read",
+                capability_seam::each_runtime_asks_for_its_own_read as fn(),
+            ),
+            (
+                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
+                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
+            ),
+            (
+                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
+                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
+                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_dropped_handle_ends_its_subscription",
                 capability_seam::a_dropped_handle_ends_its_subscription as fn(),
             ),
@@ -316,6 +339,11 @@ fn capability_seam() {
             (
                 "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
                 capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
+            ),
+            (
+                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
+                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
+                    as fn(),
             ),
             (
                 "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",

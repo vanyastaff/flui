@@ -91,6 +91,8 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// capabilities from, and where their completions settle (ADR-0152).
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
     pub(crate) completions: flui_platform::capability::CompletionSource,
+    /// What providers keep for the UI runtime (ADR-0152 §5).
+    pub(crate) locals: flui_platform::capability::RuntimeLocals,
     /// What the presentation closes and persists through: its close guard's
     /// vetoes and signal, and the host's flush registry.
     pub(crate) close: crate::runtime_services::CloseServices,
@@ -877,6 +879,7 @@ impl PresentationState {
                 Some(Rc::new(crate::capability::PresentationCapabilities {
                     registry: capabilities.capabilities,
                     completions: capabilities.completions,
+                    locals: capabilities.locals,
                     window: Rc::downgrade(&window),
                 }));
             presentation.close_guard = Some(close_guard.guard());

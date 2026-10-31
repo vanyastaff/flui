@@ -12,6 +12,7 @@ use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
     PendingCompletions,
 };
+use flui_platform::{ClipboardError, ClipboardRead};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -70,9 +71,9 @@ impl Answers {
     }
 
     /// Read `clipboard`, waiting for its answer.
-    fn read(&self, clipboard: &X11Clipboard) -> Option<String> {
-        let (mut completion, resolver): (Completion<Option<String>>, _) =
-            self.source.pending::<Option<String>>();
+    fn read(&self, clipboard: &X11Clipboard) -> Option<Arc<str>> {
+        let (mut completion, resolver): (Completion<ClipboardRead>, _) =
+            self.source.pending::<ClipboardRead>();
         clipboard.read_text(resolver);
         let deadline = Instant::now() + STEP;
         loop {
@@ -82,7 +83,9 @@ impl Answers {
                 job.run(&scope);
             }
             if let Some(outcome) = completion.poll() {
-                return outcome.expect("the read is answered, not abandoned");
+                return outcome
+                    .expect("the read is answered, not abandoned")
+                    .expect("the X11 read succeeds");
             }
             assert!(Instant::now() < deadline, "timed out waiting for the read");
             std::thread::sleep(Duration::from_millis(5));
@@ -185,7 +188,7 @@ fn a_read_after_a_write_answers_the_write() {
     for round in 0..20 {
         let text = format!("after {round}");
         clipboard.write_text(text.clone());
-        assert_eq!(answers.read(&clipboard), Some(text));
+        assert_eq!(answers.read(&clipboard), Some(Arc::from(text)));
     }
 }
 
@@ -228,23 +231,23 @@ fn silent_owner() -> RustConnection {
 }
 
 /// Past [`MAX_READERS`](super::selection::MAX_READERS) reads waiting, a
-/// read answers nothing at once rather than wait for another copy of the
-/// text; the reads waiting go on waiting.
+/// read is refused at once rather than queue behind them; the reads
+/// waiting go on waiting.
 #[test]
-fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
+fn a_read_past_the_waiting_limit_is_refused_at_once() {
     let Some(_server) = server() else {
         return;
     };
     let _owner = silent_owner();
     let answers = Answers::new();
     let reader = X11Clipboard::start().expect("the X server answers");
-    let mut waiting: Vec<Completion<Option<String>>> = Vec::new();
+    let mut waiting: Vec<Completion<ClipboardRead>> = Vec::new();
     for _ in 0..super::selection::MAX_READERS {
-        let (completion, resolver) = answers.source.pending::<Option<String>>();
+        let (completion, resolver) = answers.source.pending::<ClipboardRead>();
         reader.read_text(resolver);
         waiting.push(completion);
     }
-    let (mut past, resolver) = answers.source.pending::<Option<String>>();
+    let (mut past, resolver) = answers.source.pending::<ClipboardRead>();
     reader.read_text(resolver);
     let deadline = Instant::now() + super::selection::TRANSFER_TIMEOUT / 2;
     let outcome = loop {
@@ -262,7 +265,10 @@ fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
         );
         std::thread::sleep(Duration::from_millis(5));
     };
-    assert_eq!(outcome.expect("the read is answered"), None);
+    assert_eq!(
+        outcome.expect("the read is answered"),
+        Err(ClipboardError::Unavailable)
+    );
     for completion in &mut waiting {
         assert!(completion.poll().is_none(), "a waiting read was answered");
     }
@@ -310,9 +316,9 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
         });
         let source = CompletionSource::new(poster, PendingCompletions::new());
         let reader = X11Clipboard::start().expect("the X server answers");
-        let (_first, answer) = source.pending::<Option<String>>();
+        let (_first, answer) = source.pending::<ClipboardRead>();
         reader.read_text(answer);
-        let (_second, answer) = source.pending::<Option<String>>();
+        let (_second, answer) = source.pending::<ClipboardRead>();
         reader.read_text(answer);
         drop(reader);
         assert_eq!(

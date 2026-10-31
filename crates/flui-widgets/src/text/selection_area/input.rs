@@ -57,10 +57,11 @@ impl Unit {
     }
 }
 
-/// A drag in progress: the unit it selects by and the unit it started on,
-/// which stays selected whichever way it goes.
+/// A drag in progress: the input moving it, the unit it selects by and the
+/// unit it started on, which stays selected whichever way it goes.
 #[derive(Debug, Clone)]
 struct Drag {
+    input: SelectionInput,
     unit: Unit,
     start: DocumentPosition,
     end: DocumentPosition,
@@ -260,7 +261,8 @@ impl SelectionModel {
     }
 
     /// A touch long press at `global`: select the word under it and show
-    /// the handles.
+    /// the handles. The same touch then extends the selection by words as
+    /// it moves, keeping that word selected.
     fn long_pressed(self: &Rc<Self>, global: Offset<f64>) {
         let ordered = self.ordered();
         let Some(hit) = self.position_at(&ordered, global) else {
@@ -268,17 +270,24 @@ impl SelectionModel {
         };
         let (start, end) = self.unit_at(&ordered, &hit.at, Unit::Word);
         let caret = CaretMemory::after_hit(&end, &hit);
+        let held = Drag {
+            input: SelectionInput::Touch,
+            unit: Unit::Word,
+            start: start.clone(),
+            end: end.clone(),
+        };
         let word = DocumentSelection::new(start, end);
         let committed = self.registry.snap(&word);
         // A listener that panics still leaves the word selected, so its
         // handles are shown before the first failure is resumed.
         let mut failure = FirstPanic::new();
         self.select_contained(Some(word), caret, SelectionInput::Touch, &mut failure);
-        // A listener that moved the focus away has taken the handles with it,
-        // and one that selected something else has replaced the word they
-        // were for.
+        // A listener that moved the focus away has taken the handles and the
+        // rest of the press with it, and one that selected something else has
+        // replaced the word they were for.
         let still_the_word = committed.is_some() && *self.selection.borrow() == committed;
         if still_the_word && self.focus.has_primary_focus() {
+            *self.pointer.drag.borrow_mut() = Some(held);
             self.show_handles(&mut failure);
         }
         failure.resume();
@@ -435,6 +444,7 @@ impl SelectionModel {
             .map(|selection| selection.anchor().clone());
         if let Some(anchor) = anchor {
             *self.pointer.drag.borrow_mut() = Some(Drag {
+                input: SelectionInput::Pointer,
                 unit: Unit::Character,
                 start: anchor.clone(),
                 end: anchor,
@@ -446,6 +456,7 @@ impl SelectionModel {
         };
         let (start, end) = self.unit_at(&ordered, &hit.at, unit);
         *self.pointer.drag.borrow_mut() = Some(Drag {
+            input: SelectionInput::Pointer,
             unit,
             start: start.clone(),
             end: end.clone(),
@@ -458,10 +469,11 @@ impl SelectionModel {
         );
     }
 
-    /// The drag moved to `global`: select from its first unit to the unit
-    /// there, keeping the first unit whichever way the drag went.
-    fn drag_moved(&self, global: Offset<f64>) {
-        let Some(drag) = self.pointer.drag.borrow().clone() else {
+    /// The drag `input` moves went to `global`: select from its first unit
+    /// to the unit there, keeping the first unit whichever way the drag went.
+    fn drag_moved(&self, global: Offset<f64>, input: SelectionInput) {
+        let drag = self.pointer.drag.borrow().clone();
+        let Some(drag) = drag.filter(|drag| drag.input == input) else {
             return;
         };
         let ordered = self.ordered();
@@ -475,11 +487,15 @@ impl SelectionModel {
             DocumentSelection::new(drag.start, end)
         };
         let caret = CaretMemory::after_hit(selection.focus(), &hit);
-        self.select_from_input(Some(selection), caret, SelectionInput::Pointer);
+        self.select_from_input(Some(selection), caret, input);
     }
 
-    fn drag_ended(&self) {
-        self.pointer.drag.borrow_mut().take();
+    /// The drag `input` moves ended; a drag by another input goes on.
+    pub(super) fn drag_ended(&self, input: SelectionInput) {
+        let mut drag = self.pointer.drag.borrow_mut();
+        if drag.as_ref().is_some_and(|drag| drag.input == input) {
+            *drag = None;
+        }
     }
 
     /// A text the drag in progress started on left: the drag goes on from
@@ -498,7 +514,9 @@ impl SelectionModel {
         if held(&current.start) && held(&current.end) {
             return;
         }
+        let input = current.input;
         *drag = kept.map(|kept| Drag {
+            input,
             unit: Unit::Character,
             start: kept.anchor().clone(),
             end: kept.anchor().clone(),
@@ -915,25 +933,25 @@ impl SelectionGesturesState {
                     if let Some(model) = start.upgrade() {
                         let at = pressed_start.get().unwrap_or(details.global_position);
                         model.drag_started(at, Unit::of_taps(details.consecutive_tap_count));
-                        model.drag_moved(details.global_position);
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
                     }
                 })
                 .on_drag_update(move |details| {
                     if let Some(model) = update.upgrade() {
-                        model.drag_moved(details.global_position);
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
                     }
                 })
                 .on_drag_end(move |details| {
                     if let Some(model) = end.upgrade() {
                         // The release can lie past the last update, which
                         // smoothing may also have moved.
-                        model.drag_moved(details.global_position);
-                        model.drag_ended();
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
+                        model.drag_ended(SelectionInput::Pointer);
                     }
                 })
                 .on_cancel(move || {
                     if let Some(model) = cancel.upgrade() {
-                        model.drag_ended();
+                        model.drag_ended(SelectionInput::Pointer);
                     }
                 })
                 .build()
@@ -951,13 +969,30 @@ impl SelectionGesturesState {
                 .build()
         };
         let touch_long_press = {
-            let pressed = weak;
+            let (pressed, moved, released, cancelled) =
+                (weak.clone(), weak.clone(), weak.clone(), weak);
             LongPressGestureRecognizer::builder(arena)
                 .settings(settings)
                 .allowed_devices(PointerKindSet::TOUCH)
                 .on_long_press_start(move |details| {
                     if let Some(model) = pressed.upgrade() {
                         model.long_pressed(details.global_position);
+                    }
+                })
+                .on_long_press_move_update(move |details| {
+                    if let Some(model) = moved.upgrade() {
+                        model.drag_moved(details.global_position, SelectionInput::Touch);
+                    }
+                })
+                .on_long_press_end(move |details| {
+                    if let Some(model) = released.upgrade() {
+                        model.drag_moved(details.global_position, SelectionInput::Touch);
+                        model.drag_ended(SelectionInput::Touch);
+                    }
+                })
+                .on_long_press_cancel(move |_details| {
+                    if let Some(model) = cancelled.upgrade() {
+                        model.drag_ended(SelectionInput::Touch);
                     }
                 })
                 .build()

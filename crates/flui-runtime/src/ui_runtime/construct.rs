@@ -181,6 +181,7 @@ impl UiRuntime {
                 command_sender: sender_prototype.clone(),
                 capabilities: capabilities.clone(),
                 completions: owner_jobs.completions().clone(),
+                locals: owner_jobs.locals().clone(),
                 close: close.clone(),
                 clock: &clock,
                 text: text.clone(),

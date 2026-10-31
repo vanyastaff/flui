@@ -21,12 +21,16 @@
 mod completion;
 mod owner;
 mod registrar;
+mod runtime_local;
 mod window_ref;
 
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};
+pub use runtime_local::RuntimeLocals;
 pub use window_ref::WindowRef;
+
+use std::rc::Rc;
 
 use crate::Unsupported;
 
@@ -77,6 +81,7 @@ where
 pub struct ProviderContext<'a> {
     owner: &'a OwnerPoster,
     completions: &'a CompletionSource,
+    locals: &'a RuntimeLocals,
     window: Option<WindowRef>,
 }
 
@@ -86,11 +91,13 @@ impl<'a> ProviderContext<'a> {
     pub fn new(
         owner: &'a OwnerPoster,
         completions: &'a CompletionSource,
+        locals: &'a RuntimeLocals,
         window: Option<WindowRef>,
     ) -> Self {
         Self {
             owner,
             completions,
+            locals,
             window,
         }
     }
@@ -106,6 +113,15 @@ impl<'a> ProviderContext<'a> {
     #[must_use]
     pub fn completions(&self) -> &CompletionSource {
         self.completions
+    }
+
+    /// The acquiring UI runtime's `T`, shared by every handle a provider
+    /// hands out in that runtime and ended with it: the one place for state a
+    /// provider keeps per runtime ([`RuntimeLocals`]). Made with
+    /// `T::default()` the first time.
+    #[must_use]
+    pub fn runtime_local<T: Default + 'static>(&self) -> Rc<T> {
+        self.locals.get_or_default()
     }
 
     /// The window the acquiring widget belongs to, if any.

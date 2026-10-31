@@ -2194,7 +2194,10 @@ fn platform_replacement_contains_reentrant_retirement() {
         failure: Option<&'static str>,
     }
     impl flui_native::NativeClipboard for RetiredProducer {
-        fn read_text(&self, answer: flui_platform::capability::Resolver<Option<String>>) {
+        fn read_text(
+            &self,
+            answer: flui_platform::capability::Resolver<flui_platform::ClipboardRead>,
+        ) {
             drop(answer);
         }
         fn write_text(&self, _: String) {}
