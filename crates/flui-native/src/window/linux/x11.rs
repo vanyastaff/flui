@@ -538,7 +538,7 @@ pub(crate) mod support {
                     honoured.sets_size,
                     honoured.sets_constraints,
                     honoured.sets_resizable,
-                    honoured.sets_decorated,
+                    honoured.sets_frame,
                     honoured.hides,
                     honoured.shows,
                     honoured.activates,
@@ -550,6 +550,7 @@ pub(crate) mod support {
                 }
                 assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
                 assert_eq!(honoured.material, Unavailable, "{case}");
+                assert_eq!(honoured.app_title_bar, Unavailable, "{case}");
             }
         }
 

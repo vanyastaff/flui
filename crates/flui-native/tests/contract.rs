@@ -4,7 +4,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_native::current_platform;
-use flui_platform::{PlatformWindow, WindowOptions};
+use flui_platform::{PlatformWindow, WindowFrame, WindowOptions};
 
 /// The scale the window's snapshot reports with its drawable area.
 fn scale_of(window: &(impl PlatformWindow + ?Sized)) -> f64 {
@@ -64,7 +64,7 @@ fn test_window_lifecycle_contract() {
         .with_size(Size::new(640.0, 480.0))
         .with_visible(false)
         .with_resizable(true)
-        .with_decorated(true)
+        .with_frame(WindowFrame::System)
         .with_min_size(Some(Size::new(320.0, 240.0)))
         .with_max_size(None);
 
@@ -210,7 +210,7 @@ mod native_windows {
     use crate::Opened;
     use flui_foundation::geometry::Size;
     use flui_native::{HostWindow, OwnerPlatform, Platform, WindowsPlatform};
-    use flui_platform::{DispatchEventResult, WindowOptions};
+    use flui_platform::{DispatchEventResult, WindowFrame, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use std::{
         cell::RefCell,
@@ -822,7 +822,11 @@ mod native_windows {
             platform,
             WindowOptions::default()
                 .with_visible(false)
-                .with_decorated(decorated)
+                .with_frame(if decorated {
+                    WindowFrame::System
+                } else {
+                    WindowFrame::None
+                })
                 .with_size(Size::new(320.0, 240.0)),
         )
         .expect("create actual hidden Win32 window")

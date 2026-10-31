@@ -498,7 +498,7 @@ fn sample_state(
         .with_visible(true)
         .with_focused(focused)
         .with_resizable(false)
-        .with_decorated(false)
+        .with_frame(flui_platform::WindowFrame::None)
         .with_display(displays.activity_display());
     ReportedFacts {
         // No native window (terminated, or not yet made) is no drawable area.

@@ -5,7 +5,7 @@
 use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
-use flui_platform::{InputLatency, WindowMode, WindowOptions, WindowReveal};
+use flui_platform::{InputLatency, WindowFrame, WindowMode, WindowOptions, WindowReveal};
 
 fn options(config: &AppConfig) -> WindowOptions {
     WindowOptions::from(config)
@@ -39,10 +39,10 @@ fn the_frame_flags_are_kept() {
     let converted = options(
         &AppConfig::new()
             .with_resizable(false)
-            .with_decorations(false),
+            .with_frame(WindowFrame::None),
     );
     assert!(!converted.resizable);
-    assert!(!converted.decorated);
+    assert_eq!(converted.frame, WindowFrame::None);
 }
 
 fn the_position_is_kept() {

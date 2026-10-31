@@ -145,6 +145,7 @@ mod text_input;
 pub mod text_store;
 mod unsupported;
 mod window;
+mod window_frame;
 mod window_handler;
 mod window_insets;
 mod window_state;
@@ -209,6 +210,9 @@ pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedR
 pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowMaterial,
     WindowOptions, WindowReveal,
+};
+pub use window_frame::{
+    AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};

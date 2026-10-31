@@ -92,7 +92,7 @@ pub(crate) fn restore_into(
     let scale = displays
         .get(first.display)
         .map_or(1.0, |display| display.scale_factor);
-    let frame = if options.decorated {
+    let frame = if options.frame.has_system_title_bar() {
         frame_inset(scale)
     } else {
         Size::new(0.0, 0.0)

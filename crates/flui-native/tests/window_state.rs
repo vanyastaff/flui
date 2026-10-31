@@ -6,6 +6,7 @@
 //! and a command admitted before the capabilities changed is `Superseded`.
 
 use flui_platform::CommandRefusal;
+use flui_platform::WindowFrame;
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,9 +93,9 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
             |state| !state.resizable,
         ),
         (
-            "set_decorated",
-            WindowCommand::SetDecorated(false),
-            |state| !state.decorated,
+            "set_frame",
+            WindowCommand::SetFrame(WindowFrame::None),
+            |state| !state.frame.has_system_title_bar(),
         ),
         (
             "maximize",
@@ -109,7 +110,7 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         (
             "fullscreen",
             WindowCommand::SetMode(WindowMode::Fullscreen),
-            |state| state.mode == WindowMode::Fullscreen && !state.decorated,
+            |state| state.mode == WindowMode::Fullscreen && !state.frame.has_system_title_bar(),
         ),
         ("hide", WindowCommand::Hide, |state| !state.visible),
     ]
@@ -178,7 +179,11 @@ fn fullscreen_is_borderless_on_the_whole_display() {
         Size::new(1280.0, 720.0),
         "the display's size in its own logical pixels"
     );
-    assert!(!fullscreen.decorated, "fullscreen has no frame");
+    assert_eq!(
+        fullscreen.frame,
+        WindowFrame::None,
+        "fullscreen has no frame"
+    );
 }
 
 fn repeating_a_command_keeps_the_revision_and_stays_silent() {

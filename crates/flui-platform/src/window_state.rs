@@ -37,7 +37,7 @@ use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
 use crate::{
     Availability, CapabilityAbsence, DisplayId, Unsupported, WindowAppearance,
-    WindowExecutionState, WindowInsets,
+    WindowExecutionState, WindowFrame, WindowInsets,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -172,8 +172,8 @@ pub struct WindowState {
     pub constraints: SizeConstraints,
     /// Whether the user can resize the window.
     pub resizable: bool,
-    /// Whether the window has its frame and title bar.
-    pub decorated: bool,
+    /// What frames the window: the system's title bar, the application's, or none.
+    pub frame: WindowFrame,
     /// The display the window is on, named by the display snapshot's identity
     /// (ADR-0236); `None` when the platform cannot tell, which a consumer reads
     /// as an unknown display, never as the primary one.
@@ -213,7 +213,7 @@ pub struct WindowState {
 
 impl WindowState {
     /// A visible, unoccluded, unfocused, inactive, unhovered, running, resizable,
-    /// decorated window in normal mode at revision zero, with no title, limits, display,
+    /// system-framed window in normal mode at revision zero, with no title, limits, display,
     /// metrics or insets, the light appearance, and capabilities that
     /// honour nothing.
     #[must_use]
@@ -230,7 +230,7 @@ impl WindowState {
             title: None,
             constraints: SizeConstraints::NONE,
             resizable: true,
-            decorated: true,
+            frame: WindowFrame::System,
             display: None,
             metrics: None,
             appearance: WindowAppearance::Light,
@@ -299,10 +299,10 @@ impl WindowState {
         self
     }
 
-    /// Set whether the window has its frame.
+    /// Set what frames the window.
     #[must_use]
-    pub fn with_decorated(mut self, decorated: bool) -> Self {
-        self.decorated = decorated;
+    pub fn with_frame(mut self, frame: WindowFrame) -> Self {
+        self.frame = frame;
         self
     }
 
@@ -474,8 +474,15 @@ pub struct WindowCapabilities {
     pub sets_constraints: Availability,
     /// [`WindowCommand::SetResizable`].
     pub sets_resizable: Availability,
-    /// [`WindowCommand::SetDecorated`].
-    pub sets_decorated: Availability,
+    /// [`WindowCommand::SetFrame`] to [`WindowFrame::System`] or
+    /// [`WindowFrame::None`]: the system's frame put on or taken off.
+    pub sets_frame: Availability,
+    /// [`WindowFrame::AppTitleBar`], at open ([`WindowOptions::frame`](crate::WindowOptions::frame))
+    /// and through [`WindowCommand::SetFrame`]: the window system keeps the
+    /// resize borders, shadow and snapping of a frame whose title bar the
+    /// application draws. A window opened with it where this is `Unavailable`
+    /// opens with [`WindowFrame::System`].
+    pub app_title_bar: Availability,
     /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
     pub minimizes: Availability,
     /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
@@ -712,7 +719,8 @@ command_capabilities! {
     SetSize => sets_size,
     SetConstraints => sets_constraints,
     SetResizable => sets_resizable,
-    SetDecorated => sets_decorated,
+    SetFrame => sets_frame,
+    SetAppTitleBar => app_title_bar,
     Minimize => minimizes,
     Maximize => maximizes,
     EnterFullscreen => enters_fullscreen,
@@ -730,14 +738,15 @@ const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
     /// so a field the type gains does not compile until it is listed here.
-    const fn honoured(&self) -> [Availability; 21] {
+    const fn honoured(&self) -> [Availability; 22] {
         let Self {
             sets_title,
             sets_position,
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -764,7 +773,8 @@ impl WindowCapabilities {
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -792,7 +802,8 @@ impl WindowCapabilities {
         sets_size: Availability::Unavailable,
         sets_constraints: Availability::Unavailable,
         sets_resizable: Availability::Unavailable,
-        sets_decorated: Availability::Unavailable,
+        sets_frame: Availability::Unavailable,
+        app_title_bar: Availability::Unavailable,
         minimizes: Availability::Unavailable,
         maximizes: Availability::Unavailable,
         enters_fullscreen: Availability::Unavailable,
@@ -822,7 +833,8 @@ impl WindowCapabilities {
         sets_size: Availability::Native,
         sets_constraints: Availability::Native,
         sets_resizable: Availability::Native,
-        sets_decorated: Availability::Native,
+        sets_frame: Availability::Native,
+        app_title_bar: Availability::Native,
         minimizes: Availability::Native,
         maximizes: Availability::Native,
         enters_fullscreen: Availability::Native,
@@ -920,6 +932,18 @@ impl WindowCapabilities {
         };
         *self.field_mut(slot) = Availability::Unavailable;
         self.absences[slot as usize] = absence;
+        self
+    }
+
+    /// These capabilities with [`app_title_bar`](Self::app_title_bar)
+    /// `Unavailable` because of `absence`: what
+    /// [`unavailable`](Self::unavailable) does for
+    /// [`WindowCommand::SetFrame`] to an [`AppTitleBar`](crate::AppTitleBar),
+    /// in a constant.
+    #[must_use]
+    pub const fn without_app_title_bar(mut self, absence: CapabilityAbsence) -> Self {
+        self.app_title_bar = Availability::Unavailable;
+        self.absences[Slot::SetAppTitleBar as usize] = absence;
         self
     }
 
@@ -1047,7 +1071,8 @@ impl WindowCapabilities {
             WindowCommand::SetSize(_) => Slot::SetSize,
             WindowCommand::SetConstraints(_) => Slot::SetConstraints,
             WindowCommand::SetResizable(_) => Slot::SetResizable,
-            WindowCommand::SetDecorated(_) => Slot::SetDecorated,
+            WindowCommand::SetFrame(WindowFrame::AppTitleBar(_)) => Slot::SetAppTitleBar,
+            WindowCommand::SetFrame(WindowFrame::System | WindowFrame::None) => Slot::SetFrame,
             WindowCommand::SetMode(WindowMode::Minimized) => Slot::Minimize,
             WindowCommand::SetMode(WindowMode::Maximized) => Slot::Maximize,
             WindowCommand::SetMode(WindowMode::Fullscreen) => Slot::EnterFullscreen,
@@ -1076,8 +1101,9 @@ pub enum WindowCommand {
     SetConstraints(SizeConstraints),
     /// Allow or forbid user resizing.
     SetResizable(bool),
-    /// Show or remove the frame and title bar.
-    SetDecorated(bool),
+    /// Frame the window: the system's frame, a title bar the application
+    /// draws inside a frame the system keeps, or no frame.
+    SetFrame(WindowFrame),
     /// Enter a mode. [`WindowMode::Normal`] restores from any other mode.
     SetMode(WindowMode),
     /// Show the window.
@@ -1127,7 +1153,7 @@ impl WindowCommand {
             }
             Self::SetTitle(_)
             | Self::SetResizable(_)
-            | Self::SetDecorated(_)
+            | Self::SetFrame(_)
             | Self::SetMode(_)
             | Self::Show
             | Self::Hide
@@ -1433,8 +1459,8 @@ pub struct WindowStateParts {
     pub constraints: SizeConstraints,
     /// [`WindowState::resizable`].
     pub resizable: bool,
-    /// [`WindowState::decorated`].
-    pub decorated: bool,
+    /// [`WindowState::frame`].
+    pub frame: WindowFrame,
     /// [`WindowState::display`].
     pub display: Option<DisplayId>,
     /// [`WindowState::metrics`].
@@ -1474,8 +1500,10 @@ pub struct CapabilityParts {
     pub sets_constraints: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::sets_resizable`].
     pub sets_resizable: Result<Availability, CapabilityAbsence>,
-    /// [`WindowCapabilities::sets_decorated`].
-    pub sets_decorated: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_frame`].
+    pub sets_frame: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::app_title_bar`].
+    pub app_title_bar: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::minimizes`].
     pub minimizes: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::maximizes`].
@@ -1527,7 +1555,7 @@ impl WindowState {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
@@ -1548,7 +1576,7 @@ impl WindowState {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
@@ -1578,7 +1606,7 @@ impl WindowStateParts {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
@@ -1600,7 +1628,7 @@ impl WindowStateParts {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
@@ -1632,7 +1660,8 @@ impl WindowCapabilities {
             sets_size: _,
             sets_constraints: _,
             sets_resizable: _,
-            sets_decorated: _,
+            sets_frame: _,
+            app_title_bar: _,
             minimizes: _,
             maximizes: _,
             enters_fullscreen: _,
@@ -1659,7 +1688,8 @@ impl WindowCapabilities {
             sets_size: self.honoured_in(Slot::SetSize),
             sets_constraints: self.honoured_in(Slot::SetConstraints),
             sets_resizable: self.honoured_in(Slot::SetResizable),
-            sets_decorated: self.honoured_in(Slot::SetDecorated),
+            sets_frame: self.honoured_in(Slot::SetFrame),
+            app_title_bar: self.honoured_in(Slot::SetAppTitleBar),
             minimizes: self.honoured_in(Slot::Minimize),
             maximizes: self.honoured_in(Slot::Maximize),
             enters_fullscreen: self.honoured_in(Slot::EnterFullscreen),
@@ -1690,7 +1720,8 @@ impl CapabilityParts {
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -1720,7 +1751,8 @@ impl CapabilityParts {
             (Slot::SetSize, sets_size),
             (Slot::SetConstraints, sets_constraints),
             (Slot::SetResizable, sets_resizable),
-            (Slot::SetDecorated, sets_decorated),
+            (Slot::SetFrame, sets_frame),
+            (Slot::SetAppTitleBar, app_title_bar),
             (Slot::Minimize, minimizes),
             (Slot::Maximize, maximizes),
             (Slot::EnterFullscreen, enters_fullscreen),

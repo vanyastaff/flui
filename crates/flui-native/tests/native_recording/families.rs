@@ -602,19 +602,19 @@ fn a_header_out_of_its_stream_is_refused() {
     for (case, header) in [
         (
             "registry without a clock",
-            r#"{"flui_native_recording":1,"backend":"web","devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","devices":[]}"#,
         ),
         (
             "application stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "platform stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "window state stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
     ] {
         assert!(

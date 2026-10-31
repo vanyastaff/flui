@@ -57,9 +57,9 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmissionError, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
-    PlatformWindow, SizeConstraints, Unsupported, WindowCommand, WindowMaterial, WindowMode,
-    WindowState,
+    AdmissionError, AppTitleBar, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
+    PlatformWindow, SizeConstraints, Unsupported, WindowCommand, WindowFrame, WindowMaterial,
+    WindowMode, WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -236,7 +236,12 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
         )),
         // The frame first: a window system that resizes a window only through
         // its frame (Win32) takes resizing back only on a framed window.
-        WindowCommand::SetDecorated(!state.decorated),
+        WindowCommand::SetFrame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+        WindowCommand::SetFrame(if state.frame == WindowFrame::System {
+            WindowFrame::None
+        } else {
+            WindowFrame::System
+        }),
         WindowCommand::SetResizable(!state.resizable),
         WindowCommand::SetMode(WindowMode::Minimized),
         WindowCommand::SetMode(WindowMode::Maximized),
@@ -323,9 +328,9 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
             WindowCommand::SetResizable(on) => (state.resizable == *on)
                 .then_some(())
                 .ok_or_else(|| format!("resizable is {}, not {on}", state.resizable)),
-            WindowCommand::SetDecorated(on) => (state.decorated == *on)
+            WindowCommand::SetFrame(frame) => (state.frame == *frame)
                 .then_some(())
-                .ok_or_else(|| format!("decorated is {}, not {on}", state.decorated)),
+                .ok_or_else(|| format!("the frame is {:?}, not {frame:?}", state.frame)),
             // Minimizing is a mode, not a hide: the window stays shown, and
             // `is_seen` is what leaves it out.
             WindowCommand::SetMode(WindowMode::Minimized) => {

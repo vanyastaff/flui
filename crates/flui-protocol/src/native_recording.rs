@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The native recording format's major version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_native_recording";
@@ -1082,8 +1082,10 @@ pub struct Capabilities {
     pub sets_constraints: Capability,
     /// Making it resizable or not.
     pub sets_resizable: Capability,
-    /// Giving it a frame or not.
-    pub sets_decorated: Capability,
+    /// Giving it the system's frame or none.
+    pub sets_frame: Capability,
+    /// Giving it a title bar the application draws.
+    pub app_title_bar: Capability,
     /// Minimizing it.
     pub minimizes: Capability,
     /// Maximizing it.
@@ -1149,6 +1151,35 @@ pub struct SizeConstraints {
     pub max: Option<[f64; 2]>,
 }
 
+/// What frames a window.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum WindowFrame {
+    /// The system's title bar and borders.
+    System,
+    /// A title bar the application draws, inside a frame the system keeps.
+    AppTitleBar {
+        /// The system's own controls over it.
+        system_controls: SystemControls,
+    },
+    /// No frame.
+    None,
+}
+
+/// The controls a system draws over a title bar the application draws.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SystemControls {
+    /// Where the system puts them.
+    Shown,
+    /// Moved from there, in logical pixels: along the bar toward its trailing edge, and down.
+    Offset([f64; 2]),
+    /// Not drawn.
+    Hidden,
+}
+
 /// A window's drawable area and scale.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1190,8 +1221,8 @@ pub struct WindowState {
     pub constraints: SizeConstraints,
     /// Whether the user can resize it.
     pub resizable: bool,
-    /// Whether it has a frame.
-    pub decorated: bool,
+    /// What frames it.
+    pub frame: WindowFrame,
     /// The display it is on, by label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<u64>,

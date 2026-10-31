@@ -297,14 +297,14 @@ pub(crate) enum PresentationLifecycle {
 
 /// Where a window's content sits on the desktop, as a published
 /// [`WindowState`](flui_platform::WindowState) reports it: the outer
-/// top-left corner, the display, and whether a frame offsets the content
+/// top-left corner, the display, and what frame offsets the content
 /// from that corner. A change re-reads the window's gesture geometry for new
 /// contacts (ADR-0212 §2) and hands it its input regions again (ADR-0217 §5).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ContentPlacement {
     position: Option<flui_foundation::geometry::Point<f64>>,
     display: Option<flui_platform::DisplayId>,
-    decorated: bool,
+    frame: flui_platform::WindowFrame,
 }
 
 impl ContentPlacement {
@@ -312,7 +312,7 @@ impl ContentPlacement {
         Self {
             position: state.outer.position,
             display: state.display,
-            decorated: state.decorated,
+            frame: state.frame,
         }
     }
 }

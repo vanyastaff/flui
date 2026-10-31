@@ -63,8 +63,8 @@ use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_platform::{
     AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowGeometry, WindowHandler, WindowId, WindowMode,
-    WindowOptions, WindowState,
+    WindowCapabilities, WindowCommand, WindowFrame, WindowGeometry, WindowHandler, WindowId,
+    WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use parking_lot::Mutex;
@@ -102,7 +102,9 @@ use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, not_carried_out};
+use crate::window::state::{
+    ReportedFacts, WindowStateCell, mode_of, not_carried_out, system_frame_or_none,
+};
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
 const PROPERTY_READ_LENGTH: u32 = 64;
@@ -477,7 +479,7 @@ impl X11Window {
             .with_title(Some(record.title.clone()))
             .with_constraints(record.constraints)
             .with_resizable(record.resizable)
-            .with_decorated(record.decorated)
+            .with_frame(system_frame_or_none(record.decorated))
             .with_display(display.map(|display| display.id));
         ReportedFacts {
             metrics,
@@ -1295,7 +1297,8 @@ impl PlatformWindow for X11Window {
                 self.record.borrow_mut().resizable = resizable;
                 self.write_size_hints(None);
             }
-            WindowCommand::SetDecorated(decorated) => {
+            WindowCommand::SetFrame(frame) => {
+                let decorated = frame.has_system_title_bar();
                 self.record.borrow_mut().decorated = decorated;
                 self.write_decorations(decorated);
             }
@@ -1647,7 +1650,9 @@ impl X11Windows {
                 title: options.title.clone(),
                 constraints: SizeConstraints::new(options.min_size, options.max_size),
                 resizable: options.resizable,
-                decorated: options.decorated,
+                // No title bar of the application's here yet: one asked for
+                // opens with the system's frame.
+                decorated: options.frame != WindowFrame::None,
                 shown: options.visible,
                 reveal_pending: plan.hidden_until_first_frame,
                 minimize_on_map: false,

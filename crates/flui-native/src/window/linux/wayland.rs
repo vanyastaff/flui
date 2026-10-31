@@ -88,7 +88,7 @@ pub(crate) mod configure {
     use flui_foundation::geometry::Size;
     use flui_platform::{
         Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCommand,
-        WindowMode,
+        WindowFrame, WindowMode,
     };
 
     /// `xdg_toplevel.state` values.
@@ -275,6 +275,7 @@ pub(crate) mod configure {
             // desktop compositor keeps no edges for system gestures.
             .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
             .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
+            .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
                 CapabilityAbsence::NotOnThisPlatform,
@@ -293,7 +294,8 @@ pub(crate) mod configure {
             }
         }
         if let Some(absence) = decoration {
-            capabilities = capabilities.unavailable(&WindowCommand::SetDecorated(true), absence);
+            capabilities =
+                capabilities.unavailable(&WindowCommand::SetFrame(WindowFrame::System), absence);
         }
         if states.tiled_by_compositor() {
             capabilities = capabilities.unavailable(
@@ -629,7 +631,7 @@ pub(crate) mod configure {
             assert!(unannounced.sets_size.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
             assert_eq!(
-                capabilities(None, None, free, Activation::Missing).sets_decorated,
+                capabilities(None, None, free, Activation::Missing).sets_frame,
                 Availability::Native,
                 "a compositor that draws frames takes the command"
             );
@@ -648,7 +650,7 @@ pub(crate) mod configure {
                     flui_platform::UnsupportedReason::NotOnThisPlatform,
                 ),
                 (
-                    WindowCommand::SetDecorated(false),
+                    WindowCommand::SetFrame(WindowFrame::None),
                     flui_platform::UnsupportedReason::NotOnThisDevice,
                 ),
                 (
@@ -1345,8 +1347,8 @@ mod toplevel {
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
         SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-        WindowExecutionState, WindowGeometry, WindowHandler, WindowId, WindowMode, WindowOptions,
-        WindowState,
+        WindowExecutionState, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowMode,
+        WindowOptions, WindowState,
     };
     use flui_semantics::platform::PlatformAccessibility;
     use parking_lot::Mutex;
@@ -1404,7 +1406,9 @@ mod toplevel {
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
-    use crate::window::state::{ReportedFacts, WindowStateCell, not_carried_out};
+    use crate::window::state::{
+        ReportedFacts, WindowStateCell, not_carried_out, system_frame_or_none,
+    };
 
     /// What the compositor said of one window since the owner last looked,
     /// recorded by the dispatch of the window's objects on the owner's queue,
@@ -1744,7 +1748,7 @@ mod toplevel {
                 .with_title(Some(applied.title.clone()))
                 .with_constraints(applied.constraints)
                 .with_resizable(applied.resizable)
-                .with_decorated(decoration.decorated())
+                .with_frame(system_frame_or_none(decoration.decorated()))
                 .with_display(output.map(|output| output.display));
             ReportedFacts {
                 metrics: WindowMetrics::from_logical(content, scale).ok(),
@@ -1818,12 +1822,16 @@ mod toplevel {
                 .viewporter
                 .as_ref()
                 .map(|viewporter| viewporter.get_viewport(&surface, &queue, ()));
+            // This host takes no title bar of the application's
+            // (`app_title_bar` is not yet on it), so a window asking for one
+            // opens with the system's frame.
+            let decorated_at_open = options.frame != WindowFrame::None;
             // Asked before the first commit, so the first configure says who
             // draws the frame.
             let decoration = protocol.decoration.as_ref().map(|manager| {
                 let decoration =
                     manager.get_toplevel_decoration(&toplevel, &queue, Arc::clone(&record));
-                decoration.set_mode(frame_mode(options.decorated));
+                decoration.set_mode(frame_mode(decorated_at_open));
                 decoration
             });
             let fractional_scale = protocol
@@ -1863,7 +1871,7 @@ mod toplevel {
                 resizable: options.resizable,
                 configured: false,
                 leaving_maximized: false,
-                decoration_requested: options.decorated,
+                decoration_requested: decorated_at_open,
                 decoration_answered: false,
                 limits_header: 0.0,
                 geometry: None,
@@ -2714,7 +2722,8 @@ mod toplevel {
                 // Where the compositor offers frames its configure says
                 // whether it draws one; a frame it leaves to the window, and
                 // every frame where it offers none, the window draws itself.
-                WindowCommand::SetDecorated(decorated) => {
+                WindowCommand::SetFrame(frame) => {
+                    let decorated = frame.has_system_title_bar();
                     let roles = self.roles.borrow();
                     if let Some(decoration) =
                         roles.as_ref().and_then(|roles| roles.decoration.as_ref())
@@ -2730,7 +2739,7 @@ mod toplevel {
                         }
                         self.applied.borrow_mut().decoration_answered = false;
                     } else if self.frame_globals.is_none() {
-                        return Err(not_carried_out(&WindowCommand::SetDecorated(decorated)));
+                        return Err(not_carried_out(&WindowCommand::SetFrame(frame)));
                     } else {
                         drop(roles);
                     }

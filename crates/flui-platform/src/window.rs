@@ -9,7 +9,7 @@
 use flui_foundation::geometry::{Point, Size};
 
 use crate::os_options::OsWindowOptions;
-use crate::{Unsupported, WindowGeometry, WindowMode};
+use crate::{Unsupported, WindowFrame, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -100,8 +100,10 @@ pub struct WindowOptions {
     /// see [`WindowReveal`] for who should pick what. Ignored for
     /// `visible: false`.
     pub reveal: WindowReveal,
-    /// Whether window is decorated (has title bar)
-    pub decorated: bool,
+    /// What frames the window. A window that cannot take
+    /// [`WindowFrame::AppTitleBar`] ([`WindowCapabilities::app_title_bar`](crate::WindowCapabilities::app_title_bar))
+    /// opens with [`WindowFrame::System`].
+    pub frame: WindowFrame,
     /// Minimum window size
     pub min_size: Option<Size<f64>>,
     /// Maximum window size
@@ -166,10 +168,10 @@ impl WindowOptions {
         self
     }
 
-    /// Set whether the window is decorated.
+    /// Set what frames the window.
     #[must_use]
-    pub const fn with_decorated(mut self, decorated: bool) -> Self {
-        self.decorated = decorated;
+    pub const fn with_frame(mut self, frame: WindowFrame) -> Self {
+        self.frame = frame;
         self
     }
 
@@ -239,7 +241,7 @@ impl Default for WindowOptions {
             resizable: true,
             visible: true,
             reveal: WindowReveal::AtOpen,
-            decorated: true,
+            frame: WindowFrame::System,
             min_size: None,
             max_size: None,
             display: None,

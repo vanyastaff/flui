@@ -160,7 +160,7 @@ fn sample_state(
         .with_focused(focused)
         .with_title(Some(title))
         .with_resizable(false)
-        .with_decorated(false)
+        .with_frame(flui_platform::WindowFrame::None)
         .with_display(display);
     ReportedFacts {
         metrics,

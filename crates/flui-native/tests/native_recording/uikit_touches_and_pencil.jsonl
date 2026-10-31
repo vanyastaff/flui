@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"uikit","epoch_ns":4000000000,"uptime_ns":500000000000,"reserved_contact":0,"devices":[]}
+{"flui_native_recording":2,"backend":"uikit","epoch_ns":4000000000,"uptime_ns":500000000000,"reserved_contact":0,"devices":[]}
 {"row":"reading","reading":{"contact":8323073,"kind":"touch","action":{"press":1},"time":{"uptime_s":500.125},"position":[100.0,200.0],"pressure":0.25,"contact_size":[20.0,20.0]}}
 {"row":"reading","reading":{"contact":8323074,"kind":"touch","action":{"press":1},"time":{"uptime_s":500.1875},"position":[150.0,200.0],"pressure":0.5,"contact_size":[18.0,18.0]}}
 {"row":"reading","reading":{"contact":8323073,"kind":"touch","action":"move","time":{"uptime_s":500.25},"position":[104.0,200.0],"pressure":0.25,"contact_size":[20.0,20.0]}}

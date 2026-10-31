@@ -3,10 +3,11 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, KeyboardInset, SizeConstraints, Unsupported, UnsupportedReason,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
-    WindowInsets, WindowMaterial, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
+    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints,
+    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
+    WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial,
+    WindowMode, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -95,11 +96,52 @@ fn open_or_absent_constraints_are_valid() {
     valid(&constraints(None, Some(size(500.0, 500.0))));
 }
 
+fn a_window_opens_with_the_system_frame() {
+    assert_eq!(WindowOptions::default().frame, WindowFrame::System);
+    assert!(WindowFrame::System.has_system_title_bar());
+    assert!(!WindowFrame::AppTitleBar(AppTitleBar::new()).has_system_title_bar());
+    assert!(!WindowFrame::None.has_system_title_bar());
+    assert_eq!(
+        AppTitleBar::new().system_controls(),
+        SystemControls::Shown,
+        "the system's own controls stay where the system puts them"
+    );
+}
+
+fn a_controls_offset_is_finite_and_non_negative() {
+    let offset = ControlsOffset::try_new(12.0, 6.5).expect("a finite, non-negative offset");
+    assert_eq!((offset.along(), offset.down()), (12.0, 6.5));
+    for (along, down) in [
+        (-1.0, 0.0),
+        (0.0, -0.5),
+        (f64::NAN, 0.0),
+        (0.0, f64::INFINITY),
+    ] {
+        assert_eq!(
+            ControlsOffset::try_new(along, down),
+            Err(InvalidControlsOffset),
+            "({along}, {down})"
+        );
+    }
+}
+
+fn a_window_that_cannot_take_the_app_title_bar_opens_with_the_system_frame() {
+    let bar = WindowFrame::AppTitleBar(AppTitleBar::new());
+    let mut takes_it = WindowCapabilities::NONE;
+    takes_it.app_title_bar = Availability::Native;
+    assert_eq!(bar.at_open(&takes_it), bar);
+    assert_eq!(bar.at_open(&WindowCapabilities::NONE), WindowFrame::System);
+    for frame in [WindowFrame::System, WindowFrame::None] {
+        assert_eq!(frame.at_open(&WindowCapabilities::NONE), frame);
+    }
+}
+
 fn commands_without_numbers_are_always_valid() {
     for command in [
         WindowCommand::SetTitle(String::new()),
         WindowCommand::SetResizable(false),
-        WindowCommand::SetDecorated(false),
+        WindowCommand::SetFrame(WindowFrame::None),
+        WindowCommand::SetFrame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         WindowCommand::SetMode(WindowMode::Fullscreen),
         WindowCommand::Show,
         WindowCommand::Hide,
@@ -120,7 +162,7 @@ fn admits(
 }
 
 fn admit_refuses_exactly_when_the_capability_is_unavailable() {
-    let rows: [(WindowCommand, Capability); 14] = [
+    let rows: [(WindowCommand, Capability); 16] = [
         (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
         (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
             &mut c.sets_position
@@ -130,7 +172,16 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         }),
         (constraints(None, None), |c| &mut c.sets_constraints),
         (WindowCommand::SetResizable(true), |c| &mut c.sets_resizable),
-        (WindowCommand::SetDecorated(true), |c| &mut c.sets_decorated),
+        (WindowCommand::SetFrame(WindowFrame::System), |c| {
+            &mut c.sets_frame
+        }),
+        (WindowCommand::SetFrame(WindowFrame::None), |c| {
+            &mut c.sets_frame
+        }),
+        (
+            WindowCommand::SetFrame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+            |c| &mut c.app_title_bar,
+        ),
         (WindowCommand::SetMode(WindowMode::Minimized), |c| {
             &mut c.minimizes
         }),
@@ -347,11 +398,12 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE;
     honours_title.sets_title = Availability::Native;
-    let facts: [(&str, WindowState); 11] = [
+    let facts: [(&str, WindowState); 12] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
         ("occlusion", base_state().with_occluded(true)),
         ("hover", base_state().with_hovered(true)),
+        ("frame", base_state().with_frame(WindowFrame::None)),
         ("activation", base_state().with_active(true)),
         (
             "appearance",
@@ -644,6 +696,18 @@ fn window_command_validate() {
             (
                 "open_or_absent_constraints_are_valid",
                 open_or_absent_constraints_are_valid,
+            ),
+            (
+                "a_window_opens_with_the_system_frame",
+                a_window_opens_with_the_system_frame,
+            ),
+            (
+                "a_window_that_cannot_take_the_app_title_bar_opens_with_the_system_frame",
+                a_window_that_cannot_take_the_app_title_bar_opens_with_the_system_frame,
+            ),
+            (
+                "a_controls_offset_is_finite_and_non_negative",
+                a_controls_offset_is_finite_and_non_negative,
             ),
             (
                 "commands_without_numbers_are_always_valid",

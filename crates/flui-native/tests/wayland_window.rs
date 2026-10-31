@@ -18,6 +18,7 @@ use flui_native::testing::wayland::{
     offers_activation, outputs, portal_parent, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
+use flui_platform::WindowFrame;
 use flui_platform::{
     Availability, PlatformWindow, UnsupportedReason, WindowCommand, WindowOptions,
 };
@@ -800,12 +801,15 @@ fn assert_frame_agrees(fixture: &WaylandFixture, context: &str) {
             !own.has_header(),
             "{context}: the compositor draws the frame, and the window draws none: {own:?}"
         );
-        assert!(state.decorated, "{context}: the compositor's frame");
+        assert!(
+            state.frame.has_system_title_bar(),
+            "{context}: the compositor's frame"
+        );
         return;
     }
     assert_eq!(
         own.has_header(),
-        state.decorated,
+        state.frame.has_system_title_bar(),
         "{context}: the window draws its own frame exactly when decorated: {own:?}"
     );
     let content = state.content_size;
@@ -858,17 +862,21 @@ fn a_window_has_the_frame_its_compositor_leaves_it() {
         };
         let mut fixture = WaylandFixture::open(platform, title);
         let refusal = |fixture: &WaylandFixture, wanted: bool| {
-            WindowCommand::SetDecorated(wanted)
-                .admit(&fixture.window.state().capabilities)
-                .err()
-                .and_then(|refused| refused.unsupported().map(|unsupported| unsupported.reason))
+            WindowCommand::SetFrame(if wanted {
+                WindowFrame::System
+            } else {
+                WindowFrame::None
+            })
+            .admit(&fixture.window.state().capabilities)
+            .err()
+            .and_then(|refused| refused.unsupported().map(|unsupported| unsupported.reason))
         };
         assert!(
-            fixture.window.state().decorated,
+            fixture.window.state().frame.has_system_title_bar(),
             "{title}: a window opened decorated has a frame, whoever draws it"
         );
         assert_frame_agrees(&fixture, &format!("{title}, opened"));
-        let first = fixture.window.state().decorated;
+        let first = fixture.window.state().frame.has_system_title_bar();
         for wanted in [!first, first] {
             if let Some(reason) = refusal(&fixture, wanted) {
                 assert_eq!(reason, NotOnThisDevice, "{title}");
@@ -877,12 +885,16 @@ fn a_window_has_the_frame_its_compositor_leaves_it() {
             }
             fixture
                 .window
-                .admit_and_apply(WindowCommand::SetDecorated(wanted))
+                .admit_and_apply(WindowCommand::SetFrame(if wanted {
+                    WindowFrame::System
+                } else {
+                    WindowFrame::None
+                }))
                 .expect("an offered command is applied");
             fixture.settle();
-            let context = format!("{title}, after SetDecorated({wanted})");
+            let context = format!("{title}, after SetFrame with the system frame {wanted}");
             assert_frame_agrees(&fixture, &context);
-            let decorated = fixture.window.state().decorated;
+            let decorated = fixture.window.state().frame.has_system_title_bar();
             if decorated == wanted {
                 eprintln!("{case}: {context}: honoured");
             } else {

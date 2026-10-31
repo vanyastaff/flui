@@ -792,7 +792,7 @@ fn read_error(text: &str) -> CodecError {
     NativeRecording::read(text.as_bytes()).expect_err("the recording is refused")
 }
 
-const HEADER: &str = r#"{"flui_native_recording":1,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4,"kinds":["touch"]}]}"#;
+const HEADER: &str = r#"{"flui_native_recording":2,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4,"kinds":["touch"]}]}"#;
 
 /// An unknown row, action or kind is a typed error naming its line and
 /// spelling, never a skipped row; an unknown field is skipped.
@@ -841,14 +841,14 @@ fn an_unknown_native_variant_is_a_typed_error_not_a_skipped_row() {
 /// does not declare are refused.
 fn a_native_recording_outside_its_format_is_refused() {
     let version = HEADER.replace(
-        r#""flui_native_recording":1"#,
         r#""flui_native_recording":2"#,
+        r#""flui_native_recording":3"#,
     );
     assert!(matches!(
         read_error(&version),
         CodecError::Version {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         }
     ));
     let zero_frequency = HEADER.replace(

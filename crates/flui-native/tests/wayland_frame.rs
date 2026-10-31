@@ -29,7 +29,7 @@ mod cases {
         client_frame_report, compositor_report, last_input_serial, present, run_for,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
-    use flui_platform::{WindowCommand, WindowMode, WindowOptions};
+    use flui_platform::{WindowCommand, WindowFrame, WindowMode, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use x11rb::connection::Connection as _;
@@ -287,7 +287,7 @@ mod cases {
         let screen = session.screen();
         let state = opened.window.state();
         assert!(
-            state.decorated,
+            state.frame.has_system_title_bar(),
             "a decorated window on a compositor that draws no frame"
         );
         assert_eq!(state.outer.size.height, CONTENT.1 + f64::from(HEADER));
@@ -352,18 +352,18 @@ mod cases {
 
         opened
             .window
-            .admit_and_apply(WindowCommand::SetDecorated(false))
+            .admit_and_apply(WindowCommand::SetFrame(WindowFrame::None))
             .expect("the frame is turned off");
         assert_eq!(
             watch_bar(&opened, &screen, |found| found.is_none()),
             None,
             "the frame is gone"
         );
-        assert!(!opened.window.state().decorated);
+        assert!(!opened.window.state().frame.has_system_title_bar());
         assert_eq!(opened.window.state().outer.size.height, CONTENT.1);
         opened
             .window
-            .admit_and_apply(WindowCommand::SetDecorated(true))
+            .admit_and_apply(WindowCommand::SetFrame(WindowFrame::System))
             .expect("the frame is turned on");
         assert!(
             watch_bar(&opened, &screen, |found| found.is_some()).is_some(),

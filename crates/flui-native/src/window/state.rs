@@ -65,6 +65,21 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
 }
 
+/// The frame a window reports whose window system says only whether its own
+/// frame is on: [`WindowFrame::System`](flui_platform::WindowFrame::System) or
+/// [`WindowFrame::None`](flui_platform::WindowFrame::None). A host that
+/// draws no title bar of the application's
+/// ([`WindowCapabilities::app_title_bar`](WindowCapabilities::app_title_bar)
+/// `Unavailable`) has no third answer.
+#[cfg(any(windows, target_os = "macos", linux_host, winit_host, test))]
+pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::WindowFrame {
+    if decorated {
+        flui_platform::WindowFrame::System
+    } else {
+        flui_platform::WindowFrame::None
+    }
+}
+
 /// `size` held to `constraints` the way a resize by the user is: raised to the
 /// minimum, then lowered to the maximum, each axis on its own, so a maximum
 /// below the minimum wins. A window system that applies a size as given

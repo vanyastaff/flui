@@ -1073,7 +1073,7 @@ trait depends on `flui-platform` instead.
   window that wants a frame draws its own (`client_frame`, see "A Wayland
   window draws its own frame on subsurfaces, not through the engine" below);
   only a compositor that draws a frame although asked not to (sway frames
-  every tiled window) makes `SetDecorated` `NotOnThisDevice`
+  every tiled window) makes `SetFrame` to the system frame or none `NotOnThisDevice`
   (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
@@ -3863,7 +3863,7 @@ The engine does not draw it, though that was the first shape asked for:
   `sctk-adwaita` draw it; a toolkit that draws its frame inside its content
   (GTK4's header bar, Chromium's views frame) draws an application's own
   title bar, which is the contract's custom title bar (gaps entry 10), not
-  the frame `decorated: true` promises;
+  the frame `WindowFrame::System` promises;
 - the engine drawing it from `flui-app` would split one host obligation over
   the host, the composition root and the raster lane, a second swapchain a
   window, and a commit order across threads, for a 37-pixel bar.
@@ -4780,7 +4780,7 @@ filter `true`) while it is natively hidden. A hidden window is never sent `WM_PA
 `activate` or a mode that shows the window comes first. A mode set on a window still waiting for its
 first frame is staged in the slot, not shown early.
 
-**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `decorated` is the caption; a
+**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `WindowFrame::System` is the caption; a
 popup has neither, so a window without a frame reports `resizable: false` and gets its wish back with
 the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
 window's current DPI with the frame measured for the style the window has

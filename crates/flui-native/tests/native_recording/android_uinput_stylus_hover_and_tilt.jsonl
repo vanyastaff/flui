@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"android","epoch_ns":0,"uptime_ns":0,"devices":[{"device":22,"kinds":["pen"]}]}
+{"flui_native_recording":2,"backend":"android","epoch_ns":0,"uptime_ns":0,"devices":[{"device":22,"kinds":["pen"]}]}
 {"row":"add_device","device":22,"kind":"unknown","time_ns":376888098104000}
 {"row":"reading","reading":{"device":22,"contact":0,"kind":"pen","action":"enter","buttons":[],"time":{"epoch_ns":376888098104000},"position":[432.0,1200.0],"scale":2.8125,"pressure":0.0,"angles":{"spherical":{"altitude":1.5707963267948966,"azimuth":-1.5707963267948966}}}}
 {"row":"batch","coalesced":[{"device":22,"contact":0,"kind":"pen","action":"move","buttons":[],"time":{"epoch_ns":376888098104000},"position":[432.0,1200.0],"scale":2.8125,"pressure":0.0,"angles":{"spherical":{"altitude":1.5707963267948966,"azimuth":-1.5707963267948966}}}],"current":{"device":22,"contact":0,"kind":"pen","action":"move","buttons":[],"time":{"epoch_ns":376889614252000},"position":[438.0,1200.0],"scale":2.8125,"pressure":0.0,"angles":{"spherical":{"altitude":1.5707963267948966,"azimuth":-1.5707963267948966}}}}
