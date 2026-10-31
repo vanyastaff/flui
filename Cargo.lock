@@ -488,6 +488,7 @@ checksum = "c77886257be21c9cd89a4ae7e64860c6f0eefca799bb79127913052bd0eefb3d"
 dependencies = [
  "atspi-common",
  "atspi-proxies",
+ "zbus 5.19.0",
 ]
 
 [[package]]
@@ -2203,6 +2204,8 @@ dependencies = [
  "android-activity",
  "anyhow",
  "arboard",
+ "async-io",
+ "atspi",
  "block2 0.6.2",
  "cfg_aliases",
  "console_error_panic_hook",
@@ -2220,6 +2223,7 @@ dependencies = [
  "flui-protocol",
  "flui-semantics",
  "flui-testing",
+ "futures-lite",
  "futures-util",
  "icu_normalizer",
  "icu_properties",
