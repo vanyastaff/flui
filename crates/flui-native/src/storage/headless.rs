@@ -21,7 +21,7 @@ impl host::Storage<HeadlessLoop> for HeadlessData {
                     roaming: root.join("roaming").join(app.as_str()),
                     local: root.join("local").join(app.as_str()),
                 }),
-                None => DataStore::in_memory(state.memory.clone()),
+                None => DataStore::in_memory(state.memory.entry(app.clone()).or_default().clone()),
             })
         })
     }
@@ -35,7 +35,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// the user's data directories.
     #[must_use]
     pub fn with_data_root(self, root: impl Into<std::path::PathBuf>) -> Self {
-        let root = root.into();
+        let root: std::path::PathBuf = root.into();
         self.owner()
             .with_state(|state| state.data_root = Some(root));
         self

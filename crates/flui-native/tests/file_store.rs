@@ -419,8 +419,9 @@ fn copy_aside_keeps_the_value_under_the_first_free_name() {
 }
 
 /// Without a root a headless platform keeps each application's values in its
-/// own memory: every store it hands out sees them, another platform does
-/// not, and nothing reaches the user's data directories.
+/// own memory: every store it hands out for that application sees them,
+/// another application or another platform does not, and nothing reaches the
+/// user's data directories.
 fn a_headless_platform_keeps_values_in_memory_without_a_root() {
     let app = AppDataDir::try_new("dev.flui.headless-memory").expect("a directory name");
     let platform = HeadlessPlatform::new();
@@ -445,6 +446,17 @@ fn a_headless_platform_keeps_values_in_memory_without_a_root() {
         other.read(&NOTES, 1024).expect("reads").bytes,
         None,
         "another platform starts empty"
+    );
+    let neighbour = AppDataDir::try_new("dev.flui.headless-neighbour").expect("a directory name");
+    assert_eq!(
+        platform
+            .data_store(&neighbour)
+            .expect("the neighbour's store")
+            .read(&NOTES, 1024)
+            .expect("reads")
+            .bytes,
+        None,
+        "another application on the same platform keeps its own values"
     );
     if let Some(dirs) = data_dirs(&app) {
         assert!(
@@ -503,8 +515,14 @@ fn the_memory_store_compares_and_copies_as_the_file_store_does() {
     store
         .write(&SESSION, b"session", WriteMode::Replace)
         .expect("the other scope");
-    assert_eq!(store.contents(&NOTES).as_deref(), Some(&b"two"[..]));
-    assert_eq!(store.contents(&SESSION).as_deref(), Some(&b"session"[..]));
+    assert_eq!(
+        store.read(&NOTES, 1024).expect("reads").bytes.as_deref(),
+        Some(&b"two"[..])
+    );
+    assert_eq!(
+        store.read(&SESSION, 1024).expect("reads").bytes.as_deref(),
+        Some(&b"session"[..])
+    );
 
     assert_eq!(
         store.copy_aside(&NOTES).expect("copied").kept_as,

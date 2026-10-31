@@ -37,12 +37,6 @@ impl MemoryStore {
         Self::default()
     }
 
-    /// The bytes stored under `name`, if any.
-    #[must_use]
-    pub fn contents(&self, name: &StorageName) -> Option<Vec<u8>> {
-        self.values.lock().stored.get(name).cloned()
-    }
-
     /// Read the value stored under `name`, as
     /// [`FileStore::read`](super::FileStore::read) does.
     ///
@@ -128,10 +122,15 @@ impl MemoryStore {
 
 impl std::fmt::Debug for MemoryStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let values = self.values.lock();
+        // Counted under the lock, written after it: the formatter's writer is
+        // the caller's code and may use this store.
+        let (values, kept) = {
+            let values = self.values.lock();
+            (values.stored.len(), values.kept.len())
+        };
         f.debug_struct("MemoryStore")
-            .field("values", &values.stored.len())
-            .field("kept", &values.kept.len())
+            .field("values", &values)
+            .field("kept", &kept)
             .finish()
     }
 }

@@ -259,9 +259,10 @@ pub(crate) struct HeadlessState {
     /// each application keeps its values under `<root>/roaming/<app>` and
     /// `<root>/local/<app>`. `None`, the default: they stay in `memory`.
     pub(crate) data_root: Option<std::path::PathBuf>,
-    /// The values every application on this platform keeps without a root,
-    /// for as long as the platform lives; never the user's data directories.
-    pub(crate) memory: crate::storage::MemoryStore,
+    /// The values each application on this platform keeps without a root, one
+    /// store per application, for as long as the platform lives; never the
+    /// user's data directories.
+    pub(crate) memory: HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
     /// What `Platform::preferences` reports: unknown until
     /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
     pub(crate) preferences: flui_platform::SystemPreferences,
@@ -350,7 +351,7 @@ impl HeadlessLoop {
             session_end_releases: 0,
             session_end_support: flui_platform::SessionEndSupport::Hold,
             data_root: None,
-            memory: crate::storage::MemoryStore::new(),
+            memory: HashMap::new(),
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
             display_failure: None,
