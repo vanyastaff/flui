@@ -73,7 +73,6 @@ impl AppRun {
         self.settle();
     }
 
-
     /// The user closes the last window and the application exits: what the
     /// run holds is dropped, as the runner drops the UI runtime.
     pub fn close(mut self) {
@@ -216,7 +215,10 @@ impl AppRun {
     /// When the tree's focused node is not where the primary focus is: after
     /// every step the two name the same element.
     pub fn focused(&self) -> Option<String> {
-        let tree = self.laid.a11y_tree().expect("BUG: AppRun enables semantics");
+        let tree = self
+            .laid
+            .a11y_tree()
+            .expect("BUG: AppRun enables semantics");
         // With nothing focused the tree reports its root window focused.
         let node = tree.focus().filter(|node| node.role() != Role::Window);
         let primary = self.laid.focus_manager().primary_focus();
@@ -252,6 +254,22 @@ impl AppRun {
             .focus_manager()
             .primary_focus()
             .is_some_and(|node| node.has_visible_focus())
+    }
+
+    /// The notes list's scroll offset, as its viewport last laid out or was
+    /// given it: the list is the only scrolling view.
+    pub fn list_offset(&self) -> f64 {
+        let viewports = self.laid.find_all_by_render_type("RenderViewport");
+        assert_eq!(viewports.len(), 1, "one notes list is mounted");
+        let offset = self
+            .laid
+            .render_property(viewports[0], "scroll_offset")
+            .expect("BUG: a viewport reports its scroll offset");
+        offset
+            .trim_end_matches("px")
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("a scroll offset is a number, not {offset:?}"))
     }
 
     fn press(&self, key: Key, modifiers: Modifiers) {

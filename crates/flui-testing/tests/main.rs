@@ -49,6 +49,8 @@ mod layout_builder_seam;
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
+#[path = "memory_storage.rs"]
+mod memory_storage;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
