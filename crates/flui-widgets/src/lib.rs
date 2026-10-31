@@ -315,11 +315,11 @@ pub use swipe::{
     SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };
 pub use text::{
-    AnimatedDefaultTextStyle, DefaultSelectionHandles, DefaultSelectionStyle, DefaultTextStyle,
-    DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide, RawTextField,
-    RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea, SelectionChange,
-    SelectionChangeCause, SelectionContainer, SelectionController, SelectionHandles,
-    SelectionInput, SelectionStyle, SubmitCallback, Text, TextEditingController,
+    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionHandles, DefaultSelectionStyle,
+    DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
+    RawTextField, RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea,
+    SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
+    SelectionHandles, SelectionInput, SelectionStyle, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
