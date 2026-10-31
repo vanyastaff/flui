@@ -5,13 +5,10 @@
 //! width/height, dropped the forced dimension, or failed to resolve the
 //! provider correctly.
 //!
-//! `AssetImage`/`NetworkImage` (the async providers) are NOT covered here —
-//! `Image::from_image`/`memory`/`file` all resolve synchronously via
-//! `ImageProvider::resolve`, so `Image`'s `StatelessView::build` takes the
-//! `build_sync` path unconditionally and every test below observes the FIRST
-//! (and only) frame. `tests/image_async.rs` covers the async
-//! probe-cache/`FutureBuilder`-wrap/coalescing dispatch that only exists once
-//! a provider's `cache_key()` returns `Some`.
+//! Every test below uses `Image::from_image`, whose provider has no cache key
+//! and resolves inline in `build`, so it observes the first (and only) frame.
+//! `tests/image_background.rs` covers `Image::memory`/`file`, which decode on
+//! the background lanes, and `tests/image_async.rs` the `AssetImage` loads.
 
 use crate::common::{lay_out, loose, size};
 use flui_painting::paint::Image as PixelImage;
