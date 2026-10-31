@@ -593,6 +593,8 @@ struct Shared {
     scroll: ScrollController,
     /// Where the notebook and the compact flag are stored.
     data: Persisted<Saved>,
+    /// Where the screens and the draft are stored.
+    session: Persisted<Session>,
     /// What writes the session; weak, since the router's pages hold this
     /// state and the place holds the router.
     place: Weak<Place>,
@@ -934,6 +936,7 @@ impl ViewState<Loaded> for LoadedState {
             draft,
             scroll,
             data,
+            session: place.session.clone(),
             place: Rc::downgrade(&place),
             close: cx
                 .close_guard()
@@ -1026,6 +1029,7 @@ impl ViewState<Screen> for ScreenState {
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(cx)),
             storage_banner(&shared.data),
+            place_banner(&shared.session),
             close_decision(shared.close.as_ref()),
             Expanded::new(content),
         ]))
@@ -1353,6 +1357,29 @@ fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
     .boxed()
 }
 
+/// A failed write of where the user is, with its own Retry: the notes'
+/// banner does not show it, and an unchanged place is not written again by
+/// itself, so without it a close the failure holds could only discard.
+fn place_banner(session: &Persisted<Session>) -> BoxedView {
+    let watched = session.clone();
+    let listenable: Rc<dyn Listenable> = Rc::new(session.clone());
+    AnimatedBuilder::new(listenable, move || match watched.status() {
+        SaveStatus::Failed(error) => {
+            let session = watched.clone();
+            Row::new(vec![
+                Text::new(format!("Saving the place failed: {error}")).boxed(),
+                TextButton::new(Text::new("Retry saving the place"))
+                    .on_pressed(move |_cx| session.retry())
+                    .boxed(),
+            ])
+            .boxed()
+        }
+        // No storage, or storage this build must not write, is the notes'
+        // banner to tell.
+        _ => SizedBox::shrink().boxed(),
+    })
+    .boxed()
+}
 /// Wait until the fresh start of `data` is stored: its value is loaded and
 /// takes edits from then on. A failed step ends the wait with its error.
 async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
@@ -1398,7 +1425,8 @@ async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
 
 /// A close the window holds, with the user's two ways out: close without
 /// saving what the holds protect, or keep the window open. Retry saving is
-/// on the storage banner; a save that succeeds then carries the close out.
+/// on the notes' and the place's banners; a save that succeeds then carries
+/// the close out.
 fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
     let Some(close) = close else {
         return SizedBox::shrink().boxed();
@@ -1430,7 +1458,7 @@ fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
                 .boxed(),
         ]);
         Column::new(column![
-            Text::new("Closing: unsaved changes to the notes would be lost"),
+            Text::new("Closing: unsaved changes would be lost"),
             buttons
         ])
         .boxed()

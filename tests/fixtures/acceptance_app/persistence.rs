@@ -763,6 +763,33 @@ fn close_with_a_failed_write_requires_a_decision() {
     );
 }
 
+/// A close held by a failed write of the place alone, with the notes clean,
+/// shows that failure with its own Retry, whose write carries the close out.
+#[test]
+fn a_close_held_by_a_failed_place_write_offers_its_retry() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.storage().fail_next(StorageError::Full);
+    run.type_text("!");
+    assert!(
+        run.shows_starting("Saving the place failed: ") && !run.shows_starting("Saving failed: "),
+        "the place's failure is shown, the notes' banner stays clear"
+    );
+    run.request_close();
+    assert!(!run.is_closed(), "the failed place write holds the window");
+    assert!(run.shows("Close without saving"));
+
+    run.tap("Retry saving the place");
+    assert!(run.is_closed(), "the retried write carries the close out");
+    assert!(
+        run.storage()
+            .contents(&Session::NAME)
+            .is_some_and(|stored| String::from_utf8_lossy(&stored).contains("\"Groceries!\"")),
+        "with the draft stored in the place"
+    );
+}
+
 /// A close during a save waits for it, asks nothing, and closes once the
 /// notes are stored.
 #[test]

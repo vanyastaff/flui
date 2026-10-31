@@ -157,6 +157,15 @@ impl AppRun {
         self.settle();
     }
 
+    /// Type `text` into the focused field, one key per character, then
+    /// settle.
+    pub fn type_text(&mut self, text: &str) {
+        for character in text.chars() {
+            self.press(Key::character(character.to_string()), Modifiers::NONE);
+        }
+        self.settle();
+    }
+
     /// Focus the Title field and replace its text by typing `text`.
     ///
     /// # Panics
