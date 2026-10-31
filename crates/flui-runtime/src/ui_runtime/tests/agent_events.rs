@@ -346,3 +346,25 @@ fn subscribe_to(
 ) -> EventStream {
     subscribe(ui_runtime, agent, kinds).expect("the window admits it")
 }
+
+#[test]
+fn a_frame_that_unwound_before_the_pipeline_counts_for_no_wait() {
+    let (ui_runtime, agent, mut sink) = shown();
+    let mut params = WaitParams::new(window(&ui_runtime), Condition::Frames(1));
+    params.timeout_ms = Some(60_000);
+    let mut parked = agent.wait(params).expect("the inbox has room");
+    let _report = ui_runtime.drain_commands();
+    assert!(parked.try_take().is_none(), "no frame has come since");
+    ui_runtime
+        .scheduler()
+        .schedule_frame_callback(Box::new(|_| panic!("a transient callback panics")));
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&ui_runtime, &mut sink);
+    }));
+    assert!(unwound.is_err(), "the callback's panic leaves the frame");
+    assert!(
+        parked.try_take().is_none(),
+        "no frame was rendered, so the wait stays parked"
+    );
+}

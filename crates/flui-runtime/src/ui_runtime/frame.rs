@@ -15,6 +15,7 @@ use flui_scheduler::{
     DemandKind, FramePhase, FramePhaseDurations, FrameSnapshot, FrameTimes, Instant, PresentOutcome,
 };
 use flui_view::__runtime::BindingRuntime as _;
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 impl UiRuntime {
@@ -374,13 +375,16 @@ impl UiRuntime {
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
         mut prepare: impl FnMut(),
-        pipeline: impl FnMut() -> bool,
+        mut pipeline: impl FnMut() -> bool,
     ) -> bool {
         let mut commits_closed = None;
         let commit_slot = &mut commits_closed;
         // Owed until the anchor below completes: a drive that unwinds leaves
         // it to the next owner turn (ADR-0142 item 5).
         self.anchor_owed.set(true);
+        // Whether the pipeline ran to its end: a drive that unwinds before it (a transient
+        // callback) or inside it had no frame to report.
+        let piped = Cell::new(false);
         // A callback that panics after the frame presented unwinds out of the drive, but the
         // frame happened: what an agent is owed for it is still delivered below, and the panic
         // continues after.
@@ -392,18 +396,24 @@ impl UiRuntime {
                     prepare();
                     *commit_slot = Some(TextCommitsClosed::close(self));
                 },
-                pipeline,
+                || {
+                    let presented = pipeline();
+                    piped.set(true);
+                    presented
+                },
             )
         }));
         drop(commits_closed);
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
         // left, the events it produced are emitted, and the waits an agent parked see the window as
         // the frame left it, events included.
-        for presentation in self.presentations.iter() {
-            Self::complete_agent_reads(presentation);
+        if driven.is_ok() || piped.get() {
+            for presentation in self.presentations.iter() {
+                Self::complete_agent_reads(presentation);
+            }
+            self.publish_agent_events();
+            self.evaluate_agent_waits(true);
         }
-        self.publish_agent_events();
-        self.evaluate_agent_waits(true);
         let result = match driven {
             Ok(result) => result
                 .expect("BUG: the runtime's live frame owner must admit its frame transaction"),
