@@ -6,7 +6,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,8 +34,33 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Self {
-        let mut daemon = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address"])
+        Self::spawn(Command::new("dbus-daemon").arg("--session"))
+    }
+
+    /// A bus that starts the services `directory` describes on demand, as a
+    /// desktop session starts its portal.
+    fn with_services(directory: &Path) -> Self {
+        let config = directory.join("bus.conf");
+        std::fs::write(
+            &config,
+            format!(
+                "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN\" \
+                 \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n\
+                 <busconfig><type>session</type><listen>unix:tmpdir={tmp}</listen>\
+                 <servicedir>{services}</servicedir>\
+                 <policy context=\"default\"><allow send_destination=\"*\"/><allow receive_sender=\"*\"/><allow own=\"*\"/></policy>\
+                 </busconfig>\n",
+                tmp = std::env::temp_dir().display(),
+                services = directory.display(),
+            ),
+        )
+        .expect("the bus configuration is written");
+        Self::spawn(Command::new("dbus-daemon").arg(format!("--config-file={}", config.display())))
+    }
+
+    fn spawn(command: &mut Command) -> Self {
+        let mut daemon = command
+            .args(["--nofork", "--print-address"])
             .stdout(Stdio::piped())
             .spawn()
             .expect("dbus-daemon runs: the Linux test host installs it");
@@ -279,7 +305,11 @@ struct StandIn {
 
 impl StandIn {
     fn serve() -> Self {
-        let bus = PrivateBus::start();
+        Self::serve_on(PrivateBus::start())
+    }
+
+    /// The stand-in on `bus`, which may have started it.
+    fn serve_on(bus: PrivateBus) -> Self {
         let script = Arc::new(Script::default());
         let path = "/org/freedesktop/portal/desktop";
         let server = zruntime::block_on(
@@ -559,6 +589,85 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
         matches!(answered, Ok(Err(DialogError::Unavailable(_)))),
         "{answered:?}"
     );
+}
+
+#[test]
+fn an_installed_portal_that_is_not_running_is_started_first() {
+    let services =
+        std::env::temp_dir().join(format!("flui-system-services-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&services);
+    std::fs::create_dir_all(&services).expect("a service directory");
+    let started = services.join("started");
+    // The bus runs this to start the portal; the test then serves the
+    // stand-in under the portal's name, which completes the start.
+    std::fs::write(
+        services.join("org.freedesktop.portal.Desktop.service"),
+        format!(
+            "[D-BUS Service]\nName=org.freedesktop.portal.Desktop\n\
+             Exec=/bin/sh -c \"touch '{}'; exec sleep 20\"\n",
+            started.display()
+        ),
+    )
+    .expect("the service file is written");
+    let bus = PrivateBus::with_services(&services);
+    let plugin = PortalOnBus::new(bus.address.as_str());
+    let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+
+    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+    let slot = outcome_slot::<Result<LaunchResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    launcher
+        .open_uri(&uri)
+        .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    pump_until(&mut host, "the bus starts the portal", || started.exists());
+    let portal = StandIn::serve_on(bus);
+    pump_until(&mut host, "the started portal answers", || {
+        slot.borrow().is_some()
+    });
+    assert_eq!(slot.borrow_mut().take(), Some(Ok(Ok(()))));
+    assert_eq!(
+        portal.calls(),
+        [Call::OpenUri {
+            parent: String::new(),
+            uri: "https://example.com/".to_owned(),
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&services);
+}
+
+#[test]
+fn a_named_pipe_without_a_writer_does_not_stall_the_caller() {
+    let portal = StandIn::serve();
+    let (mut host, launcher) = acquire::<LauncherCapability>(&portal.plugin());
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let fifo = std::env::temp_dir().join(format!("flui-system-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_file(&fifo);
+    let status = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "a named pipe is made");
+    // A blocked open would otherwise hang the test: a writer arrives late.
+    let late = fifo.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&late);
+    });
+
+    let asked = Instant::now();
+    let completion = launcher.open_path(&fifo);
+    assert!(
+        asked.elapsed() < Duration::from_secs(1),
+        "asking returned after {:?}",
+        asked.elapsed()
+    );
+    assert_eq!(settle(&mut host, completion), Ok(Ok(())));
+    writer.join().expect("the writer ends");
+    let _ = std::fs::remove_file(&fifo);
 }
 
 /// Pump `host` until `ready` holds.

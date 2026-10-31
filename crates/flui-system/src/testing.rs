@@ -196,9 +196,8 @@ impl PortalOnBus {
     /// `unix:path=/tmp/bus`.
     #[must_use]
     pub fn new(address: impl Into<std::sync::Arc<str>>) -> Self {
-        Self {
-            address: address.into(),
-        }
+        let address: std::sync::Arc<str> = address.into();
+        Self { address }
     }
 }
 

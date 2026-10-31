@@ -102,7 +102,7 @@ fn filters(filters: &[FileFilter]) -> Vec<(String, Vec<(u32, String)>)> {
             let globs = filter
                 .extensions()
                 .iter()
-                .map(|extension| (0, format!("*.{extension}")));
+                .map(|extension| (0, format!("*.{}", literal_glob(extension))));
             let types = filter
                 .mime_types()
                 .iter()
@@ -113,6 +113,22 @@ fn filters(filters: &[FileFilter]) -> Vec<(String, Vec<(u32, String)>)> {
             )
         })
         .collect::<Vec<(String, Vec<(u32, String)>)>>()
+}
+
+/// `text` as a glob that matches only itself: each glob character in a
+/// bracket of its own, which every glob dialect reads as that character.
+fn literal_glob(text: &str) -> String {
+    let mut glob = String::with_capacity(text.len());
+    for character in text.chars() {
+        if matches!(character, '*' | '?' | '[' | ']') {
+            glob.push('[');
+            glob.push(character);
+            glob.push(']');
+        } else {
+            glob.push(character);
+        }
+    }
+    glob
 }
 
 /// A path as the portal's `ay` options take it: its bytes and a NUL.
@@ -192,6 +208,7 @@ mod tests {
         let filter = FileFilter::new("Images")
             .with_extension("png")
             .with_extension("jpg")
+            .with_extension("a[1]?")
             .with_mime_type("image/webp");
         assert_eq!(
             filters(&[filter]),
@@ -200,6 +217,8 @@ mod tests {
                 vec![
                     (0, "*.png".to_owned()),
                     (0, "*.jpg".to_owned()),
+                    // Glob characters in an extension match only themselves.
+                    (0, "*.a[[]1[]][?]".to_owned()),
                     (1, "image/webp".to_owned()),
                 ]
             )]

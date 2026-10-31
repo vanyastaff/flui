@@ -36,6 +36,7 @@ flui-testing = { workspace = true }
 # The stand-in desktop portal the Linux providers' tests serve on a private
 # bus.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = { workspace = true }
 zbus = { workspace = true, features = ["service"] }
 zruntime = { version = "0.2", default-features = false, features = ["runtime", "helper"] }
 

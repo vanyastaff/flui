@@ -56,11 +56,8 @@ where
         .replace('.', "_");
     let expected = format!("{PATH}/request/{sender}/{token}");
     let mut departures = subscribe_departures(connection).await?;
-    let owner = zbus::fdo::DBusProxy::new(connection)
-        .await?
-        .get_name_owner(zbus::names::BusName::try_from(DESTINATION)?)
-        .await
-        .map_err(zbus::Error::from)?;
+    let bus = zbus::fdo::DBusProxy::new(connection).await?;
+    let owner = owner(&bus).await?;
     let mut responses = subscribe(connection, &owner, &expected).await?;
 
     let reply = connection
@@ -86,6 +83,23 @@ where
         1 => Response::Cancelled,
         _ => Response::Ended,
     })
+}
+
+/// The portal's unique owner, starting an installed portal that is not
+/// running: asking for an owner does not start one.
+async fn owner(
+    bus: &zbus::fdo::DBusProxy<'_>,
+) -> Result<zbus::names::OwnedUniqueName, PortalError> {
+    let name = zbus::names::BusName::try_from(DESTINATION)?;
+    match bus.get_name_owner(name.clone()).await {
+        Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+            bus.start_service_by_name(zbus::names::WellKnownName::try_from(DESTINATION)?, 0)
+                .await
+                .map_err(zbus::Error::from)?;
+            Ok(bus.get_name_owner(name).await.map_err(zbus::Error::from)?)
+        }
+        owner => Ok(owner.map_err(zbus::Error::from)?),
+    }
 }
 
 /// The `Response` signals `owner` sends on the `Request` object at `path`.

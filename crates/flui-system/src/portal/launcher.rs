@@ -34,11 +34,17 @@ impl PortalLauncher {
     /// them. `entry` opens the directory entry itself: a symbolic link there
     /// is refused instead of followed, since the portal acts on the path its
     /// descriptor resolves to, and trashing a link must not trash its target.
+    ///
+    /// Non-blocking, since this runs on the caller's thread: opening a named
+    /// pipe with no writer would otherwise wait for one. The portal is never
+    /// read through the descriptor, so the mode costs nothing.
     fn open(path: &Path, entry: Entry) -> Result<File, LaunchError> {
-        let flags = match entry {
-            Entry::FollowLinks => libc::O_CLOEXEC,
-            Entry::Itself => libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        };
+        let flags = libc::O_CLOEXEC
+            | libc::O_NONBLOCK
+            | match entry {
+                Entry::FollowLinks => 0,
+                Entry::Itself => libc::O_NOFOLLOW,
+            };
         std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(flags)
