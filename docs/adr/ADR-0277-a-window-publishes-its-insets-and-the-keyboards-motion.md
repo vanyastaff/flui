@@ -1,9 +1,8 @@
 # ADR-0277: A window publishes its insets as one value, and the frame samples the keyboard's motion
 
 - **Status:** Accepted (2026-10-30). Implemented: the value, the capabilities, the frame sampling,
-  the recording and the headless script (§1 to §3, §5), and the Android keyboard at rest and its
-  system gesture regions (§4). Not implemented: the Android keyboard's motion, and the iOS and
-  Web producers (§4).
+  the recording and the headless script (§1 to §3, §5), and the Android keyboard with its motion
+  and its system gesture regions (§4). Not implemented: the iOS and Web producers (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
@@ -171,7 +170,7 @@ asks for the next frame; at or after its end the keyboard is kept settled and no
 
 | Host | safe area | keyboard | system gestures |
 |---|---|---|---|
-| Android | `systemBars() \| displayCutout()` as today | `Type.ime()`; API 30 and later: `WindowInsetsAnimation.Callback` publishes a motion at `onStart` (bounds, `getDurationMillis`, the interpolator mapped to `InsetCurve`) and re-anchors it at each `onProgress`; below API 30 the target alone | `systemGestures()` (API 29 and later) |
+| Android | `systemBars() \| displayCutout()` as today | `Type.ime()`; API 30 and later: `WindowInsetsAnimation.Callback` publishes a motion at `onStart` (the bottom edge from `onPrepare` and at `onStart`, `getDurationMillis`, the interpolator mapped to the nearest of the insets controller's curves by its values at three times) and re-anchors its start at an `onProgress` whose `getFraction()` puts the start more than a frame away; a motion with no duration (one the user drives) and below API 30: the target alone | `systemGestures()` (API 29 and later) |
 | iOS | `safeAreaInsets` as today | `UIKeyboardWillChangeFrameNotification`: the end frame converted to the view, the duration, the curve (7 is `SystemKeyboard`) | none |
 | Web | `env(safe-area-inset-*)` with `viewport-fit=cover` | `navigator.virtualKeyboard` with `overlaysContent` and `geometrychange` where the browser has it, else the `visualViewport` resize (`innerHeight - (visualViewport.height + offsetTop)`); the target alone, and the capability is `Native` or `Emulated` by which the browser offers | none |
 | Desktop | as today | none | none |
@@ -229,4 +228,4 @@ and `time_to_next_frame` shows the frame requests ending with the motion.
 - Good: one shape for both mobile systems; the frame decides the value, as ADR-0083 requires;
   deterministic in tests and replay.
 - Bad: Android's interpolator is mapped to a curve (its default IME interpolator is a Bézier); a
-  custom one is approximated, and re-anchoring at each `onProgress` corrects the drift.
+  custom one is approximated, and re-anchoring the start from `onProgress` corrects the drift.

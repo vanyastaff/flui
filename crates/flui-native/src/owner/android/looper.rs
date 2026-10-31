@@ -196,6 +196,12 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
     /// Delivers the insets the Java view answered with.
     fn settle_insets(&self);
 
+    /// The keyboard began to move, or its motion was reported again.
+    fn keyboard_motion(&self, report: java_view::KeyboardReport);
+
+    /// The keyboard's motion ended: read it at rest again.
+    fn keyboard_settled(&self);
+
     /// Delivers the night mode the configuration reports.
     fn settle_appearance(&self);
 
@@ -442,6 +448,16 @@ impl AndroidLoop {
                 java_view::ViewEvent::InsetsChanged => {
                     if let Some(window) = &window {
                         window.request_insets();
+                    }
+                }
+                java_view::ViewEvent::KeyboardMotion(report) => {
+                    if let Some(window) = &window {
+                        window.keyboard_motion(report);
+                    }
+                }
+                java_view::ViewEvent::KeyboardSettled => {
+                    if let Some(window) = &window {
+                        window.keyboard_settled();
                     }
                 }
             }

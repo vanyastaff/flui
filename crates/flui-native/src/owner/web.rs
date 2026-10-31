@@ -215,9 +215,6 @@ pub(crate) trait CanvasEditor {
     /// the canvas's focus area; `None` when there is none.
     fn set_semantics(&self, host: Option<&web_sys::HtmlElement>);
 
-    /// Whether the canvas, or the editor beside it, has the page's focus.
-    fn has_focus(&self) -> bool;
-
     /// Whether `event` only moves focus within the canvas's focus area
     /// (between the canvas and its editor), which the window does not see as
     /// a focus change.
@@ -242,11 +239,97 @@ pub struct CanvasRef {
     pub(crate) keys: Rc<dyn CanvasKeys>,
     /// The canvas's focus area, which the text input's editor joins.
     pub(crate) editor: Rc<dyn CanvasEditor>,
+    /// The field the semantics host mirrors where the tree's focus is, which
+    /// the text input edits through.
+    pub(crate) field: Rc<FocusedField>,
 }
 
 impl std::fmt::Debug for CanvasRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CanvasRef").finish_non_exhaustive()
+    }
+}
+
+/// What the semantics host does with a field the text input released.
+pub(crate) type FieldRelease = Rc<dyn Fn(&web_sys::HtmlElement)>;
+
+/// The text field a canvas's semantics host mirrors where the tree's focus
+/// is ([`CanvasRef::field`]): the `<input>` or `<textarea>` a screen reader
+/// reads and edits as a native field. While the window's text input serves
+/// the focused store, it edits the store through that element instead of an
+/// editor of its own, and the host leaves the element's value to it.
+#[derive(Default)]
+pub(crate) struct FocusedField {
+    /// The element the semantics host names.
+    named: RefCell<Option<web_sys::HtmlElement>>,
+    /// The element the text input edits a store through now.
+    served: RefCell<Option<web_sys::HtmlElement>>,
+    /// What the text input does when the named element changes.
+    changed: RefCell<Option<Rc<dyn Fn()>>>,
+    /// What the semantics host does with an element the text input stops
+    /// serving a store through.
+    released: RefCell<Option<FieldRelease>>,
+}
+
+impl FocusedField {
+    /// The element the semantics host names now.
+    pub(crate) fn named(&self) -> Option<web_sys::HtmlElement> {
+        self.named.borrow().clone()
+    }
+
+    /// The semantics host's focused field is `element` now, `None` when the
+    /// tree's focus is on no mirrored field or the host is gone. The text
+    /// input hears of a change with nothing here borrowed.
+    pub(crate) fn name(&self, element: Option<&web_sys::HtmlElement>) {
+        let same = match (&*self.named.borrow(), element) {
+            (Some(named), Some(element)) => named.is_same_node(Some(element.as_ref())),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        *self.named.borrow_mut() = element.cloned();
+        let changed = self.changed.borrow().clone();
+        if let Some(changed) = changed {
+            changed();
+        }
+    }
+
+    /// Run `changed` whenever the named element changes; `None` stops it.
+    pub(crate) fn on_change(&self, changed: Option<Rc<dyn Fn()>>) {
+        *self.changed.borrow_mut() = changed;
+    }
+
+    /// Run `released` with each element the text input stops serving a store
+    /// through; `None` stops it.
+    pub(crate) fn on_release(&self, released: Option<FieldRelease>) {
+        *self.released.borrow_mut() = released;
+    }
+
+    /// The text input edits a store through `element` now, or through none.
+    /// The semantics host hears of the element served before, with
+    /// nothing here borrowed, and shows the element's published value again.
+    pub(crate) fn serve(&self, element: Option<&web_sys::HtmlElement>) {
+        let before = std::mem::replace(&mut *self.served.borrow_mut(), element.cloned());
+        let Some(before) = before.filter(|before| {
+            !element.is_some_and(|element| element.is_same_node(Some(before.as_ref())))
+        }) else {
+            return;
+        };
+        let released = self.released.borrow().clone();
+        if let Some(released) = released {
+            released(&before);
+        }
+    }
+
+    /// Whether the text input edits a store through `element`, whose value
+    /// is then the store's.
+    pub(crate) fn serves(&self, element: &web_sys::Element) -> bool {
+        self.served
+            .borrow()
+            .as_ref()
+            .is_some_and(|served| served.is_same_node(Some(element.as_ref())))
     }
 }
 
