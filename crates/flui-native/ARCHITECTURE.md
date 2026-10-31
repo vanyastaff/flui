@@ -4665,14 +4665,17 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 
-`Platform::data_dirs` answers where an application keeps its data, so the host
+`Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
 `storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
-backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
-one record per name in the IndexedDB database `flui-storage`, keyed
-`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+backs up. Headless never touches the user's directories: it answers with a
+memory store per application that the platform owns, or with the root a test
+names with `with_data_root`, where the test reads back the bytes written.
+`DataStore` hides which of the two, with `FileStore`'s calls. On wasm32
+`FileStore` keeps the native methods, returning futures: one record per name in
+the IndexedDB database `flui-storage`, keyed `<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
 connection it opens and closes, so an idle connection never blocks another
 tab's upgrade. A based write reads, compares and puts inside one readwrite
 transaction; the browser runs readwrite transactions over one store one at a

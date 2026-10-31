@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
-use flui_native::storage::DataDirs;
+use flui_native::storage::DataStore;
 use flui_native::{
     AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
     PlatformError,
@@ -122,7 +122,7 @@ impl Platform for OutsidePlatform {
         Ok(PathBuf::new())
     }
 
-    fn data_dirs(&self, _: &AppDataDir) -> Option<DataDirs> {
+    fn data_store(&self, _: &AppDataDir) -> Option<DataStore> {
         None
     }
 }

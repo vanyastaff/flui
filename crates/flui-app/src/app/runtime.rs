@@ -1359,7 +1359,7 @@ impl AppRuntime {
         self.platform_data_transfer.lock().clone()
     }
 
-    /// Install the host's byte storage under `dirs`, or none, once, when the
+    /// Install the host's byte storage over `store`, or none, once, when the
     /// host starts: every UI runtime the runners and secondary windows build
     /// afterwards takes this one (`runner::host::build_ui_runtime`). `None`
     /// replaces a storage an earlier run on this thread left, whose IO pool
@@ -1367,10 +1367,10 @@ impl AppRuntime {
     /// if no runner resolved them yet, so install the host's executors first.
     pub(super) fn install_host_storage(
         &mut self,
-        dirs: Result<flui_native::storage::DataDirs, flui_platform::Unsupported>,
+        store: Result<flui_native::storage::DataStore, flui_platform::Unsupported>,
     ) {
-        let dirs = match dirs {
-            Ok(dirs) => dirs,
+        let store = match store {
+            Ok(store) => store,
             Err(refusal) => {
                 self.host_storage.install(Err(refusal));
                 self.flush_host = None;
@@ -1378,7 +1378,7 @@ impl AppRuntime {
             }
         };
         let io = Arc::downgrade(self.ensure_execution());
-        let storage = super::storage_host::host_storage(dirs, std::sync::Weak::clone(&io));
+        let storage = super::storage_host::host_storage(store, std::sync::Weak::clone(&io));
         let wake = self.frame_wake_callback();
         self.flush_host = Some(flui_view::__runtime::FlushHost::new(
             Box::new(move |write| {
