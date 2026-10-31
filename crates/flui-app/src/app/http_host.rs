@@ -91,6 +91,7 @@ impl HttpClient for NotYet {
 mod lanes {
     use std::future::{Future, poll_fn};
     use std::pin::{Pin, pin};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, OnceLock, Weak};
     use std::task::{Context, Poll};
     use std::time::Duration;
@@ -168,6 +169,8 @@ mod lanes {
         mut head_tx: oneshot::Sender<Result<HttpResponse, HttpError>>,
     ) {
         let limit = request.body_limit();
+        // `None` past what the clock can name: no deadline to keep.
+        let deadline = std::time::Instant::now().checked_add(request.deadline());
         let send = match build(&client, request) {
             Ok(send) => send,
             Err(error) => {
@@ -200,10 +203,12 @@ mod lanes {
             }
         };
         let (body_tx, body_rx) = mpsc::channel(BODY_CHUNKS_IN_FLIGHT);
+        let timed_out = Arc::new(AtomicBool::new(false));
         let (status, headers) = head;
         let chunks = Chunks {
             receiver: body_rx,
             ended: false,
+            timed_out: Arc::clone(&timed_out),
         };
         let answered = HttpResponse::new(status, headers, ResponseBody::new(chunks, limit));
         if head_tx.send(Ok(answered)).is_err() {
@@ -218,8 +223,20 @@ mod lanes {
                 Some(Err(error)) => Chunk::Failed(transport(&error)),
             };
             let last = !matches!(chunk, Chunk::Bytes(_));
-            if body_tx.send(chunk).await.is_err() || last {
-                return;
+            // A reader that stops reading leaves the response unpolled, so
+            // its own deadline would never fire: the wait for room in the
+            // channel keeps the request's deadline instead.
+            let forwarded = match deadline {
+                Some(at) => tokio::time::timeout_at(at.into(), body_tx.send(chunk)).await,
+                None => Ok(body_tx.send(chunk).await),
+            };
+            match forwarded {
+                Ok(Ok(())) if !last => {}
+                Ok(_) => return,
+                Err(_elapsed) => {
+                    timed_out.store(true, Ordering::Release);
+                    return;
+                }
             }
         }
     }
@@ -351,6 +368,9 @@ mod lanes {
         receiver: mpsc::Receiver<Chunk>,
         /// Whether the lane reported the body's end or its failure.
         ended: bool,
+        /// Set by the lane when the request's deadline passed while it waited
+        /// for the reader.
+        timed_out: Arc<AtomicBool>,
     }
 
     impl BodySource for Chunks {
@@ -371,10 +391,15 @@ mod lanes {
                     self.ended = true;
                     Some(Err(error))
                 }
-                // The lane dropped the exchange mid-body: the host shut down.
+                // The lane left mid-body: the deadline passed while the reader
+                // held its chunks, or the host shut down.
                 None => {
                     self.ended = true;
-                    Some(Err(HttpError::Cancelled))
+                    Some(Err(if self.timed_out.load(Ordering::Acquire) {
+                        HttpError::Timeout
+                    } else {
+                        HttpError::Cancelled
+                    }))
                 }
             })
         }
@@ -516,12 +541,15 @@ mod tests {
     }
 
     /// Dropping the request's future, and later the body of an answered one,
-    /// closes its connection on the lane.
+    /// closes its connection on the lane, and so does a body its reader holds
+    /// unread past the request's deadline.
     #[test]
     fn dropping_a_request_or_its_body_closes_the_connection() {
         let (address, seen) = serve(|path| match path {
             // Never answers.
             "/silent" => Vec::new(),
+            // More body than the lane holds for a reader that stops reading.
+            "/large" => ok(&vec![7_u8; 8 * 1024 * 1024]),
             // Headers, then a body that never ends.
             _ => b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\npartial".to_vec(),
         });
@@ -546,6 +574,25 @@ mod tests {
             seen.recv_timeout(wait),
             Ok("closed"),
             "a dropped body closes its connection"
+        );
+
+        let held = block_on(
+            http.send(
+                HttpRequest::get(format!("http://{address}/large"))
+                    .with_deadline(Duration::from_millis(300)),
+            ),
+        )
+        .expect("the head arrives within the deadline");
+        assert_eq!(seen.recv_timeout(wait), Ok("accepted"));
+        assert_eq!(
+            seen.recv_timeout(wait),
+            Ok("closed"),
+            "a body held unread past its deadline closes its connection"
+        );
+        assert_eq!(
+            block_on(held.into_body().into_bytes()),
+            Err(HttpError::Timeout),
+            "the reader learns the deadline passed"
         );
 
         let shut_down = Arc::new(ExecutionServices::with_defaults());

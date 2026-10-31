@@ -128,7 +128,8 @@ tokio-util = { workspace = true }
 reqwest = { workspace = true, optional = true }
 # Names a failed TLS handshake in reqwest's error chain (`HttpError::Tls`).
 rustls = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["sync"] }
+# "time": the lane keeps a request's deadline while its reader holds the body.
+tokio = { workspace = true, features = ["sync", "time"] }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
