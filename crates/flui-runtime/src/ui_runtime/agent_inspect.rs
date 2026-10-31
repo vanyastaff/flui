@@ -94,7 +94,7 @@ fn root_of(
         reason: "root is not a node handle",
     };
     let link = if text.contains('/') {
-        let reference: NodeRef = text.parse().map_err(|_| NOT_A_NODE)?;
+        let reference = text.parse::<NodeRef>().map_err(|_| NOT_A_NODE)?;
         if reference.presentation != presentation {
             return Err(AgentError::UnknownPresentation);
         }
@@ -184,7 +184,9 @@ fn value_to_wire(value: &OwnedValue) -> InspectValue {
         // An object nodes share has no wire form of its own: it is named by type and number.
         OwnedValue::Shared { ty, number } => InspectValue::Str(format!("{ty}#{number}")),
         OwnedValue::Debug(text) => InspectValue::Debug(text.clone()),
-        OwnedValue::Seq(items) => InspectValue::Seq(items.iter().map(value_to_wire).collect()),
+        OwnedValue::Seq(items) => {
+            InspectValue::Seq(items.iter().map(value_to_wire).collect::<Vec<_>>())
+        }
         // `None` and a value added later: nothing to say.
         _ => InspectValue::None,
     }
@@ -210,15 +212,23 @@ fn field_to_wire(field: &OwnedField) -> InspectField {
 /// The node itself, with no children.
 fn node_to_wire(node: &SnapshotNode) -> InspectNode {
     let mut wire = InspectNode::new(node.id.to_string(), node.kind);
-    wire.kind_args = node.kind_args.iter().map(|arg| (*arg).to_owned()).collect();
+    wire.kind_args = node
+        .kind_args
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .collect::<Vec<_>>();
     wire.fields = node
         .facts
         .iter()
         .chain(&node.fields)
         .map(field_to_wire)
-        .collect();
+        .collect::<Vec<_>>();
     wire.rect = node.rect.map(rect_to_wire);
-    wire.links = node.links.iter().map(|link| link.to_string()).collect();
+    wire.links = node
+        .links
+        .iter()
+        .map(|link| link.to_string())
+        .collect::<Vec<_>>();
     wire.omitted_children = node.omitted_children;
     wire.debug_fields = node.debug_fields;
     wire

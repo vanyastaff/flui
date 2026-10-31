@@ -72,11 +72,11 @@ fn slot_and_generation(text: &str) -> Option<(u64, Option<NonZeroU64>)> {
         // A first generation prints no suffix, so a written one is another spelling of the same
         // node: refused, so every node has one text.
         Some(generation) => {
-            Some(NonZeroU64::new(generation.parse().ok()?).filter(|g| g.get() > 1)?)
+            Some(NonZeroU64::new(generation.parse::<u64>().ok()?).filter(|g| g.get() > 1)?)
         }
         None => None,
     };
-    Some((slot.parse().ok()?, generation))
+    Some((slot.parse::<u64>().ok()?, generation))
 }
 
 impl FromStr for Link {
@@ -129,7 +129,7 @@ impl FromStr for NodeRef {
         );
         Ok(Self {
             presentation,
-            link: link.parse()?,
+            link: link.parse::<Link>()?,
         })
     }
 }

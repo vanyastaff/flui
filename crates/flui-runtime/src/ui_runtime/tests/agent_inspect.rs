@@ -63,7 +63,7 @@ fn nodes(node: &InspectNode) -> Vec<&InspectNode> {
     let mut all = vec![node];
     let mut next = 0;
     while next < all.len() {
-        let children: Vec<_> = all[next].children.iter().collect();
+        let children = all[next].children.iter().collect::<Vec<_>>();
         all.extend(children);
         next += 1;
     }
@@ -108,7 +108,7 @@ fn a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window() {
     assert_eq!(sub.roots[0].id, child.id);
     assert!(sub.count < all.count, "a subtree is a part of the tree");
 
-    let link: Link = child.id.parse().expect("a handle");
+    let link = child.id.parse::<Link>().expect("a handle");
     let reference = NodeRef::new(ui_runtime.presentation_id(), link);
     let mut params = InspectParams::new(window(&ui_runtime));
     params.root = Some(reference.to_string());
@@ -121,7 +121,7 @@ fn a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window() {
 fn a_reference_to_another_window_is_unknown_and_never_read_here() {
     let (ui_runtime, agent) = shown();
     let all = whole(&ui_runtime, &agent, InspectTarget::Render).expect("the render tree");
-    let link: Link = all.roots[0].id.parse().expect("a handle");
+    let link = all.roots[0].id.parse::<Link>().expect("a handle");
 
     let own = ui_runtime.presentation_id();
     let reused = PresentationId::new_gen(
