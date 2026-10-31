@@ -94,6 +94,12 @@ export function removeKeyboard() {
     delete globalThis.document.documentElement;
 }
 export function keyboardOverlaysContent() { return keyboard.overlaysContent; }
+// An ancestor of the canvas scrolled, moving it to `top` in the viewport; the
+// window's capture-phase `scroll` listener hears it.
+export function scrollCanvasTo(top) {
+    canvases[canvases.length - 1].top = top;
+    fireWindow('scroll', false);
+}
 // The visual viewport shrunk to `height` at `scale`, as a keyboard or a pinch
 // leaves it.
 export function setVisualViewport(height, scale) {
@@ -135,6 +141,8 @@ extern "C" {
     fn keyboard_overlays_content() -> bool;
     #[wasm_bindgen(js_name = moveVirtualKeyboard)]
     fn move_virtual_keyboard(top: f64);
+    #[wasm_bindgen(js_name = scrollCanvasTo)]
+    fn scroll_canvas_to(top: f64);
 }
 
 /// The page's window and the handler it was opened with.
@@ -468,6 +476,11 @@ async fn web_window_reads_the_keyboard_from_the_visual_viewport() {
     set_visual_viewport(70.0, 1.0);
     assert_eq!(keyboard().target().bottom, 80.0);
     assert_eq!(keyboard().motion(), None, "a browser names no motion");
+    // An ancestor scrolls the canvas further under the keyboard, and back.
+    scroll_canvas_to(40.0);
+    assert_eq!(keyboard().target().bottom, 120.0);
+    scroll_canvas_to(0.0);
+    assert_eq!(keyboard().target().bottom, 80.0);
     set_visual_viewport(150.0, 1.0);
     assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
     remove_keyboard();
@@ -495,6 +508,14 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
     assert_eq!(keyboard().target().bottom, 50.0);
     move_virtual_keyboard(150.0);
     assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    // The page gets its own setting back once the window goes.
+    window
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("a page retires its canvas");
+    assert!(
+        !keyboard_overlays_content(),
+        "the page's setting is restored"
+    );
     remove_keyboard();
     running.quit();
     settle().await;

@@ -742,47 +742,47 @@ impl WebWindow {
         )
     }
 
-    /// The keyboard moving over the page: `navigator.virtualKeyboard`'s
+    /// The keyboard moving over the canvas: `navigator.virtualKeyboard`'s
     /// `geometrychange` where the browser has it, which the page then asks to
-    /// overlay its content, and the visual viewport's `resize` and `scroll`
-    /// (its offset moves as the browser scrolls the focused field into view).
+    /// overlay its content until the window retires, and whatever moves the
+    /// canvas in the viewport without a layout of its own (the page or an
+    /// ancestor scrolling, the visual viewport resizing or panning as the
+    /// browser scrolls the focused field into view).
     fn register_keyboard_events(
         &self,
         registration: &mut Registration,
     ) -> Result<(), OpenWindowError> {
         let browser =
             web_sys::window().expect("BUG: window construction verified browser environment");
-        let keyboard = virtual_keyboard(&browser);
-        if let Some(keyboard) = &keyboard {
+        let overlays = JsValue::from_str("overlaysContent");
+        if let Some(keyboard) = virtual_keyboard(&browser) {
             // The window lays its content out around the keyboard itself
             // (ADR-0277 §4): the browser keeps the viewport whole and does not
             // scroll the canvas, and names the keyboard's rectangle instead.
-            // A browser that refuses keeps reporting through the viewport.
-            let _ = js_sys::Reflect::set(
-                keyboard,
-                &JsValue::from_str("overlaysContent"),
-                &JsValue::TRUE,
-            );
-        }
-        let visual = browser.visual_viewport().map(web_sys::EventTarget::from);
-        let targets = [
-            (keyboard, "geometrychange"),
-            (visual.clone(), "resize"),
-            (visual, "scroll"),
-        ];
-        for (target, kind) in targets {
-            let Some(target) = target else {
-                continue;
-            };
+            // The setting is the page's, so the page gets back what it had
+            // when the window retires or fails to install; a browser that
+            // refuses keeps reporting through the viewport.
+            let previous = js_sys::Reflect::get(&keyboard, &overlays).unwrap_or(JsValue::FALSE);
+            let _ = js_sys::Reflect::set(&keyboard, &overlays, &JsValue::TRUE);
+            let restored = keyboard.clone();
+            registration.on_retire(Box::new(move || {
+                let _ = js_sys::Reflect::set(&restored, &overlays, &previous);
+            }));
             let publisher = self.publisher();
             registration.listen(
-                &target,
-                kind,
+                &keyboard,
+                "geometrychange",
                 Rc::new(move |_: web_sys::Event| {
                     publisher.publish();
                 }),
             )?;
         }
+        let publisher = self.publisher();
+        let moved = crate::owner::web::listener::viewport_listeners(
+            &Accepting::reading(&registration.accepting),
+            move || publisher.publish(),
+        )?;
+        registration.listeners.extend(moved);
         Ok(())
     }
 
