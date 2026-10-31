@@ -270,7 +270,7 @@ impl Locale {
             rebuilt.push('-');
             rebuilt.push_str(part);
         }
-        rebuilt.parse().unwrap_or_else(|_| self.clone())
+        rebuilt.parse::<Self>().unwrap_or_else(|_| self.clone())
     }
     /// English (United States).
     #[must_use]
