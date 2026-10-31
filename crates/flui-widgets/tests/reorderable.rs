@@ -79,7 +79,12 @@ struct Shelf {
 impl Shelf {
     fn new(items: &[&str]) -> Self {
         Self {
-            items: StateHandle::new(items.iter().map(|item| (*item).to_owned()).collect()),
+            items: StateHandle::new(
+                items
+                    .iter()
+                    .map(|item| (*item).to_owned())
+                    .collect::<Vec<String>>(),
+            ),
             shown: StateHandle::new(true),
             horizontal: StateHandle::new(false),
             log: Rc::default(),
@@ -357,7 +362,10 @@ fn polite(laid: &LaidOut) -> Option<String> {
 }
 
 fn strings(names: &[&str]) -> Vec<String> {
-    names.iter().map(|name| (*name).to_owned()).collect()
+    names
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<String>>()
 }
 
 // --- Rows ---------------------------------------------------------------------------------------
@@ -465,7 +473,7 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
             .borrow()
             .iter()
             .map(|preview| (preview.from, preview.over))
-            .collect()
+            .collect::<Vec<_>>()
     };
     let mut laid = shelf.mount();
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(1, HANDLE_X));
@@ -582,7 +590,8 @@ pub(crate) fn a_list_that_turns_horizontal_drags_along_its_new_axis() {
 /// The move commands: Alt+Down with focus in a row and assistive
 /// technology's "Move to the end" move it as a command, and the move is
 /// announced with the row's name and new position. A row offers only the
-/// moves that apply to it.
+/// moves that apply to it, and each move starts from where the model has the
+/// row now.
 pub(crate) fn the_move_commands_move_a_row_and_announce_it() {
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let mut laid = shelf.mount();
@@ -609,6 +618,18 @@ pub(crate) fn the_move_commands_move_a_row_and_announce_it() {
     assert_eq!(shelf.moves()[1], (0, 3, ReorderCause::Command));
     assert_eq!(shelf.items(), strings(&["c", "b", "d", "a"]));
     assert_eq!(polite(&laid).as_deref(), Some("Moved a to position 4 of 4"));
+
+    // Two commands before the next rebuild: each moves the row from where
+    // the model has it now, so Alt+Up undoes Alt+Down.
+    focus_row(&mut laid, "b", "Move down");
+    press(&laid, &SingleActivator::named(NamedKey::ArrowDown).alt());
+    press(&laid, &SingleActivator::named(NamedKey::ArrowUp).alt());
+    settle(&mut laid);
+    assert_eq!(
+        shelf.moves()[2..],
+        [(1, 2, ReorderCause::Command), (2, 1, ReorderCause::Command)]
+    );
+    assert_eq!(shelf.items(), strings(&["c", "b", "d", "a"]));
 }
 
 /// A dragged row scrolled out of the built band keeps its drag: resting at

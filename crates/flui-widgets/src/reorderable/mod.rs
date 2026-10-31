@@ -390,6 +390,14 @@ impl Shared {
         owner.try_with_layout(|owner| owner.box_size(id))?
     }
 
+    /// Where the model has the item keyed `key` now: an earlier move may have
+    /// changed it since the rows were built. The view is cloned out of its
+    /// cell first, since `key_of` is app code.
+    fn index_now(&self, key: &dyn ViewKey) -> Option<usize> {
+        let view = self.view.borrow().clone();
+        view.index_of(key)
+    }
+
     /// A drag of `key` is over `over` now.
     fn hover(&self, key: &dyn ViewKey, over: Option<usize>) {
         if self.over.replace(over) == over {
@@ -747,22 +755,29 @@ impl StatelessView for ReorderRow {
         let content = AnchoredBox::new(anchor, content).boxed();
         let token = Rc::clone(&self.list);
         let hover = Rc::clone(&self.list);
+        let row = Rc::clone(&self.key);
         let target = DropTarget::bare(
             move |drag: &DragView<'_>| {
                 let payload = drag.value::<RowPayload>()?;
                 if !Rc::ptr_eq(&payload.list, &token) {
                     return None;
                 }
-                hover.hover(&*payload.key, Some(index));
+                // Where the model has this row now, as for the drop.
+                if let Some(over) = hover.index_now(&*row) {
+                    hover.hover(&*payload.key, Some(over));
+                }
                 Some(TransferActions::MOVE)
             },
             move |_hover| content.clone(),
         )
         .on_drop({
             let list = Rc::clone(&self.list);
+            let dropped_on = Rc::clone(&self.key);
             move |cx, drag, _at, _action| {
-                if let Some(payload) = drag.value::<RowPayload>() {
-                    let _ = list.reorder(cx, &*payload.key, index, ReorderCause::Drag);
+                if let Some(payload) = drag.value::<RowPayload>()
+                    && let Some(to) = list.index_now(&*dropped_on)
+                {
+                    let _ = list.reorder(cx, &*payload.key, to, ReorderCause::Drag);
                 }
             }
         });
@@ -818,8 +833,6 @@ impl StatelessView for ReorderRow {
         Actions::new(row).action(RowMoves {
             list: Rc::clone(&self.list),
             key: Rc::clone(&self.key),
-            index,
-            count: view.item_count,
             rtl,
         })
     }
@@ -927,16 +940,19 @@ fn commands(
 struct RowMoves {
     list: Rc<Shared>,
     key: Rc<dyn ViewKey>,
-    index: usize,
-    count: usize,
     rtl: bool,
 }
 
 impl RowMoves {
     fn target(&self, intent: ReorderIntent) -> Option<usize> {
-        let last = self.count.checked_sub(1)?;
-        let back = self.index.checked_sub(1);
-        let forward = (self.index < last).then_some(self.index + 1);
+        // The row's index now, not when it was built: the app may have moved
+        // its model since, by an earlier command delivered before a rebuild.
+        // The key is resolved outside the borrow, since `key_of` is app code.
+        let view = self.list.view.borrow().clone();
+        let index = view.index_of(&*self.key)?;
+        let last = view.item_count.checked_sub(1)?;
+        let back = index.checked_sub(1);
+        let forward = (index < last).then_some(index + 1);
         let target = match intent {
             ReorderIntent::Start => Some(0),
             ReorderIntent::End => Some(last),
@@ -945,7 +961,7 @@ impl RowMoves {
             ReorderIntent::Up | ReorderIntent::Left => back,
             ReorderIntent::Down | ReorderIntent::Right => forward,
         };
-        target.filter(|&target| target != self.index)
+        target.filter(|&target| target != index)
     }
 }
 
