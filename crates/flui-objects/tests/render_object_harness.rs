@@ -14117,3 +14117,22 @@ fn viewports_over_different_offsets_report_different_kind_arguments() {
     assert_ne!(arguments(&position), arguments(&scrollable));
     assert_eq!(arguments(&position).len(), 1);
 }
+
+/// An infinite preferred extent clamps at layout; the description leaves it out.
+#[test]
+fn an_unbounded_preferred_size_is_absent_from_the_description() {
+    let run = RenderTester::mount(box_node(RenderCustomPaint::new(
+        None,
+        None,
+        Size::new(f64::INFINITY, 30.0),
+    )))
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let paint = snapshot
+        .find_by_kind("RenderCustomPaint")
+        .unique()
+        .expect("one custom paint");
+    assert!(paint.get::<f64>("preferred_width").is_err(), "unbounded");
+    assert_eq!(paint.get::<f64>("preferred_height"), Ok(30.0));
+}
