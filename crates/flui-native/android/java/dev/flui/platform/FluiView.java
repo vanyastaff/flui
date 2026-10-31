@@ -77,6 +77,19 @@ public final class FluiView extends View {
     /** The window insets this view received have changed. */
     static native void nativeInsetsChanged(long handle);
 
+    /**
+     * The keyboard moves from the bottom edge {@code from} to {@code to}, in
+     * pixels, starting at {@code startNanos} on {@link System#nanoTime}'s clock
+     * for {@code durationMillis}, along an interpolator that takes the values
+     * {@code q1}, {@code q2} and {@code q3} a quarter, half and three quarters
+     * of the way (API 30).
+     */
+    static native void nativeKeyboardMotion(long handle, int from, int to, long startNanos,
+            long durationMillis, float q1, float q2, float q3);
+
+    /** The keyboard's motion ended or was cancelled (API 30). */
+    static native void nativeKeyboardSettled(long handle);
+
     /** The node info of a virtual view, {@code HOST_VIEW_ID} for this view itself, or null. */
     static native AccessibilityNodeInfo nativeNodeInfo(long handle, View host, int virtualViewId);
 
@@ -144,6 +157,9 @@ public final class FluiView extends View {
         setBackgroundColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= 26) {
             Api26.noFocusHighlight(this);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            FluiKeyboardMotion.install(this);
         }
         if (Build.VERSION.SDK_INT >= 31) {
             FluiContentReceiver.install(this);

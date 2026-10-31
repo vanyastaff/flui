@@ -1792,24 +1792,59 @@ and writes only what changed between two specs.
   `CanvasKeys`. The tree's focus moves the page's focus only while the page's
   focus is the window's, on the canvas or in the host (activating a focused
   placeholder puts it on the canvas); a focus whose element takes no DOM focus
-  puts it on the canvas, as does a text field: the window's text input
-  serves it there (an `EditContext` or the hidden editor), and the field's
-  element has no input surface.
+  puts it on the canvas, as does a node that takes text with no field of its
+  own (a date, a spin button): the window's text input serves it there (an
+  `EditContext` or the hidden editor).
+- **A text field is a native one** (`Tag::Line`, `Tag::Area`): an `<input>`
+  whose `type` lets a script set its caret and keeps the value it is given
+  (`text`, an address's too, `search`, `password`, `tel`), or a `<textarea>`,
+  valued as published. The host names the
+  tree's focused field in `FocusedField`, which `CanvasRef` hands the host and
+  the text input alike; while the text input serves a store, it serves it
+  through the named field instead of an editor of its own, so a screen reader
+  reads and edits the element the input method edits. The store is the source
+  of truth: the field's edits reach it first and its text is written back, the
+  host writes no published value over a served field, and a field no store is
+  served through shows its published value again after an edit and once the
+  text input releases it (`FocusedField::on_release`). The field's
+  hints are the store's status (`inputmode`, an `autocomplete` of its
+  purpose, `enterkeyhint`). The focus leaving the field, the field's removal
+  or the host's retirement moves the store back to the canvas, and the
+  element keeps no listener of the text input's. A hidden editor that takes
+  the store over takes the canvas's focus only, never another element's of the
+  host; the canvas forwards its focus to the host's field only while the host
+  names it, and a field the store moves to takes the canvas's focus. A field
+  shows the store's text as the browser's value sanitization lets it (a
+  single-line input drops line breaks, a textarea shows a CRLF as one line
+  feed) and maps its offsets to the store's
+  (`FieldValue`), so an edit next to a unit it cannot show keeps it; its
+  selection keeps its direction.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
 
 `a_node_is_described_as_its_element`,
 `a_node_the_browser_must_act_on_is_its_native_element`,
+`a_text_field_is_a_native_field_of_its_kind`,
 `each_update_becomes_the_dom_operations_it_needs`,
-`a_scroller_scrolling_replaces_its_children` and
-`an_update_that_cannot_stand_is_refused_and_changes_nothing` pin the mapping on
+`a_scroller_scrolling_replaces_its_children`,
+`an_update_that_cannot_stand_is_refused_and_changes_nothing`,
+`a_field_shows_the_store_s_text_as_the_browser_holds_it` and
+`an_edit_of_the_shown_text_is_an_edit_of_the_store` pin the mapping on
 Linux. In headless Chrome,
 `the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
 `a_click_on_an_element_reaches_the_action_listener`,
 `a_link_is_an_anchor_whose_click_is_the_node_s_action`,
 `moving_a_slider_s_input_asks_the_node_for_its_value`,
-`scrolling_a_scroller_asks_the_node_for_its_offset` and
+`scrolling_a_scroller_asks_the_node_for_its_offset`,
+`a_focused_text_field_is_edited_through_its_element`,
+`the_store_goes_back_to_the_canvas_when_the_field_goes`,
+`a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor`,
+`the_canvas_keeps_the_focus_a_field_left`,
+`a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
+`a_field_keeps_the_line_breaks_it_cannot_show`,
+`a_textarea_s_line_feed_is_the_store_s_crlf`,
+`a_field_s_selection_keeps_its_direction` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

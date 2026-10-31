@@ -78,21 +78,27 @@ application's.
 pub trait Storage: Send + Sync + 'static {
     fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored>;
     fn publish(&self, name: &StorageName, bytes: Vec<u8>, mode: WriteMode) -> StorageFuture<StoredVersion>;
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside>;
 }
 pub enum WriteMode { Replace, IfUnchanged(StoredVersion) }
+pub struct CopiedAside { pub kept_as: String, pub version: StoredVersion }
 pub struct StorageName(/* name + scope */); // [a-z0-9][a-z0-9_-]{0,63}, no Windows device name
 impl StorageName {
     pub const fn from_static(name: &'static str) -> Self;   // roaming data
     pub const fn machine_local(name: &'static str) -> Self; // this machine and instance
 }
 #[non_exhaustive] pub enum StorageError {
-    Unsupported(Unsupported), Inaccessible { kind: std::io::ErrorKind }, Busy, Full,
+    Unsupported(Unsupported), NotFound, Inaccessible { kind: std::io::ErrorKind }, Busy, Full,
     TooLarge { len: u64, limit: u64 }, Conflict, Superseded, Cancelled,
 }
 ```
 
 `publish` accepts the bytes before it returns; a previous value of the same name not yet started is
-replaced and resolves `Superseded`. A bad name in a constant is a compile error. Storage reaches a
+replaced and resolves `Superseded`. `copy_aside` copies the stored value to the first free
+`<name>.corrupt-<n>` in its scope, claimed atomically (an exclusive create on files, one
+transaction in IndexedDB), and returns the version of the bytes it copied; `NotFound` when nothing
+is stored. A `StorageName` cannot hold `.`, so no value is ever written over a copy. A bad name in
+a constant is a compile error. Storage reaches a
 UI runtime as a built-in capability of the seam (ADR-0152), and `LifecycleContext::storage` is
 removed. The directory is `AppConfig::with_storage_dir`, else the application's identifier
 (`AppIdentity::with_app_id`), else a fixed name where the data roots belong to the application
@@ -152,8 +158,11 @@ application's body: the name guards against reading another document's file, the
 the decoder, and the `Revision` counts the writes across runs (`u64::MAX` makes the document
 `Exhausted` for good). A file without the header or with another name is `Corrupt`; a version above
 `D::VERSION` is read-only, never written; a body `decode` refuses is `Decode`, and the file is not
-touched. `start_over` copies the bytes to the first free `<name>-corrupt-N` before writing
-`initial()`. A load applies only its latest attempt.
+touched. `start_over` keeps the bytes with `copy_aside`, then writes `initial()` as
+`IfUnchanged(version)` of the file the failed load read, so a file another writer replaced since
+that load is a `Conflict` rather than lost; the status is `Saving` until both steps finish, and a
+failed step is `Failed` (`retry` resumes it without a second copy). A load applies only its latest
+attempt.
 
 `set` refuses until a load succeeded (there is no base to write against), encodes on the owner
 thread with no borrow of the document held, and publishes the bytes to the flush registry
@@ -228,8 +237,10 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `older_version_decodes_or_reports_without_writing`, `oversized_file_is_refused_unread`,
   `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
   `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
-  `two_runtimes_keep_independent_documents`.
-- `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, the classification of
+  `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
+  `start_over_never_writes_over_a_file_replaced_since_the_load`.
+- `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
+  first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
 - `crates/flui-widgets/tests/contracts.rs`: `from_stack_restores_back_order`,
   `stack_reads_every_committed_edit`, `empty_stack_is_refused`.

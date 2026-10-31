@@ -503,6 +503,7 @@ impl WebWindow {
             accepting: registration.accepting(),
             keys,
             editor: Rc::clone(&focus) as Rc<dyn CanvasEditor>,
+            field: Rc::default(),
         };
         let facets = positions.for_window(&canvas);
         let visibility = Rc::new(self.visibility_sync(Rc::clone(&registration.accepting)));
@@ -790,10 +791,6 @@ impl CanvasEditor for FocusSync {
 
     fn set_semantics(&self, host: Option<&web_sys::HtmlElement>) {
         self.editor.set_semantics(host);
-    }
-
-    fn has_focus(&self) -> bool {
-        effective_focus(&self.canvas)
     }
 
     fn is_handoff(&self, event: &web_sys::Event) -> bool {

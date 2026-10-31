@@ -214,7 +214,10 @@ pub enum ReadOnlyReason {
 
 /// Which step of a [`Document`]'s codec ran when it panicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CodecStep {
+    /// [`Document::initial`].
+    Initial,
     /// [`Document::encode`].
     Encode,
     /// [`Document::decode`].
@@ -224,6 +227,7 @@ pub enum CodecStep {
 impl std::fmt::Display for CodecStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Initial => "initial",
             Self::Encode => "encode",
             Self::Decode => "decode",
         })

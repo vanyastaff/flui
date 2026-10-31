@@ -26,7 +26,7 @@ use parking_lot::Mutex;
 
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::input::regions::ProjectedInputRegions;
-use crate::owner::android::java_view::{ActivityDragSource, JavaView};
+use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
@@ -34,6 +34,7 @@ use crate::window::capabilities::{
     ActivityFacts, WindowColorMode, activity_capabilities, activity_color_mode,
     pointer_icon_absence,
 };
+use crate::window::keyboard_motion::KeyboardMotion;
 
 use crate::text::WindowTextInput;
 use crate::{
@@ -192,7 +193,8 @@ impl AndroidWindow {
                 }
                 return;
             }
-            let Some(insets) = sample.logical(size, scale) else {
+            capture.last = Some(sample);
+            let Some(insets) = sample.logical(size, scale, capture.motion) else {
                 return;
             };
             if !self.geometry_live.load(Ordering::Acquire) || insets == capture.accepted {
@@ -331,6 +333,37 @@ impl ActivityWindow for AndroidWindow {
             // asks once more and no more.
             self.query_insets();
         }
+    }
+
+    /// The keyboard moves: the sample already taken at the motion's end
+    /// moves along it now, and one taken later does as it arrives. A report
+    /// with no length of time (a motion the user drives) leaves the keyboard
+    /// at rest, jumping to where it ends up.
+    fn keyboard_motion(&self, report: KeyboardReport) {
+        let motion = KeyboardMotion::try_from_report(
+            report.from,
+            report.to,
+            report.start,
+            report.duration_millis,
+            report.values,
+        );
+        let last = {
+            let mut capture = self.insets.lock();
+            capture.motion = motion;
+            capture.last
+        };
+        self.accept_insets(last);
+    }
+
+    /// The motion ended: the keyboard is at rest where the next sample puts it.
+    fn keyboard_settled(&self) {
+        let last = {
+            let mut capture = self.insets.lock();
+            capture.motion = None;
+            capture.last
+        };
+        self.accept_insets(last);
+        self.request_insets();
     }
 
     /// Report a night-mode change from the configuration that just changed,
@@ -941,6 +974,7 @@ mod insets {
     use crate::version::gate::android::{
         AndroidApi, DisplayCutout, InsetsByType, SystemGestureInsets,
     };
+    use crate::window::keyboard_motion::KeyboardMotion;
 
     /// Device-pixel edges as top, right, bottom, left.
     type Edges = [i32; 4];
@@ -962,11 +996,17 @@ mod insets {
             self.size == size
         }
 
-        /// The sample in logical pixels at `scale`, the keyboard at rest: a
-        /// keyboard's motion arrives through its animation callback. `None`
-        /// for a sample taken at another size or a scale that makes no
+        /// The sample in logical pixels at `scale`. The keyboard moves along
+        /// `motion` when this sample is that motion's end, and is at rest
+        /// otherwise: a sample alone says only where the keyboard ends up.
+        /// `None` for a sample taken at another size or a scale that makes no
         /// logical pixels.
-        pub(super) fn logical(self, size: Size<i32>, scale: f64) -> Option<WindowInsets> {
+        pub(super) fn logical(
+            self,
+            size: Size<i32>,
+            scale: f64,
+            motion: Option<KeyboardMotion>,
+        ) -> Option<WindowInsets> {
             if self.size != size
                 || size.width <= 0
                 || size.height <= 0
@@ -983,7 +1023,13 @@ mod insets {
                     f64::from(left.clamp(0, size.width)) / scale,
                 )
             };
-            let keyboard = KeyboardInset::try_at_rest(logical(self.keyboard)).ok()?;
+            let target = logical(self.keyboard);
+            let keyboard = match motion.and_then(|motion| {
+                motion.keyboard(target, self.keyboard[2].clamp(0, size.height), scale)
+            }) {
+                Some(moving) => moving,
+                None => KeyboardInset::try_at_rest(target).ok()?,
+            };
             WindowInsets::try_new(
                 logical(self.safe_area),
                 keyboard,
@@ -1008,6 +1054,12 @@ mod insets {
         /// A change was reported while a reply was out: once it settles, ask
         /// again, since that reply may predate the change.
         pub(super) requery: bool,
+        /// The sample `accepted` was made from, read again when a motion
+        /// arrives or ends.
+        pub(super) last: Option<Sample>,
+        /// The keyboard's motion `FluiKeyboardMotion` last reported, until it
+        /// reports the motion's end.
+        pub(super) motion: Option<KeyboardMotion>,
     }
 
     impl Default for Capture {
@@ -1017,6 +1069,8 @@ mod insets {
                 query: Query::Idle,
                 retry_stale: false,
                 requery: false,
+                last: None,
+                motion: None,
             }
         }
     }
@@ -1195,7 +1249,7 @@ mod insets {
                 system_gestures: [0, 63, 63, 63],
             };
             let insets = sample
-                .logical(size, 2.625)
+                .logical(size, 2.625, None)
                 .expect("a sample at its own size");
             assert_eq!(
                 insets.safe_area(),
@@ -1212,11 +1266,11 @@ mod insets {
                 EdgeInsets::new(0.0, 24.0, 24.0, 24.0)
             );
             assert!(
-                sample.logical(Size::new(2400, 1080), 2.625).is_none(),
+                sample.logical(Size::new(2400, 1080), 2.625, None).is_none(),
                 "an old portrait reply cannot enter a landscape frame"
             );
             for scale in [0.0, f64::INFINITY, f64::NAN, f64::MIN_POSITIVE / 100.0] {
-                assert!(sample.logical(size, scale).is_none());
+                assert!(sample.logical(size, scale, None).is_none());
             }
         }
     }

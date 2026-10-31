@@ -355,7 +355,10 @@ impl DecodedImages {
     /// The bytes of `source`, read where the run is polled.
     #[cfg_attr(
         not(feature = "network"),
-        expect(clippy::unused_self, reason = "only a network fetch reads the registry's client")
+        expect(
+            clippy::unused_self,
+            reason = "only a network fetch reads the registry's client"
+        )
     )]
     fn fetch(&self, source: &ImageSource) -> Fetch {
         match source {
