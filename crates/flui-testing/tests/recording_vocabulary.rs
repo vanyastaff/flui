@@ -30,9 +30,10 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, Locale, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    PlatformInput, SystemPreferences, TextWeightPreference, WheelPreferences, WheelStep,
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride,
+    RegionalFormats, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -258,6 +259,14 @@ fn full_preferences() -> SystemPreferences {
             Locale::en_us(),
             Locale::from_language_tag("ar-EG").expect("tag"),
         ])
+        .with_regional(
+            RegionalFormats::default()
+                .with_first_weekday(Weekday::Monday)
+                .with_hour_cycle(HourCycle::H23)
+                .with_measurement(MeasurementSystem::Metric)
+                .with_numbering(NumberingSystem::try_new("arab").expect("valid"))
+                .with_region(RegionOverride::try_new("GB").expect("valid")),
+        )
         .with_gestures(
             GesturePreferences::default()
                 .with_double_click_interval(Duration::from_millis(500))
@@ -674,6 +683,30 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             SystemPreferences::default()
                 .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
         )),
+        ("Weekday", name) => {
+            let day = Weekday::ALL
+                .into_iter()
+                .find(|day| format!("{day:?}") == name)?;
+            one(preferences(SystemPreferences::default().with_regional(
+                RegionalFormats::default().with_first_weekday(day),
+            )))
+        }
+        ("HourCycle", name) => {
+            let cycle = HourCycle::ALL
+                .into_iter()
+                .find(|cycle| format!("{cycle:?}") == name)?;
+            one(preferences(SystemPreferences::default().with_regional(
+                RegionalFormats::default().with_hour_cycle(cycle),
+            )))
+        }
+        ("MeasurementSystem", name) => {
+            let system = MeasurementSystem::ALL
+                .into_iter()
+                .find(|system| format!("{system:?}") == name)?;
+            one(preferences(SystemPreferences::default().with_regional(
+                RegionalFormats::default().with_measurement(system),
+            )))
+        }
         ("GestureDisposition", "Accepted") => one(decision(GestureDisposition::Accepted)),
         ("GestureDisposition", "Rejected") => one(decision(GestureDisposition::Rejected)),
         ("accesskit::Action", name) => {
@@ -887,7 +920,10 @@ fn preference_rows_keep_their_json_spelling() {
             concat!(
                 r#"{"preferences":{"revision":7,"text_scale":1.25,"motion":"reduce","#,
                 r#""high_contrast":true,"haptics":false,"text_weight":"bold","#,
-                r#""locales":["en-US","ar-EG"],"gestures":{"double_click_interval_ns":500000000,"#,
+                r#""locales":["en-US","ar-EG"],"#,
+                r#""regional":{"first_weekday":"mon","hour_cycle":"h23","measurement":"metric","#,
+                r#""numbering":"arab","region":"GB"},"#,
+                r#""gestures":{"double_click_interval_ns":500000000,"#,
                 r#""double_tap_interval_ns":300000000,"long_press_timeout_ns":450000000,"#,
                 r#""native_mouse_geometry":{"double_click_area":[4,4],"drag_tolerance":[2,3],"#,
                 r#""pixel_ratio":1.5},"native_touch_geometry":{"touch_slop":8,"#,

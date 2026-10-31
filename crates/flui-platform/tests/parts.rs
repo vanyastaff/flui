@@ -8,8 +8,9 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
-    DisplayKey, DisplayRegistry, GesturePreferences, KeyboardInset, Locale, MotionPreference,
-    SizeConstraints, SystemPreferences, TextWeightPreference, WheelPreferences, WheelStep,
+    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
+    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
     WindowInsets, WindowMaterial, WindowMode, WindowState,
 };
@@ -23,6 +24,14 @@ fn preferences_round_trip_through_their_parts() {
         .with_haptics(false)
         .with_text_weight(TextWeightPreference::Bold)
         .with_locales(vec![Locale::en_us()])
+        .with_regional(
+            RegionalFormats::default()
+                .with_first_weekday(Weekday::Saturday)
+                .with_hour_cycle(HourCycle::H11)
+                .with_measurement(MeasurementSystem::Imperial)
+                .with_numbering(NumberingSystem::try_new("arab").expect("valid"))
+                .with_region(RegionOverride::try_new("GB").expect("valid")),
+        )
         .with_gestures(
             GesturePreferences::default()
                 .with_double_click_interval(Duration::from_millis(400))

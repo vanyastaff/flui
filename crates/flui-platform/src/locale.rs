@@ -175,6 +175,103 @@ impl Locale {
     pub fn from_language_tag(tag: &str) -> Option<Self> {
         tag.parse().ok()
     }
+
+    /// This locale with `keywords` added to its `u` extension, each a key and
+    /// its value. A key the locale already carries keeps its value. The
+    /// extensions stay in singleton order and the keywords in key order, as
+    /// canonical form has them. A tag with no language subtag first (a
+    /// private-use or irregular grandfathered tag), or one that does not
+    /// parse with the keywords added, is returned as it is.
+    pub(crate) fn with_unicode_keywords(&self, keywords: &[(&str, String)]) -> Self {
+        let tag = self.0.as_str();
+        let subtags: Vec<&str> = tag.split('-').collect();
+        if keywords.is_empty() || subtags.first().is_none_or(|first| first.len() == 1) {
+            return self.clone();
+        }
+        // The subtags before the first singleton, the extensions by
+        // singleton, and the private-use part from its `x` on.
+        let prefix_end = subtags
+            .iter()
+            .position(|part| part.len() == 1)
+            .unwrap_or(subtags.len());
+        let mut extensions: Vec<(String, Vec<&str>)> = Vec::new();
+        let mut private_use: &[&str] = &[];
+        let mut at = prefix_end;
+        while at < subtags.len() {
+            let singleton = subtags[at].to_ascii_lowercase();
+            if singleton == "x" {
+                private_use = &subtags[at..];
+                break;
+            }
+            let end = subtags[at + 1..]
+                .iter()
+                .position(|part| part.len() == 1)
+                .map_or(subtags.len(), |offset| at + 1 + offset);
+            extensions.push((singleton, subtags[at + 1..end].to_vec()));
+            at = end;
+        }
+        let u = if let Some(index) = extensions
+            .iter()
+            .position(|(singleton, _)| singleton == "u")
+        {
+            index
+        } else {
+            extensions.push(("u".to_owned(), Vec::new()));
+            extensions.len() - 1
+        };
+        // The `u` extension: attributes (three to eight characters) first,
+        // then keywords, each a two-character key and its value subtags.
+        let body = &extensions[u].1;
+        let attributes_end = body
+            .iter()
+            .position(|part| part.len() == 2)
+            .unwrap_or(body.len());
+        let mut merged: Vec<(String, Vec<String>)> = Vec::new();
+        for part in &body[attributes_end..] {
+            if part.len() == 2 {
+                merged.push((part.to_ascii_lowercase(), Vec::new()));
+            } else if let Some((_, values)) = merged.last_mut() {
+                values.push((*part).to_owned());
+            }
+        }
+        for (key, value) in keywords {
+            if !merged.iter().any(|(present, _)| present == key) {
+                merged.push(((*key).to_owned(), vec![value.clone()]));
+            }
+        }
+        merged.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut u_body: Vec<String> = body[..attributes_end]
+            .iter()
+            .map(|part| (*part).to_owned())
+            .collect();
+        for (key, values) in merged {
+            u_body.push(key);
+            u_body.extend(values);
+        }
+        extensions.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let mut rebuilt = subtags[..prefix_end].join("-");
+        for (singleton, body) in &extensions {
+            rebuilt.push('-');
+            rebuilt.push_str(singleton);
+            if singleton == "u" {
+                for part in &u_body {
+                    rebuilt.push('-');
+                    rebuilt.push_str(part);
+                }
+            } else {
+                for part in body {
+                    rebuilt.push('-');
+                    rebuilt.push_str(part);
+                }
+            }
+        }
+        for part in private_use {
+            rebuilt.push('-');
+            rebuilt.push_str(part);
+        }
+        rebuilt.parse().unwrap_or_else(|_| self.clone())
+    }
     /// English (United States).
     #[must_use]
     pub fn en_us() -> Self {
