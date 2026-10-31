@@ -991,6 +991,14 @@ impl UiRuntime {
                     params,
                     reply,
                 } => {
+                    if matches!(target, flui_view::dev_agent::InspectTarget::Layers) {
+                        if self.park_agent_layer_read(presentation_id, &params, reply) {
+                            report.invoked += 1;
+                        } else {
+                            report.dropped_stale += 1;
+                        }
+                        continue;
+                    }
                     // A render object's `debug_name` or an `inspect` override is app code: a
                     // panic in it answers the request, then continues on the owner thread.
                     let served = catch_unwind(AssertUnwindSafe(|| {
