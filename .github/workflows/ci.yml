@@ -381,13 +381,18 @@ jobs:
       # dlopens libxkbcommon-x11, which the hosted runners do not ship. The
       # native X11 host's window conformance (`tests/x11_window.rs`) starts an
       # Xvfb and an openbox of its own, and its host loads libxcb at run time.
+      # The AT-SPI suite (`tests/linux_atspi.rs`) starts a session bus and the
+      # accessibility bus of its own (`dbus-daemon`, at-spi2-core), and
+      # `FLUI_REQUIRE_ATSPI` turns a missing one into a failure.
       #
       # Mesa's lavapipe (Vulkan) and llvmpipe (GL, through EGL) are the GPU the
       # readback suites render on: without an adapter they skip, and the
       # gpu-test steps below run them on each backend with a missing adapter
       # as a failure (ADR-0244 §1).
-      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, lavapipe and llvmpipe are available (flui-native X11 tests, GPU readbacks)
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, at-spi2-core, lavapipe and llvmpipe are available (flui-native X11 and AT-SPI tests, GPU readbacks)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 dbus at-spi2-core mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+          echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
       # The native Wayland host's tests (`cargo xtask test` runs them apart
       # from the Xvfb suite) need a compositor: a headless Weston on a socket

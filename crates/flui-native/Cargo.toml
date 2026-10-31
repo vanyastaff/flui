@@ -688,6 +688,11 @@ libtest-mimic.workspace = true
 x11rb = { workspace = true, features = ["xtest"] }
 # The stand-in D-Bus services the logind and portal tests serve.
 zbus = { workspace = true, features = ["service"] }
+# The AT-SPI client `linux_atspi` reads a window's tree with: the proxies
+# `accesskit_unix` serves, on the zbus 5 it serves them with.
+atspi = { version = "0.29", default-features = false, features = ["proxies", "zbus"] }
+async-io = "2.6"
+futures-lite = "2.6"
 
 # Main-thread winit ownership plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
@@ -915,3 +920,13 @@ targets = [
     { target = "aarch64-linux-android" },
     { target = "wasm32-unknown-unknown" },
 ]
+
+# A window's tree read back by a real AT-SPI client on an accessibility bus of
+# its own: its own harness, because it starts an X server, a session bus and
+# the accessibility bus and names them for the process before anything
+# connects.
+[[test]]
+name = "linux_atspi"
+path = "tests/linux_atspi.rs"
+harness = false
+required-features = ["x11"]
