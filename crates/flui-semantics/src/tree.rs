@@ -592,29 +592,47 @@ impl SemanticsTree {
     /// text a region holds (ADR-0214 §2 as amended).
     fn run_children(&self, node: &SemanticsNode) -> Vec<crate::AccessibilityNodeId> {
         if let Some(runs) = node.config().hosted_runs() {
-            let text = node.parent().and_then(|parent| self.get(parent));
-            return text
-                .and_then(|text| {
-                    crate::accesskit_translation::published_text(text.config().attributes())
-                })
-                .and_then(|(_, identities)| identities.get(runs))
-                .map(<[_]>::to_vec)
-                .unwrap_or_default();
+            let Some(text) = node.parent().and_then(|parent| self.get(parent)) else {
+                return Vec::new();
+            };
+            return match crate::accesskit_translation::published_text(text.config().attributes()) {
+                Some((_, identities)) if self.regions_hold_runs(text, identities.len()) => {
+                    identities.get(runs).map(<[_]>::to_vec).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
         }
         let Some((_, identities)) =
             crate::accesskit_translation::published_text(node.config().attributes())
         else {
             return Vec::new();
         };
-        let hosted = node.children().iter().any(|&child| {
-            self.get(child)
-                .is_some_and(|child| child.config().hosted_runs().is_some())
-        });
-        if hosted {
+        if self.regions_hold_runs(node, identities.len()) {
             Vec::new()
         } else {
             identities.to_vec()
         }
+    }
+
+    /// Whether `text`'s regions in the tree hold all of its `runs` runs, one
+    /// consecutive range each. A region the assembly left out (one
+    /// clipped away) leaves its runs with no owner, so the text then keeps
+    /// every run and its regions list none.
+    fn regions_hold_runs(&self, text: &SemanticsNode, runs: usize) -> bool {
+        let mut ranges: SmallVec<[std::ops::Range<usize>; 4]> = text
+            .children()
+            .iter()
+            .filter_map(|&child| self.get(child)?.config().hosted_runs())
+            .collect();
+        ranges.sort_unstable_by_key(|range| range.start);
+        let mut next = 0;
+        for range in &ranges {
+            if range.start != next {
+                return false;
+            }
+            next = range.end;
+        }
+        !ranges.is_empty() && next == runs
     }
 
     /// `node`'s document selection (ADR-0214 §3) as positions in the runs of

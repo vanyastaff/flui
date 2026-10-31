@@ -1158,6 +1158,12 @@ pub(crate) fn links_in_selectable_text_hold_their_own_runs() {
             .into_iter()
             .find(|node| run_values(node) == ["Read the "])
             .expect("the text before the first link holds its runs");
+        let text = before.parent().expect("the stretch is in its text");
+        assert_eq!(
+            (text.data().value(), run_values(&text).len()),
+            (None, 0),
+            "the text's reading is its regions'"
+        );
         (
             find_all(state, Role::Document)[0].locate().0,
             runs_of(&before)[0],
@@ -1202,4 +1208,123 @@ pub(crate) fn a_wrapped_link_holds_a_run_on_each_line() {
         seen.borrow().last().cloned().flatten().as_deref(),
         Some("privacy notice")
     );
+}
+
+/// The text of `linked_area`, its links routed to a handler that does
+/// nothing.
+fn linked_text() -> flui_widgets::RichText {
+    use flui_painting::typography::TextSpan;
+
+    flui_widgets::RichText::new(TextSpan::with_children(vec![
+        TextSpan::new("Read the "),
+        TextSpan::new("terms").with_link("app://terms"),
+        TextSpan::new(" and the "),
+        TextSpan::new("privacy notice").with_link("app://privacy"),
+    ]))
+    .on_link(|_cx, _link| {})
+}
+
+/// A link a clip leaves out of the tree leaves its runs with no region, so
+/// the text keeps every run, in an update to a live adapter as in a full
+/// tree, and no run is listed under two nodes.
+///
+/// Red-check: let the regions the clip kept hold their runs (the dropped
+/// link's runs reach no node, which the adapter refuses).
+pub(crate) fn a_clipped_link_leaves_its_runs_with_the_text() {
+    use flui_foundation::geometry::Rect;
+    use flui_widgets::ClipRect;
+
+    let view = |height: f64| {
+        recorded_area(
+            SizedBox::new(60.0, 400.0).child(
+                ClipRect::new()
+                    .clipper(Rect::from_ltwh(0.0, 0.0, 60.0, height))
+                    .child(linked_text()),
+            ),
+        )
+        .0
+    };
+    let mut laid = mounted(view(400.0));
+    let live = std::sync::Arc::new(std::sync::Mutex::new(consumer(&laid)));
+    let delivered = std::sync::Arc::clone(&live);
+    laid.pipeline_owner().with_mut(|owner| {
+        owner.set_semantics_update_callback(std::sync::Arc::new(move |packet| {
+            delivered
+                .lock()
+                .expect("consumer lock")
+                .update_and_process_changes(packet.clone(), &mut NoChanges);
+        }));
+    });
+    laid.pump_widget(view(18.0));
+    laid.tick();
+    let full = consumer(&laid);
+    let live = live.lock().expect("consumer lock");
+    for (tree, name) in [(&full, "full"), (&*live, "live")] {
+        let state = tree.state();
+        let links = find_all(state, Role::Link);
+        assert!(links.len() < 2, "{name}: the clip drops a link");
+        assert!(
+            links.iter().all(|link| run_values(link).is_empty()),
+            "{name}: no link holds runs while another lost its node"
+        );
+        let text = find_all(state, Role::Label)
+            .into_iter()
+            .find(|node| !run_values(node).is_empty())
+            .expect("one static text holds the runs");
+        assert_eq!(
+            run_values(&text).concat(),
+            "Read the terms and the privacy notice",
+            "{name}: the text holds every run"
+        );
+        assert_eq!(
+            find_all(state, Role::TextRun).len(),
+            run_values(&text).len(),
+            "{name}: each run is listed once"
+        );
+    }
+}
+
+/// A link that starts inside a grapheme cluster (a combining accent after
+/// plain text) cannot hold whole runs, so the text keeps them all.
+///
+/// Red-check: give each run to the region holding its first byte (the run
+/// "é" crosses into the link but is held by the text before it).
+pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
+    use flui_painting::typography::TextSpan;
+
+    let laid = mounted(SelectionArea::new(
+        flui_widgets::RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Caf"),
+            TextSpan::new("e"),
+            TextSpan::new("\u{301} menu").with_link("app://menu"),
+        ]))
+        .on_link(|_cx, _link| {}),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    let links = find_all(state, Role::Link);
+    assert_eq!(links.len(), 1);
+    assert_eq!(run_values(&links[0]), Vec::<String>::new());
+    let text = links[0].parent().expect("the link is in its text");
+    assert_eq!(run_values(&text).concat(), "Cafe\u{301} menu");
+}
+
+/// A change handler that ignores the changes.
+struct NoChanges;
+
+impl accesskit_consumer::TreeChangeHandler for NoChanges {
+    fn node_added(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
+    fn node_updated(
+        &mut self,
+        _: &accesskit_consumer::NodeRef<'_>,
+        _: &accesskit_consumer::NodeRef<'_>,
+    ) {
+    }
+    fn focus_moved(
+        &mut self,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+    ) {
+    }
+    fn node_removed(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
 }

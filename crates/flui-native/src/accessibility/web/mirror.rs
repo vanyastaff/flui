@@ -350,20 +350,6 @@ impl Mirror {
         (!runs.is_empty()).then(|| runs.iter().map(|(_, run)| run.text).collect())
     }
 
-    /// Whether `id`'s runs are held by its children: selectable text with
-    /// links, whose links and the text between them each hold their own.
-    /// Its text is then its children's elements, not its own.
-    fn runs_in_children(&self, id: NodeId) -> bool {
-        self.nodes.get(&id).is_some_and(|entry| {
-            entry.node.role() == Role::Label
-                && entry
-                    .node
-                    .children()
-                    .iter()
-                    .any(|&child| self.run_text(child).is_some())
-        })
-    }
-
     /// The position in `paragraph`'s runs of UTF-16 `offset` into its
     /// element's text; see [`selection::position_at`].
     pub(crate) fn text_position(&self, paragraph: NodeId, offset: u32) -> Option<TextPosition> {
@@ -467,8 +453,6 @@ impl Mirror {
             // The runs name the element: a link that holds runs is named by
             // its content, as a leaf link is.
             spec.attributes.retain(|&(name, _)| name != "aria-label");
-        } else if self.runs_in_children(id) {
-            spec.text = None;
         }
         let entry = self
             .nodes
@@ -989,13 +973,17 @@ mod tests {
     }
 
     /// Selectable text with a link: the link and the text before it each
-    /// hold their runs and show their text, the paragraph shows none of its
-    /// own, and the page's offsets in the link are positions in its runs.
+    /// hold their runs and show their text, the paragraph, whose regions
+    /// carry its text, shows none, and the page's offsets in the link are
+    /// positions in its runs.
     #[test]
     fn a_link_in_selectable_text_shows_its_runs() {
         const BEFORE: NodeId = NodeId(23);
         const LINK: NodeId = NodeId(24);
-        let text = paragraph("Read the terms", &[BEFORE, LINK]);
+        // The text publishes no label of its own: its regions carry it.
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK]);
+        text.add_action(Action::SetTextSelection);
         let mut before = Node::new(Role::Label);
         before.set_label("Read the ");
         before.set_value("Read the ");
@@ -1023,11 +1011,7 @@ mod tests {
             ))
             .expect("a document with a link");
         let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
-        assert_eq!(
-            text_of(FIRST),
-            None,
-            "the paragraph's text is its children's"
-        );
+        assert_eq!(text_of(FIRST), None, "the paragraph has no text of its own");
         assert_eq!(text_of(BEFORE).as_deref(), Some("Read the "));
         assert_eq!(text_of(LINK).as_deref(), Some("terms"));
         assert!(
@@ -1041,5 +1025,36 @@ mod tests {
         assert_eq!(mirror.text_position(LINK, 2), Some(at(SECOND_RUN, 2)));
         assert_eq!(mirror.dom_position(at(SECOND_RUN, 5)), Some((LINK, 5)));
         assert_eq!(mirror.selection_target(BEFORE, LINK), Some(FIRST));
+    }
+
+    /// A labelled wrapper over selectable text keeps its own text: it is
+    /// not its child's runs joined, so its label is still its content.
+    #[test]
+    fn a_labelled_wrapper_over_selectable_text_keeps_its_text() {
+        const WRAPPER: NodeId = NodeId(25);
+        let mut wrapper = Node::new(Role::Label);
+        wrapper.set_label("Shipping");
+        wrapper.set_value("Shipping");
+        wrapper.set_children(vec![FIRST]);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[WRAPPER])),
+                    (WRAPPER, wrapper),
+                    (FIRST, paragraph("Free delivery", &[FIRST_RUN])),
+                    (FIRST_RUN, run("Free delivery")),
+                ],
+                ROOT,
+            ))
+            .expect("a wrapper over selectable text");
+        assert_eq!(
+            mirror.spec(WRAPPER).and_then(|spec| spec.text.as_deref()),
+            Some("Shipping")
+        );
+        assert_eq!(
+            mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
+            Some("Free delivery")
+        );
     }
 }

@@ -850,13 +850,13 @@ impl RenderBox for RenderParagraph {
         if !self.routes_links() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
-        let run_starts: Vec<usize> = self
+        let run_ranges: Vec<std::ops::Range<usize>> = self
             .selectable_runs()
             .map(|content| {
                 content
                     .runs()
                     .iter()
-                    .map(|run| run.byte_range().start)
+                    .map(flui_rendering::semantics::TextRun::byte_range)
                     .collect()
             })
             .unwrap_or_default();
@@ -867,7 +867,7 @@ impl RenderBox for RenderParagraph {
                 self.link_focus.map(|focus| focus.link),
                 self.painter.text_direction().map(semantics_text_direction),
                 flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, size.width, size.height),
-                &run_starts,
+                &run_ranges,
             ),
             after_children: Vec::new(),
         }
