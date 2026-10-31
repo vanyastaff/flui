@@ -401,9 +401,18 @@ fn apply(session: &mut dyn TextStoreEdit, pending: Pending) {
                 }
             }
             let caret = Utf16Offset::new(before.start().get());
-            let selection = Selection {
-                anchor: caret,
-                active: Utf16Offset::new(caret.get() + range.len()),
+            // The selection keeps its direction past the deleted prefix.
+            let end = Utf16Offset::new(caret.get() + range.len());
+            let selection = if told.anchor <= told.active {
+                Selection {
+                    anchor: caret,
+                    active: end,
+                }
+            } else {
+                Selection {
+                    anchor: end,
+                    active: caret,
+                }
             };
             if let Err(error) = session.set_selection(selection) {
                 tracing::debug!(?error, "the selection after a deletion was refused");
@@ -646,9 +655,21 @@ impl TextInputClient {
             self.read(move |session| send_state(&*wire, session, ChangeCause::Other))
         };
         if sent.is_none() {
-            // The store could not be read now: the input method starts from
-            // an empty field, and the next change tells it the text.
+            // The store could not be read now (its frame holds it): the
+            // input method is enabled at once, and the field's state follows
+            // when the store lets a read run, while this `enable` holds.
             wire.commit();
+            let session = self.session.get();
+            let this = self.this.clone();
+            let grant = LockGrant::read(move |read| {
+                if let Some(wire) = this.upgrade().and_then(|client| client.wire_of(session)) {
+                    send_state(&*wire, read, ChangeCause::Other);
+                }
+            });
+            let _entered = self.queue.enter();
+            if let Err(error) = store.request_lock(grant, LockTiming::Async) {
+                tracing::debug!(?error, "the focused store refused the input method's read");
+            }
         }
     }
 
@@ -701,6 +722,7 @@ impl TextInputClient {
                     CompositionEnd::Abandoned
                 };
                 if end != CompositionEnd::Committed {
+                    let _entered = self.queue.enter();
                     let _ = flui_platform::text_store::commit_composition_in_place(&*store);
                 }
             }
@@ -716,6 +738,11 @@ impl TextInputClient {
         if same || self.retired.get() {
             return;
         }
+        // The calls below reach the stores' application code (a commit's
+        // change listeners, an observer's `Drop`): a focus request made there
+        // waits in the queue until this transition is whole, and the caller's
+        // drain applies it after, so it is never overwritten by this one.
+        let _entered = self.queue.enter();
         if let Some(previous) = self.focused() {
             // The input method's composition belongs to the field losing
             // focus: it is committed there, and the input method is reset by
@@ -750,7 +777,6 @@ impl TextInputClient {
         // only while the same `enable` holds, so a field focused since is
         // never reset or told this one's text.
         let session = self.session.get();
-        let content = ContentType::of_store(&**store);
         let grant = LockGrant::read_write(move |edit| {
             if edit.composition().is_some()
                 && let Err(error) = edit.set_composition(None)
@@ -760,11 +786,14 @@ impl TextInputClient {
             let Some(client) = this.upgrade() else {
                 return;
             };
-            if let Some(wire) = client.wire_of(session) {
-                // `enable` resets the content type too: it is sent again
-                // with the rest of the state, as after any `enable`.
+            if let Some(wire) = client.wire_of(session)
+                && let Some(store) = client.focused()
+            {
+                // `enable` resets the content type too: it is sent again,
+                // read as the grant runs, so a status that changed while the
+                // store held the grant is the one the input method keeps.
                 wire.enable();
-                wire.set_content_type(content);
+                wire.set_content_type(ContentType::of_store(&*store));
                 send_state(&*wire, edit, ChangeCause::Other);
             }
         });

@@ -563,3 +563,94 @@ fn a_second_seat_leaving_keeps_the_seat_the_window_serves() {
     client.done(&*second, second.commits());
     assert_eq!(store.text(), "y", "the served seat still edits");
 }
+
+#[test]
+fn a_focus_moved_by_the_losing_fields_listener_is_the_one_kept() {
+    let first = InMemoryTextStore::new("");
+    let second = InMemoryTextStore::new("");
+    let third = InMemoryTextStore::new("third");
+    let (client, wire) = serving(&first);
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
+
+    // Committing the composition where it was tells the field's owner, whose
+    // code moves focus on.
+    let host = Rc::downgrade(&client);
+    let next = as_store(&third);
+    first.set_owner_listener(Some(Rc::new(move || {
+        if let Some(host) = host.upgrade() {
+            host.focus_store(Some(Rc::clone(&next)));
+        }
+    })));
+    client.focus_store(Some(as_store(&second)));
+
+    let _ = wire.take();
+    client.commit_string(&*wire, Some("!".into()));
+    client.done(&*wire, wire.commits());
+    assert_eq!(third.text(), "third!", "the newer focus request holds");
+    assert_eq!(second.text(), "");
+}
+
+#[test]
+fn a_field_its_frame_holds_is_described_once_it_may_be_read() {
+    let store = InMemoryTextStore::new("held");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    let (_client, wire) = serving(&store);
+    assert_eq!(wire.surroundings(), [], "the frame holds the store");
+
+    gate.set_open(true);
+    let _ = store.run_deferred_grants();
+    assert_eq!(wire.surroundings(), [around("held", 4, 4)]);
+}
+
+#[test]
+fn a_completion_the_frame_held_sends_the_status_it_runs_under() {
+    let store = InMemoryTextStore::new("");
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    let (client, wire) = serving(&store);
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.done(&*wire, wire.commits());
+
+    gate.set_open(false);
+    let _ = client.complete_composition(&as_store(&store));
+    store.set_protected(true);
+    let _ = wire.take();
+    gate.set_open(true);
+    let _ = store.run_deferred_grants();
+    let last = wire.take().into_iter().rev().find_map(|sent| match sent {
+        Sent::Content(content) => Some(content),
+        _ => None,
+    });
+    assert_eq!(
+        last,
+        Some(ContentType::of_store(&*as_store(&store))),
+        "the password hints are the last the input method hears"
+    );
+    assert_eq!(
+        last.map(|content| content.purpose),
+        Some(ContentType::PASSWORD)
+    );
+}
+
+#[test]
+fn a_deletion_around_a_backward_selection_keeps_its_direction() {
+    let store = InMemoryTextStore::new("xabcy");
+    store.app_select(Selection {
+        anchor: Utf16Offset::new(4),
+        active: Utf16Offset::new(1),
+    });
+    let (client, wire) = serving(&store);
+    client.delete_surrounding(&*wire, 1, 1);
+    client.done(&*wire, wire.commits());
+    assert_eq!(store.text(), "abc");
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: Utf16Offset::new(3),
+            active: Utf16Offset::new(0),
+        }
+    );
+}
