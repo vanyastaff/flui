@@ -41,7 +41,8 @@
 //! there is no tooltip layer). What ships, outermost to innermost:
 //!
 //! ```text
-//! Semantics(container: true, button: true, enabled: on_pressed.is_some())
+//! Semantics(container: true, button: true, enabled: on_pressed.is_some(),
+//!           toggled: selected, when the button is a toggle)
 //!   ConstrainedBox(min/fixed/max size)
 //!     Material(color, elevation, shape)
 //!       InkWell(overlay_color, shared states controller, enabled = on_pressed.is_some())
@@ -68,7 +69,8 @@
 //! order is load-bearing). Both this state and the inner `InkWell` state end
 //! up listening on the *same* controller and syncing the *same* `Disabled`
 //! bit from the *same* `enabled` predicate — redundant but harmless (each
-//! sync is idempotent).
+//! sync is idempotent). A toggle button's `Selected` bit is synced the same
+//! way, by this state alone: the `InkWell` never touches it.
 //!
 //! [`overlay_color`](crate::ButtonStyle::overlay_color) is the one property
 //! NOT baked to a single value here: it is handed to `InkWell` as a live
@@ -84,7 +86,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, Semantics, SemanticsRole, WidgetState,
+    ConstrainedBox, DefaultTextStyle, Padding, Semantics, SemanticsRole, Toggled, WidgetState,
     WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
@@ -139,6 +141,7 @@ pub(crate) struct ButtonStyleButtonCore {
     theme_style: Option<ButtonStyle>,
     default_style: ButtonStyle,
     identifier: Option<std::sync::Arc<str>>,
+    selected: Option<bool>,
     child: BoxedView,
 }
 
@@ -154,6 +157,7 @@ impl ButtonStyleButtonCore {
             theme_style: None,
             default_style,
             identifier: None,
+            selected: None,
             child,
         }
     }
@@ -195,8 +199,21 @@ impl ButtonStyleButtonCore {
         self
     }
 
+    /// Makes the button a toggle: `Some(selected)` keeps
+    /// [`WidgetState::Selected`] in the states every property resolves
+    /// against and reports [`Toggled`] on the node; `None` is a plain button.
+    #[must_use]
+    pub(crate) fn selected(mut self, selected: Option<bool>) -> Self {
+        self.selected = selected;
+        self
+    }
+
     fn is_interactive(&self) -> bool {
         self.on_pressed.is_some()
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected == Some(true)
     }
 }
 
@@ -233,6 +250,8 @@ pub(crate) struct ButtonStyleButtonCoreState {
     /// `ViewState` impl captures anything it needs before its first
     /// build).
     initially_enabled: bool,
+    /// Seeded the same way as `initially_enabled`.
+    initially_selected: bool,
     rebuild: Option<RebuildHandle>,
 }
 
@@ -244,6 +263,7 @@ impl StatefulView for ButtonStyleButtonCore {
             states: WidgetStatesController::default(),
             states_listener: None,
             initially_enabled: self.is_interactive(),
+            initially_selected: self.is_selected(),
             rebuild: None,
         }
     }
@@ -257,6 +277,8 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         // rationale, which applies verbatim here.
         self.states
             .update(WidgetState::Disabled, !self.initially_enabled);
+        self.states
+            .update(WidgetState::Selected, self.initially_selected);
 
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
@@ -274,6 +296,10 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         if new_view.is_interactive() != old_view.is_interactive() {
             self.states
                 .update(WidgetState::Disabled, !new_view.is_interactive());
+        }
+        if new_view.is_selected() != old_view.is_selected() {
+            self.states
+                .update(WidgetState::Selected, new_view.is_selected());
         }
     }
 
@@ -365,14 +391,15 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
         }
 
-        identified(
-            Semantics::new()
-                .container(true)
-                .role(SemanticsRole::Button)
-                .enabled(view.is_interactive()),
-            view.identifier.as_ref(),
-        )
-        .child(
+        let semantics = Semantics::new()
+            .container(true)
+            .role(SemanticsRole::Button)
+            .enabled(view.is_interactive());
+        let semantics = match view.selected {
+            Some(selected) => semantics.toggled(Toggled::from_bool(selected)),
+            None => semantics,
+        };
+        identified(semantics, view.identifier.as_ref()).child(
             ConstrainedBox::new(constraints).child(
                 Material::new(background_color)
                     .elevation(elevation)
