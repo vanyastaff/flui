@@ -534,3 +534,141 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
         );
     });
 }
+
+/// The application's own read of its selection, whose closure fails, keeps
+/// that failure though the owner's queue fails too as the read is answered:
+/// the answer is posted under containment of its own, not dropped during the
+/// unwind, where a second panic would abort.
+#[test]
+fn an_own_read_whose_selection_fails_keeps_the_first_failure() {
+    let Some(_server) = server() else {
+        return;
+    };
+    in_child(
+        "an_own_read_whose_selection_fails_keeps_the_first_failure",
+        || {
+            let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&posts);
+            let poster = OwnerPoster::new(move |_| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                panic!("the owner's queue failed")
+            });
+            let source = CompletionSource::new(poster, PendingCompletions::new());
+            let owner = clipboard();
+            owner.offer(Rc::new(|| panic!("the selection failed")));
+            let (_completion, answer) = source.pending::<Option<String>>();
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                NativePrimarySelection::read_text(&owner, answer);
+            }))
+            .expect_err("the read fails");
+            assert_eq!(
+                flui_foundation::panic::payload_text(&*failure),
+                Some("the selection failed")
+            );
+            assert_eq!(
+                posts.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "the read is answered once"
+            );
+        },
+    );
+}
+
+/// While a requestor holds every `INCR` transfer, its further requests for
+/// the primary selection are refused without asking the application's
+/// closure: holding the writers and asking again costs the application no
+/// work.
+#[test]
+fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    // Longer than one request: each answer is an `INCR` transfer.
+    owner.offer(counted(&"x".repeat(1 << 20), &asked));
+
+    let (requestor, screen) = RustConnection::connect(None).expect("the X server answers");
+    let root = requestor.setup().roots[screen].root;
+    let window = requestor.generate_id().expect("an id");
+    requestor
+        .create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .expect("the request is sent");
+    let intern = |name: &str| {
+        requestor
+            .intern_atom(false, name.as_bytes())
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .atom
+    };
+    let utf8 = intern("UTF8_STRING");
+    let incr = intern("INCR");
+    // Ask for the text into `property` and wait for the answer's property,
+    // turning the owner's loop meanwhile.
+    let request = |property: u32| -> u32 {
+        requestor
+            .convert_selection(
+                window,
+                x11rb::protocol::xproto::AtomEnum::PRIMARY.into(),
+                utf8,
+                property,
+                x11rb::CURRENT_TIME,
+            )
+            .expect("the request is sent");
+        requestor.flush().expect("the request is sent");
+        let deadline = Instant::now() + STEP;
+        loop {
+            owner.deliver();
+            while let Some(event) = requestor.poll_for_event().expect("the connection holds") {
+                if let Event::SelectionNotify(notify) = event {
+                    return notify.property;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the answer"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    for held in 0..super::selection::MAX_WRITERS {
+        let property = intern(&format!("FLUI_HELD_{held}"));
+        assert_eq!(request(property), property, "transfer {held} starts");
+        let announced = requestor
+            .get_property(false, window, property, incr, 0, 1)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        assert_eq!(announced.type_, incr, "transfer {held} goes INCR");
+        // The property is never deleted: the transfer stays held.
+    }
+    let writers = u32::try_from(super::selection::MAX_WRITERS).expect("a few writers");
+    assert_eq!(asked.get(), writers);
+
+    for refused in 0..3 {
+        let property = intern(&format!("FLUI_REFUSED_{refused}"));
+        assert_eq!(
+            request(property),
+            x11rb::NONE,
+            "request {refused} is refused"
+        );
+    }
+    assert_eq!(asked.get(), writers, "the refused requests ask nothing");
+}

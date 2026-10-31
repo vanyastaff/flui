@@ -37,7 +37,7 @@ use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
 use self::selection::{Command, Generation, Name, Notice, Selections};
-use crate::clipboard::linux::offered::{SelectionText, ask, drop_retired};
+use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::error::PlatformError;
 use crate::host;
 use crate::owner::linux::x11::LoopClipboard;
@@ -239,7 +239,7 @@ impl host::NativePrimarySelection for X11Clipboard {
     fn read_text(&self, answer: Resolver<Option<String>>) {
         match self.current() {
             // Asked with nothing held: the closure may call back in.
-            Some(text) => drop(answer.resolve(ask(text))),
+            Some(text) => answer_with(text, answer),
             None => self.send(Command::Read(Name::Primary, answer)),
         }
     }

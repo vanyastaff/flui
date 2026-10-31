@@ -41,7 +41,7 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
-use crate::clipboard::linux::offered::{SelectionText, ask, drop_retired};
+use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::linux::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
 
@@ -323,7 +323,7 @@ impl super::SeatClipboard {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
-            Read::Ask(text) => drop(answer.resolve(ask(text))),
+            Read::Ask(text) => answer_with(text, answer),
             Read::Pipe(reader, form) => {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-primary".to_owned())

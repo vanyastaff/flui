@@ -21,8 +21,10 @@
 //!   asks the owner through the [`Notice`], which wakes the owner's loop; at
 //!   its turn the loop asks the closure and sends the text back
 //!   ([`Command::Answer`]), and every request waiting on that offer is
-//!   answered with it. One that waits past [`TRANSFER_TIMEOUT`], or whose
-//!   offer stopped being the selection, is refused.
+//!   answered with it. While [`MAX_WRITERS`] transfers run, a request is
+//!   refused without asking the closure. One that waits past
+//!   [`TRANSFER_TIMEOUT`], or whose offer stopped being the selection, is
+//!   refused.
 //! - **Reading.** While the application owns the clipboard a read answers
 //!   its text at once; a read sent after a write waits for the write to own
 //!   it. Otherwise the thread takes a server timestamp, as a write does, and
@@ -72,7 +74,7 @@ const MAX_TEXT: usize = 64 * 1024 * 1024;
 
 /// The most `INCR` writes at once: a requestor that never deletes its
 /// property holds one until its timeout, and more are refused.
-const MAX_WRITERS: usize = 4;
+pub(super) const MAX_WRITERS: usize = 4;
 
 /// The most reads of a selection waiting at once: each is answered with its
 /// own copy of the text, so more are answered nothing at once.
@@ -1073,6 +1075,15 @@ impl Selections {
             let answered = self.write_text(request, property, form, text, len)?;
             return Ok(Reply::Now(answered));
         };
+        // With every transfer held, a long text could not be written: the
+        // closure is not asked at all, so a requestor that holds the writers
+        // and keeps asking costs the application no work.
+        if self.transfers.len() >= MAX_WRITERS {
+            tracing::debug!(
+                "an X11 primary selection request while {MAX_WRITERS} transfers run was refused"
+            );
+            return Ok(Reply::Now(false));
+        }
         if self.asks.len() >= MAX_ASKS {
             tracing::debug!("an X11 primary selection request past {MAX_ASKS} waiting was refused");
             return Ok(Reply::Now(false));
