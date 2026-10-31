@@ -1936,7 +1936,7 @@ impl PresentationState {
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
-        let waited = deliver_each(waits, |wait| wait.abandon());
+        let waited = deliver_each(waits, crate::ui_runtime::PendingWait::abandon);
         let layers = self.abandon_agent_layer_reads();
         if let Some(payload) = first_panic_of([ended, reads, waited, layers]) {
             std::panic::resume_unwind(payload);
