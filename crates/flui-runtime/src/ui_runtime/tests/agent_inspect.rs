@@ -441,3 +441,63 @@ fn a_layer_read_whose_window_closes_before_its_scene_is_gone() {
         .expect_err("the window is gone");
     assert_eq!(error, AgentError::PresentationGone);
 }
+
+/// A scene the sink could not show is not what the window shows: a layer read waits for the
+/// retry that does.
+#[test]
+fn a_layer_read_waits_for_a_scene_that_is_shown_not_one_the_surface_withheld() {
+    use crate::sink::SubmitVerdict;
+
+    let (ui_runtime, agent) = shown();
+    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let presentation = ui_runtime
+        .presentations
+        .get(ui_runtime.presentation_id())
+        .expect("the primary presentation is open");
+
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    frame(&ui_runtime, &mut withheld);
+    assert_eq!(withheld.submit_calls, 1, "a scene was built and withheld");
+    assert!(
+        parked.try_take().is_none(),
+        "the window never showed that scene"
+    );
+    assert_eq!(
+        presentation.agent_layer_reads.borrow().len(),
+        1,
+        "the read is parked again for the next scene"
+    );
+    assert!(presentation.agent_layer_staged.borrow().is_empty());
+
+    frame(&ui_runtime, &mut ScriptedSink::always_presents());
+    parked
+        .try_take()
+        .expect("the retry showed a scene")
+        .expect("the layers are read");
+}
+
+/// A reply is delivered to a receiver whose drop or trace is user code: one that panics must not
+/// take the replies behind it with it.
+#[test]
+fn every_reply_is_attempted_and_the_first_panic_is_returned() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::super::agent_inspect::deliver_each;
+
+    let mut seen = Vec::new();
+    let panicked = deliver_each(vec![1, 2, 3], |item| {
+        seen.push(item);
+        assert_ne!(item, 1, "the first receiver panics");
+        assert_ne!(item, 2, "and so does the second");
+    })
+    .expect("a panic was returned");
+    assert_eq!(seen, [1, 2, 3], "every reply was attempted");
+    let message = catch_unwind(AssertUnwindSafe(|| std::panic::resume_unwind(panicked)))
+        .expect_err("it resumes");
+    let message = message
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| message.downcast_ref::<&str>().map(ToString::to_string))
+        .unwrap_or_default();
+    assert!(message.contains("the first receiver panics"), "{message}");
+}

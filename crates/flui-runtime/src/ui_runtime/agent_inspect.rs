@@ -10,10 +10,11 @@
 //! The element and render trees are read at the owner's turn. The layer tree belongs to the scene
 //! a frame paints, which the sink takes, so the window keeps no copy of it: a read of the layers
 //! is parked on the presentation, one repaint is asked for, and the next scene the window shows is
-//! snapshot before it goes to the sink. A frame that shows nothing costs nothing here beyond a
+//! snapshot before it goes to the sink and answered once the sink shows it. A frame that shows nothing costs nothing here beyond a
 //! check that no read is parked.
 
 use std::num::NonZeroU32;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_foundation::PresentationId;
 use flui_foundation::inspect::{
@@ -122,21 +123,74 @@ impl UiRuntime {
     }
 }
 
+/// A parked layer read and what the scene about to be submitted says to it, held until the sink
+/// has classified the submit.
+pub(crate) struct StagedLayerRead {
+    read: PendingLayerRead,
+    reading: Result<InspectReading, AgentError>,
+}
+
+/// Runs `deliver` for every item even if one panics, and returns the first panic: a reply goes
+/// to a receiver whose drop or trace is user code, and the obligations behind it must not be
+/// lost with it.
+pub(super) fn deliver_each<T>(
+    items: Vec<T>,
+    mut deliver: impl FnMut(T),
+) -> Option<Box<dyn std::any::Any + Send>> {
+    let mut first = None;
+    for item in items {
+        let panicked = catch_unwind(AssertUnwindSafe(|| deliver(item))).err();
+        super::input::preserve_first_input_panic(&mut first, panicked, "agent layer read reply");
+    }
+    first
+}
+
 impl PresentationState {
-    /// Answers the layer reads parked for the scene the window is about to show. Called with the
-    /// scene's tree before the sink takes it.
-    pub(crate) fn answer_agent_layer_reads(&self, scene: &LayerTree) {
+    /// Reads the scene the window is about to submit for every layer read parked on it, and holds
+    /// the readings: they are delivered only if the scene is shown ([`Self::settle_agent_layer_reads`]).
+    pub(crate) fn stage_agent_layer_reads(&self, scene: &LayerTree) {
+        // A scene that was staged and never submitted shows nothing: its reads wait again.
+        drop(self.settle_agent_layer_reads(false));
         let parked = std::mem::take(&mut *self.agent_layer_reads.borrow_mut());
-        for read in parked {
-            let taken = snapshot(scene, read.query);
-            send_reply(&read.reply, None, reading_from(taken));
-        }
+        let staged = parked.into_iter().map(|read| {
+            let reading = reading_from(snapshot(scene, read.query));
+            StagedLayerRead { read, reading }
+        });
+        self.agent_layer_staged.borrow_mut().extend(staged);
     }
 
-    pub(crate) fn abandon_agent_layer_reads(&self) {
-        for read in std::mem::take(&mut *self.agent_layer_reads.borrow_mut()) {
-            read.abandon();
+    /// The submit was classified. A scene the window showed (or already showed) answers the reads
+    /// staged for it; a scene it did not show returns them to the parked list, for the next one.
+    /// Returns the first panic of a reply's delivery, after every reply was attempted.
+    pub(crate) fn settle_agent_layer_reads(
+        &self,
+        shown: bool,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
+        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
+        if staged.is_empty() {
+            return None;
         }
+        if shown {
+            return deliver_each(staged, |staged| {
+                send_reply(&staged.read.reply, None, staged.reading);
+            });
+        }
+        let mut parked = self.agent_layer_reads.borrow_mut();
+        let later = std::mem::take(&mut *parked);
+        parked.extend(staged.into_iter().map(|staged| staged.read));
+        parked.extend(later);
+        None
+    }
+
+    /// The window closes: every read parked or staged is answered `gone`. Returns the first panic
+    /// of a reply's delivery, after every reply was attempted.
+    pub(crate) fn abandon_agent_layer_reads(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        let mut owed = std::mem::take(&mut *self.agent_layer_staged.borrow_mut())
+            .into_iter()
+            .map(|staged| staged.read)
+            .collect::<Vec<_>>();
+        owed.append(&mut *self.agent_layer_reads.borrow_mut());
+        deliver_each(owed, PendingLayerRead::abandon)
     }
 }
 

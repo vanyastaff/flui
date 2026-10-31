@@ -447,6 +447,7 @@ pub struct PresentationState {
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
     /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
     pub(crate) agent_layer_reads: RefCell<Vec<crate::ui_runtime::PendingLayerRead>>,
+    pub(crate) agent_layer_staged: RefCell<Vec<crate::ui_runtime::StagedLayerRead>>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1075,6 +1076,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
             agent_layer_reads: RefCell::default(),
+            agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1206,6 +1208,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
             agent_layer_reads: RefCell::default(),
+            agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1927,10 +1930,13 @@ impl PresentationState {
         for pending in owed {
             pending.abandon();
         }
-        self.abandon_agent_layer_reads();
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
         for wait in waits {
             wait.abandon();
+        }
+        // Last: it attempts every reply and then resumes the first panic of one.
+        if let Some(payload) = self.abandon_agent_layer_reads() {
+            std::panic::resume_unwind(payload);
         }
     }
 
