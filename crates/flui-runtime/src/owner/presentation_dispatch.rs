@@ -281,6 +281,12 @@ impl PendingWindowState {
                 "accepted pixel ratio gesture projection",
             );
         }
+        // The keyboard is held before the media query's update wakes anything:
+        // a wake that panics must not leave the next frame sampling a motion
+        // this observation replaced.
+        if let Some(insets) = self.insets {
+            runtime.hold_keyboard_inset_for(id, insets.keyboard());
+        }
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
@@ -302,9 +308,6 @@ impl PendingWindowState {
                         data.platform_brightness = brightness;
                     }
                 });
-            }
-            if let Some(insets) = self.insets {
-                runtime.hold_keyboard_inset_for(id, insets.keyboard());
             }
         }))
         .err();

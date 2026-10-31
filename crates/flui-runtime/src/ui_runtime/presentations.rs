@@ -481,8 +481,8 @@ impl UiRuntime {
     }
 
     /// Hold `keyboard` as presentation `id`'s soft-keyboard inset: each frame
-    /// samples it at its vsync while it moves (ADR-0276 §3), and a moving one
-    /// asks for the first of those frames. Nothing when
+    /// samples it at its vsync while it moves (ADR-0276 §3); the window-state
+    /// operation that holds it asks for the first of those frames. Nothing when
     /// this UI runtime no longer hosts `id`.
     pub(crate) fn hold_keyboard_inset_for(
         &self,
@@ -491,9 +491,6 @@ impl UiRuntime {
     ) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.keyboard.set(keyboard);
-            if keyboard.motion().is_some() {
-                self.request_redraw_for(presentation);
-            }
         }
     }
 

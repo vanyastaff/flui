@@ -65,6 +65,36 @@ fn the_system_keyboard_curve_is_its_bezier() {
     assert_eq!(InsetCurve::SystemKeyboard.progress(1.0), 1.0);
 }
 
+fn an_overshooting_motion_stays_finite() {
+    let overshoot = InsetCurve::CubicBezier {
+        x1: 0.5,
+        y1: 2.0,
+        x2: 0.5,
+        y2: 2.0,
+    };
+    let far = EdgeInsets::new(0.0, 0.0, f64::MAX, 0.0);
+    let motion = InsetMotion::try_new(
+        EdgeInsets::ZERO,
+        START,
+        Duration::from_millis(250),
+        overshoot,
+    )
+    .expect("a valid motion");
+    let keyboard = KeyboardInset::try_moving(far, motion).expect("a finite target");
+    for ms in (0..=250).step_by(5) {
+        let edges = keyboard.at(at_ms(ms));
+        assert!(
+            [edges.top, edges.right, edges.bottom, edges.left]
+                .iter()
+                .all(|edge| edge.is_finite() && *edge >= 0.0),
+            "at {ms} ms: {edges:?}"
+        );
+    }
+    // Between ordinary endpoints the overshoot itself is kept.
+    let springy = showing(overshoot).at(at_ms(125)).bottom;
+    assert!(springy > SHOWN.bottom, "the curve overshoots: {springy}");
+}
+
 fn a_keyboard_at_rest_is_its_target() {
     let keyboard = KeyboardInset::try_at_rest(SHOWN).expect("a valid target");
     assert_eq!(keyboard.at(START), SHOWN);
@@ -123,6 +153,10 @@ fn window_insets_table() {
             (
                 "the_system_keyboard_curve_is_its_bezier",
                 the_system_keyboard_curve_is_its_bezier,
+            ),
+            (
+                "an_overshooting_motion_stays_finite",
+                an_overshooting_motion_stays_finite,
             ),
             (
                 "a_keyboard_at_rest_is_its_target",

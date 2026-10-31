@@ -188,7 +188,13 @@ impl KeyboardInset {
         }
         let t = elapsed.as_secs_f64() / motion.duration.as_secs_f64();
         let progress = motion.curve.progress(t);
-        let lerp = |from: f64, to: f64| (from + (to - from) * progress).max(0.0);
+        // An overshooting curve can leave the range of `f64` between finite
+        // endpoints; such an edge takes the target, so no frame lays out
+        // with a non-finite inset.
+        let lerp = |from: f64, to: f64| {
+            let edge = from + (to - from) * progress;
+            if edge.is_finite() { edge.max(0.0) } else { to }
+        };
         EdgeInsets::new(
             lerp(motion.from.top, self.target.top),
             lerp(motion.from.right, self.target.right),
