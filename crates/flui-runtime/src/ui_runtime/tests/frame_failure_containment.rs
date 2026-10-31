@@ -372,7 +372,13 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
 #[derive(Debug)]
 struct PanicOnLayoutForReportBox;
 
-impl flui_foundation::Diagnosticable for PanicOnLayoutForReportBox {}
+impl flui_foundation::inspect::Inspect for PanicOnLayoutForReportBox {
+    fn kind(&self) -> &'static str {
+        "PanicOnLayoutForReportBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
     type Arity = flui_rendering::prelude::Leaf;

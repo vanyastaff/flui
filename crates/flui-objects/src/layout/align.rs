@@ -166,13 +166,14 @@ impl RenderAlign {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAlign {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_optional("width_factor", self.width_factor.map(|f| format!("{f:?}")));
-        builder.add_optional(
-            "height_factor",
-            self.height_factor.map(|f| format!("{f:?}")),
-        );
+impl flui_foundation::inspect::Inspect for RenderAlign {
+    fn kind(&self) -> &'static str {
+        "RenderAlign"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("width_factor", &self.width_factor);
+        out.field("height_factor", &self.height_factor);
     }
 }
 

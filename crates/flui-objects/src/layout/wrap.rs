@@ -657,18 +657,26 @@ impl RenderWrap {
     }
 }
 
-// ── Diagnosticable ────────────────────────────────────────────────────────────
+// ── Inspect ────────────────────────────────────────────────────────────
 
-impl flui_foundation::Diagnosticable for RenderWrap {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("direction", self.direction);
-        properties.add_enum("alignment", self.alignment);
-        properties.add_default_double("spacing", self.spacing, 0.0, Some("px"));
-        properties.add_enum("run_alignment", self.run_alignment);
-        properties.add_default_double("run_spacing", self.run_spacing, 0.0, Some("px"));
-        properties.add_enum("cross_axis_alignment", self.cross_axis_alignment);
-        properties.add_enum("clip_behavior", self.clip_behavior);
-        properties.add("has_visual_overflow", self.has_visual_overflow.to_string());
+impl flui_foundation::inspect::Inspect for RenderWrap {
+    fn kind(&self) -> &'static str {
+        "RenderWrap"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("direction", &self.direction);
+        out.field("alignment", &self.alignment);
+        out.field("spacing", &self.spacing)
+            .unit(flui_foundation::inspect::Unit::LogicalPx)
+            .default(&0.0_f64);
+        out.field("run_alignment", &self.run_alignment);
+        out.field("run_spacing", &self.run_spacing)
+            .unit(flui_foundation::inspect::Unit::LogicalPx)
+            .default(&0.0_f64);
+        out.field("cross_axis_alignment", &self.cross_axis_alignment);
+        out.field("clip_behavior", &self.clip_behavior);
+        out.field("has_visual_overflow", &self.has_visual_overflow);
     }
 }
 

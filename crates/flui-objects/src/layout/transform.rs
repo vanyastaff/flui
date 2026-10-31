@@ -336,11 +336,19 @@ impl Default for RenderTransform {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderTransform {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add("transform", format!("{:?}", self.transform));
-        properties.add_optional("alignment", self.alignment.map(|a| format!("{a:?}")));
-        properties.add_optional("origin", self.origin.map(|o| format!("{o:?}")));
+impl flui_foundation::inspect::Inspect for RenderTransform {
+    fn kind(&self) -> &'static str {
+        "RenderTransform"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("transform", &self.transform);
+        if let Some(alignment) = &self.alignment {
+            out.field("alignment", alignment)
+                .unit(flui_foundation::inspect::Unit::Fraction);
+        }
+        out.field("origin", &self.origin)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 impl RenderBox for RenderTransform {

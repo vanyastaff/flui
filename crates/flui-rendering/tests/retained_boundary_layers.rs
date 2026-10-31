@@ -150,7 +150,13 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     #[derive(Debug)]
     struct CountingLeaf(Arc<AtomicUsize>);
 
-    impl flui_foundation::Diagnosticable for CountingLeaf {}
+    impl flui_foundation::inspect::Inspect for CountingLeaf {
+        fn kind(&self) -> &'static str {
+            "CountingLeaf"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for CountingLeaf {
         type Arity = Leaf;
@@ -245,7 +251,13 @@ use std::sync::{
 #[derive(Debug)]
 struct PaintCounter(Arc<AtomicUsize>);
 
-impl flui_foundation::Diagnosticable for PaintCounter {}
+impl flui_foundation::inspect::Inspect for PaintCounter {
+    fn kind(&self) -> &'static str {
+        "PaintCounter"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PaintCounter {
     type Arity = flui_foundation::Leaf;
@@ -383,7 +395,13 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     #[derive(Debug)]
     struct PoisonOnDemand(Arc<AtomicBool>);
 
-    impl flui_foundation::Diagnosticable for PoisonOnDemand {}
+    impl flui_foundation::inspect::Inspect for PoisonOnDemand {
+        fn kind(&self) -> &'static str {
+            "PoisonOnDemand"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl flui_rendering::traits::RenderBox for PoisonOnDemand {
         type Arity = flui_foundation::Leaf;

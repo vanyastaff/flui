@@ -159,15 +159,16 @@ impl RenderConstraintsTransformBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderConstraintsTransformBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        let alignment = self.inner.alignment();
-        builder.add("alignment", format!("({}, {})", alignment.x, alignment.y));
-        builder.add_optional(
-            "constrained_axis",
-            self.constrained_axis.map(|axis| format!("{axis:?}")),
-        );
-        builder.add_enum("clip_behavior", self.clip_behavior);
+impl flui_foundation::inspect::Inspect for RenderConstraintsTransformBox {
+    fn kind(&self) -> &'static str {
+        "RenderConstraintsTransformBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("alignment", &self.inner.alignment())
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("constrained_axis", &self.constrained_axis);
+        out.field("clip_behavior", &self.clip_behavior);
     }
 }
 

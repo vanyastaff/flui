@@ -31,7 +31,7 @@ pub fn widget_color_override_wins_over_the_divider_theme() {
         .try_find_by_render_type("RenderContainer")
         .expect("Divider must compose a decorated (filled) line");
     let decoration = laid
-        .render_property(decorated, "decoration")
+        .render_debug_field(decorated, "decoration")
         .expect("RenderContainer reports a \"decoration\" diagnostics property");
 
     assert!(

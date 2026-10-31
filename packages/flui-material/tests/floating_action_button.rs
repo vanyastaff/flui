@@ -9,18 +9,11 @@
 
 use crate::common;
 
-use common::{lay_out, tight};
+use common::{lay_out, rgba, tight};
 use flui_material::{
     FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
-
-/// `_FABDefaultsM3`'s formatted `Debug` string for a given resolved
-/// [`Color`](flui_sdk::painting::Color) — the same helper `tests/elevated_button.rs`
-/// uses for `RenderPhysicalShape`'s `"color"` diagnostics property.
-fn color_property(color: flui_sdk::painting::Color) -> String {
-    format!("{color:?}")
-}
 
 /// The middle cascade tier, proven end to end: a
 /// `ThemeData.floating_action_button_theme` with a custom
@@ -49,17 +42,15 @@ pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let material = laid
         .try_find_by_render_type("RenderPhysicalShape")
         .expect("Material must mount");
+    let material_node = laid.render_node(material);
     assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(themed_background)),
+        material_node.get::<flui_sdk::foundation::inspect::Rgba>("color"),
+        Ok(rgba(themed_background)),
         "a configured floating_action_button_theme.background_color must reach the mounted \
          Material",
     );
-    let elevation = laid
-        .render_property(material, "elevation")
-        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
     assert_eq!(
-        elevation.parse::<f64>(),
+        material_node.get::<f64>("elevation"),
         Ok(12.0),
         "a configured floating_action_button_theme.elevation must reach the enabled tier",
     );

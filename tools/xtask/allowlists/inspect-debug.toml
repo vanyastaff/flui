@@ -1,0 +1,82 @@
+# `Value::Debug(` sites of flui_foundation::inspect, the untyped escape hatch (R50). Written
+# by `cargo xtask inspect-debug --seed`. Counts are exact and only go down: the scan fails
+# when a file grows past its entry, shrinks below it, or loses its last site. `exit` names
+# the ADR whose change removes the entry.
+
+[[allow]]
+path = "crates/flui-layer/src/inspect.rs"
+count = 8
+reason = "clip shapes (RRect, Path, superellipse), color/image filters, shaders and the type-erased annotated-region payload are composites or trait objects with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/layout/container.rs"
+count = 1
+reason = "BoxDecoration is a composite with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/layout/custom_multi_child_layout.rs"
+count = 1
+reason = "the layout delegate is a user trait object with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/layout/custom_single_child_layout.rs"
+count = 1
+reason = "the layout delegate is a user trait object with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/layout/table.rs"
+count = 1
+reason = "TableColumnWidth is an enum carrying fractions and nested widths, with no single value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/animated_decorated_box.rs"
+count = 1
+reason = "the interpolated BoxDecoration is a composite with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/backdrop_filter.rs"
+count = 1
+reason = "ImageFilter is a composite with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/custom_paint.rs"
+count = 2
+reason = "the painter and foreground painter are user trait objects with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/decorated_box.rs"
+count = 1
+reason = "BoxDecoration is a composite with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/text/icon.rs"
+count = 1
+reason = "TextStyle is a many-field record with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-objects/src/text/paragraph.rs"
+count = 1
+reason = "TextStyle is a many-field record with no value mapping"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-rendering/src/inspect.rs"
+count = 2
+reason = "SliverConstraints and SliverGeometry are twelve-field records with no single value; sliver assertions read the `geometry` fact by name"
+exit = "ADR-0242"
+
+[[allow]]
+path = "crates/flui-view/src/inspect.rs"
+count = 1
+reason = "a view Key is an open set of user key types with no value mapping"
+exit = "ADR-0242"

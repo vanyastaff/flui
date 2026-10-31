@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use flui_material::{CarouselView, CarouselViewThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::geometry::Offset;
 use flui_sdk::painting::{Alignment, Color};
 use flui_sdk::view::ViewExt;
@@ -15,7 +16,7 @@ use flui_sdk::widgets::{CarouselItemScope, CarouselLayout, ColoredBox, KeylineSn
 use flui_testing::TouchScript;
 use flui_testing::a11y::Role;
 
-use crate::common::{LaidOut, lay_out_animated, tight};
+use crate::common::{LaidOut, lay_out_animated, rgba, tight};
 
 const WIDTH: f64 = 360.0;
 const HEIGHT: f64 = 200.0;
@@ -194,15 +195,9 @@ pub fn the_widget_beats_the_theme_which_beats_the_tokens() {
         }
         let laid = mount_with(*theme, carousel);
         let card = laid.find_all_by_render_type("RenderPhysicalShape")[0];
-        assert_eq!(
-            laid.render_property(card, "color"),
-            Some(format!("{expected:?}")),
-            "{name}"
-        );
-        let drawn = laid
-            .render_property(card, "elevation")
-            .and_then(|value| value.parse::<f64>().ok());
-        assert_eq!(drawn, Some(elevation), "{name}");
+        let card_node = laid.render_node(card);
+        assert_eq!(card_node.get::<Rgba>("color"), Ok(rgba(expected)), "{name}");
+        assert_eq!(card_node.get::<f64>("elevation"), Ok(elevation), "{name}");
     }
 }
 

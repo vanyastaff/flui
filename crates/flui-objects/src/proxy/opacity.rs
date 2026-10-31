@@ -166,14 +166,17 @@ impl Default for RenderOpacity {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderOpacity {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_default_double("opacity", self.opacity, 1.0, None);
-        properties.add_flag(
-            "always_needs_compositing",
-            self.always_needs_compositing,
-            "always needs compositing",
-        );
+impl flui_foundation::inspect::Inspect for RenderOpacity {
+    fn kind(&self) -> &'static str {
+        "RenderOpacity"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("opacity", &self.opacity)
+            .unit(flui_foundation::inspect::Unit::Fraction)
+            .default(&1.0_f64);
+        out.field("always_needs_compositing", &self.always_needs_compositing)
+            .default(&false);
     }
 }
 impl RenderBox for RenderOpacity {

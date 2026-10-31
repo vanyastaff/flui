@@ -8,18 +8,11 @@
 
 use crate::common;
 
-use common::{lay_out, tight};
+use common::{lay_out, rgba, tight};
 use flui_material::{Card, CardThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::painting::Color;
 use flui_sdk::widgets::ColoredBox;
-
-/// `_CardDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_sdk::painting::Color) — what `RenderPhysicalShape`'s
-/// `Diagnosticable::debug_fill_properties` writes into its `"color"`
-/// property, mirroring `tests/elevated_button.rs`'s identical helper.
-fn color_property(color: Color) -> String {
-    format!("{color:?}")
-}
 
 /// The middle cascade tier, proven end to end: a `ThemeData.card_theme` with
 /// custom `color`/`elevation` reaches the mounted `Material`, per field —
@@ -45,13 +38,11 @@ pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let material = laid
         .try_find_by_render_type("RenderPhysicalShape")
         .expect("Card must compose a Material surface");
+    let material_node = laid.render_node(material);
     assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(themed_color)),
+        material_node.get::<Rgba>("color"),
+        Ok(rgba(themed_color)),
         "a configured card_theme.color must reach the mounted Material",
     );
-    let elevation = laid
-        .render_property(material, "elevation")
-        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
-    assert_eq!(elevation.parse::<f64>(), Ok(15.0));
+    assert_eq!(material_node.get::<f64>("elevation"), Ok(15.0));
 }

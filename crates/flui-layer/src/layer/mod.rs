@@ -36,7 +36,6 @@ pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
 use flui_foundation::geometry::{Offset, Rect};
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
 pub use follower::{FollowerLayer, LeaderClip};
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
@@ -266,41 +265,6 @@ impl Layer {
         match self {
             Layer::PerformanceOverlay(layer) => Some(layer),
             _ => None,
-        }
-    }
-}
-
-impl Diagnosticable for Layer {
-    fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        let mut node = DiagnosticsNode::new(self.kind_name());
-        let mut builder = DiagnosticsBuilder::new();
-        self.debug_fill_properties(&mut builder);
-        *node.properties_mut() = builder.build();
-        node
-    }
-
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        if let Some(bounds) = self.bounds() {
-            properties.add("bounds", format!("{bounds:?}"));
-        }
-        match self {
-            Layer::Offset(layer) => {
-                properties.add("offset", format!("{:?}", layer.offset()));
-            }
-            Layer::Transform(layer) => {
-                properties.add("transform", format!("{:?}", layer.transform()));
-            }
-            Layer::Opacity(layer) => {
-                properties.add("alpha", layer.alpha());
-                properties.add("offset", format!("{:?}", layer.offset()));
-            }
-            Layer::ClipRect(layer) => {
-                properties.add("clip_rect", format!("{:?}", layer.clip_rect()));
-            }
-            Layer::Picture(layer) => {
-                properties.add("commands", layer.picture().len());
-            }
-            _ => {}
         }
     }
 }

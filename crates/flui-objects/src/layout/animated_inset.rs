@@ -161,10 +161,15 @@ impl RenderAnimatedInset {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedInset {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("rect", self.rect());
-        properties.add_default_enum("clip_behavior", self.clip_behavior, Clip::HardEdge);
+impl flui_foundation::inspect::Inspect for RenderAnimatedInset {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedInset"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("rect", &self.rect())
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("clip_behavior", &self.clip_behavior);
     }
 }
 

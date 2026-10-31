@@ -58,7 +58,13 @@ impl Drop for RetirementProbe {
     }
 }
 
-impl flui_foundation::Diagnosticable for RetirementProbe {}
+impl flui_foundation::inspect::Inspect for RetirementProbe {
+    fn kind(&self) -> &'static str {
+        "RetirementProbe"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl flui_rendering::traits::RenderBox for RetirementProbe {
     type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
