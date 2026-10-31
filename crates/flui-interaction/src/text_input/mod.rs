@@ -690,16 +690,20 @@ impl TextInputOwner {
         }
         // A push platform reads no store, so it is told the incoming field's
         // status here and hears of each change through the store's observer,
-        // which answers only while this client is the active one.
+        // which answers only while this client is the active one. The
+        // platform's enable may have attached another client in its place,
+        // whose observer this one must not replace.
         if let Some(platform) = &platform
             && let Some(store) = pushed
         {
-            let observer: Rc<dyn TextStoreObserver> = Rc::new(PushStatusObserver {
-                owner: self.this.clone(),
-                token,
-            });
-            calls.run(|| store.set_observer(Some(observer)));
-            self.tell_field_status(token, &store, platform, &mut calls);
+            if self.is_active(token) {
+                let observer: Rc<dyn TextStoreObserver> = Rc::new(PushStatusObserver {
+                    owner: self.this.clone(),
+                    token,
+                });
+                calls.run_parking(&self.gate, || store.set_observer(Some(observer)));
+                self.tell_field_status(token, &store, platform, &mut calls);
+            }
             // The platform's call may have detached the client, leaving this
             // clone the store's last owner.
             calls.retire_parking(&self.gate, store);
@@ -809,9 +813,21 @@ impl TextInputOwner {
         Ok(())
     }
 
+    /// Whether `token` names the active client of an open owner.
+    fn is_active(&self, token: ClientToken) -> bool {
+        let state = self.state.borrow();
+        state.lifecycle == OwnerLifecycle::Open
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.token == token)
+    }
+
     /// Tell the push `platform` the status of `store`, the field `token`
     /// names, while that client is still the active one of an open owner:
-    /// the store's own code may have moved focus or closed the owner.
+    /// the store's own code may have moved focus or closed the owner. Both
+    /// calls reach code whose grants park failures in the gate, so they are
+    /// ordered against those failures as every owner call is.
     fn tell_field_status(
         &self,
         token: ClientToken,
@@ -819,19 +835,11 @@ impl TextInputOwner {
         platform: &Arc<dyn PlatformTextInput>,
         calls: &mut OwnerCalls,
     ) {
-        let Some(status) = calls.run(|| store.status()) else {
+        let Some(status) = calls.run_parking(&self.gate, || store.status()) else {
             return;
         };
-        let active = {
-            let state = self.state.borrow();
-            state.lifecycle == OwnerLifecycle::Open
-                && state
-                    .active
-                    .as_ref()
-                    .is_some_and(|active| active.token == token)
-        };
-        if active {
-            calls.run(|| platform.set_field_status(status));
+        if self.is_active(token) {
+            calls.run_parking(&self.gate, || platform.set_field_status(status));
         }
     }
 

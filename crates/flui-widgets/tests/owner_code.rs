@@ -1715,6 +1715,14 @@ const ROWS: &[(&str, fn())] = &[
         completion_whose_platform_discard_parks_and_panics,
     ),
     (
+        "status: a push platform parking a failure and panicking",
+        status_change_whose_platform_parks_and_panics,
+    ),
+    (
+        "status: an attach inside the platform's enable",
+        status_after_an_attach_inside_the_platforms_enable,
+    ),
+    (
         "completion: a push platform's discard closing the owner and panicking",
         completion_whose_platform_discard_closes_the_owner_and_panics,
     ),
@@ -3329,6 +3337,96 @@ fn completion_whose_platform_discard_parks_and_panics() {
     CLEANUP_STORE.with(|slot| slot.borrow_mut().take());
     assert_eq!(store.composition(), None, "the store still commits");
     the_owner_keeps_working(&self::owner());
+}
+
+/// A push platform that, told a field's status, parks a failure through the
+/// client's store and then panics.
+struct ParksThenFailsOnStatus;
+
+impl PlatformTextInput for ParksThenFailsOnStatus {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
+
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {
+        let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
+        if let Some(store) = store {
+            park_through(&store, "parked by the status");
+            panic!("platform failure applying the status");
+        }
+    }
+}
+
+fn status_change_whose_platform_parks_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ParksThenFailsOnStatus)));
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&store)));
+    assert_eq!(
+        raised(|| store.set_protected(true)).as_deref(),
+        Some("parked by the status"),
+        "the failure parked before the platform's panic is raised first"
+    );
+    CLEANUP_STORE.with(|slot| slot.borrow_mut().take());
+    the_owner_keeps_working(&self::owner());
+}
+
+thread_local! {
+    /// What a push platform's next enable runs: the platform is
+    /// `Send + Sync`, and the owner and store it reenters are not.
+    static ON_ENABLE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// A push platform that records the statuses it is told and runs
+/// [`ON_ENABLE`] from its next enable.
+#[derive(Default)]
+struct ReentersOnEnable(parking_lot::Mutex<Vec<flui_platform::text_store::TextStoreStatus>>);
+
+impl PlatformTextInput for ReentersOnEnable {
+    fn set_ime_allowed(&self, allowed: bool) {
+        let hook = ON_ENABLE.with(|slot| slot.borrow_mut().take());
+        if allowed && let Some(hook) = hook {
+            hook();
+        }
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
+
+    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
+        self.0.lock().push(status);
+    }
+}
+
+/// The platform's enable attaches the same field again: the outer attach's
+/// observer, whose client is no longer active, does not replace the one the
+/// inner attach installed, so the field's next status change still reaches
+/// the platform.
+fn status_after_an_attach_inside_the_platforms_enable() {
+    let platform = Arc::new(ReentersOnEnable::default());
+    let owner = TextInputOwner::new(TextInputBackend::Push(platform.clone()));
+    let store = InMemoryTextStore::new("");
+    let (handle, field) = (owner.handle(), Rc::clone(&store));
+    ON_ENABLE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let _inner = handle
+                .attach(TextInputClient::new(field))
+                .expect("the inner attach");
+        }));
+    });
+    let _outer = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("the outer attach");
+    store.set_protected(true);
+    assert_eq!(
+        platform.0.lock().last().map(|status| status.protected),
+        Some(true),
+        "the change reaches the platform"
+    );
+    the_owner_keeps_working(&owner);
 }
 
 /// A push platform that closes its owner, then panics, from its discard, and
