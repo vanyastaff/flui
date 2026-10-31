@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "background_work.rs"]
+mod background_work;
 #[path = "capability_seam.rs"]
 mod capability_seam;
 #[path = "close_guard.rs"]
@@ -204,6 +206,32 @@ fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
 
+/// A capture of a panicking `on_complete` closure is kept through the
+/// unwind; dropped there, its own panicking `Drop` would abort the process,
+/// so the case runs in a child process.
+#[test]
+fn background_work_callback_keeps_its_captures() {
+    if std::env::var(background_work::CALLBACK_UNWIND_CHILD).is_ok() {
+        background_work::an_on_complete_panic_keeps_its_captures();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "background_work_callback_keeps_its_captures",
+            "--test-threads=1",
+        ])
+        .env(background_work::CALLBACK_UNWIND_CHILD, "1")
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .expect("child test process");
+    assert!(
+        output.status.success(),
+        "the child aborted: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Each case runs in a child process: without retention, a capture dropped
 /// while unwinding panics again and aborts the process.
 #[test]
@@ -296,6 +324,74 @@ fn capability_seam() {
             (
                 "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
                 capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
+                    as fn(),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn background_work() {
+    run_table(
+        "background_work",
+        &[
+            (
+                "background_work::a_compute_job_answers_at_the_pump_that_runs_it",
+                background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
+            ),
+            (
+                "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
+                background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
+            ),
+            (
+                "background_work::held_work_keeps_its_widget_loading_until_released",
+                background_work::held_work_keeps_its_widget_loading_until_released as fn(),
+            ),
+            (
+                "background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump",
+                background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump
+                    as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_skips_its_job",
+                background_work::a_dropped_task_skips_its_job as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump",
+                background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_cancelled_task_answers_cancelled",
+                background_work::a_cancelled_task_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_panicking_job_answers_panicked_on_the_owner_thread",
+                background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
+            ),
+            (
+                "background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked",
+                background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked as fn(),
+            ),
+            (
+                "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
+                background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_task_cancelled_while_its_job_runs_answers_cancelled",
+                background_work::a_task_cancelled_while_its_job_runs_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock",
+                background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
+                    as fn(),
+            ),
+            (
+                "background_work::a_future_whose_poll_panicked_is_kept_not_dropped",
+                background_work::a_future_whose_poll_panicked_is_kept_not_dropped as fn(),
+            ),
+            (
+                "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
+                background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
                     as fn(),
             ),
         ],

@@ -55,44 +55,10 @@
 //! same contract.
 
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// A pure background compute job: a boxed closure, run once on a worker
-/// thread (or inline on wasm32).
-pub type ComputeJob = Box<dyn FnOnce() + Send + 'static>;
-
-/// A background IO future. Result delivery is the caller's business (send it
-/// through a channel the caller owns); the executor only drives the future.
-pub type IoFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
-/// Why a spawn was refused.
-///
-/// The job or future passed to the failing spawn call is dropped (its
-/// destructors run); a caller that wants to retry must rebuild it.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum SpawnError {
-    /// The lane's bounded admission window is full. Backpressure, not a bug:
-    /// the caller may retry later or shed the work.
-    #[error("the executor lane's bounded admission window is full")]
-    Saturated,
-    /// Execution services are shutting down (or already shut down); no new
-    /// work is admitted.
-    #[error("execution services are shutting down; new work is refused")]
-    ShuttingDown,
-    /// The lane's worker pool could not be started — the OS refused thread
-    /// creation (resource exhaustion). An environment failure, not a bug
-    /// (see `docs/PANIC-POLICY.md`): the pool slot stays unstarted, so a
-    /// later spawn retries once resources free up.
-    #[error(
-        "the executor lane's worker pool could not be started (OS thread/resource \
-         exhaustion); a later spawn may succeed"
-    )]
-    Unavailable,
-}
+pub use flui_platform::executor::{ComputeJob, IoFuture, SpawnError};
 
 /// Host-provided worker pool for the **asynchronous compute** work class.
 ///
@@ -637,6 +603,18 @@ impl ExecutionServices {
     }
 }
 
+/// The lanes as a capability handle reaches them, within these admission
+/// windows and this shutdown.
+impl flui_platform::executor::Executor for ExecutionServices {
+    fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
+        Self::spawn_compute(self, job)
+    }
+
+    fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
+        Self::spawn_io(self, future)
+    }
+}
+
 impl fmt::Debug for ExecutionServices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExecutionServices")
@@ -868,6 +846,21 @@ impl DeterministicExecutors {
     #[must_use]
     pub fn pending(&self) -> (usize, usize) {
         (self.inner.jobs.lock().len(), self.inner.tasks.lock().len())
+    }
+
+    /// Work [`run_until_idle`](Self::run_until_idle) would make progress on
+    /// now: queued jobs plus woken futures. A future parked on a wake that
+    /// has not come is pending but not runnable.
+    #[must_use]
+    pub fn runnable(&self) -> usize {
+        let woken = self
+            .inner
+            .tasks
+            .lock()
+            .iter()
+            .filter(|task| task.future.is_some() && task.ready.load(Ordering::Acquire))
+            .count();
+        self.inner.jobs.lock().len() + woken
     }
 }
 

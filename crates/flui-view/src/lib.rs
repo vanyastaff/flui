@@ -86,6 +86,7 @@
 )]
 extern crate self as flui_view;
 
+pub mod background;
 pub mod binding;
 pub mod child;
 pub mod context;
