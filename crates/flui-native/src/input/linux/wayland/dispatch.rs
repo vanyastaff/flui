@@ -1108,7 +1108,9 @@ impl WaylandInput for SeatInput {
             }
             for wire in wires {
                 if let Wire::Text(text) = wire {
-                    self.texts.deliver(text);
+                    // A field's store is application code: a panic there
+                    // costs that one event, never the rest of the batch.
+                    contain_owner_callback(|| self.texts.deliver(text));
                     continue;
                 }
                 let inputs = self.assemble(wire);

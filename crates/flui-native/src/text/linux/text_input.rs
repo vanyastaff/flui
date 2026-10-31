@@ -205,6 +205,13 @@ fn head(text: &str, budget: usize) -> &str {
 fn told_selection(session: &dyn TextStoreRead) -> Option<(Selection, String)> {
     let selection = session.selection();
     let range = selection.range();
+    // A UTF-16 code unit is at least one byte: a range of more units than the
+    // budget has bytes cannot fit, and is not read at all.
+    if range.len() > MAX_SURROUNDING_BYTES {
+        // Still `None` for a protected field, by a read of no text.
+        text_within(session, range.start().get(), range.start().get())?;
+        return Some((Selection::collapsed(selection.active), String::new()));
+    }
     let (selected, _) = text_within(session, range.start().get(), range.end().get())?;
     if selected.len() > MAX_SURROUNDING_BYTES {
         Some((Selection::collapsed(selection.active), String::new()))
@@ -327,6 +334,9 @@ pub(crate) struct TextInputClient {
     /// Counts each `enable`: a grant made under one acts on the wire only
     /// while the same one holds, never on the field that took focus since.
     session: Cell<u64>,
+    /// The content type the input method was last told under this
+    /// `enable`.
+    content: Cell<Option<ContentType>>,
     pending: RefCell<Pending>,
     /// The requests made while the client is inside a call into a store.
     queue: HostQueue<MirrorHostOp>,
@@ -385,11 +395,17 @@ fn apply(session: &mut dyn TextStoreEdit, pending: Pending) {
         && let Some((told, _)) = told_selection(session)
     {
         let range = told.range();
+        // The input method saw at most the budget around the selection: a
+        // longer count, untrusted, never reads or deletes past it.
         let spans = surrounding_deletion(
             session,
             range,
-            usize::try_from(before).unwrap_or(usize::MAX),
-            usize::try_from(after).unwrap_or(usize::MAX),
+            usize::try_from(before).map_or(MAX_SURROUNDING_BYTES, |before| {
+                before.min(MAX_SURROUNDING_BYTES)
+            }),
+            usize::try_from(after).map_or(MAX_SURROUNDING_BYTES, |after| {
+                after.min(MAX_SURROUNDING_BYTES)
+            }),
         );
         if let Some((before, after)) = spans {
             // The later span first, so the earlier one's offsets hold.
@@ -472,6 +488,7 @@ impl TextInputClient {
             wire: RefCell::new(None),
             enabled: Cell::new(false),
             session: Cell::new(0),
+            content: Cell::new(None),
             pending: RefCell::new(Pending::default()),
             queue: HostQueue::new(),
             retired: Cell::new(false),
@@ -649,7 +666,9 @@ impl TextInputClient {
     fn enable_on(&self, wire: &Rc<dyn TextInputWire>, store: &Rc<dyn TextStore>) {
         self.session.set(self.session.get().wrapping_add(1));
         wire.enable();
-        wire.set_content_type(ContentType::of_store(&**store));
+        let content = ContentType::of_store(&**store);
+        self.content.set(Some(content));
+        wire.set_content_type(content);
         let sent = {
             let wire = Rc::clone(wire);
             self.read(move |session| send_state(&*wire, session, ChangeCause::Other))
@@ -671,6 +690,29 @@ impl TextInputClient {
                 tracing::debug!(?error, "the focused store refused the input method's read");
             }
         }
+    }
+
+    /// The field's status changed, while enabled: a new content type takes a
+    /// fresh `enable`, as the protocol lets a compositor ignore one sent
+    /// within an enablement, so a field turned protected never keeps the
+    /// hints of ordinary text. The reset forgets the input method's
+    /// composition, so it is committed in the field first.
+    fn restatus(&self) {
+        if !self.enabled.get() {
+            return;
+        }
+        let (Some(wire), Some(store)) = (self.wire(), self.focused()) else {
+            return;
+        };
+        if self.content.get() == Some(ContentType::of_store(&*store)) {
+            return;
+        }
+        {
+            let _entered = self.queue.enter();
+            let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+            self.enable_on(&wire, &store);
+        }
+        self.drain();
     }
 
     /// The field changed outside the input method: tell it, while enabled.
@@ -792,8 +834,10 @@ impl TextInputClient {
                 // `enable` resets the content type too: it is sent again,
                 // read as the grant runs, so a status that changed while the
                 // store held the grant is the one the input method keeps.
+                let content = ContentType::of_store(&*store);
+                client.content.set(Some(content));
                 wire.enable();
-                wire.set_content_type(ContentType::of_store(&*store));
+                wire.set_content_type(content);
                 send_state(&*wire, edit, ChangeCause::Other);
             }
         });
@@ -901,12 +945,8 @@ impl TextStoreObserver for ClientObserver {
     }
 
     fn status_changed(&self) {
-        if let Some(client) = self.client.upgrade()
-            && client.enabled.get()
-            && let (Some(wire), Some(store)) = (client.wire(), client.focused())
-        {
-            wire.set_content_type(ContentType::of_store(&*store));
-            wire.commit();
+        if let Some(client) = self.client.upgrade() {
+            client.restatus();
         }
     }
 }

@@ -654,3 +654,40 @@ fn a_deletion_around_a_backward_selection_keeps_its_direction() {
         }
     );
 }
+
+#[test]
+fn a_field_turned_protected_is_enabled_afresh_with_password_hints() {
+    let store = InMemoryTextStore::new("abc");
+    let (_client, wire) = serving(&store);
+    let _ = wire.take();
+
+    // A status change that keeps the content type sends nothing.
+    store.set_purpose(TextInputPurpose::Search);
+    assert_eq!(wire.take(), []);
+
+    store.set_protected(true);
+    let sent = wire.take();
+    assert_eq!(
+        sent.first(),
+        Some(&Sent::Enable),
+        "a fresh enablement: {sent:?}"
+    );
+    assert!(sent.contains(&Sent::Content(ContentType {
+        hint: ContentType::HINT_HIDDEN_TEXT | ContentType::HINT_SENSITIVE_DATA,
+        purpose: ContentType::PASSWORD,
+    })));
+    assert!(
+        !sent.iter().any(|sent| matches!(sent, Sent::Surrounding(_))),
+        "{sent:?}"
+    );
+    assert_eq!(sent.last(), Some(&Sent::Commit));
+}
+
+#[test]
+fn a_deletion_count_past_what_the_input_method_saw_stops_at_it() {
+    let store = InMemoryTextStore::new("x".repeat(5000));
+    let (client, wire) = serving(&store);
+    client.delete_surrounding(&*wire, u32::MAX, 0);
+    client.done(&*wire, wire.commits());
+    assert_eq!(store.text().len(), 5000 - MAX_SURROUNDING_BYTES);
+}

@@ -506,11 +506,15 @@ struct Left {
 impl Left {
     /// Tell the client, with no cell borrowed.
     fn deliver(self) {
-        if self.client.left(&*self.wire)
-            && let Some(next) = self.next
-        {
-            self.client.entered(next);
-        }
+        // The client reaches the field's store, application code: a panic
+        // there leaves the seats' other text inputs to their own leaves.
+        contain_owner_callback(|| {
+            if self.client.left(&*self.wire)
+                && let Some(next) = self.next
+            {
+                self.client.entered(next);
+            }
+        });
     }
 }
 
