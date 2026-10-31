@@ -654,13 +654,15 @@ impl SelectionModel {
     /// The area gained or lost the focus: it rebuilds with the active or the
     /// dimmed highlight, and keeps its selection. Losing it hides the
     /// handles, which would otherwise stay above whatever took the focus,
-    /// such as a route pushed over the area.
+    /// such as a route pushed over the area, and ends a long press's extension:
+    /// that touch no longer selects in an area it left.
     fn focus_changed(&self, focused: bool) {
         if self.focused.replace(focused) == focused {
             return;
         }
         let mut failure = FirstPanic::new();
         if !focused {
+            self.drag_ended(SelectionInput::Touch);
             self.hide_handles(&mut failure);
         }
         let rebuild = self.rebuild.borrow().clone();

@@ -9,6 +9,8 @@
   `StorageError::Unsupported`, `set` refuses every value, and storage still reaches a UI runtime
   through `LifecycleContext::storage`.
 - **Date:** 2026-10-28
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  §4's retention of the codec's panic payload only: the payload is dropped.
 - **Supersedes (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
   step 8, its "stack restoration as a list of paths" only (§6 here); web history, query and
   fragment stay in step 8.
