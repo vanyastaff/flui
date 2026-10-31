@@ -8,13 +8,21 @@
 //!
 //! Behind the `testing` feature, the doubles of the contracts this crate
 //! owns (ADR-0243 D4): `FakeHaptics`, the recording
-//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against.
+//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against, and
+//! `ScriptedHttp`, the [`HttpClient`](crate::http::HttpClient) a headless host
+//! registers so no test reaches the network.
 
 #[cfg(feature = "testing")]
 mod haptics;
 
 #[cfg(feature = "testing")]
 pub use haptics::{FakeHaptics, HapticCall, HapticPlay};
+
+#[cfg(feature = "testing")]
+mod http;
+
+#[cfg(feature = "testing")]
+pub use http::{ScriptedHttp, ScriptedResponse};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,

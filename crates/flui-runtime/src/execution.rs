@@ -403,7 +403,6 @@ impl ExecutionServices {
     /// (`true` — the lazily-started default pools on native targets,
     /// sequential in-place execution on wasm32) rather than routing it to
     /// host-injected pools (`false`).
-    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))

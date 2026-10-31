@@ -8,7 +8,7 @@
 //! `Image` *widget*, whose asset and network providers have their own consumer tests.
 #![cfg(feature = "images")]
 
-use flui_assets::{AssetKey, AssetRegistryBuilder, ImageAsset};
+use flui_assets::{AssetKey, AssetRegistryBuilder, ImageAsset, LoadServices};
 
 /// Absolute path to the committed 4x2 RGBA fixture PNG.
 fn fixture_path() -> &'static str {
@@ -79,7 +79,7 @@ async fn decoded_pixels_are_bounded_before_decoding() {
     let path = directory.join("huge.png");
     std::fs::write(&path, &huge).expect("the oversized header is written");
     let decoded = registry
-        .load_image(path.to_string_lossy().into_owned(), None)
+        .load_image(path.to_string_lossy().into_owned(), LoadServices::new())
         .await;
     let _ = std::fs::remove_dir_all(&directory);
     assert!(

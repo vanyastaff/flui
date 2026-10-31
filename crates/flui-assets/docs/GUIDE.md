@@ -237,7 +237,8 @@ let bytes = loader.load_bytes("logo.png").await?;
 let text = loader.load_string("config.json").await?;
 ```
 
-With `network`, `NetworkLoader` fetches HTTP bytes and is constructed fallibly.
+A network image is fetched with the HTTP client its caller passes in `LoadServices`
+(the host's `HttpCapability`, ADR-0280); this crate links no HTTP stack.
 Asset implementations own source selection and decoding; loaders do not infer
 arbitrary decoded types from keys.
 

@@ -7,8 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-#[cfg(feature = "images")]
-use flui_platform::executor::Executor;
 use parking_lot::RwLock;
 
 use crate::cache::{AssetCache, AssetCacheConfig, CacheCapacity};
@@ -21,7 +19,7 @@ mod images;
 #[cfg(feature = "images")]
 mod ordered_slots;
 #[cfg(feature = "images")]
-pub use images::{ImageLoad, ImageSource};
+pub use images::{ImageLoad, ImageSource, LoadServices};
 
 /// How a registry keeps and decodes images.
 #[cfg(feature = "images")]
@@ -90,12 +88,7 @@ impl AssetRegistry {
     fn new(cache_config: AssetCacheConfig) -> Self {
         #[cfg(feature = "images")]
         {
-            Self::with_images(
-                cache_config,
-                ImageConfig::default(),
-                #[cfg(feature = "network")]
-                None,
-            )
+            Self::with_images(cache_config, ImageConfig::default())
         }
         #[cfg(not(feature = "images"))]
         {
@@ -109,36 +102,30 @@ impl AssetRegistry {
     /// As [`new`](Self::new), additionally recording how decoded images are
     /// kept and decoded.
     #[cfg(feature = "images")]
-    fn with_images(
-        cache_config: AssetCacheConfig,
-        image_config: ImageConfig,
-        #[cfg(feature = "network")] network_loader: Option<crate::NetworkLoader>,
-    ) -> Self {
+    fn with_images(cache_config: AssetCacheConfig, image_config: ImageConfig) -> Self {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
             cache_config,
             decoded_images: Arc::new(images::DecodedImages::new(
                 image_config.budget,
                 image_config.decode_threads,
-                #[cfg(feature = "network")]
-                network_loader,
             )),
         }
     }
 
-    /// Loads and decodes the image asset at `path` on `lanes`, through this
-    /// registry's decoded-image cache.
+    /// Loads and decodes the image asset at `path` on `services`, through
+    /// this registry's decoded-image cache.
     ///
     /// A completed image for `path` is returned at once and made most recently
     /// used; a request for a path already loading joins that load; otherwise
-    /// the file is read on the IO lane of `lanes` and decoded on its compute
-    /// lane, at most
+    /// the file is read on the IO lane of the services' lanes and decoded on
+    /// their compute lane, at most
     /// [`with_decode_threads`](AssetRegistryBuilder::with_decode_threads)
     /// decodes at a time. The decoded image is kept within
     /// [`with_decoded_image_budget`](AssetRegistryBuilder::with_decoded_image_budget);
     /// failures are not kept, so a later request retries.
     ///
-    /// With no `lanes`, or lanes too full or unable to take the load, it runs
+    /// With no lanes, or lanes too full or unable to take the load, it runs
     /// inside the returned [`ImageLoad`], on the thread that polls it. The
     /// registry starts no runtime or thread of its own.
     ///
@@ -147,10 +134,10 @@ impl AssetRegistry {
     /// the last cancels it (the file is read in chunks and stops at the next
     /// one, and a decode that has not started never runs). A load dropped
     /// unfinished by the lanes or the request it ran in is taken over by the
-    /// next request still waiting. Loads start reading in the order they were
-    /// requested, up to four per decode thread; a decode slot goes to the
-    /// earliest-requested load whose bytes are ready, never held for one
-    /// still fetching.
+    /// next request still waiting, on that request's services. Loads start
+    /// reading in the order they were requested, up to four per decode
+    /// thread; a decode slot goes to the earliest-requested load whose bytes
+    /// are ready, never held for one still fetching.
     ///
     /// This method does not consult or populate [`AssetRegistry::load`]'s
     /// typed cache (`AssetCache<ImageAsset>`): the decoded-image cache is the
@@ -161,44 +148,35 @@ impl AssetRegistry {
     /// Returns [`AssetError::LoadFailed`] if the file cannot be read, or if
     /// the load panicked or kept being dropped unfinished;
     /// [`AssetError::DecodeFailed`] if it cannot be decoded; and
-    /// [`AssetError::LanesRefused`] if `lanes` are shutting down.
+    /// [`AssetError::LanesRefused`] if the lanes are shutting down.
     #[cfg(feature = "images")]
-    pub fn load_image(
-        &self,
-        path: impl Into<Arc<str>>,
-        lanes: Option<Arc<dyn Executor>>,
-    ) -> ImageLoad {
+    pub fn load_image(&self, path: impl Into<Arc<str>>, services: LoadServices) -> ImageLoad {
         self.decoded_images
-            .load(ImageSource::Asset(path.into()), lanes)
+            .load(ImageSource::Asset(path.into()), services)
     }
 
-    /// Fetches and decodes an image over HTTP/HTTPS via
-    /// [`NetworkLoader`](crate::loaders::NetworkLoader), through the same
-    /// decoded-image cache, lanes, sharing and cancellation as
-    /// [`load_image`](Self::load_image).
+    /// Fetches and decodes an image over HTTP or HTTPS with the services'
+    /// HTTP client, through the same decoded-image cache, lanes, sharing and
+    /// cancellation as [`load_image`](Self::load_image).
     ///
-    /// Requires both the `images` (decode) and `network` (HTTP client)
-    /// features. The request runs on the IO lane, which must run it inside a
-    /// tokio runtime, as a native host's default lanes do. Requests share
-    /// this registry's lazily initialized HTTP connection pool. Client
-    /// initialization errors are returned and a later load may retry.
-    /// Dropping the last waiter drops the request, closing its connection.
+    /// The request is sent from the IO lane; the client drives it, so the
+    /// lane needs no async runtime of its own. Dropping the last waiter
+    /// drops the request. A body over 256 MiB fails without being read whole.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::ReactorUnavailable`] when the lane it runs on has
-    /// no tokio reactor (with no `lanes`, the polling thread usually has
-    /// none); [`AssetError::LoadFailed`]/[`AssetError::NetworkError`] on a
-    /// failed request; and otherwise the errors of
-    /// [`load_image`](Self::load_image).
-    #[cfg(all(feature = "images", feature = "network"))]
+    /// Returns [`AssetError::HttpUnavailable`] when the services have no HTTP
+    /// client; [`AssetError::Http`] when the request fails and
+    /// [`AssetError::HttpStatus`] when it answers a status other than 2xx;
+    /// and otherwise the errors of [`load_image`](Self::load_image).
+    #[cfg(feature = "images")]
     pub fn load_network_image(
         &self,
         url: impl Into<Arc<str>>,
-        lanes: Option<Arc<dyn Executor>>,
+        services: LoadServices,
     ) -> ImageLoad {
         self.decoded_images
-            .load(ImageSource::Network(url.into()), lanes)
+            .load(ImageSource::Network(url.into()), services)
     }
 
     /// The completed decoded image this registry keeps for `source`, made most
@@ -472,8 +450,6 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
     /// and [`with_decode_threads`](Self::with_decode_threads).
     #[cfg(feature = "images")]
     images: ImageConfig,
-    #[cfg(all(feature = "images", feature = "network"))]
-    network_loader: Option<crate::NetworkLoader>,
 }
 
 // ===== Initial State: NoCapacity =====
@@ -494,8 +470,6 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: NoCapacity,
             #[cfg(feature = "images")]
             images: ImageConfig::default(),
-            #[cfg(all(feature = "images", feature = "network"))]
-            network_loader: None,
         }
     }
 
@@ -527,8 +501,6 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             images: self.images,
-            #[cfg(all(feature = "images", feature = "network"))]
-            network_loader: self.network_loader,
         }
     }
 
@@ -549,27 +521,6 @@ impl AssetRegistryBuilder<NoCapacity> {
 }
 
 impl<C> AssetRegistryBuilder<C> {
-    /// Builds a fresh configured HTTP client for network image requests.
-    ///
-    /// Configure deadlines, proxies, headers and redirects through the client
-    /// builder. Accepting a builder rather than an already-used client prevents
-    /// importing connections driven by another runtime. A fresh client establishes
-    /// connections on the tokio runtime of the IO lane that first fetches an
-    /// image.
-    ///
-    /// Without configuration, a default loader initializes lazily on that
-    /// lane.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid client configuration or failed TLS/resolver
-    /// initialization.
-    #[cfg(all(feature = "images", feature = "network"))]
-    pub fn with_network_client(mut self, client: reqwest::ClientBuilder) -> reqwest::Result<Self> {
-        self.network_loader = Some(crate::NetworkLoader::with_client(client.build()?));
-        Ok(self)
-    }
-
     /// Bounds the decoded images the registry keeps, in pixel bytes
     /// (`width * height * 4` each).
     ///
@@ -613,12 +564,7 @@ impl AssetRegistryBuilder<HasCapacity> {
     pub fn build(self) -> AssetRegistry {
         #[cfg(feature = "images")]
         {
-            AssetRegistry::with_images(
-                self.capacity.0,
-                self.images,
-                #[cfg(feature = "network")]
-                self.network_loader,
-            )
+            AssetRegistry::with_images(self.capacity.0, self.images)
         }
         #[cfg(not(feature = "images"))]
         {
@@ -650,8 +596,6 @@ impl AssetRegistryBuilder<HasCapacity> {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             images: self.images,
-            #[cfg(all(feature = "images", feature = "network"))]
-            network_loader: self.network_loader,
         }
     }
 }

@@ -75,9 +75,9 @@ tracing = { workspace = true }
 # feature to avoid pulling in the decode library for apps that only use
 # `Image::from_image` (pre-decoded `PixelImage`).
 image = { workspace = true, optional = true }
-# Byte-loading/decode + a background tokio runtime for `AssetImage`/
-# `NetworkImage`'s async resolution (`ImageProvider::resolve_async`).
-# Optional: only the `asset-images`/`network-images` features pull it in.
+# Byte-loading and decode for `AssetImage` and `NetworkImage`'s async
+# resolution (`ImageProvider::resolve_async`), on the caller's lanes and HTTP client.
+# Optional: only the `asset-images` feature pulls it in.
 flui-assets = { path = "../flui-assets", version = "=0.2.0-dev", optional = true }
 # `EditableText` is a text store an input method pulls from: it implements
 # the `TextStore` contract and converts offsets with its `utf16` helper
@@ -191,16 +191,13 @@ testing = []
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.
 images = ["dep:image"]
-# Async, `flui-assets`-backed asset-file image loading: `AssetImage` resolves
-# through an injected `Arc<flui_assets::AssetRegistry>` on a background tokio
-# runtime, decoded via the same `image` crate `images` activates. Pulls in
+# Async, `flui-assets`-backed image loading: `AssetImage` and `NetworkImage`
+# resolve through an injected `Arc<flui_assets::AssetRegistry>` on the UI
+# runtime's lanes, a network image fetched with the host's HTTP capability,
+# decoded via the same `image` crate `images` activates. Pulls in
 # `flui-assets` (with its own `images` feature), whose registry keeps the
 # decoded images and coalesces their loads.
 asset-images = ["dep:flui-assets", "flui-assets/images", "images"]
-# Async network image loading: rewires `NetworkImage::resolve_async` through
-# `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
-# share the registry's decoded-image cache and background runtime.
-network-images = ["asset-images", "flui-assets/network"]
 # Serialization of the value types the widgets take, in each crate that owns some.
 serde = [
     "flui-painting/serde",

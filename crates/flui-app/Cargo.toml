@@ -23,7 +23,12 @@ exclude = ["/ARCHITECTURE.md"]
 crate-type = ["rlib"]
 
 [features]
-default = ["desktop"]
+default = ["desktop", "http"]
+
+# The built-in HTTP capability (ADR-0280): `reqwest` on the run's IO lane.
+# Without it a widget acquiring `HttpCapability` is refused as not
+# registered, and the application links no TLS stack.
+http = ["dep:reqwest", "dep:rustls"]
 
 # Accepted and ignored: `UiCommand::SignalWrite` is always compiled (ADR-0085 §5).
 # It stays only because CI's `test-features` job still passes
@@ -116,6 +121,14 @@ tokio = { workspace = true, features = ["sync"] }
 # only, like that layer.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-util = { workspace = true }
+
+# The built-in HTTP client (`http` feature, ADR-0280), driven on the run's IO
+# lane. Android and the web have no client yet (`HttpError::NotYetOnThisHost`).
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+reqwest = { workspace = true, optional = true }
+# Names a failed TLS handshake in reqwest's error chain (`HttpError::Tls`).
+rustls = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync"] }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
