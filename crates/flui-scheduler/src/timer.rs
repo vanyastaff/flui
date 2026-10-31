@@ -192,23 +192,30 @@ impl Future for Sleep {
         let (Some(key), false) = (self.key, store.closed.get()) else {
             return Poll::Pending;
         };
-        let due = self.clock.now() >= key.0;
-        // A replaced or removed waker's drop is foreign code: it runs after
-        // the borrow is released.
-        let released = {
-            let mut armed = store.armed.borrow_mut();
-            if due {
-                armed.remove(&key)
-            } else {
-                match armed.get_mut(&key) {
-                    Some(known) if known.will_wake(cx.waker()) => None,
-                    Some(known) => Some(std::mem::replace(known, cx.waker().clone())),
-                    None => armed.insert(key, cx.waker().clone()),
-                }
-            }
+        // A waker's clone and drop are foreign code: they run with no borrow
+        // of the store held, and may themselves read or change it.
+        if self.clock.now() >= key.0 {
+            let removed = store.armed.borrow_mut().remove(&key);
+            drop(removed);
+            return Poll::Ready(());
+        }
+        let known = store
+            .armed
+            .borrow()
+            .get(&key)
+            .is_some_and(|known| known.will_wake(cx.waker()));
+        if known {
+            return Poll::Pending;
+        }
+        let waker = cx.waker().clone();
+        // The clone may have retired the owner: nothing is armed after that.
+        let released = if store.closed.get() {
+            Some(waker)
+        } else {
+            store.armed.borrow_mut().insert(key, waker)
         };
         drop(released);
-        if due { Poll::Ready(()) } else { Poll::Pending }
+        Poll::Pending
     }
 }
 

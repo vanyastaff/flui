@@ -1,13 +1,13 @@
 //! `TimerHandle` and `Sleep`: deadlines on the UI runtime's clock, fired by
 //! the owner turn that polls tasks.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Wake, Waker};
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
@@ -130,5 +130,73 @@ fn a_sleep_outliving_its_owner_stays_pending_without_a_waker() {
         pin!(timer.sleep(Duration::ZERO)).poll(&mut cx),
         Poll::Pending,
         "a sleep made after teardown never resolves"
+    );
+}
+
+thread_local! {
+    /// What the next clone of a [`cloning_waker`] runs.
+    static ON_WAKER_CLONE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+#[expect(
+    unsafe_code,
+    reason = "exercise an executor's clone through the public Future API"
+)]
+fn cloning_waker() -> Waker {
+    unsafe fn clone(data: *const ()) -> RawWaker {
+        if let Some(hook) = ON_WAKER_CLONE.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
+        RawWaker::new(data, &VTABLE)
+    }
+    unsafe fn noop(_: *const ()) {}
+    // The data pointer is a null constant that nothing dereferences, so
+    // clones and drops have nothing to count.
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    // SAFETY: no vtable function dereferences `data`, and each is safe to call
+    // from any thread any number of times.
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+/// An executor's waker clone is foreign code: one that reads the deadlines
+/// and drops another sleep while the poll registers its own finds the store
+/// free, and the registration still lands.
+#[test]
+fn a_waker_clone_that_reenters_the_deadlines_still_arms_the_sleep() {
+    let (_clock, _scheduler, owner) = on_virtual_clock();
+    let owner = Rc::new(owner);
+    let timer = owner.async_driver().timer();
+    let start = timer.now();
+    let mut other = Box::pin(timer.sleep(Duration::from_millis(5)));
+    let noop = Waker::noop();
+    assert_eq!(
+        other.as_mut().poll(&mut Context::from_waker(noop)),
+        Poll::Pending
+    );
+
+    let seen = Rc::new(Cell::new(None));
+    let (reader, seen_by_clone) = (Rc::clone(&owner), Rc::clone(&seen));
+    let mut other = Some(other);
+    ON_WAKER_CLONE.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            seen_by_clone.set(reader.next_deadline());
+            drop(other.take());
+        }));
+    });
+    let waker = cloning_waker();
+    let mut sleep = pin!(timer.sleep(Duration::from_millis(20)));
+    assert_eq!(
+        sleep.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    );
+    assert_eq!(
+        seen.get(),
+        Some(start + Duration::from_millis(5)),
+        "the clone read the deadlines"
+    );
+    assert_eq!(
+        owner.next_deadline(),
+        Some(start + Duration::from_millis(20)),
+        "the other sleep is disarmed and this one is armed"
     );
 }
