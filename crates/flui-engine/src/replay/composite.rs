@@ -108,6 +108,7 @@ impl GpuReplay {
                     .map(|clip| clip.legacy),
             };
             self.admit_filter_composite(viewport_size, surface_format, resources)?;
+            admit_destination_copy(bounds, destination, surface_format, resources)?;
             flush_advanced_layer(
                 op,
                 destination,
@@ -150,4 +151,32 @@ impl GpuReplay {
         );
         Ok(())
     }
+}
+
+/// Charges the copy of the destination under `bounds` that a composite
+/// reading the destination makes, before it is made: a large composite over
+/// a small source, such as a magnifier, copies far more than its source.
+fn admit_destination_copy(
+    bounds: Rect<f64>,
+    destination: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    resources: &mut GpuResources,
+) -> EngineResult<()> {
+    let size = destination.size();
+    let covered = flui_foundation::geometry::cover(bounds);
+    let span = |low: f64, high: f64, end: u32| {
+        let end = f64::from(end);
+        (high.clamp(0.0, end) - low.clamp(0.0, end)).max(1.0) as usize
+    };
+    let overflow = || EngineError::PreparedResourceOverflow;
+    let texel = format.block_copy_size(None).ok_or_else(overflow)? as usize;
+    let bytes = span(covered.left(), covered.right(), size.width)
+        .checked_mul(span(covered.top(), covered.bottom(), size.height))
+        .and_then(|texels| texels.checked_mul(texel))
+        .ok_or_else(overflow)?;
+    resources.reserve_prepared(crate::device_domain::PreparedCost {
+        gpu_bytes: bytes,
+        cpu_bytes: 0,
+        objects: 2,
+    })
 }

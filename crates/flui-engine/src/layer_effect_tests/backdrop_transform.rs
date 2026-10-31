@@ -227,6 +227,35 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
             ..
         })
     ));
+    // Under a blend that reads the destination, each pane also copies the
+    // destination under its output: five such 4096 x 4096 copies take 320
+    // MiB, past the 256 MiB the frame may prepare, though each pane copies
+    // only a few backdrop texels.
+    let mut multiplied =
+        LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, side, side), Color::WHITE));
+    for _ in 0..5 {
+        multiplied.push_child(
+            multiplied.root(),
+            Layer::from(BackdropFilterLayer::new(
+                ImageFilter::try_magnify(Point::new(side / 2.0, side / 2.0), 1024.0)
+                    .expect("a valid scale"),
+                BlendMode::Multiply,
+                Rect::from_xywh(0.0, 0.0, side, side),
+            )),
+        );
+    }
+    let outcome = renderer.render_layer_tree(&multiplied, (4096, 4096));
+    assert!(
+        matches!(
+            outcome,
+            Err(crate::EngineError::PreparedResourceLimit {
+                resource: "GPU payload bytes",
+                ..
+            })
+        ),
+        "{:?}",
+        outcome.map(|bytes| bytes.len())
+    );
     // A rotated map has no lowering: the frame fails instead of drawing the
     // backdrop untransformed.
     let rotated = Matrix4::translation(32.0, 32.0, 0.0)
