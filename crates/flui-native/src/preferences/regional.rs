@@ -45,11 +45,12 @@ pub(crate) fn hour_cycle_of_pattern(pattern: &str) -> Option<HourCycle> {
 }
 
 /// The numbering system whose zero `digits` starts with, as Windows'
-/// `LOCALE_SNATIVEDIGITS` lists them. ASCII digits are the locale's own and
-/// report nothing, as does a zero this table does not name.
+/// `LOCALE_SNATIVEDIGITS` lists them, ASCII digits as `latn`. A zero this
+/// table does not name reports nothing.
 #[cfg(any(windows, test))]
 pub(crate) fn numbering_of_digits(digits: &str) -> Option<NumberingSystem> {
     let name = match digits.chars().next()? {
+        '0' => "latn",
         '\u{0660}' => "arab",
         '\u{06F0}' => "arabext",
         '\u{0966}' => "deva",
@@ -207,7 +208,7 @@ mod tests {
         assert_eq!(name("٠١٢٣٤٥٦٧٨٩").as_deref(), Some("arab"));
         assert_eq!(name("۰۱۲۳۴۵۶۷۸۹").as_deref(), Some("arabext"));
         assert_eq!(name("०१२३४५६७८९").as_deref(), Some("deva"));
-        assert_eq!(name("0123456789"), None);
+        assert_eq!(name("0123456789").as_deref(), Some("latn"));
         assert_eq!(name(""), None);
         let substituted = |mode: &str, digits: &'static str| {
             windows_numbering(mode, || Some(digits.to_owned()))
@@ -216,7 +217,11 @@ mod tests {
         assert_eq!(substituted("1", "٠١٢٣٤٥٦٧٨٩").as_deref(), Some("latn"));
         assert_eq!(substituted("2", "٠١٢٣٤٥٦٧٨٩").as_deref(), Some("arab"));
         assert_eq!(substituted("0", "٠١٢٣٤٥٦٧٨٩"), None);
-        assert_eq!(substituted("2", "0123456789"), None);
+        assert_eq!(
+            substituted("2", "0123456789").as_deref(),
+            Some("latn"),
+            "ASCII native digits under a non-Latin language are an observation"
+        );
     }
 
     fn a_region_overrides_only_another_languages_region() {
