@@ -297,7 +297,7 @@ fn a_window_that_has_published_no_tree_reports_none() {
 #[test]
 fn a_subscription_to_semantics_keeps_the_window_collecting_them() {
     let (ui_runtime, agent, mut sink) = shown();
-    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
+    let stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
     drop(agent);
     let collecting = || {
         ui_runtime
@@ -305,7 +305,7 @@ fn a_subscription_to_semantics_keeps_the_window_collecting_them() {
             .get(ui_runtime.presentation_id())
             .expect("the primary presentation is open")
             .pipeline()
-            .with(|pipeline| pipeline.semantics_enabled())
+            .with(flui_rendering::PipelineOwner::semantics_enabled)
     };
 
     frame(&ui_runtime, &mut sink);
