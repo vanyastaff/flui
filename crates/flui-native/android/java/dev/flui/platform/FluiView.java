@@ -112,6 +112,8 @@ public final class FluiView extends View {
         Settings.System.getUriFor("haptic_feedback_enabled"),
         Settings.Secure.getUriFor("long_press_timeout"),
         Settings.Secure.getUriFor("high_text_contrast_enabled"),
+        // `TIME_12_24`, the 24-hour switch `DateFormat.is24HourFormat` reads.
+        Settings.System.getUriFor(Settings.System.TIME_12_24),
     };
 
     private long handle;

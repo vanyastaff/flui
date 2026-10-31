@@ -195,6 +195,10 @@ objc2-foundation = { workspace = true, features = [
     "NSNotification",
     "NSDistributedNotificationCenter",
     "NSLocale",
+    # The regional formats (`preferences::apple::regional`).
+    "NSCalendar",
+    "NSDateFormatter",
+    "NSFormatter",
     "NSOperation",
     "block2",
 ] }
@@ -451,6 +455,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSEnumerator",
     "NSRunLoop",
     "NSLocale",
+    "NSCalendar",
+    "NSDateFormatter",
+    "NSFormatter",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIFont",
@@ -530,9 +537,12 @@ objc2-core-haptics = { workspace = true, features = [
 # UIA bridge for Windows, which every Win32 window builds. Version cohort must
 # match the workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its
 # `windows` dependency (0.62) matches the backend's own, so no duplicate
-# windows-rs stack is linked.
+# windows-rs stack is linked. UI Automation's `ScrollPattern` (gap 36), which
+# the published adapter does not implement, comes from the vendored copy listed
+# in third_party/README.md, by path for the reason given at accesskit_ios.
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
 version = "0.35.1"
+path = "../../third_party/accesskit_windows"
 
 # NSAccessibility bridge for macOS, which every AppKit window builds, in the
 # same 0.25 accesskit cohort. Uses the same objc2 binding family as the
