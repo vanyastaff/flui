@@ -8090,7 +8090,6 @@ dependencies = [
  "serde",
  "serde_repr",
  "socket2",
- "tokio",
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
@@ -8320,6 +8319,9 @@ checksum = "dfc035df602243402949ddf3dcc5bcfad7edeb732dd49ec6e605431c4eca54ce"
 dependencies = [
  "futures-core",
  "futures-io",
+ "rustix 1.1.5",
+ "socket2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
