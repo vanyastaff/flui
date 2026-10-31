@@ -1,12 +1,23 @@
 //! The user's regional formats (ADR-0278 §3) from the values the hosts report
 //! them as: Windows' locale information strings, the POSIX environment's
-//! category locales, and GNOME's clock format.
+//! category locales, GNOME's clock format, Foundation's locale and calendar,
+//! Android's calendar and the browser's `Intl` week info.
 
+#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+use flui_platform::NumberingSystem;
 #[cfg(any(linux_host, test))]
 use flui_platform::RegionalFormats;
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    test
+))]
+use flui_platform::Weekday;
+#[cfg(any(windows, linux_host, target_os = "macos", target_os = "ios", test))]
 use flui_platform::{HourCycle, Locale, MeasurementSystem, RegionOverride};
-#[cfg(any(windows, test))]
-use flui_platform::{NumberingSystem, Weekday};
 
 /// `LOCALE_IFIRSTDAYOFWEEK`: `0` is Monday through `6`, Sunday.
 #[cfg(any(windows, test))]
@@ -28,7 +39,7 @@ pub(crate) fn windows_measurement(value: &str) -> Option<MeasurementSystem> {
 /// The hour cycle a time pattern writes its hours in: `h` 1 to 12, `H` 0 to
 /// 23, `K` 0 to 11 and `k` 1 to 24, outside quoted literals. A pattern without
 /// hours has none.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
 pub(crate) fn hour_cycle_of_pattern(pattern: &str) -> Option<HourCycle> {
     let mut quoted = false;
     for unit in pattern.chars() {
@@ -88,9 +99,49 @@ pub(crate) fn windows_numbering(
     }
 }
 
+/// `NSCalendar.firstWeekday` and `java.util.Calendar.getFirstDayOfWeek`: `1`
+/// is Sunday through `7`, Saturday.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", test))]
+pub(crate) fn sunday_first_weekday(day: usize) -> Option<Weekday> {
+    let from_sunday = day.checked_sub(1).filter(|&index| index < 7)?;
+    Weekday::ALL.get((from_sunday + 6) % 7).copied()
+}
+
+/// The `firstDay` of an `Intl.Locale`'s week info: `1` is Monday through `7`,
+/// Sunday, as ISO 8601 numbers them.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn iso_weekday(day: u8) -> Option<Weekday> {
+    Weekday::ALL.get(usize::from(day.checked_sub(1)?)).copied()
+}
+
+/// `NSLocaleMeasurementSystem`: `Metric`, `U.S.` or `U.K.`.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) fn apple_measurement(value: &str) -> Option<MeasurementSystem> {
+    match value {
+        "Metric" => Some(MeasurementSystem::Metric),
+        "U.S." => Some(MeasurementSystem::UsCustomary),
+        "U.K." => Some(MeasurementSystem::Imperial),
+        _ => None,
+    }
+}
+
+/// The numbering system an ICU locale identifier's `numbers` keyword names,
+/// as Foundation spells the user's choice: `ar_SA@numbers=latn`, keywords
+/// separated by `;`.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) fn icu_numbering(identifier: &str) -> Option<NumberingSystem> {
+    let (_, keywords) = identifier.split_once('@')?;
+    keywords
+        .split(';')
+        .filter_map(|keyword| keyword.split_once('='))
+        .find(|(key, _)| key.trim().eq_ignore_ascii_case("numbers"))
+        .and_then(|(_, value)| NumberingSystem::try_new(value.trim()).ok())
+}
+
 /// The region whose formats apply when it is not the region of the first
 /// preferred language, as the formats locale names it. Without a region, or
 /// when it is the language's own, there is no override.
+#[cfg(any(windows, linux_host, target_os = "macos", target_os = "ios", test))]
 pub(crate) fn region_override(
     formats_region: Option<&str>,
     first_language: Option<&Locale>,
@@ -239,6 +290,42 @@ mod tests {
         assert_eq!(region_override(Some("D"), Some(&en_us)), None);
     }
 
+    fn calendar_weekday_numbers_read_as_weekdays() {
+        assert_eq!(sunday_first_weekday(1), Some(Weekday::Sunday));
+        assert_eq!(sunday_first_weekday(2), Some(Weekday::Monday));
+        assert_eq!(sunday_first_weekday(7), Some(Weekday::Saturday));
+        for day in [0, 8] {
+            assert_eq!(sunday_first_weekday(day), None, "{day}");
+        }
+        assert_eq!(iso_weekday(1), Some(Weekday::Monday));
+        assert_eq!(iso_weekday(6), Some(Weekday::Saturday));
+        assert_eq!(iso_weekday(7), Some(Weekday::Sunday));
+        for day in [0, 8] {
+            assert_eq!(iso_weekday(day), None, "{day}");
+        }
+    }
+
+    fn foundation_values_read_as_their_documented_names() {
+        assert_eq!(apple_measurement("Metric"), Some(MeasurementSystem::Metric));
+        assert_eq!(
+            apple_measurement("U.S."),
+            Some(MeasurementSystem::UsCustomary)
+        );
+        assert_eq!(apple_measurement("U.K."), Some(MeasurementSystem::Imperial));
+        assert_eq!(apple_measurement("metric"), None);
+        let numbering = |identifier: &str| {
+            icu_numbering(identifier).map(|system| system.unicode_value().to_owned())
+        };
+        assert_eq!(numbering("ar_SA@numbers=latn").as_deref(), Some("latn"));
+        assert_eq!(
+            numbering("en_US@calendar=gregorian;numbers=Arab").as_deref(),
+            Some("arab")
+        );
+        assert_eq!(numbering("en_US@calendar=gregorian"), None);
+        assert_eq!(numbering("en_US"), None);
+        assert_eq!(numbering("en_US@numbers=x"), None);
+    }
+
     fn gnome_clock_formats_read_as_hour_cycles() {
         assert_eq!(gnome_clock_format("24h"), Some(HourCycle::H23));
         assert_eq!(gnome_clock_format("12h"), Some(HourCycle::H12));
@@ -339,6 +426,14 @@ mod tests {
                 (
                     "a_region_overrides_only_another_languages_region",
                     a_region_overrides_only_another_languages_region as fn(),
+                ),
+                (
+                    "calendar_weekday_numbers_read_as_weekdays",
+                    calendar_weekday_numbers_read_as_weekdays as fn(),
+                ),
+                (
+                    "foundation_values_read_as_their_documented_names",
+                    foundation_values_read_as_their_documented_names as fn(),
                 ),
                 (
                     "gnome_clock_formats_read_as_hour_cycles",
