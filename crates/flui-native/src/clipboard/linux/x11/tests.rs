@@ -398,7 +398,7 @@ fn targets() -> Vec<xproto::Atom> {
         .0
         .iter()
         .map(|atom| u32::from_ne_bytes(*atom))
-        .collect()
+        .collect::<Vec<xproto::Atom>>()
 }
 
 /// The atom `name` names on the server.

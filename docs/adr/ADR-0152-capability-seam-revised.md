@@ -668,7 +668,8 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   `a_concealed_write_stays_out_of_the_headless_history`,
   `a_concealed_write_offers_the_password_manager_hint` (X11 under Xvfb: `TARGETS` offers the hint
   and it converts to `secret`, an ordinary write offers neither),
-  `the_selection_crosses_between_clients` (Wayland), `a_concealed_write_is_an_ordinary_one_on_the_web`
+  `the_selection_crosses_between_clients` (Wayland, with `a_concealed_source_offers_and_answers_the_hint`
+  for the offer and its answer), `a_concealed_write_is_an_ordinary_one_on_the_web`
   (the expected failure), and `a_concealed_write_stays_out_of_the_windows_history` and
   `a_concealed_write_stays_out_of_the_macos_history`, run on those hosts.
 
