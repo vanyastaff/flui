@@ -309,7 +309,12 @@ pub(crate) fn describe(
     }
 }
 
-/// A slider's range as an `<input type="range">` holds it.
+/// How far from a whole number of steps a value may be and still be on its
+/// slider's step, relative to the count: the division rounds.
+const STEP_TOLERANCE: f64 = 1e-9;
+
+/// A slider's range as an `<input type="range">` holds it; `step` is `None`
+/// where the input takes any value.
 struct Slider {
     value: f64,
     min: f64,
@@ -334,11 +339,23 @@ fn movable_slider(node: &Node) -> Option<Slider> {
         finite(node.max_numeric_value())?,
     );
     let value = finite(node.numeric_value())?;
-    (min <= max).then_some(Slider {
-        value: value.clamp(min, max),
+    if min > max {
+        return None;
+    }
+    let value = value.clamp(min, max);
+    // A range input snaps its value to its step: one the step does not reach
+    // from the minimum would be shown as another, so the input takes any.
+    let step = finite(node.numeric_value_step())
+        .filter(|step| *step > 0.0)
+        .filter(|step| {
+            let steps = (value - min) / step;
+            (steps - steps.round()).abs() <= STEP_TOLERANCE * steps.abs().max(1.0)
+        });
+    Some(Slider {
+        value,
         min,
         max,
-        step: finite(node.numeric_value_step()).filter(|step| *step > 0.0),
+        step,
     })
 }
 
@@ -1114,6 +1131,15 @@ mod tests {
             assert_eq!(attribute(&input, name), value, "range input: {name}");
         }
         assert_eq!(input.value.as_deref(), Some("30"));
+        let mut off_step = slider(false);
+        off_step.set_numeric_value(32.0);
+        let input = describe(&off_step);
+        assert_eq!(
+            attribute(&input, "step"),
+            Some("any"),
+            "a value off the step is not snapped"
+        );
+        assert_eq!(input.value.as_deref(), Some("32"));
         let read_only = describe(&slider(true));
         assert_eq!(
             read_only.tag.name(),

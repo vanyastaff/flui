@@ -1758,20 +1758,25 @@ and writes only what changed between two specs.
   `<input type="range">`, which the browser adjusts for a screen reader where
   it adjusts no ARIA slider; the moved value asks for `SetValue` or a step,
   and the input shows the node's value until the tree publishes the moved
-  one. A node mirrored as another element later (a link given its address)
-  gets a new element in its old one's place, with its children. Both are out
-  of the Tab order (`tabindex="-1"`).
+  one. A value its step does not reach from the minimum gets `step="any"`,
+  as the input would snap it. A node mirrored as another element later (a
+  link given its address) gets a new element in its old one's place, with
+  its children. Both are out of the Tab order (`tabindex="-1"`).
 - **A node that takes a scroll offset is a scroller.** Its element scrolls
-  (`overflow: auto`) over an empty `flui-scroll-extent` as much larger than
+  (`overflow: auto`, no scrollbar to take its box, `direction: ltr` whatever
+  the page inherits) over an empty `flui-scroll-extent` as much larger than
   its box as its published extent is long, and is scrolled to its published
   position less its minimum, the order ADR-0273 publishes it in. Its
   children are published where they are seen, so each is placed as far into
   the content as it is scrolled. The browser scrolling it, for a screen
   reader's swipe or to reveal its cursor's element, asks for
-  `SetScrollOffset`; a scroll to where the node already is (the host's own,
+  `SetScrollOffset` and scrolls back to the published position until the node
+  publishes the new one; a scroll to where the node already is (the host's own,
   after a publish) asks for nothing. The host hears `scroll` in the capture
   phase, since it does not bubble. A scroller is scrolled once the host is
-  shown: one published while the canvas was hidden is scrolled when it shows.
+  shown: one published while the canvas, or an ancestor that leaves it no box,
+  was hidden is scrolled when it shows, which a `ResizeObserver` on the canvas
+  hears.
 - **The host is part of the canvas's focus area** (`EditorSlot::set_semantics`),
   so focus moving between the canvas, its editor and the host's elements is no
   window focus change. Keys on an element reach the window through

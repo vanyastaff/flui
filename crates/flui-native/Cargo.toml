@@ -322,6 +322,7 @@ web-sys = { version = "0.3", features = [
     # Rendering
     "CanvasRenderingContext2d",
     "DomRect",
+    "DomRectList",
     # Display
     "Screen",
     "MediaQueryList",

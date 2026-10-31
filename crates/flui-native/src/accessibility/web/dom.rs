@@ -47,6 +47,15 @@ const NODE_ATTRIBUTE: &str = "data-flui-node";
 
 /// The empty element whose size is a scroller's content.
 const EXTENT_TAG: &str = "flui-scroll-extent";
+/// A scroller's own style: it scrolls with no scrollbar, which would take
+/// part of the box the node's viewport is, and its offsets run from the
+/// left edge whatever direction the page inherits, as the node's scroll
+/// does.
+const SCROLLER_STYLE: [(&str, &str); 3] = [
+    ("overflow", "auto"),
+    ("scrollbar-width", "none"),
+    ("direction", "ltr"),
+];
 /// How far from 1 the canvas's own scale may be before the host takes it:
 /// layout rounds a box to a fraction of a pixel.
 const SCALE_TOLERANCE: f64 = 1e-3;
@@ -617,8 +626,10 @@ impl Page {
 
     /// The browser scrolled a scroller, for a screen reader's swipe or to
     /// reveal the element its cursor moved to: the offset it is scrolled to
-    /// is asked of the node. A scroll to where the node already is (the
-    /// host's own, after a publish) asks for nothing.
+    /// is asked of the node, and the scroller goes back to the published
+    /// offset until the node publishes the new one, so a scroll the node
+    /// refuses leaves nothing behind. A scroll to where the node already is
+    /// (the host's own, after a publish) asks for nothing.
     fn scrolled(&self, event: &web_sys::Event) {
         let Some((node, element)) = event_node(event) else {
             return;
@@ -641,6 +652,9 @@ impl Page {
             .node(node)
             .and_then(|mirrored| aria::scroll_offset(mirrored, left, top));
         drop(tree);
+        // The node scrolls, or refuses to: until it publishes where it is, the
+        // scroller stays where it was published, with its children.
+        scroll_to(&element, &scroll);
         if let Some(offset) = offset {
             self.submit(Work::Action(ActionRequest {
                 action: Action::SetScrollOffset,
@@ -773,7 +787,8 @@ impl Page {
         }
     }
 
-    /// Whether the canvas's own style hides it.
+    /// Whether the canvas is hidden: by its own style, or by an ancestor's
+    /// `display: none`, which leaves it no box.
     fn canvas_hidden(&self) -> bool {
         let Some(computed) = self
             .document
@@ -783,7 +798,9 @@ impl Page {
             return false;
         };
         let read = |property| computed.get_property_value(property).unwrap_or_default();
-        read("display") == "none" || read("visibility") != "visible"
+        read("display") == "none"
+            || read("visibility") != "visible"
+            || self.canvas.get_client_rects().length() == 0
     }
 
     fn host_element(&self) -> Option<HtmlElement> {
@@ -941,7 +958,7 @@ fn create(document: &Document, id: NodeId, spec: &ElementSpec) -> Result<HtmlEle
 
 /// Scroll `element` to `scroll`, unless it is there: the browser answers a
 /// scroll with a `scroll` event, which then asks for nothing.
-fn scroll_to(element: &HtmlElement, scroll: &Scroll) {
+fn scroll_to(element: &Element, scroll: &Scroll) {
     if !scroll.is_at(
         f64::from(element.scroll_left()),
         f64::from(element.scroll_top()),
@@ -995,13 +1012,17 @@ fn write_extent(element: &HtmlElement, scroll: Option<&Scroll>) -> Result<(), Js
     let style = element.style();
     let extent = element.query_selector(&format!(":scope > {EXTENT_TAG}"))?;
     let Some(scroll) = scroll else {
-        style.remove_property("overflow")?;
+        for property in SCROLLER_STYLE.map(|(property, _)| property) {
+            style.remove_property(property)?;
+        }
         if let Some(extent) = extent {
             extent.remove();
         }
         return Ok(());
     };
-    style.set_property("overflow", "auto")?;
+    for (property, value) in SCROLLER_STYLE {
+        style.set_property(property, value)?;
+    }
     let extent: HtmlElement = if let Some(extent) = extent {
         extent.unchecked_into()
     } else {
@@ -1094,9 +1115,11 @@ fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValu
 }
 
 /// A `MutationObserver` on the attributes that can show or hide the canvas,
-/// disconnected when dropped.
+/// and a `ResizeObserver` on its box, which an ancestor hidden or shown
+/// takes away or gives back; both disconnected when dropped.
 struct StyleObserver {
     observer: web_sys::MutationObserver,
+    resized: web_sys::ResizeObserver,
     _callback: Closure<dyn Fn()>,
 }
 
@@ -1112,8 +1135,17 @@ impl StyleObserver {
             .collect();
         options.set_attribute_filter(&filter);
         observer.observe_with_options(canvas, &options)?;
+        let resized = match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
+            Ok(resized) => resized,
+            Err(error) => {
+                observer.disconnect();
+                return Err(error);
+            }
+        };
+        resized.observe(canvas);
         Ok(Self {
             observer,
+            resized,
             _callback: callback,
         })
     }
@@ -1122,6 +1154,7 @@ impl StyleObserver {
 impl Drop for StyleObserver {
     fn drop(&mut self) {
         self.observer.disconnect();
+        self.resized.disconnect();
     }
 }
 

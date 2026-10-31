@@ -126,6 +126,8 @@ export function sliderValue(id) { return byId(id).value; }
 export function scrollNode(id, top) { byId(id).scrollTop = top; }
 export function scrollOf(id) { return byId(id).scrollTop; }
 export function topOf(id) { return byId(id).offsetTop; }
+export function scrollLeftOf(id) { return byId(id).scrollLeft; }
+export function styleScroller(style) { document.getElementById("scroller").style.cssText += style; }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -175,6 +177,10 @@ extern "C" {
     fn scroll_of(id: &str) -> f64;
     #[wasm_bindgen(js_name = topOf)]
     fn top_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = scrollLeftOf)]
+    fn scroll_left_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = styleScroller)]
+    fn style_scroller(style: &str);
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -722,9 +728,12 @@ fn moving_a_slider_s_input_asks_the_node_for_its_value() {
 
 /// A node a platform scrolls to an offset is a scroller over content as
 /// long as its extent, scrolled as far as the node is, its children where
-/// they are seen. The browser scrolling it asks the node for the offset;
-/// the host's own scroll after a publish asks for nothing, and a scroller
-/// published while the canvas was hidden is scrolled once it is shown.
+/// they are seen, its offsets from the left edge on a right-to-left page.
+/// The browser scrolling it asks the node for the offset and goes back to
+/// where the node is until the node publishes the new one; the host's own
+/// scroll after a publish asks for nothing, and a scroller published while
+/// the canvas, or an ancestor of it, was hidden is scrolled once it is
+/// shown.
 #[wasm_bindgen_test]
 async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
     const LIST: NodeId = NodeId(2);
@@ -733,6 +742,9 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
         let mut node = Node::new(Role::ScrollView);
         node.set_author_id("list");
         node.add_action(Action::SetScrollOffset);
+        node.set_scroll_x(100.0);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(200.0);
         node.set_scroll_y(position);
         node.set_scroll_y_min(0.0);
         node.set_scroll_y_max(400.0);
@@ -753,11 +765,14 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
         tree_id: TreeId::ROOT,
         focus: ROOT,
     };
-    let (_platform, window, accessibility) = open();
+    // A page written right to left, which the host inherits.
+    scrolled_canvas("direction: rtl; height: auto; overflow: visible", "");
+    let (_platform, window, accessibility) = open_on_page(RecordingWindowHandler::new());
     let actions = record_actions(&accessibility);
     accessibility.publish(under_root(vec![(LIST, list(100.0)), (ITEM, item(120.0))]));
     activate_placeholder();
     assert_eq!(scroll_of("list"), 100.0);
+    assert_eq!(scroll_left_of("list"), 100.0, "from the left edge");
     assert_eq!(top_of("item"), 220.0, "the item is where it is seen");
 
     scroll_node("list", 250.0);
@@ -774,9 +789,14 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
             Action::SetScrollOffset,
             LIST,
             Some(accesskit::ActionData::SetScrollOffset(
-                accesskit::Point::new(0.0, 250.0)
+                accesskit::Point::new(100.0, 250.0)
             ))
         )]
+    );
+    assert_eq!(
+        scroll_of("list"),
+        100.0,
+        "where the node is, until it moves"
     );
 
     accessibility.publish(partial(300.0));
@@ -799,6 +819,14 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
     style_canvas("; display: block");
     super::wait(50).await;
     assert_eq!(scroll_of("list"), 350.0, "scrolled once shown again");
+
+    style_scroller("; display: none");
+    super::wait(50).await;
+    accessibility.publish(partial(380.0));
+    style_scroller("; display: block");
+    super::wait(50).await;
+    assert_eq!(scroll_of("list"), 380.0, "scrolled once its ancestor shows");
     assert!(actions.lock().expect("the record").is_empty());
     window.close_now();
+    remove_scroller();
 }
