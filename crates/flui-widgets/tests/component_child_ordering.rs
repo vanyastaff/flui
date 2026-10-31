@@ -181,6 +181,7 @@ fn render_node_sized(laid: &LaidOut, wanted: Size, case: &str) -> RenderId {
 /// `id` and its render ancestors, nearest first.
 fn render_ancestry(laid: &LaidOut, id: RenderId) -> Vec<RenderId> {
     laid.pipeline_owner().with(|owner| {
-        std::iter::successors(Some(id), |&node| owner.render_tree().parent(node)).collect()
+        std::iter::successors(Some(id), |&node| owner.render_tree().parent(node))
+            .collect::<Vec<RenderId>>()
     })
 }

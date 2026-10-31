@@ -1772,7 +1772,7 @@ impl ElementTree {
                 self.get(*child)
                     .is_some_and(|node| node.parent() == Some(id))
             })
-            .collect()
+            .collect::<Vec<ElementId>>()
     }
 
     pub(crate) fn preflight_unmount(&self, ids: &[ElementId]) {
