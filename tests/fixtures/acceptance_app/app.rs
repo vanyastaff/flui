@@ -421,7 +421,7 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.attempt = cx.signal(self.first_attempt);
-        self.data = Some(Persisted::open(cx));
+        self.data = Some(Persisted::<Saved>::open(cx));
     }
 
     fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
