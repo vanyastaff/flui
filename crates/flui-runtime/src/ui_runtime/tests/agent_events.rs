@@ -368,3 +368,34 @@ fn a_frame_that_unwound_before_the_pipeline_counts_for_no_wait() {
         "no frame was rendered, so the wait stays parked"
     );
 }
+
+#[test]
+fn a_subscription_is_answered_before_the_platform_wake_runs() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&panic_on_wake);
+    let ui_runtime = new_runtime(Arc::new(move || {
+        assert!(!gate.load(Ordering::Acquire), "wake probe");
+    }))
+    .expect("a runtime");
+    let agent = ui_runtime
+        .semantics_agent(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut reply = agent
+        .subscribe(vec![EventFilter::new(EventKind::Semantics)])
+        .expect("the inbox has room");
+    panic_on_wake.store(true, Ordering::Release);
+
+    let unwound =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ui_runtime.drain_commands()));
+    assert!(unwound.is_err(), "the platform's wake panics");
+    assert!(
+        reply
+            .try_take()
+            .expect("the owner answered before the wake")
+            .is_ok(),
+        "the subscription is registered and answered"
+    );
+}

@@ -328,11 +328,13 @@ impl UiRuntime {
             .agent_events
             .borrow_mut()
             .subscribe(filters, semantics);
-        if wants_tree && result.is_ok() {
+        let subscribed = wants_tree && result.is_ok();
+        // Answered first: the redraw below reaches the platform's wake, which is user code.
+        send_reply(reply, None, result);
+        if subscribed {
             // Collection starts at the next frame: ask for one, as vending an agent does.
             self.request_redraw_for(state);
         }
-        send_reply(reply, None, result);
         true
     }
 
