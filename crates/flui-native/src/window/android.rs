@@ -1025,10 +1025,11 @@ mod insets {
     /// and the display cutout: from API 30 the bars as they are now, so a hidden
     /// bar (immersive or fullscreen content) reserves no space; below it the
     /// stable reading, which keeps a hidden bar's space. The keyboard is the
-    /// input method's insets (`Type.ime()`) from API 30; below it, what the
-    /// system window insets add at the bottom over the stable ones, which is
-    /// the input method under `adjustResize`. The system gesture regions are
-    /// read from API 29.
+    /// input method's insets (`Type.ime()`) from API 30; below it, the whole
+    /// system window bottom once it exceeds the stable one (the input method is
+    /// up under `adjustResize`), measured from the window's edge as `Type.ime()`
+    /// is, the way AndroidX's `WindowInsetsCompat` reads it. The system gesture
+    /// regions are read from API 29.
     pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
         crate::owner::android::activity::with_activity(app, |env, activity| {
             let window = env
@@ -1089,7 +1090,9 @@ mod insets {
                         &[],
                     )?
                     .i()?;
-                keyboard[2] = system_bottom.saturating_sub(safe_area[2]).max(0);
+                if system_bottom > safe_area[2] {
+                    keyboard[2] = system_bottom;
+                }
             }
             if api.since::<DisplayCutout>().is_some() && api.since::<InsetsByType>().is_none() {
                 let cutout = env
