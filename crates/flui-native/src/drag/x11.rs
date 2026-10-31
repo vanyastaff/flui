@@ -296,6 +296,40 @@ pub(crate) mod model {
         }
     }
 
+    impl Kind {
+        /// How many bytes the payload [`payload`](Self::payload) makes of
+        /// `bytes` holds, measured without making it: a fetch refuses text
+        /// past its limit before ill-formed or wider text grows as it
+        /// decodes.
+        pub(crate) fn decoded_len(&self, bytes: &[u8]) -> usize {
+            match self {
+                Self::Text(form) => form.decoded_len(bytes),
+                Self::Html => {
+                    let utf16 = |pairs: &[u8], unit: fn([u8; 2]) -> u16| {
+                        let units = pairs.as_chunks::<2>().0.iter().map(|pair| unit(*pair));
+                        let (len, last) = char::decode_utf16(units)
+                            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+                            .fold((0, None), |(len, _), char| {
+                                (len + char.len_utf8(), Some(char))
+                            });
+                        // A trailing NUL is dropped.
+                        len - usize::from(last == Some('\0'))
+                    };
+                    match bytes {
+                        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+                        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+                        _ => TextForm::Utf8String.decoded_len(bytes),
+                    }
+                }
+                // A URI list's trailing NUL is dropped.
+                Self::Bytes(TransferFormat::UriList) => {
+                    bytes.strip_suffix(&[0]).unwrap_or(bytes).len()
+                }
+                Self::Bytes(_) => bytes.len(),
+            }
+        }
+    }
+
     /// HTML markup: UTF-16 behind a byte-order mark, as Firefox writes it,
     /// UTF-8 otherwise, with any ill-formed sequence replaced and a
     /// trailing NUL dropped.
@@ -546,9 +580,10 @@ struct State {
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
-    /// The name the server gave each atom a source offered that has one, at
-    /// most [`MAX_NAMES`]: an atom the server cannot name is asked again.
-    names: HashMap<xproto::Atom, String>,
+    /// What the server answered for each atom a source offered, at most
+    /// [`MAX_NAMES`]: its name, or `None` for one it cannot name or names
+    /// past [`MAX_NAME_LEN`], so a source repeating it costs no lookup.
+    names: HashMap<xproto::Atom, Option<String>>,
 }
 
 /// What a step leaves to do once the lock is let go: completers to resolve
@@ -789,10 +824,10 @@ impl X11Drag {
         }
     }
 
-    /// The names of `atoms` the server has not named to the transfer yet,
-    /// asked in one batch.
+    /// What the server names `atoms` that the transfer has not asked about
+    /// yet, asked in one batch, each atom once.
     fn learn_names(&self, atoms: &[xproto::Atom]) {
-        let unknown: Vec<xproto::Atom> = {
+        let mut unknown: Vec<xproto::Atom> = {
             let state = self.state.lock();
             atoms
                 .iter()
@@ -800,6 +835,8 @@ impl X11Drag {
                 .filter(|atom| !state.names.contains_key(atom))
                 .collect()
         };
+        unknown.sort_unstable();
+        unknown.dedup();
         if unknown.is_empty() {
             return;
         }
@@ -808,15 +845,17 @@ impl X11Drag {
             .iter()
             .map(|&atom| xcb.get_atom_name(atom).ok())
             .collect();
-        let named: Vec<(xproto::Atom, String)> = unknown
+        // A refusal is kept as `None` too: the server sends a name whole
+        // before its length is known, so one is asked for once.
+        let named: Vec<(xproto::Atom, Option<String>)> = unknown
             .into_iter()
             .zip(cookies)
-            .filter_map(|(atom, cookie)| {
-                let reply = cookie?.reply().ok()?;
-                (reply.name.len() <= MAX_NAME_LEN)
-                    .then(|| String::from_utf8(reply.name).ok())
-                    .flatten()
-                    .map(|name| (atom, name))
+            .map(|(atom, cookie)| {
+                let name = cookie
+                    .and_then(|cookie| cookie.reply().ok())
+                    .filter(|reply| reply.name.len() <= MAX_NAME_LEN)
+                    .and_then(|reply| String::from_utf8(reply.name).ok());
+                (atom, name)
             })
             .collect();
         let mut state = self.state.lock();
@@ -903,7 +942,7 @@ impl X11Drag {
         let mut state = self.state.lock();
         let named: Vec<(xproto::Atom, &str)> = types
             .iter()
-            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_str())))
+            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_deref()?)))
             .collect();
         let offered: Arc<[(xproto::Atom, Kind)]> = model::representations(&named).into();
         if let Some(hover) = state.hover.as_mut().filter(|hover| hover.source == source) {
@@ -1171,9 +1210,13 @@ impl X11Drag {
                 }
                 Ok(Read::Done(bytes)) => {
                     let bytes = fetch.incremental.take().unwrap_or(bytes);
-                    let payload = fetch.wanted.kind.payload(bytes);
-                    let len = usize::try_from(payload.byte_len()).unwrap_or(usize::MAX);
-                    Some(model::too_large(len, limit).map_or(Ok(payload), Err))
+                    // Measured before it is made, which can take more than
+                    // the bytes read.
+                    let len = fetch.wanted.kind.decoded_len(&bytes);
+                    Some(
+                        model::too_large(len, limit)
+                            .map_or_else(|| Ok(fetch.wanted.kind.payload(bytes)), Err),
+                    )
                 }
             };
             if let Some(outcome) = outcome {

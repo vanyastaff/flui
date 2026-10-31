@@ -202,10 +202,23 @@ fn types_offer_each_format_once() {
 }
 
 /// Each kind's bytes make its payload: text decoded, HTML in UTF-8 or
-/// behind a UTF-16 mark, a URI list as its bytes without a trailing NUL.
+/// behind a UTF-16 mark, a URI list as its bytes without a trailing NUL;
+/// each measured exactly before it is made.
 #[test]
 fn bytes_make_their_payload() {
-    let table: [(&str, Kind, Vec<u8>, TransferPayload); 5] = [
+    let table: [(&str, Kind, Vec<u8>, TransferPayload); 7] = [
+        (
+            "ill-formed utf-8 text",
+            Kind::Text(TextForm::Utf8String),
+            vec![b'a', 0xFF, 0xFE, b'b'],
+            TransferPayload::Text("a\u{FFFD}\u{FFFD}b".to_owned()),
+        ),
+        (
+            "utf-16le html with a lone surrogate and a trailing NUL",
+            Kind::Html,
+            vec![0xFF, 0xFE, b'x', 0, 0x00, 0xD8, 0, 0],
+            TransferPayload::Html("x\u{FFFD}".to_owned()),
+        ),
         (
             "latin-1 text",
             Kind::Text(TextForm::Latin1),
@@ -241,6 +254,8 @@ fn bytes_make_their_payload() {
         ),
     ];
     for (case, kind, bytes, expected) in table {
+        let len = u64::try_from(kind.decoded_len(&bytes)).expect("a small payload");
+        assert_eq!(len, expected.byte_len(), "{case}: measured as made");
         assert_same!(kind.payload(bytes), expected, "{case}");
     }
 }
@@ -1043,11 +1058,10 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
 }
 
 /// A type the server cannot name, or names past the longest media type, is
-/// neither kept nor offered: a client sending fresh invalid atoms, or atoms
-/// with 64 KiB names, grows nothing in the transfer, and the type the server
-/// names as a media type still offers.
+/// not offered, and is kept as refused, so a source repeating it costs no
+/// second lookup; the type the server names as a media type still offers.
 #[test]
-fn a_type_unnamed_or_named_past_a_media_type_is_not_kept() {
+fn a_type_unnamed_or_named_past_a_media_type_is_refused_once() {
     let _server = SERVER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1066,18 +1080,21 @@ fn a_type_unnamed_or_named_past_a_media_type_is_not_kept() {
         .expect("interned")
         .atom;
     let dropped = [0x0FFF_FFF0, long, 0x0FFF_FFF1];
+    // The long name listed again and again is one lookup.
     source.enter(
         target.xid,
-        &[dropped[0], atoms.utf8, dropped[1], dropped[2]],
+        &[
+            dropped[0], atoms.utf8, dropped[1], dropped[1], dropped[1], dropped[2],
+        ],
     );
     source.position(target.xid, (20, 30), 10, atoms.copy);
     source.expect_message(&target, atoms.status);
     let names = &target.drag.state.lock().names;
     assert!(
-        dropped.iter().all(|atom| !names.contains_key(atom)),
-        "kept {names:?}"
+        dropped.iter().all(|atom| names.get(atom) == Some(&None)),
+        "not refused: {names:?}"
     );
-    assert!(names.contains_key(&atoms.utf8));
+    assert!(matches!(names.get(&atoms.utf8), Some(Some(_))));
     let heard = target.heard();
     let Some(DragDropEvent::Entered { offer, .. }) = heard.first() else {
         panic!("not entered: {heard:?}");
