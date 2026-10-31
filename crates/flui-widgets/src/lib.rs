@@ -123,6 +123,7 @@ mod overlay;
 pub mod paint;
 pub mod physical_model;
 // The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+mod reorderable;
 pub mod router;
 pub mod scroll;
 pub mod semantics;
@@ -306,6 +307,10 @@ pub use scroll::{
 };
 pub use semantics::{
     ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
+};
+pub use reorderable::{
+    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
+    ReorderableList, ReorderableListState,
 };
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use swipe::{

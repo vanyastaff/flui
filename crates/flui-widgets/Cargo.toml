@@ -306,6 +306,7 @@ layers = [
     ],
     [
         "swipe",
+        "reorderable",
     ],
     [
         "icon",
