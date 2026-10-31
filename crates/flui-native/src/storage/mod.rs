@@ -43,7 +43,7 @@ mod user_dirs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_store::FileStore;
 pub(crate) use headless::HeadlessData;
-pub use memory_store::MemoryStore;
+pub(crate) use memory_store::MemoryStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
 pub(crate) use user_dirs::UserDataDirs;
@@ -85,7 +85,7 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
 }
 
 /// Where a platform keeps an application's values: a [`FileStore`] under
-/// its data roots, or a [`MemoryStore`] on a host with no disk of its own to
+/// its data roots, or values in memory on a host with no disk of its own to
 /// write to (headless, unless a test gives it a root).
 ///
 /// Its calls are the [`FileStore`]'s: blocking on native targets, so the
@@ -112,7 +112,7 @@ impl DataStore {
 
     /// The values `store` keeps; clones of it see the same values.
     #[must_use]
-    pub fn in_memory(store: MemoryStore) -> Self {
+    pub(crate) fn in_memory(store: MemoryStore) -> Self {
         Self {
             backing: Backing::Memory(store),
         }

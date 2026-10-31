@@ -8,7 +8,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use flui_native::storage::{DataDirs, FileStore, MemoryStore, data_dirs};
+use flui_native::storage::{DataDirs, FileStore, data_dirs};
 use flui_native::{HeadlessPlatform, Platform};
 use flui_platform::{AppDataDir, StorageError, StorageName, StoredVersion, WriteMode};
 
@@ -496,7 +496,10 @@ fn a_headless_data_root_keeps_values_on_disk_under_it() {
 /// conflict, the two scopes keep equal names apart, a copy aside takes the
 /// first free number in its scope, and a value over the limit is too large.
 fn the_memory_store_compares_and_copies_as_the_file_store_does() {
-    let store = MemoryStore::new();
+    let app = AppDataDir::try_new("dev.flui.headless-semantics").expect("a directory name");
+    let store = HeadlessPlatform::new()
+        .data_store(&app)
+        .expect("headless always has a store");
     let first = store
         .write(
             &NOTES,

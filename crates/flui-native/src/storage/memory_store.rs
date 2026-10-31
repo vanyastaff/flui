@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 /// Clones share the values, so the host that owns it keeps them across the
 /// runs on it. Each call answers at once.
 #[derive(Clone, Default)]
-pub struct MemoryStore {
+pub(crate) struct MemoryStore {
     values: Arc<Mutex<Values>>,
 }
 
@@ -31,19 +31,13 @@ struct Values {
 }
 
 impl MemoryStore {
-    /// An empty store.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Read the value stored under `name`, as
     /// [`FileStore::read`](super::FileStore::read) does.
     ///
     /// # Errors
     ///
     /// [`StorageError::TooLarge`] for a value over `limit` bytes.
-    pub fn read(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
+    pub(crate) fn read(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
         let values = self.values.lock();
         let Some(bytes) = values.stored.get(name) else {
             return Ok(Stored {
@@ -68,7 +62,7 @@ impl MemoryStore {
     ///
     /// [`StorageError::Conflict`] when the stored version is not the base of
     /// a [`WriteMode::IfUnchanged`] write.
-    pub fn write(
+    pub(crate) fn write(
         &self,
         name: &StorageName,
         bytes: &[u8],
@@ -103,7 +97,7 @@ impl MemoryStore {
     /// # Errors
     ///
     /// [`StorageError::NotFound`] when `name` holds no value.
-    pub fn copy_aside(&self, name: &StorageName) -> Result<CopiedAside, StorageError> {
+    pub(crate) fn copy_aside(&self, name: &StorageName) -> Result<CopiedAside, StorageError> {
         let mut values = self.values.lock();
         let bytes = values
             .stored
