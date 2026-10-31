@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use flui_foundation::ManualClock;
 use flui_protocol::{
-    ActionName, ActionRequest, Condition, ErrorCode, EventFilter, EventKind, Locator, Retry,
-    UnsettledReason, WaitOutcome, WaitParams, WindowId,
+    ActionName, ActionRequest, Condition, ErrorCode, Locator, Retry, UnsettledReason, WaitOutcome,
+    WaitParams, WindowId,
 };
 
 use super::agent_semantics::{counter, find, frame, read};
@@ -235,24 +235,6 @@ fn a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_e
         parked.iter_mut().all(|reply| reply.try_take().is_none()),
         "the waits already admitted are untouched"
     );
-}
-
-#[test]
-fn a_wait_on_events_is_refused_until_the_event_stream_exists() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
-    let mut reply = wait(
-        &ui_runtime,
-        &agent,
-        Condition::Event(EventFilter::new(EventKind::Frame)),
-        None,
-    );
-    let _report = ui_runtime.drain_commands();
-
-    let error = reply
-        .try_take()
-        .expect("refused at the drain")
-        .expect_err("no event can satisfy it yet");
-    assert_eq!(error.code(), ErrorCode::InvalidArgument);
 }
 
 #[test]

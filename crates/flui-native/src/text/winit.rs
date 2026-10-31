@@ -75,6 +75,17 @@ impl PlatformTextInput for WinitTextInput {
         );
     }
 
+    /// winit names one purpose an input method shapes its suggestions by:
+    /// a protected field is a password, which the input method neither
+    /// shows nor learns from; winit has no other purpose a field's maps to.
+    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
+        self.window.set_ime_purpose(if status.protected {
+            winit::window::ImePurpose::Password
+        } else {
+            winit::window::ImePurpose::Normal
+        });
+    }
+
     /// A workaround: winit 0.30 has no call that ends a preedit without
     /// committing it, and disabling IME is the one that drops it
     /// ([`Window::set_ime_allowed`](https://docs.rs/winit/0.30/winit/window/struct.Window.html#method.set_ime_allowed)).

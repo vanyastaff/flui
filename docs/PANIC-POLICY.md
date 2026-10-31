@@ -56,14 +56,17 @@ unwind path.
 
 ## Destructor failures and unwinding
 
-A container that owns user values retires them outside its borrows, stops
-dropping them after the first failure in the same operation, and never drops
-them while the thread is already panicking: it retains (leaks) them instead,
-because a second panic during unwinding aborts the process. Framework-owned
-handles and non-last single-threaded `Rc` clones are dropped normally; a
-thread-shared `Arc` clone is retained. The full
-rule and its costs are in
-[ADR-0127](adr/ADR-0127-exceptional-path-retention.md).
+A container that owns user values withdraws each one and releases its borrows
+and locks before the value's destructor runs. After a caught failure in the
+same operation it keeps destroying what it withdrew, each destructor under the
+operation's containment, so a destructor that panics there is a competing
+failure and the first one stays. A destructor that panics while the thread is
+already unwinding aborts the process, as in std; FLUI does not leak values or
+panic payloads to prevent it
+([ADR-0281](adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
+Not implemented everywhere yet: crates still retain such values on failed
+paths, as [ADR-0127](adr/ADR-0127-exceptional-path-retention.md) required,
+until ADR-0281's migration removes those sites.
 
 ## Callback panics and exit codes
 
@@ -95,10 +98,10 @@ the AppKit and UIKit entries that have none, the end of the process
 | Application code at exit (a destructor, `on_quit`) that blocks until `EXIT_WATCHDOG` (15 s from the start of the exit) | the watchdog writes the flush registry, then ends the process with 124 (`EXIT_CODE_HUNG`), without destructors |
 | A `BUG:` invariant inside an application operation | contained like any panic on the paths above, with `internal_invariant` set in its report |
 | A panic that reaches an OS entry (`os_entry`): a framework defect, never application code | the entry's answer to the OS; at the Win32 window procedure, the cloak hook and the AppKit and UIKit entries without one, an abort without the exit flush |
-| A value whose own fields panic twice in their drop glue | abort, a documented limit (ADR-0127) |
+| A destructor that panics while the thread is already unwinding | abort, as in std (ADR-0281) |
 
 The first failure is the one reported and resumed; later ones are logged and
-their payloads retained. A terminal failure waits in the host's terminal
+their payloads dropped. A terminal failure waits in the host's terminal
 slot until the exit order has written what the application persisted; it is
 then resumed with `resume_unwind`, which does not run the panic hook again.
 
@@ -110,7 +113,7 @@ the file on disk untouched; the document's status becomes `Failed` with
 `PersistError::Panicked { during: CodecStep::Encode, message }`, and the next
 `set` works. A panic in `decode` leaves the file untouched and the document
 not loaded, and `load` may run again. The first failure stays in the status
-until the next success. Its payload is retained per ADR-0127. A codec panic
+until the next success. Its payload is dropped (ADR-0281). A codec panic
 is reported in the document's status, never as a `CallbackPanic`, and never
 ends the process.
 

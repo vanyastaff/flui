@@ -3,9 +3,10 @@
 - **Статус:** Утверждена владельцем 2026-10-28; исполнение
 - **Design:** [design.md](design.md) (раздел «Решения владельца 2026-10-28»); требования —
   [requirements.md](requirements.md); контракт закрытия — [teardown/tasks.md](../teardown/tasks.md)
-- **Итог:** сделаны P1, P2, P3, P10; P6 сделана в части; P7, P8, P9 (Notes) устарели и
-  заменены P10–P12. Осталось пять задач: P4, P5 и остаток P6 строятся на шве
-  возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52.
+- **Итог:** сделаны P1, P2, P3, P10, P11; P6 сделана в части; P7, P8, P9 (Notes) устарели и
+  заменены P10–P12. Осталось четыре задачи: P4, P5 и остаток P6 строятся на шве
+  возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52; P12 ждёт
+  flui-driver FD11.
 - **Приложение приёмки** — задача P10 этой спеки. Его строки пишут три спеки: persistence (P11),
   teardown (T18), text-ime (T11).
 
@@ -146,14 +147,14 @@ graph LR
 | R7 | `deleted_note_then_crash_drops_the_draft_and_trims_the_stack` | P11 | C |
 | R8 | `unreadable_session_starts_home_at_zero` | P11 | C |
 | R9 | `first_launch_starts_from_initial_state_without_an_error` | P11 | C |
-| R10 | `reload_replaces_a_pending_load` (счёт `live_requests`) | P11 | C |
+| R10 | `reload_replaces_a_pending_load` (счёт держателей ворот, `live_requests`) | P11 | C |
 | R11 | `a_held_write_keeps_typing_and_scrolling_live`; `a_blocked_store_keeps_frames_and_input_live` | P11; teardown T4 | C, L |
 | R12 | `user_close_waits_for_an_in_flight_save`; прогон | P5; P12 | L, D |
 | R13 | `hidden_writes_the_session_and_resume_does_not_reread`; сворачивание | P11; P12 | C, D |
-| R14 | `close_with_a_failed_write_requires_a_decision`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
+| R14 | `close_with_a_failed_write_requires_a_decision`, `close_during_a_save_waits_for_it`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
 | R15 | `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit`; `taskkill /F` | P5; P12 | L, D |
 | R16 | `busy_retry_follows_the_runtime_clock` | P5 | L |
-| R17 | `corrupt_bytes_are_kept_until_start_over` | P5 | L |
+| R17 | `corrupt_bytes_are_kept_until_start_over`; `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones`, `each_load_failure_offers_its_way_on` | P5; P11 | L, C |
 | R18 | `inaccessible_is_reported_apart_from_corrupt`; `directory_in_place_of_the_file_is_inaccessible`; прогон | P4; P2 (сделано); P12 | L, D |
 | R19 | `first_write_creates_the_directory`; `a_runner_write_lands_under_the_configured_roots` | P2 (сделано); P6 | L |
 | R20 | `retry_after_failure_publishes_the_latest_value`; `a_failed_write_keeps_its_bytes_until_replaced_or_flushed` | P5; teardown T4 | L |
@@ -196,5 +197,77 @@ graph LR
 - [ ] P4 — загрузка на шве (после LY50, LY52)
 - [ ] P6 — остаток: реестр сброса хоста (после LY52)
 - [ ] P5 — запись и удержание закрытия
-- [ ] P11 — строки приёмки persistence
+- [x] P11 — строки приёмки persistence. Четыре PR: (a) данные, (b) сеанс, (c) экраны отказов
+  и `Listenable` у `Persisted` (форма одобрена координатором 2026-10-31: уведомление только
+  при настоящем изменении `status()`/`committed()`, изменения одной доставки — одним вызовом,
+  слушатель может звать `set`/`retry` без рекурсии), (d) решение при закрытии.
+  - [x] (a) данные: заметки и compact-флаг — документ `Saved` (`notes`, JSON через `serde` и
+    `serde_json` consumer'а; `facade_consumer` добавляет их в зависимости). `Loader` стал
+    воротами перед загрузкой; `FutureBuilder` несёт `Rc<Saved>`, состояние экранов (`Loaded`)
+    начинается с загруженного; «Save note», «New note» и переключатель compact пишут
+    документ. Строки (`persistence.rs`): `saved_title_survives_restart_and_others_stay` (R1),
+    `compact_rows_survive_restart` (R2), `first_launch_starts_from_initial_state_without_an_error`
+    (R9: ничего не пишет при чтении, первая правка пишет начальное состояние),
+    `a_note_id_is_never_reused_across_a_restart`. Откаты — `set` убран, экраны с `initial()`
+    вместо загруженного — роняют каждую строку, кроме R9 во втором откате.
+  - [x] (b) сеанс: документ `Session` (`machine_local("session")`: стек путей, смещение
+    списка, черновик с его заметкой, `data_revision: Option<Revision>` данных через `serde` facade).
+    Загрузка — данные, затем сеанс; нечитаемый сеанс — `start_over` и `initial()`. `Session::restore`:
+    стек — только если все пути разбираются, начинается с Home и все заметки есть, иначе
+    Home; черновик — только при той же ревизии, с существующей заметкой и если выше не
+    открыта другая заметка, иначе открытая заметка редактирует сохранённый заголовок;
+    смещение — если конечное, раскладка зажимает. Черновик, `editing` и смещение задаются в
+    `init_state` до первой раскладки, стек — `Router::from_stack`. `Place` пишет сеанс от
+    слушателей `RouterHandle` (подписка со страницы Home, снимается в её `dispose`),
+    черновика и данных (новая ревизия после Save), без записи при неизменном сеансе;
+    слушатели держат его слабо. «Delete note» в редакторе. `editing` стал `Rc<Cell>`:
+    слушатели без контекста. Строки: `unsaved_draft_reopens_its_note_without_changing_the_list`
+    (R3), `settings_over_editor_restores_and_backs_out_twice` (R4),
+    `list_offset_and_route_are_restored_on_the_first_loaded_frame` (R5, ворота загрузки,
+    покадрово), `failed_data_load_leaves_session_unread_and_unwritten` (R6),
+    `deleted_note_then_crash_drops_the_draft_and_trims_the_stack` и таблица
+    `restored_values_that_no_longer_fit_fall_back` (R7: смещение за концом и до начала, путь
+    без маршрута, стек не от Home, черновик под другой заметкой, другая ревизия),
+    `unreadable_session_starts_home_at_zero` (R8). Откаты — без проверки заметок стека, без
+    проверки Home внизу, без сравнения ревизий, без проверки открытой заметки, без
+    `start_over` — роняют свою строку. Зависит от `Listenable` у `RouterHandle` и `Persisted`
+    и от `Persisted::revision`.
+    `Place` слушает и смещение списка (прокрутка без навигации пишет сеанс,
+    `a_list_scrolled_and_left_reopens_at_its_offset`), и сам сеанс: запись, отказанная, пока
+    свежий старт копирует нечитаемый сеанс, делается, когда он устоится
+    (`a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored`, на
+    `MemoryStorage::hold_copies`). Без каждого слушателя его строка падает.
+  - [x] (c) экраны отказов: загрузка данных отличает нечитаемые заметки (`Corrupt`, `Decode`)
+    от прочих отказов (`LoadFailure`); экран «Load failed» даёт Retry, а нечитаемым заметкам —
+    ещё «Start over» (`start_over`; заметки показываются, когда свежий старт сохранён и
+    документ принимает правки, а отказ копии даёт Retry, который зовёт `retry`).
+    Без хранилища (`Unavailable`) заметки живут в памяти. Баннер на `AnimatedBuilder` над
+    `Persisted`: «Storage is unavailable», «Read only», «Saving failed» с «Retry saving»
+    (`retry`). На экране загрузки — Reload (следующая попытка, прежняя загрузка брошена).
+    Строки: таблица `each_load_failure_offers_its_way_on` (повреждённые байты, неразбираемое
+    тело, новая версия, недоступный файл: Start over только у первых двух, файл не тронут),
+    `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones` (R17),
+    `start_over_shows_the_notes_once_they_take_edits`, `a_start_over_whose_copy_fails_offers_retry`,
+    `start_over_drops_the_place_taken_in_the_notes_given_up` (место отброшенных заметок не
+    восстанавливается над свежими: ревизия и id заметок могут совпасть),
+    `without_storage_the_notes_run_in_memory_with_a_banner`,
+    `a_failed_save_shows_a_banner_whose_retry_stores_the_notes` (R20),
+    `reload_replaces_a_pending_load` (R10), `a_held_write_keeps_typing_and_scrolling_live`
+    (R11). `AppRun::shows_starting` сверяет начало текста: прежние проверки
+    `!shows("Load failed: ")` сравнивали весь текст и не могли упасть. Откаты — Start over у
+    всех отказов, без ветки `Unavailable`, заметки до конца свежего старта, Retry без
+    `retry`, без `start_over`, баннер без «Saving failed», «Retry saving» без `retry` —
+    роняют свою строку. Слушатели `Persisted` узнают и об изменении, вернувшемся к сказанному
+    до доставки (`listeners_hear_a_change_that_came_back_before_the_delivery`).
+  - [x] (d) решение при закрытии: экраны держат `CloseGuard` и `CloseWatch` (задача на
+    `AsyncDriver` будит `ChangeNotifier` на каждом `CloseGuard::changed`); при записанном
+    закрытии — «Close without saving» (`discard_and_close`) и «Keep open» (`stay_open`),
+    Retry saving на баннере закрывает окно после успешной записи. В набор тестов добавлен
+    `LaidOut::is_closed` (закрытие, выполненное сразу, после снятия удержания или решением).
+    Строки: `close_with_a_failed_write_requires_a_decision` (R14),
+    `close_during_a_save_waits_for_it`, `hidden_writes_the_session_and_resume_does_not_reread`
+    (R13, хар.: сеанс пишется на каждом изменении, `set_window_visible`), в flui-testing
+    `a_decided_close_is_carried_out_past_the_hold`, `a_close_recorded_on_the_first_loaded_frame_is_shown`
+    (первое ожидание `changed()` берётся до первого чтения). Откаты — без панели решения, кнопки без
+    `discard_and_close` или `stay_open` — роняют строку R14.
 - [ ] P12 — нативный прогон (после flui-driver FD11)

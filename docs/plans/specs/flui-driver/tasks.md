@@ -2,8 +2,8 @@
 
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
-  locate and actionability jobs (#1968) and the snapshot delta (#1980) have merged, the waits are
-  in review; the events and the inspect jobs follow). FD28, FD29 and FD30 can start now.
+  locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
+  merged, the events (#2139) have merged, the inspect jobs are in review). FD28, FD29 and FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -373,17 +373,45 @@ graph LR
     `a_timer_the_window_waits_on_is_named_with_when_it_is_due`,
     `a_parked_wait_is_not_a_reason_the_window_has_not_settled`,
     `a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_error`,
-    `a_wait_on_events_is_refused_until_the_event_stream_exists`,
     `a_window_that_closes_first_answers_its_waits_gone`.
   - Skipping the frame evaluation, the deadline wake, the cap, the close answer and the redraw
     request for `Frames` each fails a test.
   - As built: `AgentWindow::wait` and the same on `SemanticsAgent`; `UiRuntime::next_wake` counts
-    a parked wait's deadline. Left for the event slice: the `Event` condition and the
-    subscription fan-out. Left for the scheduler's decode service (s4-10): `image_loads` among
+    a parked wait's deadline. Left for the scheduler's decode service (s4-10): `image_loads` among
     the unsettled causes, since the runtime cannot see image loads. Evaluating after input
     delivery needs nothing more: the tree changes only in a frame. Moving an act-and-read
     completion into `drive_frame` right after the frame makes it independent of the commit anchor,
     which also runs at the end of a platform entry.
+- **Evidence, events (2026-10-31):**
+  - `flui-semantics`'s `tests/wait`: the condition table gains the event rows (emitted, another
+    kind, nobody emitted, another window, this window, composite with a tree part).
+  - `flui-runtime`'s `ui_runtime::tests::agent_events`:
+    `a_subscriber_hears_a_frame_then_the_tree_it_published`,
+    `a_filter_selects_the_kinds_and_the_window_it_names`,
+    `a_subscription_names_at_least_one_event`,
+    `a_reader_that_falls_behind_is_told_how_many_events_it_missed`,
+    `a_window_admits_a_bounded_number_of_subscriptions_and_a_dropped_stream_frees_its_place`,
+    `a_closing_window_ends_every_stream_after_a_last_window_event`,
+    `a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits`.
+  - Dropping the gap, the subscription cap, the dropped-stream check, the end of the streams on
+    close and the emission after a frame each fails a test.
+  - As built: `AgentWindow::subscribe` and the same on `SemanticsAgent`, answering an
+    `EventStream` / `AgentEvents` with `try_next`, `recv_timeout` and `is_finished`. Left for
+    FD6: `input` events (the journal). Left for the announcement fan-out: `announcement` events.
+    `frame.time_us` is not filled.
+- **Evidence, inspect (2026-10-31):**
+  - `flui-foundation`'s `inspect::a_node_reference_prints_and_parses_as_one_text`.
+  - `flui-runtime`'s `ui_runtime::tests::agent_inspect`: `each_tree_answers_with_its_own_handles`,
+    `a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window`,
+    `a_reference_to_another_window_is_unknown_and_never_read_here`,
+    `a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone`,
+    `the_limits_cut_the_tree_and_say_so`, `a_deeper_level_adds_fields`,
+    `the_layers_are_read_from_the_next_scene_the_window_shows`,
+    `a_window_parks_a_bounded_number_of_layer_reads`,
+    `a_window_that_closed_answers_gone`.
+  - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
+    `inspect.layers` parks on the window and is answered from the next scene it shows; the wire
+    ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
 

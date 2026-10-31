@@ -122,6 +122,43 @@ recordings of native traces. Every concrete `RenderBox`/`RenderSliver` has a
 `render_object_harness` row. Cases that differ only in input join an existing table test, and a
 crate's integration tests are modules of one `tests/main.rs`. Tests are cited by name in docs and ADRs: `rg` before renaming one.
 
+## Before each push
+
+Run this over your own diff before every push, a review fix included. Each line is a question
+with an answer you can point to in the code; the reviewers ask the same ones.
+
+1. **User code.** List every point where the diff runs code it does not own: a callback, a
+   wake, a waker's `clone` or `drop`, the `Drop` of a replaced or captured value, `Into`,
+   `Display`, a `tracing` event (a subscriber is user code). At each one, are borrows and locks
+   released and the state committed?
+2. **A panic at each of those points.** What state is left, which flag stays set, does the next
+   operation still work, is the first failure kept when two points panic? A destructor that
+   panics while the thread is already unwinding aborts, as in std (ADR-0281): no guard for it.
+3. **Accepted work.** Every request, waker, obligation and hold the diff accepts is either
+   delivered or refused with a typed error on every exit: success, panic, cancel, owner
+   retirement, a full queue.
+4. **Asynchronous answers.** An answer is matched to its request by a ticket or generation, not
+   by "the current one". Check an answer that arrives late, after a write, or after focus or the
+   owner moved.
+5. **Identity.** A cache or coalescing key holds everything the result depends on (client, seat,
+   document, version), compared by typed ID.
+6. **Untrusted input.** Size checked before decoding or copying, how many copies of one payload
+   live at once, every queue and cache bounded.
+7. **Parity.** Policy (a limit, normalization, a version floor) lives at the seam. If a backend
+   holds it, every backend has it, winit and headless included.
+8. **Mirrors.** A diff that syncs a second copy of state lists every field of the source and
+   every operation that changes it: reorder, removal, hiding, reversed direction, the browser's
+   own normalization.
+9. **Arithmetic.** No overflow in intermediate values, no non-finite geometry published, units,
+   clocks and 0- versus 1-based indexes match.
+10. **The test fails without the fix.** Stash the fix, run the new test, see it fail; it goes
+    through the public API.
+11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
+    production caller or a named follow-up, no requirement or task IDs in code, `docs/gaps.md`
+    and `docs/platform-parity.md` updated with a platform change.
+12. **A review finding fixes its class.** Apply items 1–3 to every similar point in the PR, not
+    only the line the reviewer named.
+
 ## Where to read next
 
 `docs/architecture.md` (the code as it is), `docs/adr/` (the decisions), `docs/testing.md` (test
@@ -142,8 +179,8 @@ by, with the better shape. What this repository keeps getting wrong:
   stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at defaults;
 - a pixel claim whose readback samples don't distinguish fixed from broken; a `wgpu::Instance`
   created apart from its surface;
-- state owned by the process instead of a UI runtime; native-platform changes without a shown
-  run; event translation tested only synthetically;
+- state owned by the process instead of a UI runtime; event translation tested only
+  synthetically;
 - shapes transliterated from another framework (Dart-style names, setter/getter pairs);
 - a `type` alias for values that are easy to confuse, where a newtype makes the mix-up a type
   error; a `new` returning `Result` or `Option` (that constructor is `try_new`);
@@ -152,3 +189,7 @@ by, with the better shape. What this repository keeps getting wrong:
 - `SAFETY:` comments that restate the operation instead of naming the invariant;
 - workflow actions not pinned to a full SHA, cargo without `--locked`, caches saved off `main`;
 - an exemption (`deny.toml` skip, `typos.toml` word, `#[expect]`) without its reason.
+
+Not a finding: a native or GPU path not yet run on its platform. CI runs Linux and wasm32 only;
+the PR body names the platforms the change still needs a run on, and the owner runs them from a
+device list.

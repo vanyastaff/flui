@@ -932,9 +932,10 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     assert_eq!(scene.handles(), 0);
 }
 
-/// Frame requests that fail both as the focus leaves the area (taking its
-/// handles away) and as the area then asks to rebuild are reported, not
-/// raised into the code that moved the focus, and the handles still go.
+/// Every frame request failing as the focus leaves the area (the focus
+/// nodes' own, the area's as it takes its handles away, and its rebuild) is
+/// reported, not raised into the code that moved the focus, and the handles
+/// still go.
 ///
 /// Red-check: let a failing frame request unwind into its caller (the
 /// focus move raises the failure).
@@ -950,11 +951,9 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
-            // The focus nodes' own rebuild requests come first and pass; the
-            // area's, as it hears the focus leave, fail.
             if arm.load(Ordering::SeqCst) {
                 let request = count.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(request <= 2, "frame request {request} failed");
+                panic!("frame request {request} failed");
             }
         });
     });
@@ -1125,4 +1124,101 @@ pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
         !scene.laid.scheduler().is_frame_scheduled(),
         "a steady layout schedules no frame"
     );
+}
+
+/// The touch that long-pressed a word goes on to extend the selection by
+/// words as it moves, keeping that word whichever way it goes, and the
+/// handles follow; the release ends the extension where it lands.
+///
+/// Red-check: leave the long press without a drag (the selection stays
+/// "beta"); report the moves as a pointer's (the cause is not touch).
+pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
+    let heard: Heard = Rc::default();
+    let causes = Rc::new(RefCell::new(Vec::new()));
+    let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .handles(Marked::default())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            noted.borrow_mut().push(change.cause);
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert_eq!(scene.handles(), 2);
+
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(
+        causes.borrow().last(),
+        Some(&SelectionChangeCause::User(SelectionInput::Touch))
+    );
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("alpha beta"));
+
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(scene.handles(), 2);
+    let ends = scene
+        .laid
+        .render_property(scene.paragraph(), "selection_handles")
+        .expect("the paragraph reports its handles");
+    assert!(!ends.contains("None"), "{ends}");
+}
+
+/// A listener that moves the focus away during a long press's extension
+/// ends it: the same touch moving on or releasing selects nothing more and
+/// leaves the focus where the listener put it.
+///
+/// Red-check: keep the extension when the focus leaves (the release takes
+/// the focus back and selects "alpha beta").
+pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .on_selection_changed(move |_cx, change| {
+            let selected = change
+                .selected
+                .as_ref()
+                .map(|selected| selected.text.clone());
+            if selected.as_deref() == Some("beta gamma") {
+                let _ = moved.request_focus();
+            }
+            recorded.borrow_mut().push(selected);
+        })
+        .handles(Marked::default());
+    let app = WidgetsApp::new(Column::new((
+        area,
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
+    assert_eq!(scene.handles(), 0);
 }

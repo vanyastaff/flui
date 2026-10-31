@@ -2037,7 +2037,11 @@ Local cross-target clippy compiles these native paths; it does not execute their
 OS getters or external-setting notifications.
 
 Linux winit owners use one Settings portal connection on the existing background
-executor. Setting and service-owner subscriptions precede the initial read;
+executor. The calls are awaited there, but the connection's own I/O runs on
+zbus's `zruntime` thread: the workspace builds `zbus` without its `tokio`
+feature, so a capability crate that talks D-Bus reaches no Tokio (ADR-0154 §1),
+at the cost of that one extra thread. A `zbus` service handler runs on that
+thread too, outside any Tokio runtime. Setting and service-owner subscriptions precede the initial read;
 the accepted snapshot is committed before waking the owner. Initial bootstrap
 waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or stalled observations stay
 unknown and can recover later. No D-Bus call runs in the frame path. Successful

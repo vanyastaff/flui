@@ -3,9 +3,15 @@
 //!
 //! Three screens under one [`Router`]: Home lists the notes and toggles compact
 //! rows, Note edits a title through a [`TextFormField`] and keeps its draft
-//! after Back, Settings sits over either. Readiness is a keyed
-//! [`FutureBuilder`] above the router, with Loading, an error and Retry.
-//! Everything is held in memory by the root's state, so a restart starts over.
+//! after Back, Settings sits over either. Two [`Persisted`] documents, encoded
+//! as JSON, hold what a restart finds. [`Saved`] is the data: the notes and
+//! the compact flag, written by saving a title, adding or deleting a note and
+//! toggling compact rows. [`Session`] is where the user was: the route stack,
+//! the list's offset and the unsaved draft, written whenever one of them
+//! changes and restored on the first frame after the data loads. Readiness is
+//! a keyed [`FutureBuilder`] above the router that waits for the [`Loader`]
+//! gate, then loads the data, then the session, with Loading, an error and
+//! Retry.
 //!
 //! [`Faults`] is the constructor's seam for injected failures, a set of
 //! [`Fault`]s: a panic in the Note editor's `build`, in the Save handler, or in
@@ -13,24 +19,30 @@
 //! state, page and listener it makes, which a test turns into a drop sentinel.
 
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::future::poll_fn;
 use std::num::ParseIntError;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{ConnectionState, Listenable, ValueKey, ViewKey};
+use flui::foundation::{
+    ChangeNotifier, ConnectionState, Listenable, ListenerId, ValueKey, ViewKey,
+};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
+use flui::platform::StorageName;
 use flui::prelude::*;
-use flui::view::View;
 use flui::view::element::ElementKind;
+use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
+use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
-    BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
-    column,
+    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
+    WidgetStateProperty, column,
 };
+use serde::{Deserialize, Serialize};
 
 /// How many notes a fresh start opens with: enough to scroll.
 const SEEDED_NOTES: u64 = 40;
@@ -39,7 +51,8 @@ const COMPACT_ROW_HEIGHT: f64 = 32.0;
 
 /// A note's identity. Ids are handed out in increasing order and never
 /// reused, so a stale id can only name nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NoteId(pub u64);
 
 impl fmt::Display for NoteId {
@@ -183,12 +196,29 @@ fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
     planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
 }
 
-/// The readiness operation, called with the attempt number.
+/// The readiness gate, called with the attempt number: the stored document
+/// is loaded once it succeeds, and its error is the load's.
 ///
 /// The attempt number is a key, not a count: Retry moves it to the next value,
 /// wrapping from `u32::MAX` to 0, so it always differs from the last one and
 /// always starts a new load. A [`NoteId`] is an identity and never wraps.
 pub type Loader = Rc<dyn Fn(u32) -> BoxedResultFuture<(), String>>;
+
+/// The directory the native launchers keep the application's data in.
+///
+/// A launcher run with `cargo run --example` has no identifier from
+/// `flui build`, and without one a desktop host gives widgets no storage:
+/// the notes would never load.
+pub const DATA_DIR: &str = "dev.flui.acceptance-app";
+
+/// How the native launchers open the application: with its own storage
+/// directory, so the notes document loads on every desktop host.
+#[must_use]
+pub fn launch() -> flui::AppLaunch {
+    let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
+        .expect("BUG: the acceptance application's data directory name is valid");
+    flui::AppLaunch::new().config(flui::AppConfig::new().with_storage_dir(dir))
+}
 
 /// The acceptance application's root view.
 #[derive(Clone, StatelessView)]
@@ -256,17 +286,44 @@ impl StatelessView for AcceptanceApp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Note {
     id: NoteId,
     title: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Notebook {
     notes: Vec<Note>,
     /// The id the next new note takes.
     next_id: NoteId,
+}
+
+/// The application's data: what follows the user to another device.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Saved {
+    notebook: Notebook,
+    compact: bool,
+}
+
+impl Document for Saved {
+    const NAME: StorageName = StorageName::from_static("notes");
+    const VERSION: u32 = 1;
+
+    fn initial() -> Self {
+        Self {
+            notebook: Notebook::seeded(),
+            compact: false,
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("BUG: the notes serialize to JSON")
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, DecodeError> {
+        serde_json::from_slice::<Self>(body).map_err(|error| DecodeError::new(error.to_string()))
+    }
 }
 
 impl Notebook {
@@ -303,19 +360,307 @@ impl Notebook {
     }
 }
 
+/// Where the user was when the application last ran: what a restart restores
+/// over the data. It is machine-local, so it stays on this device when the
+/// data follows the user to another one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    /// The router's stack, bottom to top, as the routes' paths.
+    stack: Vec<String>,
+    /// The notes list's scroll offset.
+    offset: f64,
+    /// The title being edited and the note it belongs to.
+    draft: Option<Draft>,
+    /// The data revision the draft was taken against; `None` while the data
+    /// in memory was not stored.
+    data_revision: Option<Revision>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Draft {
+    note: NoteId,
+    title: String,
+}
+
+impl Document for Session {
+    const NAME: StorageName = StorageName::machine_local("session");
+    const VERSION: u32 = 1;
+
+    fn initial() -> Self {
+        Self::default()
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("BUG: the session serializes to JSON")
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, DecodeError> {
+        serde_json::from_slice::<Self>(body).map_err(|error| DecodeError::new(error.to_string()))
+    }
+}
+
+/// What a stored session restores over the loaded data.
+struct Restored {
+    stack: Vec<Route>,
+    offset: f64,
+    draft: Option<Draft>,
+}
+
+impl Session {
+    /// What of this session still fits `notebook`, stored as `revision`.
+    ///
+    /// The stack is kept only if every path parses, it starts at Home and
+    /// every note it opens exists; otherwise it is Home alone. The draft is
+    /// kept only if it was taken against this very revision, its note exists
+    /// and no other note is open above it; an open note without its draft
+    /// edits its stored title. The offset is kept if it is finite, and the
+    /// list's layout clamps it to the extent it has now.
+    fn restore(&self, notebook: &Notebook, revision: Option<Revision>) -> Restored {
+        let stack = self
+            .stack
+            .iter()
+            .map(|path| Route::parse(path))
+            .collect::<Result<Vec<Route>, _>>()
+            .ok()
+            .filter(|stack| {
+                stack.first() == Some(&Route::Home)
+                    && stack.iter().all(|route| match route {
+                        Route::Note { id } => notebook.title(*id).is_some(),
+                        Route::Home | Route::Settings => true,
+                    })
+            })
+            .unwrap_or_else(|| vec![Route::Home]);
+        let open = stack.iter().rev().find_map(|route| match route {
+            Route::Note { id } => Some(*id),
+            Route::Home | Route::Settings => None,
+        });
+        let draft = self
+            .draft
+            .clone()
+            .filter(|draft| {
+                self.data_revision.is_some()
+                    && self.data_revision == revision
+                    && notebook.title(draft.note).is_some()
+                    && open.is_none_or(|open| open == draft.note)
+            })
+            .or_else(|| {
+                let note = open?;
+                Some(Draft {
+                    note,
+                    title: notebook.title(note)?.to_owned(),
+                })
+            });
+        Restored {
+            stack,
+            offset: if self.offset.is_finite() {
+                self.offset
+            } else {
+                0.0
+            },
+            draft,
+        }
+    }
+}
+
+/// Writes the session whenever where the user is changes: a route change, a
+/// scroll of the list, an edit of the draft, or a data write the draft is now
+/// taken against; and once the session settles, so a write it refused while a
+/// fresh start ran is made.
+///
+/// Its listeners hold it weakly, and it holds the router only while Home,
+/// the bottom page, is mounted, so it keeps nothing alive past the tree.
+struct Place {
+    session: Persisted<Session>,
+    data: Persisted<Saved>,
+    draft: TextEditingController,
+    editing: Rc<Cell<Option<NoteId>>>,
+    scroll: ScrollController,
+    router: RefCell<Option<(RouterHandle<Route>, ListenerId)>>,
+    /// What it listens to while the loaded screens are up.
+    listening: RefCell<Option<Listening>>,
+    /// The session as last read or written, so a write that changes
+    /// nothing is not made.
+    stored: RefCell<Session>,
+}
+
+/// The listeners a [`Place`] keeps.
+struct Listening {
+    data: ListenerId,
+    draft: ListenerId,
+    /// The scroll position's notifier and the listener on it.
+    scroll: Rc<dyn Listenable>,
+    offset: ListenerId,
+    session: ListenerId,
+}
+
+impl Place {
+    /// A listener that writes the session, if the place still exists.
+    fn listener(self: &Rc<Self>) -> Rc<dyn Fn()> {
+        let place = Rc::downgrade(self);
+        Rc::new(move || {
+            if let Some(place) = place.upgrade() {
+                place.store();
+            }
+        })
+    }
+
+    /// Listen to the data, the draft, the list's offset and the session
+    /// itself: a write refused while a fresh start was running is made once
+    /// the session settles.
+    fn listen(self: &Rc<Self>) {
+        let scroll = self.scroll.listenable();
+        let ids = Listening {
+            data: self.data.add_listener(self.listener()),
+            draft: self.draft.add_listener(self.listener()),
+            offset: scroll.add_listener(self.listener()),
+            session: self.session.add_listener(self.listener()),
+            scroll,
+        };
+        *self.listening.borrow_mut() = Some(ids);
+    }
+
+    /// Stop listening to anything.
+    fn stop(&self) {
+        if let Some(listening) = self.listening.take() {
+            self.data.remove_listener(listening.data);
+            self.draft.remove_listener(listening.draft);
+            listening.scroll.remove_listener(listening.offset);
+            self.session.remove_listener(listening.session);
+        }
+        self.detach();
+    }
+
+    /// Follow the stack of the router Home's page sits under.
+    fn attach(self: &Rc<Self>, router: RouterHandle<Route>) {
+        let id = router.add_listener(self.listener());
+        if let Some((old, id)) = self.router.replace(Some((router, id))) {
+            old.remove_listener(id);
+        }
+    }
+
+    /// Stop following the router: Home's page is gone.
+    fn detach(&self) {
+        if let Some((router, id)) = self.router.take() {
+            router.remove_listener(id);
+        }
+    }
+
+    /// Write the session as it stands. Nothing is written before Home
+    /// mounts, nor when nothing changed.
+    fn store(&self) {
+        let Some(stack) = self
+            .router
+            .borrow()
+            .as_ref()
+            .map(|(router, _id)| router.stack())
+        else {
+            return;
+        };
+        let session = Session {
+            stack: stack
+                .iter()
+                .map(|route| route.to_path().to_string())
+                .collect::<Vec<String>>(),
+            offset: self.scroll.pixels(),
+            draft: self.editing.get().map(|note| Draft {
+                note,
+                title: self.draft.text(),
+            }),
+            data_revision: self.data.revision(),
+        };
+        if *self.stored.borrow() == session {
+            return;
+        }
+        // A write that fails is reported by the session's status; the place
+        // is written again on the next change or when the session settles.
+        if self.session.set(session.clone()).is_ok() {
+            *self.stored.borrow_mut() = session;
+        }
+    }
+}
+
 /// The application state every screen shares. Signals are handles, and the
 /// two controllers share their storage between clones.
 #[derive(Clone)]
 struct Shared {
     notebook: Signal<Notebook>,
-    /// The note the draft belongs to.
-    editing: Signal<Option<NoteId>>,
+    /// The note the draft belongs to. A cell, not a signal: the session
+    /// reads it from listeners, which have no context.
+    editing: Rc<Cell<Option<NoteId>>>,
     compact: Signal<bool>,
     status: Signal<String>,
     draft: TextEditingController,
     scroll: ScrollController,
+    /// Where the notebook and the compact flag are stored.
+    data: Persisted<Saved>,
+    /// Where the screens and the draft are stored.
+    session: Persisted<Session>,
+    /// What writes the session; weak, since the router's pages hold this
+    /// state and the place holds the router.
+    place: Weak<Place>,
+    /// The window's close as the screens show it; `None` on a host that
+    /// hands out no close guard.
+    close: Option<CloseWatch>,
     faults: Faults,
     planter: Option<Planter>,
+}
+
+/// A presentation's close guard and a notifier told each time what it has
+/// recorded changes, for the screens to show a close waiting on the user.
+#[derive(Clone)]
+struct CloseWatch {
+    guard: CloseGuard,
+    changed: Rc<ChangeNotifier>,
+    /// The task that follows the guard; it ends with the last clone.
+    _following: Rc<TaskToken>,
+}
+
+impl CloseWatch {
+    fn start(guard: CloseGuard, driver: &AsyncDriver) -> Self {
+        let changed = Rc::new(ChangeNotifier::new());
+        let told = Rc::downgrade(&changed);
+        let followed = guard.clone();
+        // Taken now, before the screens first read what is recorded: the task
+        // is first polled a turn later, and a close recorded in between must
+        // still wake it.
+        let mut next = guard.changed();
+        let following = driver.spawn_local(Box::pin(async move {
+            loop {
+                next.await;
+                // Taken before the listeners read, so a change they cause, or
+                // one after them, wakes the next round.
+                next = followed.changed();
+                let Some(told) = told.upgrade() else {
+                    return;
+                };
+                told.notify_listeners();
+            }
+        }));
+        Self {
+            guard,
+            changed,
+            _following: Rc::new(following),
+        }
+    }
+}
+
+impl Shared {
+    /// Write the notebook and the compact flag as they stand.
+    fn store(&self, cx: &EventCx<'_>) {
+        let saved = Saved {
+            notebook: self
+                .notebook
+                .peek(cx, Clone::clone)
+                .expect("BUG: the loaded state's signals outlive its screens"),
+            compact: self
+                .compact
+                .peek(cx, |compact| *compact)
+                .expect("BUG: the loaded state's signals outlive its screens"),
+        };
+        // A write that fails is reported by the document's status and kept
+        // in memory; the screens go on with it.
+        let _revision = self.data.set(saved);
+    }
 }
 
 #[derive(Clone, StatefulView)]
@@ -327,24 +672,63 @@ struct Root {
 }
 
 struct RootState {
-    shared: Option<Shared>,
+    documents: Option<Documents>,
     attempt: Signal<u32>,
-    faults: Faults,
     first_attempt: u32,
-    planter: Option<Planter>,
+    /// Set by Start over: the next load starts from the initial notes, which
+    /// the data document is storing over the unreadable ones.
+    fresh: Rc<Cell<bool>>,
     _kept: Option<Rc<dyn Any>>,
 }
+
+/// Why the notes did not load.
+#[derive(Clone, Debug)]
+enum LoadFailure {
+    /// The stored notes cannot be read back: Start over keeps them aside and
+    /// begins again.
+    Unreadable(String),
+    /// Anything else, which Retry may get past.
+    Other(String),
+}
+
+impl From<PersistError> for LoadFailure {
+    fn from(error: PersistError) -> Self {
+        match error {
+            PersistError::Corrupt { .. } | PersistError::Decode(_) => {
+                Self::Unreadable(error.to_string())
+            }
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for LoadFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreadable(message) | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The two stored documents.
+#[derive(Clone)]
+struct Documents {
+    data: Persisted<Saved>,
+    session: Persisted<Session>,
+}
+
+/// What a load reads: the data, then the session over it.
+type Read = (Rc<Saved>, Rc<Session>);
 
 impl StatefulView for Root {
     type State = RootState;
 
     fn create_state(&self) -> Self::State {
         RootState {
-            shared: None,
+            documents: None,
             attempt: Signal::default(),
-            faults: self.faults,
             first_attempt: self.first_attempt,
-            planter: self.planter.clone(),
+            fresh: Rc::new(Cell::new(false)),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
@@ -353,58 +737,236 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.attempt = cx.signal(self.first_attempt);
+        self.documents = Some(Documents {
+            data: Persisted::<Saved>::open(cx),
+            session: Persisted::<Session>::open(cx),
+        });
+    }
+
+    fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
+        let documents = self
+            .documents
+            .clone()
+            .expect("BUG: init_state precedes build");
+        let attempt = self.attempt;
+        let current = attempt.get(cx);
+        let loader = Rc::clone(&view.loader);
+        let load = documents.clone();
+        let faults = view.faults;
+        let planter = view.planter.clone();
+        let fresh = Rc::clone(&self.fresh);
+        let starting_over = Rc::clone(&self.fresh);
+        let ready = FutureBuilder::keyed(
+            Some(current),
+            Rc::new(move || {
+                let gate = loader(current);
+                let Documents { data, session } = load.clone();
+                let fresh = Rc::clone(&fresh);
+                Box::pin(async move {
+                    gate.await.map_err(LoadFailure::Other)?;
+                    // The session is read only over loaded data: a failed
+                    // data load leaves it unread and unwritten.
+                    let saved = if fresh.get() {
+                        // The notes are shown once the fresh start is
+                        // stored, so no edit is refused while the old ones
+                        // are kept aside.
+                        started_over(&data).await.map_err(LoadFailure::Other)?;
+                        Rc::new(Saved::initial())
+                    } else {
+                        match data.load().await {
+                            Ok(saved) => saved,
+                            // Without storage the notes live in memory; the
+                            // banner says so.
+                            Err(_) if matches!(data.status(), SaveStatus::Unavailable) => {
+                                Rc::new(Saved::initial())
+                            }
+                            Err(error) => return Err(LoadFailure::from(error)),
+                        }
+                    };
+                    // A session that cannot be read loses the place, never the
+                    // data: an unreadable one is kept aside and started over.
+                    let place = match session.load().await {
+                        Ok(place) => place,
+                        Err(_unreadable) => {
+                            session.start_over();
+                            Rc::new(Session::initial())
+                        }
+                    };
+                    // A place taken in notes given up is never restored over
+                    // fresh ones, which can take their revision and note ids.
+                    // The session is still loaded, so the new place is
+                    // written over it once the fresh notes' revision is told.
+                    let place = if fresh.replace(false) {
+                        Rc::new(Session::initial())
+                    } else {
+                        place
+                    };
+                    Ok((saved, place))
+                }) as BoxedResultFuture<Read, LoadFailure>
+            }),
+            Rc::new(move |_cx, snapshot| {
+                if snapshot.connection_state() != ConnectionState::Done {
+                    // Reload replaces the load under way: its future is
+                    // dropped, so nothing it read is applied.
+                    let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
+                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                    });
+                    return Column::new(column![Text::new("Loading notes"), reload]).boxed();
+                }
+                if let Some(error) = snapshot.error() {
+                    let resume = documents.data.clone();
+                    let resuming = Rc::clone(&starting_over);
+                    let retry = TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
+                        // A fresh start that failed is taken up where it
+                        // stopped; the next attempt waits for it.
+                        if resuming.get() {
+                            resume.retry();
+                        }
+                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                    });
+                    let message = Text::new(format!("Load failed: {error}"));
+                    if !matches!(error, LoadFailure::Unreadable(_)) {
+                        return Column::new(column![message, retry]).boxed();
+                    }
+                    let data = documents.data.clone();
+                    let starting_over = Rc::clone(&starting_over);
+                    let start_over =
+                        TextButton::new(Text::new("Start over")).on_pressed(move |cx| {
+                            // The unreadable notes are kept aside, then the
+                            // initial ones are stored and shown.
+                            data.start_over();
+                            starting_over.set(true);
+                            attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                        });
+                    return Column::new(column![message, retry, start_over]).boxed();
+                }
+                let read = snapshot
+                    .data()
+                    .cloned()
+                    .expect("BUG: a load done without an error has its value");
+                Loaded {
+                    read,
+                    documents: documents.clone(),
+                    faults,
+                    planter: planter.clone(),
+                }
+                .boxed()
+            }),
+        );
+        Theme::new(ThemeData::light(), ready)
+    }
+}
+
+/// The screens over the loaded documents: their state starts from them.
+#[derive(Clone, StatefulView)]
+struct Loaded {
+    read: Read,
+    documents: Documents,
+    faults: Faults,
+    planter: Option<Planter>,
+}
+
+struct LoadedState {
+    /// What `init_state` starts the shared state from.
+    start: Option<(Read, Documents)>,
+    shared: Option<Shared>,
+    /// The stack the router opens on.
+    stack: Vec<Route>,
+    place: Option<Rc<Place>>,
+    faults: Faults,
+    planter: Option<Planter>,
+    _kept: Option<Rc<dyn Any>>,
+}
+
+impl StatefulView for Loaded {
+    type State = LoadedState;
+
+    fn create_state(&self) -> Self::State {
+        LoadedState {
+            start: Some((self.read.clone(), self.documents.clone())),
+            shared: None,
+            stack: Vec::new(),
+            place: None,
+            faults: self.faults,
+            planter: self.planter.clone(),
+            _kept: plant(self.planter.as_ref(), Kept::State),
+        }
+    }
+}
+
+impl ViewState<Loaded> for LoadedState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        let (
+            (saved, session),
+            Documents {
+                data,
+                session: stored,
+            },
+        ) = self.start.take().expect("BUG: init_state runs once");
+        // Everything restored is in place before the first layout, so the
+        // first loaded frame already shows it.
+        let restored = session.restore(&saved.notebook, data.revision());
         let draft = TextEditingController::new();
+        if let Some(Draft { title, .. }) = &restored.draft {
+            draft.set_text(title.clone());
+        }
         if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
             draft.add_listener(Rc::new(move || {
                 let _kept = &kept;
             }));
         }
+        let editing = Rc::new(Cell::new(restored.draft.map(|draft| draft.note)));
+        let scroll = ScrollController::with_initial_scroll_offset(restored.offset);
+        let place = Rc::new(Place {
+            session: stored,
+            data: data.clone(),
+            draft: draft.clone(),
+            editing: Rc::clone(&editing),
+            scroll: scroll.clone(),
+            router: RefCell::new(None),
+            listening: RefCell::new(None),
+            stored: RefCell::new(Session::clone(&session)),
+        });
+        place.listen();
         self.shared = Some(Shared {
-            notebook: cx.signal(Notebook::seeded()),
-            editing: cx.signal(None),
-            compact: cx.signal(false),
+            notebook: cx.signal(saved.notebook.clone()),
+            editing,
+            compact: cx.signal(saved.compact),
             status: cx.signal(String::new()),
             draft,
-            scroll: ScrollController::new(),
+            scroll,
+            data,
+            session: place.session.clone(),
+            place: Rc::downgrade(&place),
+            close: cx
+                .close_guard()
+                .zip(cx.async_driver())
+                .map(|(guard, driver)| CloseWatch::start(guard, &driver)),
             faults: self.faults,
             planter: self.planter.clone(),
         });
+        self.stack = restored.stack;
+        self.place = Some(place);
     }
 
-    fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Loaded, _cx: &dyn BuildContext) -> impl IntoView {
         let shared = self.shared.clone().expect("BUG: init_state precedes build");
-        let attempt = self.attempt;
-        let current = attempt.get(cx);
-        let loader = Rc::clone(&view.loader);
-        let ready = FutureBuilder::keyed(
-            Some(current),
-            Rc::new(move || loader(current)),
-            Rc::new(move |_cx, snapshot| {
-                if snapshot.connection_state() != ConnectionState::Done {
-                    return Text::new("Loading notes").boxed();
-                }
-                if let Some(error) = snapshot.error() {
-                    return Column::new(column![
-                        Text::new(format!("Load failed: {error}")),
-                        TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
-                            attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
-                        }),
-                    ])
-                    .boxed();
-                }
-                let shared = shared.clone();
-                WidgetsApp::router(Router::new(Route::Home, move |route: &Route, _cx| {
-                    Screen {
-                        route: route.clone(),
-                        shared: shared.clone(),
-                        _kept: plant(shared.planter.as_ref(), Kept::Page),
-                    }
-                    .boxed()
-                }))
-                .boxed()
-            }),
-        );
-        Theme::new(ThemeData::light(), ready)
+        let router = Router::from_stack(self.stack.clone(), move |route: &Route, _cx| {
+            Screen {
+                route: route.clone(),
+                shared: shared.clone(),
+                _kept: plant(shared.planter.as_ref(), Kept::Page),
+            }
+            .boxed()
+        })
+        .expect("BUG: a restored stack holds Home at least");
+        WidgetsApp::router(router)
+    }
+
+    fn dispose(&mut self) {
+        if let Some(place) = self.place.take() {
+            place.stop();
+        }
     }
 }
 
@@ -420,6 +982,9 @@ struct ScreenState {
     form: FormHandle,
     focus: Rc<FocusNode>,
     panic_on_dispose: bool,
+    /// On Home's page, the bottom one: what writes the session, which
+    /// follows the router while the page is mounted.
+    place: Option<Weak<Place>>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -433,6 +998,7 @@ impl StatefulView for Screen {
             focus: FocusNode::new(),
             panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
+            place: (self.route == Route::Home).then(|| Weak::clone(&self.shared.place)),
             _kept: plant(self.shared.planter.as_ref(), Kept::State),
         }
     }
@@ -440,7 +1006,11 @@ impl StatefulView for Screen {
 
 impl ViewState<Screen> for ScreenState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.router = Some(Router::<Route>::handle(cx).expect("BUG: a screen is under the Router"));
+        let router = Router::<Route>::handle(cx).expect("BUG: a screen is under the Router");
+        if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
+            place.attach(router.clone());
+        }
+        self.router = Some(router);
     }
 
     fn build(&self, view: &Screen, cx: &dyn BuildContext) -> impl IntoView {
@@ -458,11 +1028,17 @@ impl ViewState<Screen> for ScreenState {
         SafeArea::new().child(Column::new(column![
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(cx)),
+            storage_banner(&shared.data),
+            place_banner(&shared.session),
+            close_decision(shared.close.as_ref()),
             Expanded::new(content),
         ]))
     }
 
     fn dispose(&mut self) {
+        if let Some(place) = self.place.take().as_ref().and_then(Weak::upgrade) {
+            place.detach();
+        }
         assert!(
             !self.panic_on_dispose,
             "injected fault: the Note screen's dispose panics"
@@ -526,20 +1102,15 @@ fn header(route: &Route, router: &RouterHandle<Route>) -> Vec<BoxedView> {
 }
 
 fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>, id: NoteId) {
-    let editing = shared
-        .editing
-        .peek(cx, |editing| *editing)
-        .expect("BUG: the root's signals outlive its screens");
-    if editing != Some(id) {
+    if shared.editing.get() != Some(id) {
         let title = shared
             .notebook
             .peek(cx, |notebook| notebook.title(id).map(str::to_owned))
-            .expect("BUG: the root's signals outlive its screens");
+            .expect("BUG: the loaded state's signals outlive its screens");
+        // The draft names its note before its text changes, so the session
+        // written for the new text names the right note.
+        shared.editing.set(Some(id));
         shared.draft.set_text(title.unwrap_or_default());
-        shared
-            .editing
-            .set(cx, Some(id))
-            .expect("BUG: the root's signals outlive its screens");
     }
     router
         .push(Route::Note { id })
@@ -590,7 +1161,7 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 .boxed()
             }))
     };
-    let toggle = shared.compact;
+    let toggle = shared.clone();
     let add = shared.clone();
     Column::new(column![
         Row::new(vec![
@@ -604,8 +1175,10 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 &Route::Home,
                 move |cx, _router| {
                     toggle
+                        .compact
                         .update(cx, |compact| *compact = !*compact)
-                        .expect("BUG: the root's signals outlive its screens");
+                        .expect("BUG: the loaded state's signals outlive its screens");
+                    toggle.store(cx);
                 },
             )
             .boxed(),
@@ -613,7 +1186,8 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 let id = add
                     .notebook
                     .update(cx, Notebook::add)
-                    .expect("BUG: the root's signals outlive its screens");
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                add.store(cx);
                 open_note(cx, &add, router, id);
             })
             .boxed(),
@@ -685,6 +1259,7 @@ fn editor(
         return Text::new(format!("Note {id} does not exist")).boxed();
     }
     let save = shared.clone();
+    let delete = shared.clone();
     let validate = form.clone();
     Form::new(Column::new(column![
         Text::new(format!("Editing note {id}")),
@@ -714,14 +1289,35 @@ fn editor(
                                 note.title.clone_from(&title);
                             }
                         })
-                        .expect("BUG: the root's signals outlive its screens");
+                        .expect("BUG: the loaded state's signals outlive its screens");
+                    save.store(cx);
                     format!("Saved note {id}")
                 } else {
                     "Fix the title".to_owned()
                 };
                 save.status
                     .set(cx, message)
-                    .expect("BUG: the root's signals outlive its screens");
+                    .expect("BUG: the loaded state's signals outlive its screens");
+            }
+        ),
+        on_current_page(
+            "Delete note",
+            router,
+            &Route::Note { id },
+            move |cx, router| {
+                delete
+                    .notebook
+                    .update(cx, |notebook| notebook.notes.retain(|note| note.id != id))
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                if delete.editing.get() == Some(id) {
+                    delete.editing.set(None);
+                }
+                delete.store(cx);
+                delete
+                    .status
+                    .set(cx, format!("Deleted note {id}"))
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                router.pop().expect("BUG: mounted Router");
             }
         ),
     ]))
@@ -732,4 +1328,140 @@ fn editor(
 fn settings(cx: &dyn BuildContext, shared: &Shared) -> BoxedView {
     let compact = if shared.compact.get(cx) { "on" } else { "off" };
     Text::new(format!("Compact rows are {compact}")).boxed()
+}
+
+/// What the notes' storage cannot do now, if anything: no storage at all, a
+/// file this build must not write, or a save that failed, with Retry.
+fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
+    let watched = data.clone();
+    let listenable: Rc<dyn Listenable> = Rc::new(data.clone());
+    AnimatedBuilder::new(listenable, move || match watched.status() {
+        SaveStatus::Unavailable => {
+            Text::new("Storage is unavailable: the notes are kept in memory only").boxed()
+        }
+        SaveStatus::ReadOnly(_) => {
+            Text::new("Read only: changes to the notes are not saved").boxed()
+        }
+        SaveStatus::Failed(error) => {
+            let data = watched.clone();
+            Row::new(vec![
+                Text::new(format!("Saving failed: {error}")).boxed(),
+                TextButton::new(Text::new("Retry saving"))
+                    .on_pressed(move |_cx| data.retry())
+                    .boxed(),
+            ])
+            .boxed()
+        }
+        _ => SizedBox::shrink().boxed(),
+    })
+    .boxed()
+}
+
+/// A failed write of where the user is, with its own Retry: the notes'
+/// banner does not show it, and an unchanged place is not written again by
+/// itself, so without it a close the failure holds could only discard.
+fn place_banner(session: &Persisted<Session>) -> BoxedView {
+    let watched = session.clone();
+    let listenable: Rc<dyn Listenable> = Rc::new(session.clone());
+    AnimatedBuilder::new(listenable, move || match watched.status() {
+        SaveStatus::Failed(error) => {
+            let session = watched.clone();
+            Row::new(vec![
+                Text::new(format!("Saving the place failed: {error}")).boxed(),
+                TextButton::new(Text::new("Retry saving the place"))
+                    .on_pressed(move |_cx| session.retry())
+                    .boxed(),
+            ])
+            .boxed()
+        }
+        // No storage, or storage this build must not write, is the notes'
+        // banner to tell.
+        _ => SizedBox::shrink().boxed(),
+    })
+    .boxed()
+}
+/// Wait until the fresh start of `data` is stored: its value is loaded and
+/// takes edits from then on. A failed step ends the wait with its error.
+async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
+    /// Removes the waiting listener when the wait ends or is dropped.
+    struct Watch {
+        data: Persisted<Saved>,
+        id: Option<ListenerId>,
+    }
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            if let Some(id) = self.id.take() {
+                self.data.remove_listener(id);
+            }
+        }
+    }
+    let waker = Rc::new(RefCell::new(None::<std::task::Waker>));
+    let mut watch = Watch {
+        data: data.clone(),
+        id: None,
+    };
+    poll_fn(move |cx| {
+        if let SaveStatus::Failed(error) = watch.data.status() {
+            return Poll::Ready(Err(error.to_string()));
+        }
+        if watch.data.revision().is_some() {
+            return Poll::Ready(Ok(()));
+        }
+        *waker.borrow_mut() = Some(cx.waker().clone());
+        if watch.id.is_none() {
+            let waker = Rc::clone(&waker);
+            watch.id = Some(watch.data.add_listener(Rc::new(move || {
+                // Taken before waking: the waker's wake may poll again.
+                let waker = waker.borrow_mut().take();
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            })));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+/// A close the window holds, with the user's two ways out: close without
+/// saving what the holds protect, or keep the window open. Retry saving is
+/// on the notes' and the place's banners; a save that succeeds then carries
+/// the close out.
+fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
+    let Some(close) = close else {
+        return SizedBox::shrink().boxed();
+    };
+    let listenable: Rc<dyn Listenable> = Rc::clone(&close.changed) as Rc<dyn Listenable>;
+    let guard = close.guard.clone();
+    AnimatedBuilder::new(listenable, move || {
+        if guard.pending().is_none() {
+            return SizedBox::shrink().boxed();
+        }
+        // Each button acts on the close recorded when it is pressed: one
+        // shown earlier may have been carried out or withdrawn since.
+        let discard = guard.clone();
+        let keep = guard.clone();
+        let buttons = Row::new(vec![
+            TextButton::new(Text::new("Close without saving"))
+                .on_pressed(move |_cx| {
+                    if let Some(pending) = discard.pending() {
+                        let _gone: Result<(), StaleClose> = pending.discard_and_close();
+                    }
+                })
+                .boxed(),
+            TextButton::new(Text::new("Keep open"))
+                .on_pressed(move |_cx| {
+                    if let Some(pending) = keep.pending() {
+                        let _gone: Result<(), StaleClose> = pending.stay_open();
+                    }
+                })
+                .boxed(),
+        ]);
+        Column::new(column![
+            Text::new("Closing: unsaved changes would be lost"),
+            buttons
+        ])
+        .boxed()
+    })
+    .boxed()
 }
