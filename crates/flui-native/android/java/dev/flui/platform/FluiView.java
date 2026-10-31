@@ -442,12 +442,15 @@ public final class FluiView extends View {
      * this view's pixels, for an input method that asked for cursor updates. A
      * negative field width means unknown. {@code characterRects} holds left,
      * top, right and bottom for each UTF-16 index from {@code charactersStart}
-     * on, and {@code characterFlags} its visibility; a box outside the composing
-     * span the mirror holds now, which the owner had not seen yet, is left out.
+     * on, measured on the composing text {@code charactersText}, and
+     * {@code characterFlags} each box's visibility. The boxes go to the input
+     * method only while the mirror still composes that text there: an edit the
+     * owner had not seen when it measured them gets none, not another text's.
      */
     public void updateCursorAnchor(float caretLeft, float caretTop, float caretBottom,
             float fieldLeft, float fieldTop, float fieldRight, float fieldBottom,
-            int charactersStart, float[] characterRects, int[] characterFlags) {
+            String charactersText, int charactersStart, float[] characterRects,
+            int[] characterFlags) {
         if (!editing) {
             return;
         }
@@ -464,12 +467,12 @@ public final class FluiView extends View {
         int compositionStart = BaseInputConnection.getComposingSpanStart(editable);
         if (compositionStart >= 0) {
             int compositionEnd = BaseInputConnection.getComposingSpanEnd(editable);
-            builder.setComposingText(compositionStart,
-                    editable.subSequence(compositionStart, compositionEnd));
-            for (int unit = 0; unit < characterFlags.length; unit++) {
-                int index = charactersStart + unit;
-                if (index >= compositionStart && index < compositionEnd) {
-                    builder.addCharacterBounds(index, characterRects[unit * 4],
+            CharSequence composing = editable.subSequence(compositionStart, compositionEnd);
+            builder.setComposingText(compositionStart, composing);
+            if (charactersStart == compositionStart
+                    && charactersText.contentEquals(composing)) {
+                for (int unit = 0; unit < characterFlags.length; unit++) {
+                    builder.addCharacterBounds(charactersStart + unit, characterRects[unit * 4],
                             characterRects[unit * 4 + 1], characterRects[unit * 4 + 2],
                             characterRects[unit * 4 + 3], characterFlags[unit]);
                 }

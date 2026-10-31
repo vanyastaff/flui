@@ -406,12 +406,17 @@ fn composing_boxes(
 
 /// The composing text's characters go to the input method one box per UTF-16
 /// index, in physical pixels: both halves of a surrogate pair take the pair's
-/// box, nothing goes without a composition, and a long composition sends its
+/// box, the boxes carry the text they were measured on, nothing goes without
+/// a composition, and a long composition sends its
 /// first boxes only.
 fn the_composing_characters_have_their_boxes() {
     let store = InMemoryTextStore::new("xa😀b");
     let boxes = composing_boxes(&store, Some(range(1, 5))).expect("a composition has boxes");
     assert_eq!(boxes.start, 1);
+    assert_eq!(
+        boxes.text, "a😀b",
+        "the boxes name the text they were measured on"
+    );
     assert_eq!(
         boxes.rects,
         [

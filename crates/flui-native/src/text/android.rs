@@ -381,19 +381,27 @@ pub(crate) mod ime {
     /// pixels.
     #[derive(Debug, Clone, PartialEq)]
     pub struct CharacterBounds {
-        /// The UTF-16 index of the first box.
+        /// The composing text the boxes were measured on: the view attaches
+        /// them only while it composes this same text at [`Self::start`], so
+        /// an input method edit that arrived after the measure never gets
+        /// another text's boxes.
+        pub text: String,
+        /// The UTF-16 index of the first box, where the composition starts.
         pub start: i32,
         /// Left, top, right and bottom of each code unit's box, in order.
         pub rects: Vec<f32>,
-        /// `FLAG_HAS_VISIBLE_REGION`, or `FLAG_HAS_INVISIBLE_REGION` for a box
-        /// the field clips, for each code unit.
+        /// `FLAG_HAS_VISIBLE_REGION`, with `FLAG_HAS_INVISIBLE_REGION` for a box
+        /// part of which lies outside the field's visible area, for each code
+        /// unit. The store says only that part is outside, so a clipped box
+        /// reads as partly visible.
         pub flags: Vec<i32>,
     }
 
     /// The boxes of the composition `session` holds, one per UTF-16 code unit
     /// as Android indexes them: both halves of a surrogate pair take the
     /// pair's box. `None` with no composition, or when the field has no layout
-    /// for it or a box would not be finite.
+    /// for it, a box would not be finite, or the store is protected (its text
+    /// cannot be read, so the boxes could not be matched to it).
     #[must_use]
     pub fn character_bounds(
         session: &(impl TextStoreRead + ?Sized),
@@ -414,6 +422,7 @@ pub(crate) mod ime {
             narrowed.is_finite().then_some(narrowed)
         };
         let mut bounds = CharacterBounds {
+            text: session.text(composition).ok()?,
             start: i32::try_from(start).ok()?,
             rects: Vec::with_capacity((end - start) * 4),
             flags: Vec::with_capacity(end - start),
@@ -439,7 +448,7 @@ pub(crate) mod ime {
                 pixel(area.origin.y + area.size.height)?,
             ];
             let flag = if rect.clipped {
-                FLAG_HAS_INVISIBLE_REGION
+                FLAG_HAS_VISIBLE_REGION | FLAG_HAS_INVISIBLE_REGION
             } else {
                 FLAG_HAS_VISIBLE_REGION
             };
@@ -1116,16 +1125,18 @@ mod input {
                 return;
             };
             self.view.post(move |env, view| {
-                let (start, rects, flags) = characters
-                    .map_or((-1, Vec::new(), Vec::new()), |bounds| {
-                        (bounds.start, bounds.rects, bounds.flags)
+                let (text, start, rects, flags) = characters
+                    .map_or((String::new(), -1, Vec::new(), Vec::new()), |bounds| {
+                        (bounds.text, bounds.start, bounds.rects, bounds.flags)
                     });
+                let text = env.new_string(text)?;
                 let rect_array = env.new_float_array(rects.len())?;
                 rect_array.set_region(env, 0, &rects)?;
                 let flag_array = env.new_int_array(flags.len())?;
                 flag_array.set_region(env, 0, &flags)?;
                 let mut arguments = anchor.map(JValue::Float).to_vec();
                 arguments.extend([
+                    JValue::Object(&text),
                     JValue::Int(start),
                     JValue::Object(&rect_array),
                     JValue::Object(&flag_array),
@@ -1133,7 +1144,7 @@ mod input {
                 env.call_method(
                     view,
                     jni_str!("updateCursorAnchor"),
-                    jni_sig!("(FFFFFFFI[F[I)V"),
+                    jni_sig!("(FFFFFFFLjava/lang/String;I[F[I)V"),
                     &arguments,
                 )
                 .map(drop)
