@@ -270,6 +270,42 @@ fn saved_status_appears_only_after_commit() {
     assert_eq!(notes.committed(), revision.ok());
 }
 
+/// A crash before the storage commits loses only the edit it held: the
+/// committed edit before it survives the restart, and the lost one was
+/// never reported saved.
+#[test]
+fn drop_before_commit_loses_only_that_edit() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "first"));
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "committed, then saved");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Saving, "never reported saved");
+    // The process dies before its write replaced the file.
+    drop((laid, notes));
+    drop(barrier);
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert_eq!(
+        reloaded.as_deref().map(|note| note.0.as_str()),
+        Ok("second"),
+        "the committed edit survives, the held one is lost"
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+}
+
 /// Mount a tree with no storage at all, as on a platform without files.
 fn mount_without_storage() -> (LaidOut, Persisted<Note>) {
     let opened = Rc::new(RefCell::new(None));
@@ -298,9 +334,9 @@ struct LoadCase(
 
 /// What a load makes of each stored state: the value, or the error and the
 /// status it leaves. An inaccessible file is its own error, apart from a
-/// corrupt one (R18); a file over the limit is refused unread (R30); an
+/// corrupt one; a file over the limit is refused unread; an
 /// older format decodes and a newer one is read-only, with nothing written
-/// either way (R31); a decode panic is contained (R29).
+/// either way; a decode panic is contained.
 #[test]
 fn a_load_reports_each_stored_state() {
     let note = |text: &str| Ok(text.to_owned());
@@ -413,7 +449,7 @@ fn a_load_reports_each_stored_state() {
 }
 
 /// Of several loads in flight, only the latest is applied, whichever
-/// finishes last (R25, R28).
+/// finishes last.
 #[test]
 fn only_the_latest_of_several_loads_is_applied() {
     for (case, older, newer, applied) in [
@@ -445,7 +481,7 @@ fn only_the_latest_of_several_loads_is_applied() {
 }
 
 /// A load dropped before it finishes releases its storage request and
-/// applies nothing, the tree gone or not (R27).
+/// applies nothing, the tree gone or not.
 #[test]
 fn unmount_during_load_releases_requests() {
     let storage = MemoryStorage::new();
@@ -464,7 +500,7 @@ fn unmount_during_load_releases_requests() {
 }
 
 /// Without storage the document lives in memory: its status says so and a
-/// load is refused as not registered, without a panic (R33).
+/// load is refused as not registered, without a panic.
 #[test]
 fn unavailable_storage_runs_in_memory_with_status() {
     let (mut laid, notes) = mount_without_storage();
@@ -525,7 +561,7 @@ fn loaded(storage: &MemoryStorage, body: &str) -> (LaidOut, Persisted<Note>, Clo
 /// A set has nothing to write over unless a load produced a writable value:
 /// before a load, after a failed one, over a newer format, at the last
 /// revision and without storage it is refused, the status stays and nothing
-/// is written (R24, R31).
+/// is written.
 #[test]
 fn no_write_without_a_writable_base() {
     let cases: [(&str, Option<Vec<u8>>, bool, PersistError); 5] = [
@@ -596,8 +632,8 @@ fn no_write_without_a_writable_base() {
 }
 
 /// A full disk fails the write: the status says so, the stored file keeps
-/// the old value, and a load is refused over the unsaved edit (R30); a retry
-/// then writes the latest value (R20).
+/// the old value, and a load is refused over the unsaved edit; a retry
+/// then writes the latest value.
 #[test]
 fn retry_after_failure_publishes_the_latest_value() {
     let storage = MemoryStorage::new();
@@ -635,7 +671,7 @@ fn retry_after_failure_publishes_the_latest_value() {
 }
 
 /// Edits made while a write is in flight replace each other: only the
-/// latest is written after it, under its own revision (R28).
+/// latest is written after it, under its own revision.
 #[test]
 fn a_later_edit_supersedes_an_unstarted_one() {
     let storage = MemoryStorage::new();
@@ -665,7 +701,7 @@ fn a_later_edit_supersedes_an_unstarted_one() {
 
 /// An encode panic publishes nothing and fails that save; the next set
 /// works. A failure is kept until a write succeeds, the first of several
-/// winning (R29).
+/// winning.
 #[test]
 fn codec_panic_is_contained_first_failure_kept() {
     let storage = MemoryStorage::new();
@@ -700,7 +736,7 @@ fn codec_panic_is_contained_first_failure_kept() {
 
 /// A write in flight holds the user's and the program's close and lets a
 /// session end through; the held close is carried out once the write is
-/// stored (R12, R14). A failed write requires a decision, even of a session
+/// stored. A failed write requires a decision, even of a session
 /// end.
 #[test]
 fn a_saving_document_holds_user_close_only() {
@@ -751,7 +787,7 @@ fn a_saving_document_holds_user_close_only() {
 }
 
 /// Two UI runtimes keep their own documents of one name, each in its own
-/// storage (R36).
+/// storage.
 #[test]
 fn two_runtimes_keep_independent_documents() {
     let (left, right) = (MemoryStorage::new(), MemoryStorage::new());
@@ -872,7 +908,7 @@ fn a_provided_storage_receives_the_documents_writes() {
 
 /// A busy store is tried again on the UI runtime's clock: 50 ms after the
 /// first refusal, not 49, the status `Saving` meanwhile; after the 800 ms
-/// retry a further refusal fails the write (R16).
+/// retry a further refusal fails the write.
 #[test]
 fn busy_retry_follows_the_runtime_clock() {
     let storage = MemoryStorage::new();
@@ -1004,7 +1040,7 @@ fn a_hidden_application_or_a_close_retries_a_busy_write_at_once() {
 }
 
 /// A stored file the document cannot read is never written over until the
-/// application starts over, and starting over keeps its bytes first (R17):
+/// application starts over, and starting over keeps its bytes first:
 /// a file without a header, a body `decode` refuses and a decode that panics
 /// are each kept under a free name and replaced by the initial value; a
 /// reload that finds the file corrupted after a save reports it rather than
