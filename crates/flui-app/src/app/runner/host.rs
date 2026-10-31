@@ -194,12 +194,18 @@ pub(super) fn refresh_preferences_with(
     let preference_read = APP_RUNTIME.with(|slot| slot.borrow().begin_preference_read());
     host.logical().update_preferences(values, host.effects())?;
     if let Some(tag) = locale {
-        APP_RUNTIME.with(|slot| {
+        let wake = APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
             if state.installed_host.same_host(&host) {
-                state.follow_locale(preference_read, tag);
+                state.follow_locale(preference_read, tag)
+            } else {
+                None
             }
         });
+        // Outside the borrow: the wake reaches the app's redraw requester.
+        if let Some(wake) = wake {
+            wake();
+        }
     }
     Ok(())
 }

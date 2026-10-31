@@ -713,17 +713,27 @@ impl AppRuntime {
     /// accepted a newer one, sends nothing: the later read sends its own.
     /// An unchanged tag asks nothing; one equal to the locale the order is
     /// already for is skipped where it is served.
-    pub(super) fn follow_locale(&self, read: PreferenceRead, tag: String) {
+    ///
+    /// Returns the wake to call when an order served on this thread changed.
+    /// The caller calls it once it no longer borrows the runtime, since the
+    /// wake reaches the installed redraw requester, which is app code.
+    #[must_use = "a changed order is announced only when the returned wake is called"]
+    pub(super) fn follow_locale(
+        &self,
+        read: PreferenceRead,
+        tag: String,
+    ) -> Option<Arc<dyn Fn() + Send + Sync>> {
         if read.0 != self.preference_reads.get() {
-            return;
+            return None;
         }
         let Some(services) = self.services.get() else {
             self.fallback_locale.replace(Some(tag));
-            return;
+            return None;
         };
-        if services.fallback.follow(tag) {
-            (self.frame_wake_callback())();
-        }
+        services
+            .fallback
+            .follow(tag)
+            .then(|| self.frame_wake_callback())
     }
 
     /// Whether the app's font collection changed since the UI runtimes were last
@@ -1675,6 +1685,14 @@ mod font_collection_tests {
         );
     }
 
+    /// Has `runtime` follow `tag` from a read of its own, and calls the wake
+    /// it returns, as the host's preference refresh does.
+    fn follow(runtime: &AppRuntime, tag: &str) {
+        if let Some(wake) = runtime.follow_locale(runtime.begin_preference_read(), tag.to_owned()) {
+            wake();
+        }
+    }
+
     /// A host query standing in for the platform's: it records each locale
     /// it is asked for, panics for `de-DE`, and names the probe face for
     /// emoji under `ja-JP` only, so moving to `ja-JP` and away from it
@@ -1712,7 +1730,7 @@ mod font_collection_tests {
     fn a_new_locale_asks_the_host_again_once() {
         let _ = take_parked_host_feeds();
         let mut runtime = AppRuntime::new();
-        runtime.follow_locale(runtime.begin_preference_read(), "ja-JP".to_owned());
+        follow(&runtime, "ja-JP");
         let _ = runtime.font_collection();
         let ParkedHostFeed { feed, requests, .. } = take_parked_host_feeds()
             .pop()
@@ -1729,11 +1747,18 @@ mod font_collection_tests {
         assert!(runtime.take_font_change());
         runtime.needs_redraw.store(false, Ordering::Relaxed);
 
-        runtime.follow_locale(runtime.begin_preference_read(), "ja-JP".to_owned());
+        follow(&runtime, "ja-JP");
         assert_eq!(*asked.lock(), ["ja-JP"], "an unchanged locale is not asked");
         assert!(!runtime.take_font_change());
 
-        runtime.follow_locale(runtime.begin_preference_read(), "en-US".to_owned());
+        let wake = runtime
+            .follow_locale(runtime.begin_preference_read(), "en-US".to_owned())
+            .expect("a changed order returns the wake to call");
+        assert!(
+            !runtime.needs_redraw.load(Ordering::Relaxed),
+            "the wake is left to the caller, outside its borrow of the runtime"
+        );
+        wake();
         assert_eq!(*asked.lock(), ["ja-JP", "en-US"], "a new locale is asked");
         assert!(
             runtime.needs_redraw.load(Ordering::Relaxed),
@@ -1857,8 +1882,8 @@ mod font_collection_tests {
 
         let outer = runtime.begin_preference_read();
         let nested = runtime.begin_preference_read();
-        runtime.follow_locale(nested, "fr-FR".to_owned());
-        runtime.follow_locale(outer, "ja-JP".to_owned());
+        assert!(runtime.follow_locale(nested, "fr-FR".to_owned()).is_none());
+        assert!(runtime.follow_locale(outer, "ja-JP".to_owned()).is_none());
 
         assert_eq!(requests.try_iter().collect::<Vec<String>>(), ["fr-FR"]);
     }
