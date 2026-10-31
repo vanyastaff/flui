@@ -591,3 +591,28 @@ fn a_panic_after_the_scene_is_shown_does_not_strand_its_layer_read() {
         .expect("the scene was shown, so the read is answered")
         .expect("the layers are read");
 }
+
+/// Reads staged for a scene whose submit panicked still owe a reply, so they count toward the
+/// window's limit: failures cannot make it admit more than it can answer.
+#[test]
+fn reads_staged_for_a_scene_whose_submit_panicked_count_toward_the_limit() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let (ui_runtime, agent) = shown();
+    let _parked: Vec<_> = (0..16)
+        .map(|_| park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime))))
+        .collect();
+
+    let mut panicking = ScriptedSink::new(|_, _| panic!("a sink that cannot submit"));
+    let unwound = catch_unwind(AssertUnwindSafe(|| frame(&ui_runtime, &mut panicking)));
+    assert!(unwound.is_err(), "the sink's panic continues");
+
+    let mut refused = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    assert!(
+        matches!(
+            refused.try_take().expect("answered at once"),
+            Err(AgentError::TreeBusy(_))
+        ),
+        "the window still owes sixteen replies"
+    );
+}

@@ -118,7 +118,8 @@ impl UiRuntime {
         };
         {
             let mut parked = state.agent_layer_reads.borrow_mut();
-            if parked.len() >= MAX_PARKED_LAYER_READS {
+            // Reads staged for a scene whose submit never settled still owe a reply.
+            if parked.len() + state.agent_layer_staged.borrow().len() >= MAX_PARKED_LAYER_READS {
                 drop(parked);
                 send_reply(
                     &reply,
