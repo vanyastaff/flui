@@ -406,11 +406,12 @@ graph LR
     `a_reference_to_another_window_is_unknown_and_never_read_here`,
     `a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone`,
     `the_limits_cut_the_tree_and_say_so`, `a_deeper_level_adds_fields`,
-    `layers_are_not_readable_because_the_sink_takes_the_scene`,
+    `the_layers_are_read_from_the_next_scene_the_window_shows`,
+    `a_window_parks_a_bounded_number_of_layer_reads`,
     `a_window_that_closed_answers_gone`.
   - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
-    Left: `inspect.layers` needs the sink or the presentation to keep the last scene (today
-    `not_supported`); the wire ids stay tree-local.
+    `inspect.layers` parks on the window and is answered from the next scene it shows; the wire
+    ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
 

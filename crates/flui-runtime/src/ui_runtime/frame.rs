@@ -624,6 +624,9 @@ impl UiRuntime {
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
             let scene = Scene::new(layer_tree);
+            // Before the sink takes the scene: the layer reads parked for it see this one, and
+            // are answered once the submit shows it.
+            presentation.stage_agent_layer_reads(scene.tree());
             phases.lap(FramePhase::Paint);
             Ok(FramePaintOutcome::Painted(scene))
         } else {
@@ -852,6 +855,8 @@ impl UiRuntime {
         // Only a scene the screen shows (or already showed: no damage) may
         // change the system bars; a withheld one keeps its style staged.
         let mut deliver_overlay_style = false;
+        // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
+        let mut hover_panic = None;
         use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
@@ -862,6 +867,16 @@ impl UiRuntime {
             // contract); the direct path borrows it internally and drops it
             // when the render returns.
             let render_verdict = sink.submit(scene);
+            // Before anything else that can panic: the layer reads staged for this scene are
+            // answered if the window showed it, and parked again if it did not.
+            self.settle_layer_reads_after_submit(
+                producer,
+                matches!(
+                    render_verdict,
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
+                ),
+                &mut hover_panic,
+            );
             // Telemetry: sampled AFTER the submit returns, never before
             // it -- a `Presented` verdict means the backend called
             // `output.present()`, and whatever pacing block that call carries
@@ -1089,9 +1104,12 @@ impl UiRuntime {
             }
         }
 
+        // A scene that was never submitted (deferred first frame, no `Painted` outcome) shows
+        // nothing: whatever is still staged is parked again.
+        self.settle_layer_reads_after_submit(producer, false, &mut hover_panic);
+
         // Each window refreshes from its own acknowledged tree. A sibling's
         // failed segment cannot substitute its tree or suppress this work.
-        let mut hover_panic = None;
         for presentation in self
             .presentations
             .iter()

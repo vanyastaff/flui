@@ -123,7 +123,7 @@ pub enum InspectTarget {
     Widgets,
     /// The render tree (`inspect.render`, ids `r12`).
     Render,
-    /// The layers of the last painted scene (`inspect.layers`, ids `l4.37`).
+    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.37`).
     Layers,
 }
 
