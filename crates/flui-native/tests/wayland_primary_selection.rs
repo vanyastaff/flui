@@ -3,6 +3,9 @@
 //! Weston has no primary selection. sway gives the keyboard to the window
 //! shown last and back to the one before when it closes, and tells a client
 //! its seat's primary selection as the keyboard enters one of its surfaces.
+//! It also runs the clipboard case that needs a compositor taking a second
+//! selection under one serial, which the Weston of `wayland_clipboard` (up
+//! to 14) does not.
 //!
 //! Its own harness, as `wayland_clipboard`: it starts Xvfb and a sway before
 //! anything connects and names that sway for the process. A run without
@@ -28,7 +31,9 @@ mod cases {
     use std::sync::{Arc, mpsc};
     use std::time::Instant;
 
+    use flui_native::testing::wayland::selection_offers_concealed_hint;
     use flui_native::{NativePrimarySelection, Platform as _};
+    use flui_platform::ClipboardWrite;
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use super::sway_x11::Session;
@@ -64,6 +69,10 @@ mod cases {
             trial(
                 "a_selection_another_client_takes_is_dropped_at_the_turn",
                 a_selection_another_client_takes_is_dropped_at_the_turn,
+            ),
+            trial(
+                "a_change_of_concealment_under_one_input_sets_a_new_source",
+                a_change_of_concealment_under_one_input_sets_a_new_source,
             ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
@@ -222,6 +231,29 @@ mod cases {
         );
         stop.send(()).expect("the second client listens");
         second.join().expect("the second client ends");
+        first.window.close_for_cleanup();
+    }
+
+    /// A concealed clipboard write after a plain one under the same input,
+    /// and a plain one after that, each change the types the selection
+    /// offers, so each sets a new source: sway takes a second selection
+    /// under one serial, and the offer the seat holds names the concealment
+    /// hint exactly while the latest write is concealed (ADR-0152 §6).
+    fn a_change_of_concealment_under_one_input_sets_a_new_source(_: &Session) {
+        let first = Client::open("first");
+        first.until("the keyboard", || first.window.state().focused);
+        let clipboard = first.platform.clipboard();
+        let hint = || selection_offers_concealed_hint(&first.platform);
+        clipboard.write(ClipboardWrite::text("plain"));
+        first.until("the plain selection", || hint() == Some(false));
+        clipboard.write(ClipboardWrite::text("concealed").concealed());
+        first.until("the concealed selection", || hint() == Some(true));
+        assert_eq!(
+            first.read(|answer| clipboard.read_text(answer)).as_deref(),
+            Some("concealed")
+        );
+        clipboard.write(ClipboardWrite::text("plain again"));
+        first.until("the plain selection again", || hint() == Some(false));
         first.window.close_for_cleanup();
     }
 }
