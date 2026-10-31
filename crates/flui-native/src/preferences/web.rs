@@ -1,5 +1,6 @@
-//! The web host's system preferences: what the browser's media queries and
-//! `navigator.languages` report, owned by the host rather than its canvas.
+//! The web host's system preferences: what the browser's media queries,
+//! `navigator.languages` and `Intl` report, owned by the host rather than its
+//! canvas.
 //!
 //! - `browser`: the queries and listeners, and the source the loop keeps
 //!   (`WebPreferences`);

@@ -14,7 +14,7 @@
 //! Each platform file is its host's source: `windows` (WinRT and Win32
 //! settings, told of changes by the owner's broadcast receiver), `apple`
 //! (AppKit and UIKit), `android` (the Activity's configuration and settings),
-//! `web` (media queries and `navigator.languages`), `linux` (the Settings
+//! `web` (media queries, `navigator.languages` and `Intl`), `linux` (the Settings
 //! portal on D-Bus, read by every Linux host) and `headless` (the values a
 //! test sets). A loop keeps its source through the owner's hook
 //! (`owner::sources::SystemPreferenceSource` or the loop's own), and the host's
