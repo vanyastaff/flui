@@ -2899,7 +2899,7 @@ fn harness_constrained_box_enforces_minimums() {
     assert_descendant_properties(
         &run.render_snapshot(),
         "RenderConstrainedBox",
-        &["additional_min", "additional_max_width"],
+        &["additional_min_width", "additional_max_height"],
     );
     // The unbounded maximum is absent from the description, not published as infinity: the
     // protocol's numbers are finite.
@@ -2923,6 +2923,29 @@ fn harness_constrained_box_enforces_minimums() {
     assert!(
         constrained.get::<f64>("additional_max_width").is_err(),
         "an unbounded maximum is absent"
+    );
+    assert_eq!(
+        constrained.get::<f64>("additional_min_width"),
+        Ok(100.0),
+        "a finite minimum is published"
+    );
+
+    // `expand()` makes the stored minimum itself infinite; it is absent too, not `Size(inf, inf)`.
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedBox::new(BoxConstraints::expand()))
+            .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let expanded = snapshot
+        .find_by_kind("RenderConstrainedBox")
+        .unique()
+        .expect("one constrained box");
+    assert!(
+        expanded.get::<f64>("additional_min_width").is_err()
+            && expanded.get::<f64>("additional_min_height").is_err(),
+        "an unbounded minimum is absent"
     );
 }
 

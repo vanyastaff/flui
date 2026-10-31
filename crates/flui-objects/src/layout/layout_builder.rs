@@ -112,12 +112,23 @@ impl flui_foundation::inspect::Inspect for RenderLayoutBuilder {
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         let constraints = self.cell.constraints();
         let unit = flui_foundation::inspect::Unit::LogicalPx;
+        // An unbounded bound is absent, not infinite: a published size is finite.
         out.field(
-            "published_min",
-            &constraints.as_ref().map(BoxConstraints::smallest),
+            "published_min_width",
+            &constraints
+                .as_ref()
+                .map(|c| c.min_width)
+                .filter(|w| w.is_finite()),
         )
         .unit(unit);
-        // An unbounded maximum is absent, not infinite: a published size is finite.
+        out.field(
+            "published_min_height",
+            &constraints
+                .as_ref()
+                .map(|c| c.min_height)
+                .filter(|h| h.is_finite()),
+        )
+        .unit(unit);
         out.field(
             "published_max_width",
             &constraints

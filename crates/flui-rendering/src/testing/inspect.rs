@@ -155,15 +155,26 @@ pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNo
 ///
 /// When `id` is not a live node of the tree.
 pub fn node_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> SnapshotNode {
-    snapshot(
-        &owner.inspect(),
-        SnapshotQuery {
-            root: Some(id.into()),
-            max_depth: Some(0),
-            ..SnapshotQuery::default()
-        },
-    )
-    .unwrap_or_else(|error| panic!("no snapshot of {id:?}: {error}"))
+    node_snapshotter(owner)(id)
+}
+
+/// [`node_snapshot`] for many nodes of one tree: building the tree's view walks the semantics
+/// tree, so a scan over every node takes the view once and reads each node through it.
+pub fn node_snapshotter<P: PipelinePhase>(
+    owner: &PipelineOwner<P>,
+) -> impl Fn(RenderId) -> SnapshotNode + '_ {
+    let tree = owner.inspect();
+    move |id| {
+        snapshot(
+            &tree,
+            SnapshotQuery {
+                root: Some(id.into()),
+                max_depth: Some(0),
+                ..SnapshotQuery::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("no snapshot of {id:?}: {error}"))
+    }
 }
 
 /// The outline of a snapshot, as a log prints it.

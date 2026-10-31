@@ -129,10 +129,19 @@ impl InspectTree for RenderInspect<'_> {
         match node {
             RenderNode::Box(entry) => {
                 if let Some(constraints) = entry.state().constraints() {
-                    out.field("constraints_min", &constraints.smallest())
-                        .unit(Unit::LogicalPx)
-                        .level(Level::Detail);
-                    // An unbounded maximum is absent, not infinite: a published size is finite.
+                    // An unbounded bound is absent, not infinite: a published size is finite.
+                    out.field(
+                        "constraints_min_width",
+                        &Some(constraints.min_width).filter(|w| w.is_finite()),
+                    )
+                    .unit(Unit::LogicalPx)
+                    .level(Level::Detail);
+                    out.field(
+                        "constraints_min_height",
+                        &Some(constraints.min_height).filter(|h| h.is_finite()),
+                    )
+                    .unit(Unit::LogicalPx)
+                    .level(Level::Detail);
                     out.field(
                         "constraints_max_width",
                         &Some(constraints.max_width).filter(|w| w.is_finite()),

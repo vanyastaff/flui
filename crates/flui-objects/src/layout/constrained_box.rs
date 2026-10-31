@@ -95,18 +95,27 @@ impl flui_foundation::inspect::Inspect for RenderConstrainedBox {
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         let unit = flui_foundation::inspect::Unit::LogicalPx;
-        out.field("additional_min", &self.additional_constraints.smallest())
-            .unit(unit);
-        // An unbounded maximum is absent, not infinite: a published size is finite.
-        let max = self.additional_constraints;
+        // An unbounded bound is absent, not infinite: a published size is finite. `expand()`
+        // makes the minimum itself infinite.
+        let bounds = self.additional_constraints;
+        out.field(
+            "additional_min_width",
+            &Some(bounds.min_width).filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "additional_min_height",
+            &Some(bounds.min_height).filter(|h| h.is_finite()),
+        )
+        .unit(unit);
         out.field(
             "additional_max_width",
-            &Some(max.max_width).filter(|w| w.is_finite()),
+            &Some(bounds.max_width).filter(|w| w.is_finite()),
         )
         .unit(unit);
         out.field(
             "additional_max_height",
-            &Some(max.max_height).filter(|h| h.is_finite()),
+            &Some(bounds.max_height).filter(|h| h.is_finite()),
         )
         .unit(unit);
     }

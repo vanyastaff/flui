@@ -1488,13 +1488,14 @@ impl LaidOut {
             }
 
             let queried = base_type_name(render_type_name);
+            let snapshot_of = inspect::node_snapshotter(owner);
             render_tree
                 .iter()
                 .filter_map(|(id, _node)| {
                     if !logical_ids.contains(&id) {
                         return None;
                     }
-                    (inspect::node_snapshot(owner, id).kind == queried).then_some(id)
+                    (snapshot_of(id).kind == queried).then_some(id)
                 })
                 .collect()
         })
@@ -1703,11 +1704,12 @@ impl LaidOut {
     /// behavior is unchanged. Returns an empty `Vec` when nothing matches.
     pub fn find_all_text(&self, text: &str) -> Vec<RenderId> {
         self.pipeline_owner.with(|owner| {
+            let snapshot_of = inspect::node_snapshotter(owner);
             owner
                 .render_tree()
                 .iter()
                 .filter_map(|(id, _node)| {
-                    let node = inspect::node_snapshot(owner, id);
+                    let node = snapshot_of(id);
                     (inspect::paragraph_text(&node).as_deref() == Some(text)).then_some(id)
                 })
                 .collect()
