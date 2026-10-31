@@ -43,9 +43,10 @@ pub(crate) enum PortalError {
 impl From<zbus::Error> for PortalError {
     fn from(error: zbus::Error) -> Self {
         match error {
-            zbus::Error::Address(_) | zbus::Error::InputOutput(_) | zbus::Error::Handshake(_) => {
-                Self::Unavailable(UnsupportedReason::Unavailable)
-            }
+            zbus::Error::Address(_)
+            | zbus::Error::Connection(..)
+            | zbus::Error::InputOutput(_)
+            | zbus::Error::Handshake(_) => Self::Unavailable(UnsupportedReason::Unavailable),
             zbus::Error::FDO(error)
                 if matches!(
                     *error,

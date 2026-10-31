@@ -9,13 +9,14 @@ use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_platform::capability::{Abandoned, Completion};
 use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability};
 use flui_system::dialog::{
-    DialogError, FileDialogCapability, FileFilter, OpenRequest, PickedFile, SaveRequest,
+    DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile, SaveRequest,
 };
 use flui_system::testing::PortalOnBus;
 use flui_testing::HeadlessHost;
@@ -96,6 +97,10 @@ struct Script {
     trashed: Mutex<u32>,
     /// The options each dialog was asked with, by name.
     dialog_options: Mutex<Vec<Results>>,
+    /// Whether requests are held unanswered instead of answered.
+    holding: AtomicBool,
+    /// The held requests: the caller's unique name and the `Request` path.
+    held: Mutex<Vec<(String, String)>>,
 }
 
 impl Script {
@@ -129,6 +134,14 @@ impl Script {
             .map(|token| String::try_from(token.clone()).expect("a string token"))
             .expect("the provider names its request");
         let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+        if self.holding.load(Ordering::SeqCst) {
+            let caller = header
+                .sender()
+                .expect("a method call has a sender")
+                .to_string();
+            self.held.lock().expect("held").push((caller, path.clone()));
+            return OwnedObjectPath::try_from(path).expect("a valid request path");
+        }
         let answer = self.next();
         connection
             .emit_signal(
@@ -260,7 +273,7 @@ impl FileChooser {
 /// A private bus with a stand-in portal on it.
 struct StandIn {
     script: Arc<Script>,
-    _server: zbus::Connection,
+    server: Option<zbus::Connection>,
     bus: PrivateBus,
 }
 
@@ -280,9 +293,40 @@ impl StandIn {
         .expect("the stand-in owns the portal's name");
         Self {
             script,
-            _server: server,
+            server: Some(server),
             bus,
         }
+    }
+
+    /// Hold every later request unanswered.
+    fn hold(&self) {
+        self.script.holding.store(true, Ordering::SeqCst);
+    }
+
+    /// The requests held so far: the caller's unique name and the path.
+    fn held(&self) -> Vec<(String, String)> {
+        self.script.held.lock().expect("held").clone()
+    }
+
+    /// Answer the held request at `path` as the portal.
+    fn release(&self, path: &str, code: u32, results: Results) {
+        let server = self.server.as_ref().expect("the stand-in is on the bus");
+        zruntime::block_on(server.emit_signal(
+            None::<&str>,
+            path,
+            "org.freedesktop.portal.Request",
+            "Response",
+            &(code, results),
+        ))
+        .expect("the response is sent");
+    }
+
+    /// Leave the bus, as a portal that exits or restarts does.
+    fn depart(&mut self) {
+        let server = self.server.take().expect("the stand-in is on the bus");
+        zruntime::block_on(server.release_name("org.freedesktop.portal.Desktop"))
+            .expect("the stand-in gives up the portal's name");
+        drop(server);
     }
 
     fn plugin(&self) -> PortalOnBus {
@@ -372,6 +416,17 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
         Ok(Err(LaunchError::NotFound)),
         "a missing file is refused before the portal is asked"
     );
+
+    *portal.script.trashed.lock().expect("trashed") = 1;
+    let link = file.with_extension("link");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&file, &link).expect("a symbolic link");
+    assert_eq!(
+        settle(&mut host, launcher.trash_path(&link)),
+        Ok(Err(LaunchError::Denied)),
+        "trashing a link is refused rather than trashing its target"
+    );
+    let _ = std::fs::remove_file(&link);
 
     let canonical = file.canonicalize().expect("the file exists");
     assert_eq!(
@@ -492,5 +547,99 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     assert!(
         matches!(answered, Ok(Err(LaunchError::Unavailable(_)))),
         "{answered:?}"
+    );
+
+    // No bus at all: the address names no socket.
+    let missing = std::env::temp_dir().join(format!("flui-no-bus-{}", std::process::id()));
+    let plugin = PortalOnBus::new(format!("unix:path={}", missing.display()));
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&plugin);
+    let dialogs = dialogs.expect("the dialogs are handed out before the bus is asked");
+    let answered = settle(&mut host, dialogs.open(OpenRequest::files()));
+    assert!(
+        matches!(answered, Ok(Err(DialogError::Unavailable(_)))),
+        "{answered:?}"
+    );
+}
+
+/// Pump `host` until `ready` holds.
+fn pump_until(host: &mut HeadlessHost, what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready() {
+        assert!(Instant::now() < deadline, "{what} within 10 s");
+        turn(host);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_response_from_another_client_is_not_heard() {
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    portal.hold();
+
+    let slot = outcome_slot::<Result<OpenResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    dialogs
+        .open(OpenRequest::files())
+        .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    pump_until(&mut host, "the dialog reached the portal", || {
+        !portal.held().is_empty()
+    });
+    let (caller, path) = portal.held().remove(0);
+
+    // Another client answers first, sent to the caller directly.
+    let rogue =
+        zruntime::block_on(zbus::connection::Builder::address(portal.bus.address.as_str()).build())
+            .expect("another client connects");
+    zruntime::block_on(rogue.emit_signal(
+        Some(caller.as_str()),
+        path.as_str(),
+        "org.freedesktop.portal.Request",
+        "Response",
+        &(0_u32, uris(&["file:///etc/shadow"])),
+    ))
+    .expect("the forged response is sent");
+    for _ in 0..20 {
+        turn(&mut host);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(slot.borrow().is_none(), "the forged answer was not taken");
+
+    portal.release(&path, 1, Results::new());
+    pump_until(&mut host, "the portal's own answer", || {
+        slot.borrow().is_some()
+    });
+    assert_eq!(slot.borrow_mut().take(), Some(Ok(Ok(None))));
+}
+
+#[test]
+fn a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window() {
+    let mut portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    portal.hold();
+
+    let slot = outcome_slot::<Result<OpenResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    dialogs
+        .open(OpenRequest::files())
+        .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    pump_until(&mut host, "the dialog reached the portal", || {
+        !portal.held().is_empty()
+    });
+    portal.depart();
+    pump_until(&mut host, "the dialog ended", || slot.borrow().is_some());
+    let ended = slot.borrow_mut().take();
+    assert!(
+        matches!(ended, Some(Ok(Err(DialogError::Unavailable(_))))),
+        "{ended:?}"
+    );
+
+    // The window is free again: the next dialog is not `Busy`.
+    let next = settle(&mut host, dialogs.save(SaveRequest::new()));
+    assert!(
+        matches!(next, Ok(Err(DialogError::Unavailable(_)))),
+        "{next:?}"
     );
 }

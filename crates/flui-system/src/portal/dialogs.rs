@@ -107,7 +107,10 @@ fn filters(filters: &[FileFilter]) -> Vec<(String, Vec<(u32, String)>)> {
                 .mime_types()
                 .iter()
                 .map(|mime_type| (1, mime_type.clone()));
-            (filter.name().to_owned(), globs.chain(types).collect())
+            (
+                filter.name().to_owned(),
+                globs.chain(types).collect::<Vec<(u32, String)>>(),
+            )
         })
         .collect::<Vec<(String, Vec<(u32, String)>)>>()
 }

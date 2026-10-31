@@ -6,7 +6,9 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
+use flui_platform::UnsupportedReason;
 use futures_util::StreamExt;
+use futures_util::future::{Either, select};
 use zbus::{MatchRule, MessageStream, OwnedObjectPath, OwnedVariant};
 
 use super::PortalError;
@@ -29,6 +31,12 @@ pub(super) enum Response {
 /// `token` is the request's `handle_token`, already in `body`'s options: it
 /// names the `Request` object before the call, so the subscription to its
 /// response is in place before the portal can answer.
+///
+/// The call goes to the portal's current unique owner, and only a
+/// `Response` sent by that owner is heard: another client on the bus can
+/// send a signal to this connection directly, past any bus-side match rule,
+/// but not under the portal's unique name. The portal leaving the bus before
+/// it answers ends the request as unavailable.
 pub(super) async fn call<B>(
     connection: &zbus::Connection,
     interface: &str,
@@ -45,19 +53,28 @@ where
         .trim_start_matches(':')
         .replace('.', "_");
     let expected = format!("{PATH}/request/{sender}/{token}");
-    let mut responses = subscribe(connection, &expected).await?;
+    let mut departures = subscribe_departures(connection).await?;
+    let owner = zbus::fdo::DBusProxy::new(connection)
+        .await?
+        .get_name_owner(zbus::names::BusName::try_from(DESTINATION)?)
+        .await
+        .map_err(zbus::Error::from)?;
+    let mut responses = subscribe(connection, &owner, &expected).await?;
 
     let reply = connection
-        .call_method(Some(DESTINATION), PATH, Some(interface), method, body)
+        .call_method(Some(owner.as_str()), PATH, Some(interface), method, body)
         .await?;
     let handle = reply.body().deserialize::<OwnedObjectPath>()?;
     if handle.as_str() != expected {
         // A portal older than `handle_token` names the object itself; its
         // answer can only be heard from here on.
-        responses = subscribe(connection, handle.as_str()).await?;
+        responses = subscribe(connection, &owner, handle.as_str()).await?;
     }
 
-    let message = responses.next().await.ok_or(PortalError::Failed)??;
+    let message = match select(responses.next(), departures.next()).await {
+        Either::Left((message, _)) => message.ok_or(PortalError::Failed)??,
+        Either::Right(_) => return Err(PortalError::Unavailable(UnsupportedReason::Unavailable)),
+    };
     let (code, results) = message
         .body()
         .deserialize::<(u32, HashMap<String, OwnedVariant>)>()?;
@@ -68,16 +85,31 @@ where
     })
 }
 
+/// The `Response` signals `owner` sends on the `Request` object at `path`.
 async fn subscribe(
     connection: &zbus::Connection,
+    owner: &str,
     path: &str,
 ) -> Result<MessageStream, PortalError> {
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .sender(DESTINATION)
+        .sender(owner)
         .interface("org.freedesktop.portal.Request")
         .member("Response")
         .path(path)
+        .build()?;
+    Ok(MessageStream::for_match_rule(rule, connection, None).await?)
+}
+
+/// The bus's notices that the portal's name changed owner: any change
+/// means the owner a request was sent to is gone.
+async fn subscribe_departures(connection: &zbus::Connection) -> Result<MessageStream, PortalError> {
+    let rule = MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")
+        .interface("org.freedesktop.DBus")
+        .member("NameOwnerChanged")
+        .arg(0, DESTINATION)
         .build()?;
     Ok(MessageStream::for_match_rule(rule, connection, None).await?)
 }
