@@ -169,6 +169,10 @@ fn reorderable_list() {
                 crate::reorderable::a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row,
             ),
             (
+                "reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size",
+                crate::reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size,
+            ),
+            (
                 "reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis",
                 crate::reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis,
             ),

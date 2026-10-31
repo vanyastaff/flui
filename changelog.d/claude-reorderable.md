@@ -7,7 +7,8 @@
   is in the row, and a context menu opened from the handle, or visible controls with
   `visible_controls`. Every move is announced with the row's new position
   (`WidgetsLocalizations::reorder_item_moved`), and a moved row keeps its focus. The drag shows
-  the row's label under the pointer, or what `feedback` builds.
+  the row's label under the pointer (a plate the row's size when it has none), or what `feedback`
+  builds.
 
 ### Changed
 

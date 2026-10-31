@@ -28,9 +28,15 @@ use std::rc::Rc;
 use flui_foundation::ValueKey;
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::Size;
 use flui_interaction::drag::{DragItem, DragReach, DragView};
 use flui_interaction::{MultiDragAxis, PointerKindSet};
-use flui_painting::styling::Color;
+use flui_objects::SubtreeAnchor;
+use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_rendering::pipeline::WeakPipelineCell;
+
+use crate::__private::AnchoredBox;
+use crate::{DecoratedBox, DefaultFocusRingStyle};
 use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::keyboard::NamedKey;
@@ -365,6 +371,8 @@ struct Shared {
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
     strings: RefCell<Option<std::sync::Arc<BoxedWidgetsLocalizations>>>,
+    /// The render tree the rows lay out in, for the size of a dragged row.
+    pipeline: RefCell<Option<WeakPipelineCell>>,
 }
 
 impl Shared {
@@ -373,6 +381,14 @@ impl Shared {
         if let Some(writer) = writer {
             writer.write(invoke);
         }
+    }
+
+    /// The laid-out size of the row published into `anchor`, or `None` when it
+    /// is not laid out or a layout pass is running.
+    fn row_size(&self, anchor: &SubtreeAnchor) -> Option<Size> {
+        let id = anchor.get()?;
+        let owner = self.pipeline.borrow().as_ref()?.upgrade()?;
+        owner.try_with_layout(|owner| owner.box_size(id))?
     }
 
     /// A drag of `key` is over `over` now.
@@ -458,6 +474,7 @@ impl StatefulView for ReorderableList {
                 writer: RefCell::new(None),
                 announcer: RefCell::new(None),
                 strings: RefCell::new(None),
+                pipeline: RefCell::new(None),
             }),
         }
     }
@@ -467,6 +484,7 @@ impl ReorderableListState {
     fn acquire(&self, ctx: &dyn LifecycleContext) {
         *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
         *self.shared.announcer.borrow_mut() = ctx.announcer();
+        *self.shared.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
     }
 }
 
@@ -721,6 +739,7 @@ impl StatelessView for ReorderRow {
             menu,
             axis: view.scroll_direction,
         };
+        let anchor = SubtreeAnchor::new();
         let feedback = match &view.feedback {
             Some(feedback) => feedback(&ReorderableItem {
                 index,
@@ -729,7 +748,11 @@ impl StatelessView for ReorderRow {
             }),
             None => match view.item_label.as_ref().map(|label| label(index)) {
                 Some(label) => Text::new(label).boxed(),
-                None => SizedBox::shrink().boxed(),
+                None => RowPlate {
+                    list: Rc::clone(&self.list),
+                    anchor: anchor.clone(),
+                }
+                .boxed(),
             },
         };
         let source = HandleSource {
@@ -756,6 +779,9 @@ impl StatelessView for ReorderRow {
             content
         };
 
+        // The row publishes its render node, so a drag without a label shows
+        // a plate of the row's size.
+        let content = AnchoredBox::new(anchor, content).boxed();
         let token = Rc::clone(&self.list);
         let hover = Rc::clone(&self.list);
         let target = DropTarget::bare(
@@ -833,6 +859,40 @@ impl StatelessView for ReorderRow {
             count: view.item_count,
             rtl,
         })
+    }
+}
+
+/// What a drag of a row without a label shows: a plate the row's size in the
+/// focus ring's colors, so the drag is seen; nothing while the row is not
+/// laid out.
+#[derive(Clone)]
+struct RowPlate {
+    list: Rc<Shared>,
+    anchor: SubtreeAnchor,
+}
+
+impl View for RowPlate {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for RowPlate {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let Some(size) = self.list.row_size(&self.anchor) else {
+            return SizedBox::shrink().boxed();
+        };
+        let style = DefaultFocusRingStyle::of(ctx);
+        let plate = BoxDecoration::new()
+            .set_color(Some(style.inner.with_alpha(0xCC)))
+            .set_border(Some(Border::all(BorderSide::new(
+                style.outer,
+                style.outer_width.max(1.0),
+                BorderStyle::Solid,
+            ))));
+        SizedBox::new(size.width, size.height)
+            .child(DecoratedBox::new(plate))
+            .boxed()
     }
 }
 

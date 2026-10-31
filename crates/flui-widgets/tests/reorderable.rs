@@ -11,7 +11,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Axis, Offset};
+use flui_foundation::RenderId;
+use flui_foundation::geometry::{Axis, Offset, Size};
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
@@ -24,9 +25,9 @@ use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
-    Alternative, GestureAlternatives, GestureCommand, MenuSpec, Navigator, NavigatorHandle,
-    PageRoute, ReorderCause, ReorderIntent, ReorderPreview, ReorderableList, SelectionArea,
-    SingleActivator, SizedBox, Text, Urgency,
+    Alternative, DecoratedBox, GestureAlternatives, GestureCommand, MenuSpec, Navigator,
+    NavigatorHandle, PageRoute, ReorderCause, ReorderIntent, ReorderPreview, ReorderableList,
+    SelectionArea, SingleActivator, SizedBox, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -61,6 +62,8 @@ struct Log {
     /// Whether the list has a feedback builder, and the rows it built.
     with_feedback: std::cell::Cell<bool>,
     fed: RefCell<Vec<usize>>,
+    /// Whether the rows have no label.
+    unlabelled: std::cell::Cell<bool>,
 }
 
 /// The shelf: its model, what it recorded and whether the list is shown.
@@ -224,7 +227,6 @@ impl ViewState<ShelfList> for ShelfListState {
                 });
             },
         )
-        .item_label(move |index| labels.with(|items| items[index].clone()))
         .on_reorder_preview(move |_cx, preview| previewed.previews.borrow_mut().push(preview))
         .item_extent_estimate(ROW)
         .scroll_direction(if horizontal {
@@ -239,6 +241,11 @@ impl ViewState<ShelfList> for ShelfListState {
             })
         } else {
             list
+        };
+        let list = if shelf.log.unlabelled.get() {
+            list
+        } else {
+            list.item_label(move |index| labels.with(|items| items[index].clone()))
         };
         list.into_view().boxed()
     }
@@ -521,6 +528,37 @@ pub(crate) fn a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row() {
     laid.dispatch_pointer_up(row_at(3, HANDLE_X).0, row_at(3, HANDLE_X).1);
     settle(&mut laid);
     assert_eq!(shelf.moves(), [(1, 3, ReorderCause::Drag)]);
+}
+
+/// A drag of a row without a label shows a plate the row's size, so the drag
+/// is seen; the plate is gone when the drag ends.
+pub(crate) fn a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size() {
+    fn row_sized(laid: &LaidOut, id: RenderId, found: &mut usize) {
+        if laid.try_size(id) == Some(Size::new(400.0, ROW)) {
+            *found += 1;
+        }
+        for child in laid.children(id) {
+            row_sized(laid, child, found);
+        }
+    }
+    let count = |laid: &mut LaidOut| {
+        let mut found = 0;
+        row_sized(laid, laid.current_root(), &mut found);
+        (laid.count_elements_by_view_type::<DecoratedBox>(), found)
+    };
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.unlabelled.set(true);
+    let mut laid = shelf.mount();
+    let (plates, sized) = count(&mut laid);
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    laid.pump();
+    let (dragging_plates, dragging_sized) = count(&mut laid);
+    assert_eq!(dragging_plates, plates + 1, "the drag shows one plate");
+    assert!(dragging_sized > sized, "the plate is the row's size");
+    press(&laid, &SingleActivator::named(NamedKey::Escape));
+    laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(count(&mut laid).0, plates, "the plate leaves with the drag");
 }
 
 /// A list turned horizontal after it mounted drags its rows by a handle
