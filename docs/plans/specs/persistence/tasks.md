@@ -267,6 +267,7 @@ graph LR
     Строки: `close_with_a_failed_write_requires_a_decision` (R14),
     `close_during_a_save_waits_for_it`, `hidden_writes_the_session_and_resume_does_not_reread`
     (R13, хар.: сеанс пишется на каждом изменении, `set_window_visible`), в flui-testing
-    `a_decided_close_is_carried_out_past_the_hold`. Откаты — без панели решения, кнопки без
+    `a_decided_close_is_carried_out_past_the_hold`, `a_close_recorded_on_the_first_loaded_frame_is_shown`
+    (первое ожидание `changed()` берётся до первого чтения). Откаты — без панели решения, кнопки без
     `discard_and_close` или `stay_open` — роняют строку R14.
 - [ ] P12 — нативный прогон (после flui-driver FD11)

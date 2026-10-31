@@ -9,6 +9,7 @@ use std::task::{Poll, Waker};
 use flui::platform::StorageError;
 use flui::platform::keyboard::NamedKey;
 use flui::testing::storage::MemoryStorage;
+use flui::view::CloseReason;
 use flui::view::persist::Document;
 use serde_json::{Value, json};
 
@@ -811,4 +812,30 @@ fn hidden_writes_the_session_and_resume_does_not_reread() {
         !run.shows_starting("Load failed: "),
         "and nothing is read back"
     );
+}
+
+/// A close recorded on the first loaded frame, before anything has run on
+/// the runtime's tasks, still reaches the screens.
+#[test]
+fn a_close_recorded_on_the_first_loaded_frame_is_shown() {
+    let (app, gate) = gated();
+    let storage = MemoryStorage::new();
+    storage.put(&Session::NAME, "not a session");
+    let mut run = AppRun::start_over(app, storage);
+    // The unreadable session starts over, and its write is held.
+    let held = run.storage().hold_writes();
+    gate.set_open(true);
+    run.laid().pump();
+    assert!(
+        !run.laid().request_close(CloseReason::User),
+        "the session write in flight holds the close"
+    );
+    run.settle();
+    assert!(
+        !run.is_closed() && run.shows("Close without saving"),
+        "the recorded close is shown"
+    );
+    drop(held);
+    run.settle();
+    assert!(run.is_closed(), "and carried out once the write lands");
 }

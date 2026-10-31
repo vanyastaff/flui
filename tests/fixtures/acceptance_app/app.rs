@@ -618,11 +618,16 @@ impl CloseWatch {
         let changed = Rc::new(ChangeNotifier::new());
         let told = Rc::downgrade(&changed);
         let followed = guard.clone();
+        // Taken now, before the screens first read what is recorded: the task
+        // is first polled a turn later, and a close recorded in between must
+        // still wake it.
+        let mut next = guard.changed();
         let following = driver.spawn_local(Box::pin(async move {
             loop {
-                // The next future is taken in the same turn the change is
-                // told, so a later change always wakes it.
-                followed.changed().await;
+                next.await;
+                // Taken before the listeners read, so a change they cause, or
+                // one after them, wakes the next round.
+                next = followed.changed();
                 let Some(told) = told.upgrade() else {
                     return;
                 };
