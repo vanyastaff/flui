@@ -394,18 +394,29 @@ trait depends on `flui-platform` instead.
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
   its caret is: AppKit, winit, headless) or `Store` (the platform reads or
-  mirrors the field's store: TSF, Android, web), and
-  `Absent<position::Text>` answers none; each window's accessor goes through
-  it, as do its text sizing (`capture_sizing`, `invalidate_sizing`,
-  `fence_sizing`) and its going (`detach`). Where the text feature keeps a
+  mirrors the field's store: TSF, Android, web, Wayland's
+  `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
+  window's accessor goes through it, as do its text sizing
+  (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
+  (`detach`). Where the text feature keeps a
   window's state itself the handle is a key to it: Android's input method
   keeps each window's field by `owner::android::ActivityWindowId`, and the
-  Web's text input lives in the canvas window's owner-thread slot. Beside it,
+  Web's text input lives in the canvas window's owner-thread slot. On
+  Wayland the seats' input binds each seat's `zwp_text_input_v3` through the
+  owner's `SeatText` seam, which `text::linux::wayland` implements and the
+  table hands the input, and records its events in the seats' queue in order
+  with the keys around them, a seat or manager that goes queued behind what
+  its text input reported, so that reaches the field first; a window's text
+  reaches the input as an opaque
+  `SeatWindowText`, so neither the owner nor the input names the text
+  feature's platform file. Beside it,
   one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
   answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
-  `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
+  `web.rs` (the pure `ime`, `input`), `linux/{text_input, wayland}.rs` (the
+  pure `text_input` client of `zwp_text_input_v3` over a wire trait, and its
+  Wayland objects), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
@@ -416,7 +427,9 @@ trait depends on `flui-platform` instead.
   (`input::android::keys`, `input::web::keys`), and a window's text input
   tells it whether the field composes. Tests of the model and the pure
   halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
-  `text::web::ime::tests`, `text::windows::geometry::tests`).
+  `text::web::ime::tests`, `text::windows::geometry::tests`,
+  `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
+  the Wayland client from a real input method on sway.
 - **`fonts` answers which system faces fall back, for a locale (ADR-0271
   §3).** `fonts::system_fallback` is the one entry; the composition root hands
   it to the font feed, which calls it on its own thread, never the owner's

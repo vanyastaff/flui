@@ -6,8 +6,9 @@
 //! (`owner::linux`). Both fill the input position: Wayland with its seats'
 //! input, X11 with XInput 2 and XKB. Wayland fills the clipboard position
 //! with its seats' selection, X11 with the `CLIPBOARD` selection on a
-//! connection of its own. Text input, drag and drop and X11's primary selection
-//! are `Absent` until each host speaks their protocols; a desktop has no
+//! connection of its own. Wayland fills the text position with its seats'
+//! `zwp_text_input_v3`. X11's text input, its drag and drop and its primary
+//! selection are `Absent` until it speaks their protocols; a desktop has no
 //! haptics and no system bars.
 
 use std::sync::Arc;
@@ -65,6 +66,7 @@ mod wayland {
     use crate::owner::linux::wayland::{
         LastInput, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
     };
+    use crate::text::linux::wayland::{SeatTexts, WaylandText};
     use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
     /// The Wayland host's table.
@@ -78,7 +80,7 @@ mod wayland {
         type Window = WaylandWindow;
         type Displays = WaylandLoop;
         type Input = WaylandLoop;
-        type Text = Absent<position::Text>;
+        type Text = WaylandText;
         type Accessibility = UnixAccessibility;
         type Clipboard = WaylandLoop;
         type PrimarySelection = WaylandLoop;
@@ -98,9 +100,10 @@ mod wayland {
         }
 
         /// The keyboards, pointers, touchscreens, tablet tools and touchpad
-        /// pinches of every seat, with the cursor each window shows.
+        /// pinches of every seat, with the cursor each window shows, and the
+        /// text inputs that reach each window's text.
         fn input(last_input: LastInput) -> Arc<dyn WaylandInput> {
-            Arc::new(SeatInput::new(last_input))
+            Arc::new(SeatInput::new(last_input, Arc::new(SeatTexts::new())))
         }
 
         /// The seats' selection, through `wl_data_device`.
