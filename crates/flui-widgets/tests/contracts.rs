@@ -616,6 +616,7 @@ fn selection_area_handles() {
             ("selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging", crate::selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging),
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
+            ("selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch", crate::selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch),
         ],
     );
 }

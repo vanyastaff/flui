@@ -18,3 +18,5 @@
   lands on it and takes its scale and rotation, and a leader inside another follower resolves
   through it. Painting, damage, hit-testing and input regions all read the same transform; a
   singular chain paints nothing instead of a degenerate transform.
+- **`flui-widgets`**: a `SelectionArea` touch handle whose end scrolls out of its viewport no
+  longer paints over the content around it or takes touches there.

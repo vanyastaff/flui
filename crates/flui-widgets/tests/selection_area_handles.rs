@@ -884,3 +884,53 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_surface_the_first() {
     scene.settle();
     assert_eq!(scene.handles(), 0);
 }
+
+/// A handle whose end scrolls out of its viewport takes no touch where it
+/// would paint, and takes them again once the end scrolls back.
+///
+/// Red-check: let the handles escape their ends' clips (the drag above the
+/// viewport moves the end).
+pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    const ABOVE: f64 = 150.0;
+    const SCROLLED: f64 = 100.0;
+    let heard: Heard = Rc::default();
+    let controller = ScrollController::new();
+    let area = SelectionArea::new(Column::new((Text::new(WORDS), SizedBox::new(400.0, 300.0))))
+        .handles(Marked::default())
+        .on_selection_changed({
+            let recorded = Rc::clone(&heard);
+            move |_cx, selected| {
+                recorded
+                    .borrow_mut()
+                    .push(selected.map(|selected| selected.text.clone()));
+            }
+        });
+    let app = WidgetsApp::new(Column::new((
+        SizedBox::new(400.0, ABOVE),
+        SizedBox::new(400.0, 60.0)
+            .child(Scrollable::new().controller(controller.clone()).child(area)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    let end = width_of("alpha beta");
+    let past = Offset::new(width_of(WORDS) + 10.0 - end, 0.0);
+    let shown = scene.handle_at(end);
+    let scrolled = shown - Offset::new(0.0, SCROLLED);
+    assert!(
+        scrolled.dy < ABOVE,
+        "the handle would paint above the viewport"
+    );
+    controller.jump_to(SCROLLED).expect("no build is running");
+    scene.settle();
+    scene.touch_drag(scrolled, scrolled + past);
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    controller.jump_to(0.0).expect("no build is running");
+    scene.settle();
+    scene.touch_drag(shown, shown + past);
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+}
