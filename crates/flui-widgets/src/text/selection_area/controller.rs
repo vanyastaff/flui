@@ -7,10 +7,12 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
+use flui_foundation::ElementId;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId, ListenerObserver};
 use flui_painting::text_boundaries;
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
+use flui_view::EventContextError;
 
 use super::input::CaretMemory;
 use super::{SelectedText, SelectionChangeCause, SelectionModel};
@@ -59,6 +61,13 @@ pub enum SelectError {
         text: SemanticsAnchor,
         /// The byte that is not a boundary of it.
         byte: usize,
+    },
+    /// The call came while an element was building: a selection changes in
+    /// an event or after a frame, never from `build` (ADR-0086).
+    #[error("the selection was changed during the build of {element:?}")]
+    DuringBuild {
+        /// The element whose build is in progress.
+        element: ElementId,
     },
 }
 
@@ -145,7 +154,8 @@ impl SelectionController {
     ///
     /// The selection is left as it was when the controller is not attached,
     /// when an end names a text [`texts`](Self::texts) does not list, or
-    /// when an end's byte is not a grapheme boundary of its text.
+    /// when an end's byte is not a grapheme boundary of its text, and when
+    /// called during a build ([`SelectError::DuringBuild`]).
     pub fn select(&self, selection: DocumentSelection) -> Result<(), SelectError> {
         let area = self.area().ok_or(SelectError::NotAttached)?;
         let ordered = area.ordered();
@@ -169,7 +179,8 @@ impl SelectionController {
     ///
     /// # Errors
     ///
-    /// [`SelectError::NotAttached`] when the controller is not attached.
+    /// [`SelectError::NotAttached`] when the controller is not attached,
+    /// [`SelectError::DuringBuild`] when called during a build.
     pub fn select_all(&self) -> Result<(), SelectError> {
         let area = self.area().ok_or(SelectError::NotAttached)?;
         let ordered = area.ordered();
@@ -187,7 +198,8 @@ impl SelectionController {
     ///
     /// # Errors
     ///
-    /// [`SelectError::NotAttached`] when the controller is not attached.
+    /// [`SelectError::NotAttached`] when the controller is not attached,
+    /// [`SelectError::DuringBuild`] when called during a build.
     pub fn clear(&self) -> Result<(), SelectError> {
         let area = self.area().ok_or(SelectError::NotAttached)?;
         area.write_programmatic(None)
@@ -242,18 +254,26 @@ impl SelectionController {
 
 impl SelectionModel {
     /// Commits `selection` for a controller, through the area's writer,
-    /// without taking the focus.
+    /// without taking the focus. A call during a build is refused before
+    /// anything changes.
     fn write_programmatic(&self, selection: Option<&DocumentSelection>) -> Result<(), SelectError> {
         let writer = self.writer.borrow().clone();
         let writer = writer.ok_or(SelectError::NotAttached)?;
         writer.write(|cx| {
+            match writer.check_context(cx) {
+                Ok(()) => {}
+                Err(EventContextError::WrittenDuringBuild { element }) => {
+                    return Err(SelectError::DuringBuild { element });
+                }
+                Err(_) => return Err(SelectError::NotAttached),
+            }
             self.commit(
                 cx,
                 selection,
                 SelectionChangeCause::Programmatic,
                 CaretMemory::default(),
             );
-        });
-        Ok(())
+            Ok(())
+        })
     }
 }

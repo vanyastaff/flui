@@ -558,6 +558,13 @@ impl SelectionModel {
         // put: Shift+End at a short line's end forgets the column.
         self.caret.set(caret);
         if *self.selection.borrow() == selection {
+            // A controller's selection hides the handles even when it keeps
+            // the range a touch selected; the range is no change to report.
+            if cause == SelectionChangeCause::Programmatic {
+                let mut failure = FirstPanic::new();
+                self.hide_handles(&mut failure);
+                failure.resume();
+            }
             return;
         }
         let coverage = selection

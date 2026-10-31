@@ -4,8 +4,8 @@
   `SelectionArea::controller`, reads and moves the area's selection from outside: `texts` lists
   the presented texts in reading order, `select` takes a `DocumentSelection` and refuses ends the
   area does not present with a typed `SelectError`, `select_all` and `clear` do the obvious, and
-  `listenable` notifies after every change. A controller's selection does not take the focus and
-  hides the touch handles.
+  `listenable` notifies after every change. A call during a build is refused. A controller's
+  selection does not take the focus and hides the touch handles.
 
 ### Changed
 

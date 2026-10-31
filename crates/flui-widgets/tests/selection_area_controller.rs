@@ -13,6 +13,7 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
 use flui_testing::replay::MouseScript;
 use flui_view::{BoxedView, ViewExt};
+use flui_widgets::prelude::{BuildContext, IntoView, StatelessView};
 use flui_widgets::{
     Column, SelectError, SelectionArea, SelectionChangeCause, SelectionController, SelectionInput,
     SizedBox, Text, WidgetsApp,
@@ -373,4 +374,45 @@ pub(crate) fn a_panicking_listener_still_lets_the_controller_notify() {
         Some(span(&first, 0, 5)),
         "it is committed"
     );
+}
+
+/// Calls `select_all` on its controller from `build`, keeping the answer.
+#[derive(Clone, Debug, StatelessView)]
+struct SelectsInBuild {
+    controller: SelectionController,
+    answer: Rc<RefCell<Option<Result<(), SelectError>>>>,
+}
+
+impl StatelessView for SelectsInBuild {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        *self.answer.borrow_mut() = Some(self.controller.select_all());
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A controller called while an element builds refuses before anything
+/// changes: no selection, no report, no notification.
+pub(crate) fn a_controller_refuses_a_change_during_a_build() {
+    let mut scene = Scene::new();
+    let answer = Rc::new(RefCell::new(None));
+    scene.replace(
+        Column::new(vec![
+            Text::new(FIRST).boxed(),
+            Text::new(SECOND).boxed(),
+            SelectsInBuild {
+                controller: scene.controller.clone(),
+                answer: Rc::clone(&answer),
+            }
+            .boxed(),
+        ])
+        .boxed(),
+    );
+    assert!(
+        matches!(*answer.borrow(), Some(Err(SelectError::DuringBuild { .. }))),
+        "refused during the build, answered {:?}",
+        answer.borrow()
+    );
+    assert_eq!(scene.controller.selection(), None);
+    assert_eq!(*scene.heard.borrow(), Vec::new());
+    assert_eq!(scene.notified.get(), 0);
 }

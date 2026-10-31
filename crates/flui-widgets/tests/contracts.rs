@@ -602,6 +602,7 @@ fn selection_area_controller() {
             ("selection_area_controller::a_controller_refuses_ends_the_area_does_not_present", crate::selection_area_controller::a_controller_refuses_ends_the_area_does_not_present),
             ("selection_area_controller::the_listener_hears_what_changed_the_selection", crate::selection_area_controller::the_listener_hears_what_changed_the_selection),
             ("selection_area_controller::a_panicking_listener_still_lets_the_controller_notify", crate::selection_area_controller::a_panicking_listener_still_lets_the_controller_notify),
+            ("selection_area_controller::a_controller_refuses_a_change_during_a_build", crate::selection_area_controller::a_controller_refuses_a_change_during_a_build),
         ],
     );
 }

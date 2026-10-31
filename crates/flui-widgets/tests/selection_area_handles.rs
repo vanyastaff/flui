@@ -332,7 +332,8 @@ pub(crate) fn a_tap_esc_or_the_mouse_hides_the_handles() {
     assert_eq!(scene.handles(), 0, "a mouse selection");
 }
 
-/// A long press is reported as touch; a controller's selection is under no
+/// A long press is reported as touch; a controller's selection, even of the
+/// range a touch selected, is under no
 /// finger, so it hides the handles.
 pub(crate) fn a_controller_selection_hides_the_handles() {
     let controller = SelectionController::new();
@@ -357,6 +358,16 @@ pub(crate) fn a_controller_selection_hides_the_handles() {
         causes.borrow().last(),
         Some(&SelectionChangeCause::User(SelectionInput::Touch))
     );
+    // The same range from a controller is no change, yet it hides them.
+    let reports = causes.borrow().len();
+    controller
+        .select(controller.selection().expect("the word is selected"))
+        .expect("the same range");
+    scene.settle();
+    assert_eq!((scene.handles(), causes.borrow().len()), (0, reports));
+
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
     let text = controller.texts()[0].clone();
     controller
         .select(DocumentSelection::new(
