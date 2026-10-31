@@ -57,7 +57,10 @@ pub struct ScriptedHttp {
 #[derive(Default)]
 struct State {
     scripts: HashMap<String, ScriptedResponse>,
-    held: HashMap<String, Vec<Waker>>,
+    /// The waker of each held request that was polled, by request.
+    held: HashMap<u64, (String, Waker)>,
+    /// The last request's number.
+    next_request: u64,
     holding: Vec<String>,
     requests: Vec<HttpRequest>,
     abandoned: usize,
@@ -84,15 +87,30 @@ impl ScriptedHttp {
     }
 
     /// Answer the held requests for `url` and every later one.
+    ///
+    /// Every held request is woken even when a waker panics; the first
+    /// panic is resumed once all of them are.
     pub fn release(&self, url: &str) {
-        let wakers = {
+        let wakers: Vec<Waker> = {
             let mut state = self.state.lock();
             state.holding.retain(|held| held != url);
-            state.held.remove(url).unwrap_or_default()
+            state
+                .held
+                .extract_if(|_, (held, _)| held == url)
+                .map(|(_, (_, waker))| waker)
+                .collect()
         };
         // Woken outside the lock: a waker may poll at once.
+        let mut first_panic = None;
         for waker in wakers {
-            waker.wake();
+            if let Err(panic) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
+            {
+                first_panic.get_or_insert(panic);
+            }
+        }
+        if let Some(panic) = first_panic {
+            std::panic::resume_unwind(panic);
         }
     }
 
@@ -136,24 +154,34 @@ impl HttpClient for ScriptedHttp {
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
         let url = request.url().to_owned();
         let limit = request.body_limit();
-        self.state.lock().requests.push(request);
+        let id = {
+            let mut state = self.state.lock();
+            state.requests.push(request);
+            state.next_request += 1;
+            state.next_request
+        };
         let mut pending = Pending {
             state: Arc::clone(&self.state),
+            id,
             answered: false,
         };
         Box::pin(std::future::poll_fn(move |cx| {
-            // Cloned, and dropped when unused, outside the lock: a waker's
-            // clone and drop run its owner's code, which may call back here.
+            // Cloned, and every replaced or unused waker dropped, outside the
+            // lock: a waker's clone and drop run its owner's code, which may
+            // call back here.
             let waker = cx.waker().clone();
             let mut state = pending.state.lock();
             if state.holding.contains(&url) {
-                state.held.entry(url.clone()).or_default().push(waker);
+                let replaced = state.held.insert(pending.id, (url.clone(), waker));
+                drop(state);
+                drop(replaced);
                 return Poll::Pending;
             }
             pending.answered = true;
+            let registered = state.held.remove(&pending.id);
             let scripted = state.scripts.get(&url).cloned();
             drop(state);
-            drop(waker);
+            drop((waker, registered));
             Poll::Ready(match scripted {
                 Some(ScriptedResponse::Respond { status, body }) => Ok(HttpResponse::new(
                     status,
@@ -181,17 +209,25 @@ impl crate::http::BodySource for Script {
     }
 }
 
-/// Counts a request dropped before its answer.
+/// A sent request: counted as abandoned, and its waker let go, when it is
+/// dropped before its answer.
 struct Pending {
     state: Arc<Mutex<State>>,
+    id: u64,
     answered: bool,
 }
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        if !self.answered {
-            self.state.lock().abandoned += 1;
+        if self.answered {
+            return;
         }
+        let registered = {
+            let mut state = self.state.lock();
+            state.abandoned += 1;
+            state.held.remove(&self.id)
+        };
+        drop(registered);
     }
 }
 

@@ -238,3 +238,95 @@ fn a_held_request_may_be_polled_by_a_waker_that_reenters_the_client() {
         "the held request registers its waker without holding the client's lock"
     );
 }
+
+/// Counts its wakes, and panics on each when told to.
+struct CountingWaker {
+    wakes: std::sync::atomic::AtomicUsize,
+    panics: bool,
+}
+
+impl std::task::Wake for CountingWaker {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        self.wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(!self.panics, "a waker that panics");
+    }
+}
+
+fn counting_waker(panics: bool) -> std::sync::Arc<CountingWaker> {
+    std::sync::Arc::new(CountingWaker {
+        wakes: std::sync::atomic::AtomicUsize::new(0),
+        panics,
+    })
+}
+
+/// A held request keeps only the waker of its last poll, and lets it go
+/// when the request is dropped unanswered.
+#[test]
+fn a_held_request_keeps_one_waker_and_lets_it_go_when_dropped() {
+    let http = ScriptedHttp::new();
+    http.hold(URL);
+    let mut request = http
+        .handle()
+        .send(flui_platform::http::HttpRequest::get(URL));
+    let first = counting_waker(false);
+    let second = counting_waker(false);
+    for waker in [&first, &second] {
+        let waker = std::task::Waker::from(std::sync::Arc::clone(waker));
+        assert!(
+            request
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(&waker))
+                .is_pending()
+        );
+    }
+    assert_eq!(
+        std::sync::Arc::strong_count(&first),
+        1,
+        "a repoll replaces the earlier waker"
+    );
+    assert_eq!(std::sync::Arc::strong_count(&second), 2);
+
+    drop(request);
+    assert_eq!(http.abandoned(), 1);
+    assert_eq!(
+        std::sync::Arc::strong_count(&second),
+        1,
+        "a dropped request lets its waker go"
+    );
+}
+
+/// Releasing a URL wakes every held request even when their wakers panic,
+/// then resumes the first panic.
+#[test]
+fn a_release_wakes_every_held_request_past_a_panicking_waker() {
+    let http = ScriptedHttp::new();
+    http.hold(URL);
+    let waker = counting_waker(true);
+    let requests: Vec<_> = (0..3)
+        .map(|_| {
+            let mut request = http
+                .handle()
+                .send(flui_platform::http::HttpRequest::get(URL));
+            let polled = std::task::Waker::from(std::sync::Arc::clone(&waker));
+            assert!(
+                request
+                    .as_mut()
+                    .poll(&mut std::task::Context::from_waker(&polled))
+                    .is_pending()
+            );
+            request
+        })
+        .collect();
+
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| http.release(URL)));
+    assert!(released.is_err(), "the first panic is resumed");
+    assert_eq!(
+        waker.wakes.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "every held request is woken"
+    );
+    drop(requests);
+}
