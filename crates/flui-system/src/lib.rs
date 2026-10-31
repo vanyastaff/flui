@@ -2,8 +2,8 @@
 //!
 //! - **Launching**: open a URI, a file or a folder in the system's handler,
 //!   show a file in the file manager, move it to the trash. The handle,
-//!   [`Launcher`](flui_platform::launch::Launcher), lives in
-//!   `flui_platform::launch`, since framework widgets name it (ADR-0154 §3);
+//!   [`flui_platform::launch::Launcher`], lives in
+//!   the contract crate, since framework widgets name it (ADR-0154 §3);
 //!   this crate provides it.
 //! - **File dialogs**: [`dialog::FileDialogs`], open and save dialogs modal to
 //!   the acquiring widget's window.
