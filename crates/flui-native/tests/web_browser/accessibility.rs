@@ -1438,6 +1438,26 @@ async fn the_page_s_selection_is_the_selection_of_static_text() {
     );
     assert_eq!(asked(), [], "the host's own selection asks for nothing");
 
+    // The paragraphs swap, their text and the selection unchanged: moving
+    // the elements drops the page's selection in them.
+    let in_second = between(at(THIRD_RUN, 1), at(THIRD_RUN, 2));
+    accessibility.publish(selectable(Some(in_second)));
+    super::wait(50).await;
+    let mut swapped = selectable(Some(in_second));
+    for (id, node) in &mut swapped.nodes {
+        if *id == AREA {
+            node.set_children(vec![SECOND, FIRST]);
+        }
+    }
+    accessibility.publish(swapped);
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["second", 1], ["second", 2]]),
+        "shown again once moved"
+    );
+    assert_eq!(asked(), []);
+
     select_page_text();
     super::wait(50).await;
     accessibility.publish(selectable(Some(between(

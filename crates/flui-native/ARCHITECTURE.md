@@ -1827,10 +1827,10 @@ and writes only what changed between two specs.
   many UTF-8 bytes as the run's `character_lengths` says; an offset inside a
   surrogate pair or a cluster moves back to the character's start. The last
   selection static text published (`Op::Select`) is set as the page's
-  selection, again when the text it lies in is written, but only while the
-  page's selection is empty, a caret or already in the host: a selection of
-  the page's own text stays. A `selectionchange` with both ends in such text
-  asks `SetTextSelection` of the nearest node over both that takes it (the
+  selection, again when the text it lies in is written or its element moved,
+  but only while the page's selection is empty, a caret or already in the
+  host: a selection of the page's own text stays. A `selectionchange` with
+  both ends in such text asks `SetTextSelection` of the nearest node over both that takes it (the
   paragraph, or the selection area), and the page shows the published
   selection again until the node publishes the new one; the published
   selection itself asks for nothing.
