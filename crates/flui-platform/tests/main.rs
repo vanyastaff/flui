@@ -54,3 +54,6 @@ mod capability;
 
 #[path = "app_data_dir.rs"]
 mod app_data_dir;
+
+#[path = "window_insets.rs"]
+mod window_insets;

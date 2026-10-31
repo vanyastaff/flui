@@ -1691,7 +1691,7 @@ impl MacOSWindow {
                 ),
                 // A desktop window has no safe area and AppKit never
                 // suspends one.
-                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+                insets: flui_platform::WindowInsets::ZERO,
                 execution: flui_platform::WindowExecutionState::Running,
                 // Covered or on another space.
                 occluded: !occlusion_visible,

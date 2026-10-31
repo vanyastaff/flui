@@ -41,10 +41,14 @@ impl WindowShell {
     /// Which commands and observations a window on this shell has. winit
     /// reports no presentation on any shell, though the compositors under it
     /// do (`wp_presentation_time`, DXGI statistics): the native hosts read
-    /// them, and this one does not.
+    /// them, and this one does not. Nor does it report the occlusion of a
+    /// touch keyboard, which Windows shows on a tablet; no desktop shell
+    /// reserves screen edges for system gestures.
     pub(super) const fn capabilities(self) -> WindowCapabilities {
         self.shell_capabilities()
             .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+            .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+            .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform)
     }
 
     const fn shell_capabilities(self) -> WindowCapabilities {
@@ -421,8 +425,10 @@ mod tests {
         assert_eq!(
             desktop,
             WindowCapabilities::ALL
-                .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost),
-            "winit reports no presentation on any shell"
+                .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+                .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+                .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform),
+            "winit reports no presentation or keyboard on any shell"
         );
 
         let wayland = WindowShell::Wayland.capabilities();

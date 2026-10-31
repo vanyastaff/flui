@@ -11,6 +11,7 @@
 
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
@@ -36,9 +37,10 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, Locale,
-    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts,
-    SystemPreferences, TextWeightPreference, WheelParts, WheelStep, WindowExecutionState, WindowId,
+    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, InsetCurve,
+    InsetMotion, KeyboardInset, Locale, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    PlatformInput, PreferenceParts, SystemPreferences, TextWeightPreference, WheelParts, WheelStep,
+    WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_protocol::native_recording as wire;
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -1810,12 +1812,15 @@ enum WindowObservationDto {
     Hover(bool),
     #[serde(rename = "moved")]
     Moved,
-    #[serde(rename = "safe_area")]
-    SafeArea {
-        top: f64,
-        right: f64,
-        bottom: f64,
-        left: f64,
+    #[serde(rename = "insets")]
+    /// What covers the window: the safe area, the keyboard and the system
+    /// gesture regions, in logical pixels as top, right, bottom, left.
+    Insets {
+        safe_area: [f64; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keyboard: Option<wire::KeyboardInset>,
+        #[serde(default)]
+        system_gestures: [f64; 4],
     },
     #[serde(rename = "brightness")]
     Brightness(BrightnessDto),
@@ -1853,11 +1858,10 @@ impl TryFrom<&WindowObservation> for WindowObservationDto {
             },
             WindowObservation::Hover(inside) => Self::Hover(inside),
             WindowObservation::Moved => Self::Moved,
-            WindowObservation::SafeArea(insets) => Self::SafeArea {
-                top: insets.top,
-                right: insets.right,
-                bottom: insets.bottom,
-                left: insets.left,
+            WindowObservation::Insets(insets) => Self::Insets {
+                safe_area: edges_to_wire(insets.safe_area()),
+                keyboard: keyboard_to_wire(insets.keyboard())?,
+                system_gestures: edges_to_wire(insets.system_gestures()),
             },
             WindowObservation::Brightness(brightness) => Self::Brightness(match brightness {
                 Brightness::Light => BrightnessDto::Light,
@@ -1898,18 +1902,89 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
             },
             WindowObservationDto::Hover(inside) => Self::Hover(inside),
             WindowObservationDto::Moved => Self::Moved,
-            WindowObservationDto::SafeArea {
-                top,
-                right,
-                bottom,
-                left,
-            } => Self::SafeArea(EdgeInsets::new(top, right, bottom, left)),
+            WindowObservationDto::Insets {
+                safe_area,
+                keyboard,
+                system_gestures,
+            } => Self::Insets(
+                WindowInsets::try_new(
+                    edges_from_wire(safe_area),
+                    keyboard
+                        .map(keyboard_from_wire)
+                        .transpose()?
+                        .unwrap_or(KeyboardInset::HIDDEN),
+                    edges_from_wire(system_gestures),
+                )
+                .map_err(invalid)?,
+            ),
             WindowObservationDto::Brightness(brightness) => Self::Brightness(match brightness {
                 BrightnessDto::Light => Brightness::Light,
                 BrightnessDto::Dark => Brightness::Dark,
             }),
         })
     }
+}
+
+fn edges_to_wire(edges: EdgeInsets) -> [f64; 4] {
+    [edges.top, edges.right, edges.bottom, edges.left]
+}
+
+fn edges_from_wire([top, right, bottom, left]: [f64; 4]) -> EdgeInsets {
+    EdgeInsets::new(top, right, bottom, left)
+}
+
+/// `keyboard` in the recording; `None` for a hidden keyboard at rest.
+fn keyboard_to_wire(keyboard: KeyboardInset) -> Result<Option<wire::KeyboardInset>> {
+    if keyboard == KeyboardInset::HIDDEN {
+        return Ok(None);
+    }
+    let motion = keyboard
+        .motion()
+        .map(|motion| {
+            Ok(wire::InsetMotion {
+                from: edges_to_wire(motion.from()),
+                start_ns: motion.start().as_nanos(),
+                duration_ns: u64::try_from(motion.duration().as_nanos())
+                    .map_err(|_| invalid("a keyboard motion longer than the timeline"))?,
+                curve: match motion.curve() {
+                    InsetCurve::Linear => wire::InsetCurve::Linear,
+                    InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+                        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 }
+                    }
+                    InsetCurve::SystemKeyboard => wire::InsetCurve::SystemKeyboard,
+                    _ => return Err(unmirrored("InsetCurve")),
+                },
+            })
+        })
+        .transpose()?;
+    Ok(Some(wire::KeyboardInset {
+        target: edges_to_wire(keyboard.target()),
+        motion,
+    }))
+}
+
+/// The keyboard `wire` describes, validated as its types validate it.
+fn keyboard_from_wire(wire: wire::KeyboardInset) -> Result<KeyboardInset> {
+    let target = edges_from_wire(wire.target);
+    let Some(motion) = wire.motion else {
+        return KeyboardInset::try_at_rest(target).map_err(invalid);
+    };
+    let curve = match motion.curve {
+        wire::InsetCurve::Linear => InsetCurve::Linear,
+        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+            InsetCurve::CubicBezier { x1, y1, x2, y2 }
+        }
+        wire::InsetCurve::SystemKeyboard => InsetCurve::SystemKeyboard,
+        _ => return Err(invalid("a keyboard curve this build does not read")),
+    };
+    let motion = InsetMotion::try_new(
+        edges_from_wire(motion.from),
+        EventTime::from_nanos(motion.start_ns),
+        Duration::from_nanos(motion.duration_ns),
+        curve,
+    )
+    .map_err(invalid)?;
+    KeyboardInset::try_moving(target, motion).map_err(invalid)
 }
 
 // ============================================================================

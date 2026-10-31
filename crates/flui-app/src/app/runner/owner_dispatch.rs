@@ -136,9 +136,10 @@ pub(in crate::app) enum RuntimeEvent {
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
     WindowExecution(flui_platform::WindowExecutionState),
-    /// Addressed logical content-view safe area. A report for a presentation
-    /// closed before delivery is dropped, not a panic.
-    SafeAreaChanged(flui_foundation::geometry::EdgeInsets),
+    /// Addressed logical insets: the safe area, the keyboard and the system
+    /// gesture regions. A report for a presentation closed before delivery is
+    /// dropped, not a panic.
+    InsetsChanged(flui_platform::WindowInsets),
     /// Whether the window's content can be seen changed
     /// ([`WindowState::is_seen`](flui_platform::WindowState::is_seen)).
     ///
@@ -206,7 +207,7 @@ impl RuntimeEvent {
     /// What a window's new snapshot `next` says that `previous` did not, as
     /// the events its presentation applies, in that order: the state
     /// notification first, then each fact that differs — the metrics, the
-    /// safe area, the appearance, then the execution state, focus and whether
+    /// insets, the appearance, then the execution state, focus and whether
     /// the content can be seen (each its own lifecycle step, as a host
     /// reports them), and the hover. A snapshot without drawable metrics keeps
     /// the ones before it, so it brings no resize.
@@ -220,8 +221,8 @@ impl RuntimeEvent {
         {
             events.push(Self::Resized(metrics));
         }
-        if next.safe_area != previous.safe_area {
-            events.push(Self::SafeAreaChanged(next.safe_area));
+        if next.insets != previous.insets {
+            events.push(Self::InsetsChanged(next.insets));
         }
         let brightness = flui_platform::Brightness::from(next.appearance);
         if brightness != flui_platform::Brightness::from(previous.appearance) {
@@ -311,7 +312,7 @@ impl RuntimeEvent {
                     .surface_restored(host.effects());
             }
             Self::Resized(metrics) => WindowObservation::Metrics(metrics),
-            Self::SafeAreaChanged(insets) => WindowObservation::SafeArea(insets),
+            Self::InsetsChanged(insets) => WindowObservation::Insets(insets),
             Self::WindowFocus(focused) => WindowObservation::Focus(focused),
             Self::WindowVisibility(visible) => WindowObservation::Visibility(visible),
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),

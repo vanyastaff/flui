@@ -175,7 +175,8 @@ secrets).
 | Presentation feedback: when each frame reached the screen | ✅ | ✅ | ❌ | — | ❌ | ❌ | — | ✅ | A frame request carries when the window's newest earlier frame was shown (`FrameRequest::presented`, on the event timeline input is stamped on); the frame clock keeps it and bounds idle work by the next refresh. Windows reads the DXGI frame statistics of the renderer's swap chain; headless reports what a test injects. The native Wayland host reads `wp_presentation_time` (the column is winit's, which reports none). The Web (a `requestAnimationFrame` stamp is a frame's start) and X11 (a present completes on the GPU driver's connection) have none, and their windows say so; macOS reads a presented handler on each drawable of the view's own `CAMetalLayer`; iOS and Android do not report yet. |
 | GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above |
 | Safe area | — | ❌ | — | — | ✅ | ✅ | ❌ | ✅ | macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`. |
-| Soft-keyboard insets | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Not in the contract |
+| Soft-keyboard insets | — | — | — | — | ❌ | ❌ | ❌ | ✅ | In the contract (ADR-0276): a window reports the keyboard's target and its motion, and each frame lays out with the occlusion at its vsync; headless scripts a motion. No mobile or Web host reports it yet, and each says so (`NotYetOnThisHost`). |
+| System-gesture insets | — | — | — | — | — | ❌ | — | ✅ | `WindowInsets::system_gestures` reaches `MediaQueryData::system_gesture_insets` (ADR-0276); Android does not read `systemGestures()` yet. |
 | System-gesture exclusion | — | — | — | — | 🟡 | ✅ | — | ✅ | Android's exclusion rects ran on a Galaxy S21; the iOS path never ran and was not type-checked on the authoring host. |
 | Display cutout, fold posture | — | — | — | — | — | 🟡 | ❌ | ❌ | Android folds the cutout into the safe area; no fold posture |
 
@@ -533,6 +534,7 @@ exists yet.
 | 2026-10-30 | notes only | The Web clipboard reads `navigator.clipboard` asynchronously and answers through the capability seam (ADR-0152), falling back to its own writes; unrun in a browser, so no cell changes |
 | 2026-10-30 | minor | iPad pointer (type-checked, no iPad run): precise scrolling with phases, touchpad pan as a drag or a scroll and trackpad pinch and rotate ❌ → 🟡 on iOS; a mouse wheel stays notched. Summary recounted |
 | 2026-10-30 | minor | Android plain-text clipboard ❌ → 🟡: the host reads and writes the system `ClipboardManager` through JNI instead of an in-process mock; type-checked, no device run |
+| 2026-10-30 | minor | Soft-keyboard insets ❌ → ✅ on headless: the window contract carries the keyboard's occlusion and motion, sampled on the frame clock (ADR-0276); a System-gesture insets row, ✅ on headless; no producer on a device yet |
 | 2026-10-30 | minor | Notes only, no cell changes: the native X11 host owns and reads the `CLIPBOARD` selection on a connection and a thread of its own, answering `TARGETS`, `TIMESTAMP` and the text forms and writing large text in `INCR` chunks; two of its clipboards exchanged text through Xvfb; the X11 column stays winit's |
 
 </details>

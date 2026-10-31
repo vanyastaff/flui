@@ -590,7 +590,7 @@ fn reported_facts(
         metrics: WindowMetrics::try_new(device_size(window.inner_size()), window.scale_factor())
             .ok(),
         appearance,
-        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        insets: flui_platform::WindowInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,
         occluded: false,
         hovered,
