@@ -624,6 +624,8 @@ impl UiRuntime {
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
             let scene = Scene::new(layer_tree);
+            // Before the sink takes the scene: the layer reads parked for it see this one.
+            presentation.answer_agent_layer_reads(scene.tree());
             phases.lap(FramePhase::Paint);
             Ok(FramePaintOutcome::Painted(scene))
         } else {

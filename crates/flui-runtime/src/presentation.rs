@@ -445,6 +445,8 @@ pub struct PresentationState {
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
+    /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
+    pub(crate) agent_layer_reads: RefCell<Vec<crate::ui_runtime::PendingLayerRead>>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1072,6 +1074,7 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_layer_reads: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1202,6 +1205,7 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_layer_reads: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1923,6 +1927,7 @@ impl PresentationState {
         for pending in owed {
             pending.abandon();
         }
+        self.abandon_agent_layer_reads();
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
         for wait in waits {
             wait.abandon();

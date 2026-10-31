@@ -211,16 +211,6 @@ fn a_deeper_level_adds_fields() {
 }
 
 #[test]
-fn layers_are_not_readable_because_the_sink_takes_the_scene() {
-    let (ui_runtime, agent) = shown();
-
-    let error = whole(&ui_runtime, &agent, InspectTarget::Layers)
-        .expect_err("a presented scene is the sink's");
-    assert_eq!(error, AgentError::LayersNotKept);
-    assert_eq!(error.code(), ErrorCode::NotSupported);
-}
-
-#[test]
 fn a_window_that_closed_answers_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
@@ -338,4 +328,116 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
     assert_eq!(failed, AgentError::InspectPanicked);
     assert_eq!(failed.code(), ErrorCode::Platform);
     assert!(!failed.may_have_run(), "a read changes nothing");
+}
+
+fn park_layers(
+    ui_runtime: &UiRuntime,
+    agent: &SemanticsAgent,
+    params: InspectParams,
+) -> AgentReply<InspectReading> {
+    let reply = agent
+        .inspect(InspectTarget::Layers, params)
+        .expect("the inbox has room");
+    let _report = ui_runtime.drain_commands();
+    reply
+}
+
+#[test]
+fn the_layers_are_read_from_the_next_scene_the_window_shows() {
+    let (ui_runtime, agent) = shown();
+    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    assert!(
+        parked.try_take().is_none(),
+        "the read waits for a scene, it does not answer from the last one"
+    );
+
+    frame(&ui_runtime, &mut ScriptedSink::always_presents());
+    let reading = parked
+        .try_take()
+        .expect("the window showed a scene")
+        .expect("the layers are read");
+    assert_eq!(reading.roots.len(), 1);
+    let all = nodes(&reading.roots[0]);
+    assert!(all.len() > 1, "a counter paints more than a root layer");
+    for node in all {
+        let link: Link = node.id.parse().expect("a layer handle");
+        assert_eq!(link.prefix(), 'l', "{}", node.id);
+    }
+
+    frame(&ui_runtime, &mut ScriptedSink::always_presents());
+    assert!(
+        ui_runtime
+            .presentations
+            .get(ui_runtime.presentation_id())
+            .expect("the primary presentation is open")
+            .agent_layer_reads
+            .borrow()
+            .is_empty(),
+        "a scene answers every read parked for it, and later ones keep no copy"
+    );
+}
+
+#[test]
+fn a_window_parks_a_bounded_number_of_layer_reads() {
+    let (ui_runtime, agent) = shown();
+    let mut parked: Vec<_> = (0..16)
+        .map(|_| park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime))))
+        .collect();
+    let mut refused = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let error = refused
+        .try_take()
+        .expect("a full list answers at once")
+        .expect_err("busy");
+    assert_eq!(error.code(), ErrorCode::Busy);
+    assert!(matches!(error, AgentError::TreeBusy(_)), "{error:?}");
+
+    frame(&ui_runtime, &mut ScriptedSink::always_presents());
+    for read in &mut parked {
+        assert!(read.try_take().expect("answered by the scene").is_ok());
+    }
+}
+
+#[test]
+fn a_layer_read_names_a_layer_and_this_window_before_it_waits() {
+    let (ui_runtime, agent) = shown();
+    let mut params = InspectParams::new(window(&ui_runtime));
+    params.root = Some("r1".to_owned());
+    let error = park_layers(&ui_runtime, &agent, params)
+        .try_take()
+        .expect("a bad root answers at once")
+        .expect_err("not a layer");
+    assert_eq!(error.code(), ErrorCode::InvalidArgument);
+
+    let own = ui_runtime.presentation_id();
+    let elsewhere = PresentationId::new_gen(own.index() + 1, own.generation());
+    let link: Link = "l1".parse().expect("a layer handle");
+    let mut params = InspectParams::new(window(&ui_runtime));
+    params.root = Some(NodeRef::new(elsewhere, link).to_string());
+    let error = park_layers(&ui_runtime, &agent, params)
+        .try_take()
+        .expect("another window answers at once")
+        .expect_err("another window");
+    assert_eq!(error, AgentError::UnknownPresentation);
+}
+
+#[test]
+fn a_layer_read_whose_window_closes_before_its_scene_is_gone() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let second = ui_runtime.install_second_presentation_for_test();
+    let agent = ui_runtime
+        .semantics_agent(second)
+        .expect("the ui_runtime hosts the second presentation");
+    let mut parked = park_layers(
+        &ui_runtime,
+        &agent,
+        InspectParams::new(WindowId::from_u64(second.as_u64()).expect("a generation")),
+    );
+    assert!(parked.try_take().is_none());
+
+    assert!(ui_runtime.close_presentation_entered(second));
+    let error = parked
+        .try_take()
+        .expect("closing answers it")
+        .expect_err("the window is gone");
+    assert_eq!(error, AgentError::PresentationGone);
 }
