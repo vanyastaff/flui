@@ -77,13 +77,16 @@ impl ScriptedHttp {
     /// Answer every later request for `url` with `response`, and the held
     /// ones once released.
     pub fn respond(&self, url: impl Into<String>, response: ScriptedResponse) {
-        self.state.lock().scripts.insert(url.into(), response);
+        // Converted before the lock: the conversion is the caller's code.
+        let url: String = url.into();
+        self.state.lock().scripts.insert(url, response);
     }
 
     /// Keep the requests for `url` unanswered until
     /// [`release`](Self::release).
     pub fn hold(&self, url: impl Into<String>) {
-        self.state.lock().holding.push(url.into());
+        let url: String = url.into();
+        self.state.lock().holding.push(url);
     }
 
     /// Answer the held requests for `url` and every later one.

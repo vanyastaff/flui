@@ -330,3 +330,35 @@ fn a_release_wakes_every_held_request_past_a_panicking_waker() {
     );
     drop(requests);
 }
+
+/// A URL whose conversion asks the client for its requests, as a caller's
+/// `Into<String>` may.
+struct ReenteringUrl(ScriptedHttp);
+
+impl From<ReenteringUrl> for String {
+    fn from(url: ReenteringUrl) -> Self {
+        let _ = url.0.requests_to(URL);
+        URL.to_owned()
+    }
+}
+
+/// Scripting or holding a URL whose conversion calls back into the client
+/// does not deadlock on the client's state.
+#[test]
+fn a_url_conversion_may_reenter_the_client() {
+    let client = ScriptedHttp::new();
+    let (done, scripted) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        client.respond(
+            ReenteringUrl(client.clone()),
+            ScriptedResponse::ok(PNG.to_vec()),
+        );
+        client.hold(ReenteringUrl(client.clone()));
+        let _ = done.send(());
+    });
+    assert_eq!(
+        scripted.recv_timeout(Duration::from_secs(5)),
+        Ok(()),
+        "the URL is converted before the client's lock is taken"
+    );
+}
