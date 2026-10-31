@@ -219,6 +219,9 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
   an equal answer changes nothing.
 - `fonts_xml_orders_fallback_by_language` (flui-native, `pub(crate)`, runs on Linux) parses
   the `fonts.xml` of API 23 and API 28, recorded from AOSP.
+- `the_font_matcher_answers_per_script_in_the_locale` (flui-native, `pub(crate)`, runs on Linux)
+  drives the API 29 path against callable stand-ins for the seven NDK functions: the locale, one
+  query per script and one for an emoji, the file and collection index, and every font released.
 - `fontconfig_answers_latin` (flui-native, Linux CI) gives a non-empty Latin list of existing files
   on the CI image. Where fontconfig is absent, it gets no answer.
 - A device run on Windows, macOS, iOS and Android renders Arabic, Devanagari, Han in ja-JP and
