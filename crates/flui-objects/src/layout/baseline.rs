@@ -64,10 +64,15 @@ impl RenderBaseline {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderBaseline {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("baseline", self.baseline);
-        properties.add("baseline_offset", format!("{:.0}px", self.baseline_offset));
+impl flui_foundation::inspect::Inspect for RenderBaseline {
+    fn kind(&self) -> &'static str {
+        "RenderBaseline"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("baseline", &self.baseline);
+        out.field("baseline_offset", &self.baseline_offset)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 

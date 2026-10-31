@@ -33,7 +33,13 @@ struct SemanticLeaf {
     selected: Option<bool>,
 }
 
-impl flui_foundation::Diagnosticable for SemanticLeaf {}
+impl flui_foundation::inspect::Inspect for SemanticLeaf {
+    fn kind(&self) -> &'static str {
+        "SemanticLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SemanticLeaf {
     type Arity = Leaf;

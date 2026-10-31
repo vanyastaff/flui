@@ -15,6 +15,7 @@ use crate::LayerLink;
 /// itself and are never consulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum LeaderClip {
     /// Paint wherever the leader is, past the leader's clips: a tooltip or a
     /// menu stays whole when its anchor is near a viewport edge.

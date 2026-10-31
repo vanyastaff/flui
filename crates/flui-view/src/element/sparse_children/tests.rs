@@ -61,7 +61,13 @@ struct DetachCountingBox {
     detach_count: Arc<AtomicUsize>,
 }
 
-impl flui_foundation::Diagnosticable for DetachCountingBox {}
+impl flui_foundation::inspect::Inspect for DetachCountingBox {
+    fn kind(&self) -> &'static str {
+        "DetachCountingBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for DetachCountingBox {
     type Arity = Leaf;

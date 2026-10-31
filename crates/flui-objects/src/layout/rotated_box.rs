@@ -161,9 +161,13 @@ impl RenderRotatedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderRotatedBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_int("quarter_turns", self.quarter_turns.into(), None);
+impl flui_foundation::inspect::Inspect for RenderRotatedBox {
+    fn kind(&self) -> &'static str {
+        "RenderRotatedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("quarter_turns", &self.quarter_turns);
     }
 }
 

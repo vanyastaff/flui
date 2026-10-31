@@ -132,7 +132,13 @@ struct PaintTripBox {
     armed: Arc<AtomicBool>,
 }
 
-impl flui_foundation::Diagnosticable for PaintTripBox {}
+impl flui_foundation::inspect::Inspect for PaintTripBox {
+    fn kind(&self) -> &'static str {
+        "PaintTripBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for PaintTripBox {
     type Arity = Leaf;

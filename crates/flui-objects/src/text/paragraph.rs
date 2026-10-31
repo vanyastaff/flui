@@ -23,9 +23,9 @@ mod links;
 
 pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::inspect::{Fields, Inspect, Value};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
@@ -634,51 +634,33 @@ fn line_of(lines: &[LineMetrics], position: TextPosition) -> Option<&LineMetrics
         })
 }
 
-impl Diagnosticable for RenderParagraph {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("text_align", self.painter.text_align());
-        properties.add(
-            "text_direction",
-            self.painter
-                .text_direction()
-                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
+impl Inspect for RenderParagraph {
+    fn kind(&self) -> &'static str {
+        "RenderParagraph"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("text_align", &self.painter.text_align());
+        out.field("text_direction", &self.painter.text_direction());
+        out.field("soft_wrap", &self.soft_wrap);
+        out.field(
+            "selection_start",
+            &self.selection.as_ref().map(|range| range.start),
         );
-        properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
-        properties.add("selection", format!("{:?}", self.selection));
-        properties.add("selection_color", format!("{:?}", self.selection_color));
-        properties.add(
-            "selection_handles",
-            format!(
-                "{:?}",
-                (
-                    self.start_handle.map(|link| link.id()),
-                    self.end_handle.map(|link| link.id()),
-                )
-            ),
+        out.field(
+            "selection_end",
+            &self.selection.as_ref().map(|range| range.end),
         );
-        properties.add(
-            "max_lines",
-            self.painter
-                .max_lines()
-                .map_or_else(|| "unlimited".to_string(), |n| n.to_string()),
-        );
-        properties.add(
-            "ellipsis",
-            self.painter
-                .ellipsis()
-                .map_or_else(|| "none".to_string(), ToString::to_string),
-        );
-        // Emit the plain text so diagnostics dumps and test finders can match on
-        // content without inspecting the full `InlineSpan` tree.
+        out.field("selection_color", &self.selection_color);
+        out.field("start_handle", &self.start_handle.map(|link| link.id()));
+        out.field("end_handle", &self.end_handle.map(|link| link.id()));
+        out.field("max_lines", &self.painter.max_lines());
+        out.field("ellipsis", &self.painter.ellipsis());
+        // The plain text lets a test find a paragraph by its content without walking the
+        // `InlineSpan` tree, and the style lets it read a resolved text color back out.
         if let Some(span) = self.painter.text() {
-            properties.add("text", span.to_plain_text());
-            // Lets a mounted-widget test read a resolved text color back out
-            // (e.g. a themed/cascaded color reaching the real paragraph a
-            // build produced) without downcasting or inspecting paint
-            // output — `TextStyle: Debug` is already required for the type
-            // to be usable at all, so this is a pure diagnostics read, not
-            // a new capability.
-            properties.add("style", format!("{:?}", span.style()));
+            out.field("text", &span.to_plain_text());
+            out.value("style", Value::Debug(&span.style()));
         }
     }
 }

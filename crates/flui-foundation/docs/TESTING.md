@@ -1,95 +1,89 @@
-# Diagnostics for test assertions (`flui_foundation::debug`)
+# Typed inspection for test assertions (`flui_foundation::inspect`)
 
 `flui_foundation` does not ship a `testing` feature module. Instead it provides the
-**diagnostics substrate** every rendering-stack harness uses for structured
-assertions: typed property builders on render objects, tree-shaped
-[`DiagnosticsNode`](../src/debug.rs) output, and query helpers that avoid
-substring-matching `dump()` strings.
-
-All render / layer / display-list harnesses implement or consume
-[`Diagnosticable`](../src/debug.rs).
+**inspection substrate** every rendering-stack harness uses for structured assertions: objects
+describe themselves as typed fields ([`Inspect`](../src/inspect/fields.rs)), a tree walk takes an
+owned [`SnapshotNode`](../src/inspect/snapshot.rs), and tests read it by type instead of
+substring-matching a printed dump.
 
 ## Where this fits
 
 ```text
-RenderObject::debug_fill_properties  →  user config (color, padding, …)
-PipelineOwner / harness              →  + committed offset / size / geometry
-Probe::diagnostics()               →  DiagnosticsNode tree
-assert_properties / property()     →  structured CI assertions
+Inspect::inspect (render object, layer)  →  the object's own fields (color, padding, …)
+PipelineOwner / LayerTree (InspectTree)  →  + facts: committed offset / size / geometry
+snapshot(&tree, SnapshotQuery)           →  SnapshotNode tree
+node.get::<T>("field") / get_fact::<T>   →  typed CI assertions
 ```
 
-Property names use **snake_case** (Rust idiom, not Dart camelCase).
+Field names use **snake_case** (Rust idiom, not Dart camelCase).
 
-## `DiagnosticsNode` — query API
+## `SnapshotNode` — query API
 
-Built by `Diagnosticable::to_diagnostics_node()` and harness tree walks.
-
-| Method | Purpose |
+| Member | Purpose |
 |--------|---------|
-| `name()` | Node type label (e.g. `"RenderPadding"`) |
-| `get_property("field")` | First property value as `&str` |
-| `get_property_f64("field")` | Parsed `f64`, if parseable |
-| `find_child("name")` | Direct child by name |
-| `find_descendant("RenderColoredBox")` | Depth-first search by node name |
-| `properties()` | All properties on this node |
-| `to_string()` / `to_string_deep_at_level(level)` | Rendered dump (debug only) |
+| `kind` | Node type (e.g. `"RenderPadding"`), without type arguments (`kind_args`) |
+| `get::<T>("field")` | The object's own field read as `T`, or a `FieldError` |
+| `get_fact::<T>("size")` | A fact the tree adds (committed size, offset, dirty flags) |
+| `field("name")` / `fact("name")` | The untyped `OwnedField` |
+| `find_by_kind("RenderFlex")` | The nodes of a kind, in tree order; `.unique()` demands one |
+| `find_by_link(link)` | The counterpart of a node in another tree |
+| `iter()` | This node and its descendants, parents before children |
+| `debug_fields` | How many fields could only be described by `Debug` (untyped) |
+
+`T` is `bool`, `i64`, `u64`, `f64`, `&str`, `Size`, `Offset`, `Rect`, `Rgba`, `EdgeInsets`,
+`Duration`, `Link`, `Variant` (a fieldless enum's variant name) and the other kinds of
+[`OwnedValue`](../src/inspect/snapshot.rs).
 
 ### Example — structured assertion
 
 ```rust
-use flui_foundation::DiagnosticsNode;
+use flui_foundation::inspect::Rgba;
 
-let tree: DiagnosticsNode = run.diagnostics();
-let leaf = tree.find_descendant("RenderColoredBox").expect("leaf");
-assert_eq!(leaf.get_property("color"), Some("[1.0, 0.0, 0.0, 1.0]"));
+let tree = run.render_snapshot();
+let leaf = tree.find_by_kind("RenderColoredBox").unique().expect("one leaf");
+assert_eq!(leaf.get::<Rgba>("color"), Ok(Rgba::new(1.0, 0.0, 0.0, 1.0)));
+assert_eq!(leaf.get_fact::<Size>("size"), Ok(Size::new(10.0, 10.0)));
 ```
 
-Via [`flui_rendering::testing::Probe`](../../flui-rendering/docs/TESTING.md):
+Via [`flui_rendering::testing::Probe`](../../flui-rendering/docs/TESTING.md), whose
+`node_snapshot(id)` takes one node alone:
 
 ```rust
-assert_eq!(
-    run.property(child_id, "color").as_deref(),
-    Some("[1.0, 0.0, 0.0, 1.0]"),
-);
-assert_eq!(
-    run.descendant_property("RenderFlex", "direction").as_deref(),
-    Some("Horizontal"),
-);
+assert_eq!(run.node_snapshot(child_id).get::<f64>("opacity"), Ok(0.5));
 ```
 
-## `DiagnosticsBuilder` — authoring API
+## `Inspect` — authoring API
 
-Render objects implement `debug_fill_properties` with typed helpers (defaults
-hidden automatically, kinds format cleanly in dumps).
+A render object or layer implements [`Inspect`](../src/inspect/fields.rs): a `kind` and the
+fields that describe it, written borrowed into a `Fields` sink. Derive it when the struct's
+fields are the description.
 
-| Method | Purpose |
-|--------|---------|
-| `add(name, value)` | Generic display property |
-| `add_flag(name, value, if_true)` | Boolean, hidden when false |
-| `add_enum(name, value, default)` | Enum / direction labels |
-| `add_double` / `add_default_double` | Float with optional unit; hide at default |
-| `add_int` | Integer with optional unit |
-| `add_size` | `width x height` |
-| `add_color` | RGBA display |
-| `add_optional` | Skip when `None` |
+| Attribute / method | Purpose |
+|--------------------|---------|
+| `#[inspect(skip)]` | Leave a field out |
+| `#[inspect(default = EXPR)]` / `.default(&v)` | The value at which a summary hides the field |
+| `#[inspect(unit = logical_px)]` / `.unit(Unit::LogicalPx)` | What a number measures |
+| `#[inspect(level = detail)]` | Hide the field from summaries |
+| `#[inspect(with = path)]` | Map a field with a `fn(&T) -> Value<'_>` |
+| `#[inspect(debug)]` / `out.value(name, Value::Debug(&v))` | Describe by `Debug`, counted as untyped |
 
 ### Example — render object self-description
 
 ```rust
-impl Diagnosticable for RenderPadding {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        properties.add("padding", format!("{:?}", self.padding()));
-    }
+#[derive(flui_foundation::inspect::Inspect)]
+struct RenderPadding {
+    #[inspect(unit = logical_px)]
+    padding: EdgeInsets,
 }
 ```
 
-Prefer typed helpers over raw `format!("{:?}")` when a property has a default
-or a known kind (`add_default_double` for opacity defaulting to `1.0`, etc.).
+Prefer a typed field over `Value::Debug`: a typed field is what a test reads with `get::<T>`;
+a `Debug` field can only be compared as text.
 
 ## Harness assertion helpers
 
 [`flui_rendering::testing::assertions`](../../flui-rendering/src/testing/assertions.rs)
-wrap common `DiagnosticsNode` checks:
+wrap common `SnapshotNode` checks:
 
 - `assert_properties(node, &["color", "padding"])`
 - `assert_descendant_properties(&tree, "RenderFlex", &["direction"])`

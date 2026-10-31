@@ -6,6 +6,7 @@
 /// children along the selected baseline kind rather than their box edges.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum TextBaseline {
     /// The alphabetic baseline — the canonical, single definition for the whole
     /// workspace (`flui-rendering` and `flui-painting` re-export this;

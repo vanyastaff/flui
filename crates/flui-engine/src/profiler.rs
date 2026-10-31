@@ -24,14 +24,14 @@
 //! # Design note — flui-owned timing record
 //!
 //! Rather than exposing `wgpu_profiler::GpuTimerQueryResult` in the
-//! `Diagnosticable` impl (which would leak an optional dep into the public
+//! `Inspect` impl (which would leak an optional dep into the public
 //! diagnostic surface), completed timer results are mapped to [`PassTiming`],
-//! a plain flui-owned struct. This keeps the `Diagnosticable` impl fully
+//! a plain flui-owned struct. This keeps the `Inspect` impl fully
 //! unit-testable without a live GPU or the `gpu-profiler` feature.
 
 use std::fmt;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect};
 
 // ---------------------------------------------------------------------------
 // Flui-owned timing record (feature-independent, always compiled)
@@ -55,8 +55,8 @@ pub struct PassTiming {
 
 /// A snapshot of GPU pass timings for a completed frame.
 ///
-/// Implements [`Diagnosticable`] so it can be printed via the standard
-/// diagnostic tree. Each pass becomes one property: `"label" = "X.XXms"`.
+/// Implements [`Inspect`] so it can be read through the standard
+/// inspect model: per-pass label, duration and depth sequences, and the total.
 ///
 /// Produced by `GpuFrameProfiler::latest_completed_frame` (available with the
 /// `gpu-profiler` feature) when a frame's queries have resolved. `None` means
@@ -88,16 +88,21 @@ impl fmt::Display for GpuFrameProfile {
     }
 }
 
-impl Diagnosticable for GpuFrameProfile {
-    fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        for pass in &self.passes {
-            let indent = "  ".repeat(pass.depth as usize);
-            builder.add(
-                format!("{}{}", indent, pass.label),
-                format!("{:.3}ms", pass.duration_ms),
-            );
-        }
-        builder.add("total", format!("{:.3}ms", self.total_ms()));
+impl Inspect for GpuFrameProfile {
+    fn kind(&self) -> &'static str {
+        "GpuFrameProfile"
+    }
+
+    /// The passes are three parallel sequences in submission order: `pass_labels`,
+    /// `pass_durations_ms` and `pass_depths`.
+    fn inspect(&self, out: &mut Fields<'_>) {
+        let labels: Vec<&str> = self.passes.iter().map(|pass| pass.label.as_str()).collect();
+        let durations: Vec<f64> = self.passes.iter().map(|pass| pass.duration_ms).collect();
+        let depths: Vec<u32> = self.passes.iter().map(|pass| pass.depth).collect();
+        out.field("pass_labels", &labels);
+        out.field("pass_durations_ms", &durations);
+        out.field("pass_depths", &depths);
+        out.field("total_ms", &self.total_ms());
     }
 }
 

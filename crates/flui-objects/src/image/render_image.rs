@@ -4,9 +4,9 @@
 //! (fit, alignment and repetition, or a stretchable centre slice) decides
 //! only where the image is painted inside that box.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Rect, Size};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_painting::ImagePlacement;
 use flui_painting::paint::Image;
 
@@ -242,29 +242,19 @@ impl RenderImage {
     }
 }
 
-impl Diagnosticable for RenderImage {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add(
-            "image",
-            if self.image.is_some() {
-                "loaded"
-            } else {
-                "none"
-            },
-        );
-        properties.add("intrinsic_size", format!("{:?}", self.intrinsic_size));
-        properties.add(
-            "width",
-            self.width
-                .map_or_else(|| "unset".to_string(), |w| format!("{w:?}")),
-        );
-        properties.add(
-            "height",
-            self.height
-                .map_or_else(|| "unset".to_string(), |h| format!("{h:?}")),
-        );
-        properties.add_default_double("scale", self.scale, 1.0, None);
-        properties.add("placement", format!("{:?}", self.placement));
+impl Inspect for RenderImage {
+    fn kind(&self) -> &'static str {
+        "RenderImage"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("has_image", &self.image.is_some());
+        out.field("intrinsic_size", &self.intrinsic_size)
+            .unit(Unit::LogicalPx);
+        out.field("width", &self.width).unit(Unit::LogicalPx);
+        out.field("height", &self.height).unit(Unit::LogicalPx);
+        out.field("scale", &self.scale).default(&1.0_f64);
+        self.placement.inspect(out);
     }
 }
 

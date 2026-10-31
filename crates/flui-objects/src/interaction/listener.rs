@@ -135,26 +135,22 @@ impl std::fmt::Debug for RenderListener {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderListener {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("has_target", self.target.is_some(), "has_target");
-        builder.add_flag(
-            "has_scroll_target",
-            self.scroll_target.is_some(),
-            "has_scroll_target",
-        );
-        builder.add_flag(
-            "has_pan_zoom_target",
-            self.pan_zoom_target.is_some(),
-            "has_pan_zoom_target",
-        );
-        builder.add_flag(
-            "has_smart_zoom_target",
-            self.smart_zoom_target.is_some(),
-            "has_smart_zoom_target",
-        );
-        builder.add_enum("behavior", self.behavior);
-        builder.add_flag("has_child", self.has_child, "has_child");
+impl flui_foundation::inspect::Inspect for RenderListener {
+    fn kind(&self) -> &'static str {
+        "RenderListener"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("has_target", &self.target.is_some())
+            .default(&false);
+        out.field("has_scroll_target", &self.scroll_target.is_some())
+            .default(&false);
+        out.field("has_pan_zoom_target", &self.pan_zoom_target.is_some())
+            .default(&false);
+        out.field("has_smart_zoom_target", &self.smart_zoom_target.is_some())
+            .default(&false);
+        out.field("behavior", &self.behavior);
+        out.field("has_child", &self.has_child).default(&false);
     }
 }
 

@@ -187,9 +187,13 @@ impl Default for RenderListBody {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderListBody {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("axis_direction", self.axis_direction);
+impl flui_foundation::inspect::Inspect for RenderListBody {
+    fn kind(&self) -> &'static str {
+        "RenderListBody"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("axis_direction", &self.axis_direction);
     }
 }
 

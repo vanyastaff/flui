@@ -7,13 +7,11 @@
 //! removal answers [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone)
 //! rather than another node.
 //!
-//! The render object's properties are its `Diagnosticable` lines, one text item each, under
-//! `properties`, until render objects describe themselves through `Inspect`.
+//! The render object's own fields are its `Inspect` fields, written after the tree's facts.
 
 use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::inspect::{
     Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, Unit, Value,
-    kind_args_of, kind_of,
 };
 use flui_foundation::{RenderId, SemanticsId};
 use rustc_hash::FxHashMap;
@@ -23,26 +21,23 @@ use crate::storage::{RenderNode, RenderTree};
 
 impl Inspect for RenderNode {
     fn kind(&self) -> &'static str {
-        kind_of(self.debug_name())
+        match self {
+            Self::Box(entry) => entry.render_object().kind(),
+            Self::Sliver(entry) => entry.render_object().kind(),
+        }
     }
 
     fn kind_args(&self, args: &mut dyn FnMut(&'static str)) {
-        kind_args_of(self.debug_name(), args);
+        match self {
+            Self::Box(entry) => entry.render_object().kind_args(args),
+            Self::Sliver(entry) => entry.render_object().kind_args(args),
+        }
     }
 
     fn inspect(&self, out: &mut Fields<'_>) {
-        let described = match self {
-            Self::Box(entry) => entry.render_object().to_diagnostics_node(),
-            Self::Sliver(entry) => entry.render_object().to_diagnostics_node(),
-        };
-        let properties: Vec<String> = described
-            .properties()
-            .iter()
-            .map(ToString::to_string)
-            .filter(|line| !line.is_empty())
-            .collect();
-        if !properties.is_empty() {
-            out.field("properties", &properties);
+        match self {
+            Self::Box(entry) => entry.render_object().inspect(out),
+            Self::Sliver(entry) => entry.render_object().inspect(out),
         }
     }
 }
@@ -134,7 +129,11 @@ impl InspectTree for RenderInspect<'_> {
         match node {
             RenderNode::Box(entry) => {
                 if let Some(constraints) = entry.state().constraints() {
-                    out.value("constraints", Value::Debug(constraints))
+                    out.field("constraints_min", &constraints.smallest())
+                        .unit(Unit::LogicalPx)
+                        .level(Level::Detail);
+                    out.field("constraints_max", &constraints.biggest())
+                        .unit(Unit::LogicalPx)
                         .level(Level::Detail);
                 }
                 if let Some(size) = entry.state().geometry() {
@@ -142,6 +141,9 @@ impl InspectTree for RenderInspect<'_> {
                 }
             }
             RenderNode::Sliver(entry) => {
+                // `SliverConstraints` and `SliverGeometry` are twelve-field records with no single
+                // `Value`; a typed split would rename the `geometry` fact that sliver assertions
+                // read, so both stay described by their `Debug`.
                 if let Some(constraints) = entry.state().constraints() {
                     out.value("constraints", Value::Debug(constraints))
                         .level(Level::Detail);

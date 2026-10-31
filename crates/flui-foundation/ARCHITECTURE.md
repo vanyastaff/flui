@@ -210,8 +210,8 @@ exists to prevent.
 
 ## Typed inspection (`inspect`)
 
-`inspect` is ADR-0242's description model, landed beside `debug`'s `Diagnosticable`, which the
-workspace migrates off and then deletes. Invariants:
+`inspect` is ADR-0242's description model; it replaced the `Diagnosticable` property builders,
+which the workspace has left. Invariants:
 
 - **Describing allocates only in the sink.** `Inspect::inspect` writes borrowed `Field`s into
   one `&mut dyn Sink`; `Value` is `Copy` and owns nothing. `inspect_allocation` (its own test

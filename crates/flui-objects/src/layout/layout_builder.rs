@@ -104,13 +104,25 @@ fn report_unsupported_intrinsics() {
     );
 }
 
-impl flui_foundation::Diagnosticable for RenderLayoutBuilder {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_optional(
-            "published_constraints",
-            self.cell.constraints().map(|c| format!("{c:?}")),
-        );
-        builder.add("needs_build", self.cell.needs_build());
+impl flui_foundation::inspect::Inspect for RenderLayoutBuilder {
+    fn kind(&self) -> &'static str {
+        "RenderLayoutBuilder"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let constraints = self.cell.constraints();
+        let unit = flui_foundation::inspect::Unit::LogicalPx;
+        out.field(
+            "published_min",
+            &constraints.as_ref().map(BoxConstraints::smallest),
+        )
+        .unit(unit);
+        out.field(
+            "published_max",
+            &constraints.as_ref().map(BoxConstraints::biggest),
+        )
+        .unit(unit);
+        out.field("needs_build", &self.cell.needs_build());
     }
 }
 

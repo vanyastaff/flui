@@ -401,7 +401,13 @@ fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
 #[derive(Debug)]
 struct RunLocalClipParent;
 
-impl flui_foundation::Diagnosticable for RunLocalClipParent {}
+impl flui_foundation::inspect::Inspect for RunLocalClipParent {
+    fn kind(&self) -> &'static str {
+        "RunLocalClipParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for RunLocalClipParent {
     type Arity = flui_rendering::prelude::Single;

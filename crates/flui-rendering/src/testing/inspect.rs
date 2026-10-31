@@ -12,8 +12,9 @@
 //!   implement so Box and Sliver are inspected identically regardless of
 //!   how far the pipeline was driven.
 
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::{DiagnosticsNode, RenderId};
+use flui_foundation::inspect::{Level, Plain, SnapshotNode, SnapshotQuery, render, snapshot};
 use flui_interaction::events::PointerKind;
 
 use crate::{
@@ -135,23 +136,42 @@ pub fn localize_hit_point(transform: Matrix4, global_x: f64, global_y: f64) -> O
 }
 
 // ============================================================================
-// Render-tree diagnostics dump
+// Render-tree snapshot
 // ============================================================================
 
-/// Builds a [`DiagnosticsNode`] tree mirroring the render hierarchy. Each
-/// node self-describes via the render object's
-/// [`Diagnosticable`](flui_foundation::Diagnosticable) impl (color, padding,
-/// direction, ...); the committed geometry/offset is layered on, and the tree
-/// links supply the parent/child structure.
+/// Takes the typed snapshot of the whole render tree ([`PipelineOwner::inspect`]): each node's
+/// own fields (color, padding, direction, ...), the tree's facts (protocol, committed size or
+/// geometry, offset, dirty flags), and the parent/child structure.
 ///
-/// Delegates to [`PipelineOwner::debug_diagnostics_tree`] so the harness and
-/// the production debug dump share one walk.
-pub fn render_diagnostics<P: PipelinePhase>(owner: &PipelineOwner<P>) -> DiagnosticsNode {
-    owner
-        .debug_diagnostics_tree()
-        .unwrap_or_else(|| DiagnosticsNode::new("<no root>"))
+/// Read it by type: `node.get::<f64>("width")`, `node.get_fact::<Size>("size")`.
+pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNode {
+    snapshot(&owner.inspect(), SnapshotQuery::default())
+        .expect("BUG: a mounted harness tree always has a root")
 }
 
+/// Takes the snapshot of the one node `id`, without its children.
+///
+/// # Panics
+///
+/// When `id` is not a live node of the tree.
+pub fn node_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> SnapshotNode {
+    snapshot(
+        &owner.inspect(),
+        SnapshotQuery {
+            root: Some(id.into()),
+            max_depth: Some(0),
+            ..SnapshotQuery::default()
+        },
+    )
+    .unwrap_or_else(|error| panic!("no snapshot of {id:?}: {error}"))
+}
+
+/// The outline of a snapshot, as a log prints it.
+fn outline(tree: &SnapshotNode) -> String {
+    let mut text = String::new();
+    render(tree, Level::Debug, &Plain, &mut text).expect("BUG: writing to a String cannot fail");
+    text
+}
 // ============================================================================
 // Probe: the ergonomic inspection surface shared by both run results
 // ============================================================================
@@ -173,52 +193,24 @@ pub trait Probe {
     /// The label -> id registry built while mounting the tree.
     fn registry(&self) -> &RenderLabelRegistry;
 
-    /// A diagnostics tree mirroring the render hierarchy, with each node's
-    /// own properties plus committed geometry/offset.
-    fn diagnostics(&self) -> DiagnosticsNode {
-        render_diagnostics(self.pipeline())
+    /// The typed snapshot of the render tree, with each node's own fields plus the committed
+    /// geometry and offset as facts: `tree.find_by_kind("RenderPadding").unique()?
+    /// .get::<EdgeInsets>("padding")`.
+    fn render_snapshot(&self) -> SnapshotNode {
+        render_snapshot(self.pipeline())
     }
 
-    /// The value of diagnostics property `name` on node `id` (e.g.
-    /// `property(child, "color")`), for structured assertions that don't
-    /// rely on substring-matching the dump.
-    fn property(&self, id: RenderId, name: &str) -> Option<String> {
-        self.pipeline()
-            .debug_node_diagnostics(id)
-            .and_then(|node| node.get_property(name).map(str::to_owned))
+    /// The snapshot of node `id` alone, for structured assertions that don't rely on
+    /// substring-matching the dump: `run.node_snapshot(child).get::<Rgba>("color")`.
+    fn node_snapshot(&self, id: RenderId) -> SnapshotNode {
+        node_snapshot(self.pipeline(), id)
     }
 
-    /// Parses a numeric diagnostics property on `id`, if present.
-    fn property_f64(&self, id: RenderId, name: &str) -> Option<f64> {
-        self.pipeline()
-            .debug_node_diagnostics(id)
-            .and_then(|node| node.get_property_f64(name))
-    }
-
-    /// Returns the first descendant's property value matched by render-object
-    /// type name (e.g. `"RenderColoredBox"`, `"RenderFlex"`).
-    fn descendant_property(&self, type_name: &str, property: &str) -> Option<String> {
-        self.diagnostics()
-            .find_descendant_unique(type_name)
-            .ok()?
-            .get_property(property)
-            .map(str::to_owned)
-    }
-
-    /// Parses a numeric property on the first descendant matched by `type_name`.
-    fn descendant_property_f64(&self, type_name: &str, property: &str) -> Option<f64> {
-        self.diagnostics()
-            .find_descendant_unique(type_name)
-            .ok()?
-            .get_property_f64(property)
-    }
-
-    /// A printable, indented dump of the render-tree diagnostics — what a
-    /// failing assertion should print to show *why*.
+    /// A printable, indented outline of the render tree — what a failing assertion should print
+    /// to show *why*.
     fn dump(&self) -> String {
-        self.diagnostics().to_string()
+        outline(&self.render_snapshot())
     }
-
     /// Resolves a node label to its `RenderId`, panicking if the label was
     /// never registered (a test-authoring error).
     fn id(&self, label: &str) -> RenderId {

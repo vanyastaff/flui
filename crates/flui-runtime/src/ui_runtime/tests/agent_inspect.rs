@@ -257,7 +257,17 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
 
     #[derive(Debug)]
     struct PanicsWhenNamedBox(Arc<AtomicBool>);
-    impl flui_foundation::Diagnosticable for PanicsWhenNamedBox {}
+    impl flui_foundation::inspect::Inspect for PanicsWhenNamedBox {
+        fn kind(&self) -> &'static str {
+            assert!(
+                !self.0.load(Ordering::SeqCst),
+                "a render object that cannot be named"
+            );
+            "PanicsWhenNamedBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for PanicsWhenNamedBox {
         type Arity = Leaf;
         type ParentData = BoxParentData;
@@ -268,13 +278,6 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
             Ok(Size::new(10.0, 10.0))
         }
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
-        fn debug_name(&self) -> &'static str {
-            assert!(
-                !self.0.load(Ordering::SeqCst),
-                "a render object that cannot be named"
-            );
-            "PanicsWhenNamed"
-        }
     }
 
     #[derive(Clone)]

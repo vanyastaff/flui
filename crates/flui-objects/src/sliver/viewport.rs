@@ -9,10 +9,10 @@
 //! no `center`/`anchor` — it always lays out every child forward from the
 //! first.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::Clip;
 use flui_rendering::constraints::{
@@ -1018,18 +1018,22 @@ impl Default for RenderViewport<ScrollableViewportOffset> {
     }
 }
 
-impl<O: ViewportOffset + 'static> Diagnosticable for RenderViewport<O> {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("axis_direction", self.axis_direction);
-        properties.add_enum("cross_axis_direction", self.cross_axis_direction);
-        properties.add_double("scroll_offset", self.offset.pixels(), Some("px"));
-        properties.add_double("cache_extent", self.cache_extent, Some("px"));
-        properties.add_enum("cache_extent_style", self.cache_extent_style);
-        properties.add_enum("paint_order", self.paint_order);
-        properties.add_double("anchor", self.anchor, None);
-        if let Some(center) = self.center {
-            properties.add_int("center", center as i64, None);
-        }
+impl<O: ViewportOffset + 'static> Inspect for RenderViewport<O> {
+    fn kind(&self) -> &'static str {
+        "RenderViewport"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("axis_direction", &self.axis_direction);
+        out.field("cross_axis_direction", &self.cross_axis_direction);
+        out.field("scroll_offset", &self.offset.pixels())
+            .unit(Unit::LogicalPx);
+        out.field("cache_extent", &self.cache_extent)
+            .unit(Unit::LogicalPx);
+        out.field("cache_extent_style", &self.cache_extent_style);
+        out.field("paint_order", &self.paint_order);
+        out.field("anchor", &self.anchor);
+        out.field("center", &self.center);
     }
 }
 impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
@@ -1781,19 +1785,23 @@ impl Default for RenderShrinkWrappingViewport<ScrollableViewportOffset> {
     }
 }
 
-impl<O: ViewportOffset + 'static> Diagnosticable for RenderShrinkWrappingViewport<O> {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("axis_direction", self.axis_direction);
-        properties.add_enum("cross_axis_direction", self.cross_axis_direction);
-        properties.add_double("scroll_offset", self.offset.pixels(), Some("px"));
-        properties.add_double("cache_extent", self.cache_extent, Some("px"));
-        properties.add_enum("cache_extent_style", self.cache_extent_style);
-        properties.add_enum("paint_order", self.paint_order);
-        properties.add_double(
-            "shrink_wrap_extent",
-            self.layout.shrink_wrap_extent,
-            Some("px"),
-        );
+impl<O: ViewportOffset + 'static> Inspect for RenderShrinkWrappingViewport<O> {
+    fn kind(&self) -> &'static str {
+        "RenderShrinkWrappingViewport"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        // See `RenderViewport`: these enums are reported by `Debug` until they derive `Inspect`.
+        out.field("axis_direction", &self.axis_direction);
+        out.field("cross_axis_direction", &self.cross_axis_direction);
+        out.field("scroll_offset", &self.offset.pixels())
+            .unit(Unit::LogicalPx);
+        out.field("cache_extent", &self.cache_extent)
+            .unit(Unit::LogicalPx);
+        out.field("cache_extent_style", &self.cache_extent_style);
+        out.field("paint_order", &self.paint_order);
+        out.field("shrink_wrap_extent", &self.layout.shrink_wrap_extent)
+            .unit(Unit::LogicalPx);
     }
 }
 
