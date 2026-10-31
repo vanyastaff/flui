@@ -93,7 +93,7 @@ an index that is never reused).
    never for the first route a tree publishes, nor for a republish of the same route, and once
    for several changes inside one flush. An adapter states its `RouteChangeSupport`. Where it is
    `Native` (the platform has a notice of a new screen: iOS
-   `UIAccessibilityScreenChangedNotification` with no element, Android `TYPE_WINDOW_STATE_CHANGED`
+   `UIAccessibilityScreenChangedNotification` with the name as the string it speaks, Android `TYPE_WINDOW_STATE_CHANGED`
    with the name as its text), the composition root installs a sink that calls
    `PlatformAccessibility::route_changed` after the update showing the route is delivered; a
    panic in it is contained and nothing is spoken in its place. Where it is `Announced` (AT-SPI,

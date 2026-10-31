@@ -36,6 +36,8 @@ use std::sync::Arc;
 use accesskit::TreeUpdate;
 use accesskit_ios::Adapter;
 use objc2::MainThreadMarker;
+use objc2::runtime::AnyObject;
+use objc2_foundation::NSString;
 use objc2_ui_kit::{UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification};
 
 use super::adapter_cell::AdapterCell;
@@ -201,11 +203,13 @@ impl PlatformAccessibility for IosAccessibility {
         Self::ROUTE_CHANGE
     }
 
-    /// UIKit's notice of a new screen, with no element: VoiceOver moves to the
-    /// first element of what it now reads, as it does when a navigation
-    /// controller pushes or pops. The route's own node is a container rather
-    /// than an element, so it is not the argument.
-    fn route_changed(&self, _change: RouteChange) {
+    /// UIKit's notice of a new screen, with the route's name as its argument:
+    /// VoiceOver speaks the name and moves to the first element of what it now
+    /// reads, as it does when a navigation controller pushes or pops. The
+    /// route's own node is a container rather than an element, so its label is
+    /// never read on its own; a route nothing names posts the notice with no
+    /// argument.
+    fn route_changed(&self, change: RouteChange) {
         let marker = MainThreadMarker::new();
         debug_assert!(
             marker.is_some(),
@@ -214,10 +218,18 @@ impl PlatformAccessibility for IosAccessibility {
         if marker.is_none() || !self.shared.is_active() {
             return;
         }
-        // SAFETY: on the main thread, and the screen-changed notice takes an
-        // optional element, here none.
+        let name = change
+            .name()
+            .filter(|name| !name.is_empty())
+            .map(NSString::from_str);
+        // SAFETY: on the main thread; the screen-changed notice's argument is
+        // documented as either an element to move to or a string to speak, and
+        // `name` is a string that outlives the call.
         unsafe {
-            UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, None);
+            UIAccessibilityPostNotification(
+                UIAccessibilityScreenChangedNotification,
+                name.as_deref().map(|name| name as &AnyObject),
+            );
         }
     }
 }
