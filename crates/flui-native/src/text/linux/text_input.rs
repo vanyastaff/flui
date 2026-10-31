@@ -672,6 +672,9 @@ impl TextInputClient {
     /// Send `enable` and the state of `store` on `wire`.
     fn enable_on(&self, wire: &Rc<dyn TextInputWire>, store: &Rc<dyn TextStore>) {
         self.session.set(self.session.get().wrapping_add(1));
+        // A batch the input method sent before this `enable` was for the
+        // field it served then: its `done` applies nothing here.
+        *self.pending.borrow_mut() = Pending::default();
         wire.enable();
         let content = ContentType::of_store(&**store);
         self.content.set(Some(content));
@@ -793,6 +796,9 @@ impl TextInputClient {
         // waits in the queue until this transition is whole, and the caller's
         // drain applies it after, so it is never overwritten by this one.
         let _entered = self.queue.enter();
+        // What the input method sent since its last `done` was for the field
+        // losing focus: it never reaches the next one.
+        *self.pending.borrow_mut() = Pending::default();
         if let Some(previous) = self.focused() {
             // The input method's composition belongs to the field losing
             // focus: it is committed there, and the input method is reset by

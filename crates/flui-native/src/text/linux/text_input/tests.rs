@@ -780,3 +780,16 @@ fn a_focus_moved_by_a_status_query_is_the_one_served() {
         );
     }
 }
+
+#[test]
+fn a_batch_sent_before_focus_moved_never_reaches_the_next_field() {
+    let first = InMemoryTextStore::new("");
+    let next = InMemoryTextStore::new("");
+    let (client, wire) = serving(&first);
+    client.preedit(&*wire, Some("に".into()), 3, 3);
+    client.commit_string(&*wire, Some("typed".into()));
+    client.focus_store(Some(as_store(&next)));
+    client.done(&*wire, wire.commits());
+    assert_eq!(next.text(), "", "the batch was the first field's");
+    assert_eq!(next.composition(), None);
+}
