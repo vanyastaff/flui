@@ -36,6 +36,7 @@ use std::sync::Arc;
 use accesskit::TreeUpdate;
 use accesskit_ios::Adapter;
 use objc2::MainThreadMarker;
+use objc2_ui_kit::{UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification};
 
 use super::adapter_cell::AdapterCell;
 use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
@@ -44,7 +45,7 @@ use crate::owner::apple::ios::{NativeOwner, ViewRef};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
-    PlatformAccessibility,
+    PlatformAccessibility, RouteChange, RouteChangeSupport,
 };
 
 /// The adapter as the window's view reaches it, through the slot its
@@ -195,6 +196,30 @@ impl PlatformAccessibility for IosAccessibility {
     fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
         self.shared.set_assistive_focus_listener(listener);
     }
+
+    fn route_change_support(&self) -> RouteChangeSupport {
+        Self::ROUTE_CHANGE
+    }
+
+    /// UIKit's notice of a new screen, with no element: VoiceOver moves to the
+    /// first element of what it now reads, as it does when a navigation
+    /// controller pushes or pops. The route's own node is a container rather
+    /// than an element, so it is not the argument.
+    fn route_changed(&self, _change: RouteChange) {
+        let marker = MainThreadMarker::new();
+        debug_assert!(
+            marker.is_some(),
+            "BUG: an iOS window's route change is told on its owner, the main thread"
+        );
+        if marker.is_none() || !self.shared.is_active() {
+            return;
+        }
+        // SAFETY: on the main thread, and the screen-changed notice takes an
+        // optional element, here none.
+        unsafe {
+            UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, None);
+        }
+    }
 }
 
 impl IosAccessibility {
@@ -203,6 +228,10 @@ impl IosAccessibility {
     /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
         flui_semantics::AssistiveFocusSupport::Reported;
+
+    /// A route change is UIKit's notice of a new screen; a run on a device
+    /// has not checked how VoiceOver reads it yet.
+    pub(crate) const ROUTE_CHANGE: RouteChangeSupport = RouteChangeSupport::Native;
 }
 
 impl std::fmt::Debug for IosAccessibility {

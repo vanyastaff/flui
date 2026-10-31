@@ -92,11 +92,11 @@ an index that is never reused).
    when the innermost route's identity differs from the one the last delivered update showed:
    never for the first route a tree publishes, nor for a republish of the same route, and once
    for several changes inside one flush. An adapter states its `RouteChangeSupport`. Where it is
-   `Native` (the platform has a notice of a new screen or pane: iOS
-   `UIAccessibilityScreenChangedNotification`, Android `TYPE_WINDOW_STATE_CHANGED` with a pane
-   title), the composition root installs a sink that calls `PlatformAccessibility::route_changed`
-   after the update showing the route is delivered; a panic in it is contained and nothing is
-   spoken in its place. Where it is `Announced` (AT-SPI, UI Automation, NSAccessibility and the
+   `Native` (the platform has a notice of a new screen: iOS
+   `UIAccessibilityScreenChangedNotification` with no element, Android `TYPE_WINDOW_STATE_CHANGED`
+   with the name as its text), the composition root installs a sink that calls
+   `PlatformAccessibility::route_changed` after the update showing the route is delivered; a
+   panic in it is contained and nothing is spoken in its place. Where it is `Announced` (AT-SPI, UI Automation, NSAccessibility and the
    Web have no such notice), the name is queued on the polite announcer (§4) in the same update,
    and a route nothing names says nothing. The owner does not move focus into the route: that is
    the focus system's. An undelivered update leaves the route change to its retry.
@@ -122,4 +122,4 @@ existing runs and an overlong grapheme cluster) and
 `obscured_fields_publish_only_the_mask` through the owner's public API;
 `published_word_starts_match_editor_word_stops`; `assistive_edits_use_the_keyboard_path` in the
 widget suite; a `TextPattern` fixture in [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) reading a field by
-character and word and moving the selection; `announcements_reach_the_live_region_value`; `each_change_of_the_innermost_route_is_told_once`, `without_a_sink_a_named_route_is_announced` and `a_failed_sink_or_delivery_loses_no_change_and_speaks_once` through the owner's public API, and `a_named_page_is_announced_when_pushed_and_when_uncovered` in the widget suite.
+character and word and moving the selection; `announcements_reach_the_live_region_value`; `each_change_of_the_innermost_route_is_told_once`, `without_a_sink_a_named_route_is_announced` and `a_failed_sink_or_delivery_loses_no_change_and_speaks_once` through the owner's public API,, `a_named_page_is_announced_when_pushed_and_when_uncovered` in the widget suite, and `flui-native`'s `each_native_adapter_says_how_a_route_change_is_told`, which pins each adapter's `RouteChangeSupport`.

@@ -45,6 +45,7 @@ pub(crate) mod windows;
 #[cfg(test)]
 mod tests {
     use flui_semantics::AssistiveFocusSupport;
+    use flui_semantics::platform::RouteChangeSupport;
 
     /// Which adapters report where the screen reader's cursor is. iOS's and
     /// Android's do, through their vendored adapters; elsewhere a scenario that
@@ -88,6 +89,52 @@ mod tests {
             assert_eq!(
                 support, expected,
                 "{adapter} changed what it reports of the assistive cursor: update gap 36 in docs/gaps.md and docs/platform-parity.md"
+            );
+        }
+    }
+
+    /// Which adapters raise the platform's own notice of a new screen when the
+    /// innermost route changes (ADR-0204 §5). iOS's and Android's do; elsewhere
+    /// the route's name is spoken as an announcement, and this table is where
+    /// an adapter that gains a notice says so.
+    #[test]
+    fn each_native_adapter_says_how_a_route_change_is_told() {
+        let adapters: &[(&str, RouteChangeSupport, RouteChangeSupport)] = &[
+            #[cfg(linux_host)]
+            (
+                "AT-SPI",
+                super::linux::UnixAccessibility::ROUTE_CHANGE,
+                RouteChangeSupport::Announced,
+            ),
+            #[cfg(windows)]
+            (
+                "UI Automation",
+                super::windows::WindowsAccessibility::ROUTE_CHANGE,
+                RouteChangeSupport::Announced,
+            ),
+            #[cfg(target_os = "macos")]
+            (
+                "NSAccessibility",
+                super::apple::MacosAccessibility::ROUTE_CHANGE,
+                RouteChangeSupport::Announced,
+            ),
+            #[cfg(target_os = "android")]
+            (
+                "TalkBack",
+                super::android::AndroidAccessibility::ROUTE_CHANGE,
+                RouteChangeSupport::Native,
+            ),
+            #[cfg(target_os = "ios")]
+            (
+                "UIAccessibility",
+                super::apple::IosAccessibility::ROUTE_CHANGE,
+                RouteChangeSupport::Native,
+            ),
+        ];
+        for (adapter, support, expected) in adapters {
+            assert_eq!(
+                support, expected,
+                "{adapter} changed how it tells a route change: update gap 36 in docs/gaps.md and docs/platform-parity.md"
             );
         }
     }
