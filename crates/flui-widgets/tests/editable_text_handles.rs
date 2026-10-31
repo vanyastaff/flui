@@ -19,7 +19,7 @@ use flui_platform::pointer::{
     PointerPosition, PointerPress, PointerRelease, PointerSample,
 };
 use flui_platform::{EventTime, TargetPlatform};
-use flui_testing::replay::PointerScript;
+use flui_testing::replay::{PointerScript, TouchScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
     CaretHandle, Column, DefaultSelectionHandles, EditableText, Focus, HandleInfo, HandleSide,
@@ -58,7 +58,6 @@ impl SelectionHandles for Marked {
 fn style() -> TextStyle {
     TextStyle::default().with_font_size(16.0)
 }
-
 struct Scene {
     laid: LaidOut,
     controller: TextEditingController,
@@ -188,7 +187,6 @@ impl Scene {
             )));
         self.settle();
     }
-
     fn selection(&self) -> std::ops::Range<usize> {
         self.controller.selection()
     }
@@ -359,4 +357,84 @@ pub(crate) fn a_long_press_in_an_obscured_field_selects_all_of_it() {
     scene.long_press(scene.along(width.min(40.0)));
     assert_eq!(scene.selection(), 0..WORDS.len());
     assert_eq!(scene.handles(), 2);
+}
+
+/// An edit the handles didn't make takes them away, even one that leaves
+/// the selection's offsets where they were.
+///
+/// Red-check: compare only the offsets (the handle survives the edit).
+pub(crate) fn an_edit_that_keeps_the_offsets_still_hides_the_handles() {
+    let mut scene = Scene::over(CaretHandle::on_tap());
+    scene.tap(scene.along(width_of(WORDS) + 4.0));
+    assert_eq!(scene.controller.caret_byte_offset(), WORDS.len());
+    assert_eq!(scene.handles(), 1);
+    let replacement = "ALPHA BETA GAMMA";
+    assert_eq!(replacement.len(), WORDS.len());
+    scene.controller.set_text(replacement);
+    scene.settle();
+    assert_eq!(scene.controller.caret_byte_offset(), WORDS.len());
+    assert_eq!(scene.handles(), 0);
+}
+
+/// A finger resting on a caret handle keeps it past its timeout, and its
+/// time starts again once the finger lifts.
+///
+/// Red-check: let the timer run while a finger rests on the handle.
+pub(crate) fn a_finger_resting_on_the_caret_handle_keeps_it() {
+    let mut scene = Scene::over(CaretHandle::on_tap().hide_after(Duration::from_secs(1)));
+    let caret = start_of("alpha ");
+    scene.tap(scene.along(caret));
+    assert_eq!(scene.handles(), 1);
+    let rest = TouchScript::new("rest on the caret handle")
+        .down(1, scene.handle_at(caret))
+        .wait(Duration::from_millis(500))
+        .frame()
+        .wait(Duration::from_millis(500))
+        .frame()
+        .wait(Duration::from_millis(500))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let mut while_resting = None;
+    scene.laid.replay_with(&rest, |laid, step| {
+        if step == 3 {
+            while_resting = Some(laid.find_all_by_render_type("RenderFollowerLayer").len());
+        }
+    });
+    assert_eq!(while_resting, Some(1), "the finger keeps it");
+    scene.settle();
+    scene.laid.pump_for(Duration::from_millis(600));
+    assert_eq!(scene.handles(), 1, "its time starts again on the lift");
+    scene.laid.pump_for(Duration::from_millis(600));
+    scene.settle();
+    assert_eq!(scene.handles(), 0, "its time without a touch is up");
+}
+
+/// A long press under way when the focus leaves selects nothing at its
+/// deadline and shows no handles.
+///
+/// Red-check: only hide the handles when the focus leaves (the press
+/// selects at its deadline).
+pub(crate) fn the_focus_leaving_mid_press_cancels_the_long_press() {
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    let _ = scene.field_focus.request_focus();
+    scene.settle();
+    assert!(scene.field_focus.has_primary_focus());
+    let press = TouchScript::new("press while the focus leaves")
+        .down(1, scene.along(width_of("alpha be")))
+        .wait(Duration::from_millis(1000))
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let elsewhere = Rc::clone(&scene.elsewhere);
+    scene.laid.replay_with(&press, |_laid, step| {
+        if step == 0 {
+            let _ = elsewhere.request_focus();
+        }
+    });
+    scene.settle();
+    assert!(!scene.field_focus.has_focus());
+    assert!(scene.selection().is_empty(), "{:?}", scene.selection());
+    assert_eq!(scene.handles(), 0);
 }

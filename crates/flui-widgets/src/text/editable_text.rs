@@ -1935,7 +1935,7 @@ impl ViewState<EditableText> for EditableTextState {
                 // method still hears of it though that fails.
                 let mut failure = FirstPanic::new();
                 if !now_focused && let Some(handles) = handles_for_focus.upgrade() {
-                    handles.hide(&mut failure);
+                    handles.abandon(&mut failure);
                 }
                 failure.contain(|| ime_focus_transition(now_focused));
                 failure.resume();
@@ -1968,15 +1968,16 @@ impl ViewState<EditableText> for EditableTextState {
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
         self.accepts_semantics_actions.set(new_view.enabled);
-        // A disabled field shows no handles, and a replaced controller's
-        // selection is not the one shown handles were for.
+        // A disabled field shows no handles and finishes no long press, and a
+        // replaced controller's selection is not the one shown handles were
+        // for.
         let replaced = !self
             .controller
             .borrow()
             .is_same_controller(&new_view.controller);
         if !new_view.enabled || replaced {
             let mut failure = FirstPanic::new();
-            self.touch_handles.hide(&mut failure);
+            self.touch_handles.abandon(&mut failure);
             failure.resume();
         }
         if !new_view.enabled {

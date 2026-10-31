@@ -30,7 +30,7 @@ use flui_view::{BoxedView, View, ViewExt};
 use super::{CompositionCommit, source_offset_at_global, source_word_range_at_global};
 use crate::interaction::GesturePolicy;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::interaction::{DragSlot, GestureDetector};
+use crate::interaction::{DragSlot, GestureDetector, Listener};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::text::controller::TextEditingController;
 use crate::text::selection_area::handles::{LinkFollower, Look};
@@ -153,11 +153,14 @@ pub(super) struct FieldHandles {
     caret_handle: Cell<CaretHandle>,
     /// Where a handle drag holds its end, relative to the contact.
     grip: Cell<Option<(HandleSide, Offset<f64>)>>,
-    /// The controller's selection and caret the handles were last shown or
-    /// moved for: a change to anything else takes them away.
-    expected: RefCell<Option<(Range<usize>, usize)>>,
+    /// The controller's selection, caret and revision the handles were last
+    /// shown or moved for: any other change, an edit of the text that keeps
+    /// the offsets included, takes them away.
+    expected: RefCell<Option<(Range<usize>, usize, u64)>>,
     /// Set while the handles change the controller themselves.
     moving: Cell<bool>,
+    /// Set while a finger rests on a handle.
+    held: Cell<bool>,
     parts: RefCell<Option<HandleParts>>,
     /// Hides the caret handle once its time without a touch is up.
     timer: RefCell<DrivenController>,
@@ -165,6 +168,8 @@ pub(super) struct FieldHandles {
     vsync: RefCell<Option<Vsync>>,
     /// The word a long press selected, which the same touch extends from.
     pressed_word: RefCell<Option<Range<usize>>>,
+    /// The field's long-press recognizer, which [`Self::abandon`] cancels.
+    long_press: RefCell<Weak<LongPressGestureRecognizer>>,
     warned: Cell<bool>,
 }
 
@@ -180,6 +185,7 @@ impl FieldHandles {
             grip: Cell::new(None),
             expected: RefCell::new(None),
             moving: Cell::new(false),
+            held: Cell::new(false),
             parts: RefCell::new(None),
             timer: RefCell::new(
                 AnimationController::builder(CaretHandle::ANDROID_TIMEOUT)
@@ -189,6 +195,7 @@ impl FieldHandles {
             timer_status: RefCell::new(None),
             vsync: RefCell::new(None),
             pressed_word: RefCell::new(None),
+            long_press: RefCell::new(Weak::new()),
             warned: Cell::new(false),
         })
     }
@@ -212,7 +219,13 @@ impl FieldHandles {
                         let Some(handles) = handles.upgrade() else {
                             return;
                         };
-                        if handles.shown.get() == Some(Shown::Caret) && handles.grip.get().is_none()
+                        // A stopped timer settles too: only one whose time
+                        // ran out, with no finger on the handle, hides it.
+                        let ran_out = handles.timer.borrow().controller().value() >= 1.0;
+                        if handles.shown.get() == Some(Shown::Caret)
+                            && handles.grip.get().is_none()
+                            && !handles.held.get()
+                            && ran_out
                         {
                             let mut failure = FirstPanic::new();
                             handles.hide(&mut failure);
@@ -275,7 +288,7 @@ impl FieldHandles {
     /// selected, when the field shows one, else the selection's. Without an
     /// overlay there are none, which a debug build reports once.
     pub(super) fn show_for_touch(self: &Rc<Self>, failure: &mut FirstPanic) {
-        let Some((selection, caret)) = self.controller_state() else {
+        let Some((selection, caret, revision)) = self.controller_state() else {
             return;
         };
         let shown = if selection.is_empty() {
@@ -294,7 +307,7 @@ impl FieldHandles {
             }
             return;
         };
-        *self.expected.borrow_mut() = Some((selection, caret));
+        *self.expected.borrow_mut() = Some((selection, caret, revision));
         self.shown.set(Some(shown));
         self.restart_timer();
         let entry = if self.entry.borrow().is_none() {
@@ -321,6 +334,21 @@ impl FieldHandles {
         self.repaint_field(failure);
     }
 
+    /// The field stopped taking touches here (it was disabled, given another
+    /// controller, or lost the focus): the handles go, and a long press
+    /// waiting for its deadline or under way is cancelled, so it selects
+    /// nothing later. The handles go first, so the cancelled press finds no
+    /// word to show handles for.
+    pub(super) fn abandon(&self, failure: &mut FirstPanic) {
+        self.hide(failure);
+        let recognizer = self.long_press.borrow().upgrade();
+        if let Some(recognizer) = recognizer {
+            failure.contain(|| {
+                let _ = recognizer.cancel();
+            });
+        }
+    }
+
     /// Takes the handles away. Returns whether any were shown.
     pub(super) fn hide(&self, failure: &mut FirstPanic) -> bool {
         let was_shown = self.take_down(failure);
@@ -343,6 +371,7 @@ impl FieldHandles {
 
     fn take_down(&self, failure: &mut FirstPanic) -> bool {
         self.grip.set(None);
+        self.held.set(false);
         self.pressed_word.borrow_mut().take();
         *self.expected.borrow_mut() = None;
         let _ = self.timer.borrow().controller().stop();
@@ -440,7 +469,7 @@ impl FieldHandles {
         if self.shown.get().is_some() {
             *self.expected.borrow_mut() = self.controller_state();
             let shown = match self.expected.borrow().as_ref() {
-                Some((selection, _)) if !selection.is_empty() => Shown::Selection,
+                Some((selection, _, _)) if !selection.is_empty() => Shown::Selection,
                 _ => Shown::Caret,
             };
             if self.shown.replace(Some(shown)) != Some(shown) {
@@ -482,7 +511,7 @@ impl FieldHandles {
         let Some(at) = self.source_offset_at(global + grip) else {
             return;
         };
-        let Some((selection, _)) = self.controller_state() else {
+        let Some((selection, _, _)) = self.controller_state() else {
             return;
         };
         match side {
@@ -544,20 +573,38 @@ impl FieldHandles {
         )
     }
 
-    fn controller_state(&self) -> Option<(Range<usize>, usize)> {
+    fn controller_state(&self) -> Option<(Range<usize>, usize, u64)> {
         let parts = self.parts.borrow();
         let controller = parts.as_ref()?.controller.borrow();
-        Some((controller.selection(), controller.caret_byte_offset()))
+        Some((
+            controller.selection(),
+            controller.caret_byte_offset(),
+            controller.revision(),
+        ))
+    }
+
+    /// A finger touched (`true`) or left (`false`) a handle: while one rests
+    /// on it the caret handle's time stands still, and it runs again from
+    /// the start when the finger lifts without dragging.
+    fn held(&self, touching: bool) {
+        self.held.set(touching);
+        if touching {
+            let _ = self.timer.borrow().controller().stop();
+        } else if self.grip.get().is_none() {
+            self.restart_timer();
+        }
     }
 
     /// Runs the caret handle's time without a touch from the start, or
-    /// stops it when nothing hides by itself.
+    /// stops it when nothing hides by itself or a finger rests on it.
     fn restart_timer(&self) {
         let timer = self.timer.borrow();
         let controller = timer.controller();
         match self.caret_handle.get().hides_after() {
             Some(timeout)
-                if self.shown.get() == Some(Shown::Caret) && self.vsync.borrow().is_some() =>
+                if self.shown.get() == Some(Shown::Caret)
+                    && !self.held.get()
+                    && self.vsync.borrow().is_some() =>
             {
                 controller.set_duration(timeout);
                 let _ = controller.forward_from(Some(0.0));
@@ -654,6 +701,7 @@ impl FieldLongPress {
             })
             .build();
         self.attachment.attach(&recognizer);
+        *handles.long_press.borrow_mut() = Rc::downgrade(&recognizer);
         let outgoing = self.recognizer.replace(recognizer);
         self.built_for = Some(policy);
         if let Some(outgoing) = outgoing {
@@ -754,8 +802,32 @@ fn handle(
                 }),
         )
         .child(look.handles().build(&info, ctx));
+    // A finger resting on the handle keeps it, though it never drags: its
+    // time runs again from the start once the finger lifts.
+    let (down, up, cancel) = (
+        Rc::downgrade(handles),
+        Rc::downgrade(handles),
+        Rc::downgrade(handles),
+    );
+    let held = Listener::new()
+        .on_pointer_down(move |_cx, _dispatch| {
+            if let Some(handles) = down.upgrade() {
+                handles.held(true);
+            }
+        })
+        .on_pointer_up(move |_cx, _dispatch| {
+            if let Some(handles) = up.upgrade() {
+                handles.held(false);
+            }
+        })
+        .on_pointer_cancel(move |_cx, _dispatch| {
+            if let Some(handles) = cancel.upgrade() {
+                handles.held(false);
+            }
+        })
+        .child(dragged);
     Some(
-        Positioned::new(LinkFollower::new(handles.links[link], dragged))
+        Positioned::new(LinkFollower::new(handles.links[link], held))
             .left(0.0)
             .top(0.0)
             .boxed(),
