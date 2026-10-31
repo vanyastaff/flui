@@ -366,6 +366,9 @@ struct Shared {
     view: RefCell<ReorderableList>,
     /// The row the live drag is over.
     over: Cell<Option<usize>>,
+    /// Whether a row reported the drag over it since the list last looked:
+    /// the rows answer a move before the list around them does.
+    row_reported: Cell<bool>,
     writer: RefCell<Option<WriterSource>>,
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
@@ -478,6 +481,7 @@ impl StatefulView for ReorderableList {
             shared: Rc::new(Shared {
                 view: RefCell::new(self.clone()),
                 over: Cell::new(None),
+                row_reported: Cell::new(false),
                 writer: RefCell::new(None),
                 announcer: RefCell::new(None),
                 strings: RefCell::new(None),
@@ -533,12 +537,28 @@ impl ViewState<ReorderableList> for ReorderableListState {
                 .boxed()
             }))
             .boxed();
-        // The rows report where a drag is; the list as a whole reports that it
-        // left. A row's own leave would report "over none" between two rows.
-        DropTarget::bare(|_drag| None, move |_hover| scrollable.clone()).on_leave(move |drag| {
+        // The rows report where a drag is. The list, which answers each move
+        // after the rows under it, reports "over none" for a move no row
+        // answered (the space after the last row) and when the drag leaves
+        // it; a row's own leave would report it between two rows.
+        let between = Rc::clone(&self.shared);
+        DropTarget::bare(
+            move |drag: &DragView<'_>| {
+                if let Some(payload) = drag.value::<RowPayload>()
+                    && Rc::ptr_eq(&payload.list, &between)
+                    && !between.row_reported.replace(false)
+                {
+                    between.hover(&*payload.key, None);
+                }
+                None
+            },
+            move |_hover| scrollable.clone(),
+        )
+        .on_leave(move |drag| {
             if let Some(payload) = drag.value::<RowPayload>()
                 && Rc::ptr_eq(&payload.list, &left)
             {
+                left.row_reported.set(false);
                 left.hover(&*payload.key, None);
             }
         })
@@ -581,7 +601,10 @@ impl HandleSource {
         .feedback(move || feedback.clone())
         .on_drag_started(move |_cx| started.over.set(None))
         // A drag that ends anywhere, dropped or not, is over no row now.
-        .on_drag_end(move |_cx, _outcome| ended.hover(&*ended_key, None))
+        .on_drag_end(move |_cx, _outcome| {
+            ended.row_reported.set(false);
+            ended.hover(&*ended_key, None);
+        })
     }
 
     fn handle(&self, child: BoxedView) -> BoxedView {
@@ -763,6 +786,7 @@ impl StatelessView for ReorderRow {
                     return None;
                 }
                 // Where the model has this row now, as for the drop.
+                hover.row_reported.set(true);
                 if let Some(over) = hover.index_now(&*row) {
                     hover.hover(&*payload.key, Some(over));
                 }

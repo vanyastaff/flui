@@ -463,7 +463,8 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
 
 /// While a drag runs, the preview reports each row it moves over, once per
 /// change, from the dragged item's index: none between two rows, "over none"
-/// once the drag leaves the list, and once more when a drag ends over a row.
+/// over the list's space after its last row or once the drag leaves the list,
+/// and once more when a drag ends over a row.
 pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let seen = || -> Vec<(usize, Option<usize>)> {
@@ -507,6 +508,29 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
         "a cancelled drag ends over no row"
     );
     assert_eq!(shelf.moves(), []);
+
+    // Two rows fill half the list: the space after them is over no row.
+    let short = Shelf::new(&["a", "b"]);
+    let mut laid = short.mount();
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(1, HANDLE_X));
+    laid.pump();
+    laid.dispatch_pointer_move(HANDLE_X, 3.0 * ROW);
+    laid.pump();
+    let previews = short
+        .log
+        .previews
+        .borrow()
+        .iter()
+        .map(|preview| preview.over)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        previews,
+        [Some(0), Some(1), None],
+        "the list below its last row is over no row"
+    );
+    press(&laid, &SingleActivator::named(NamedKey::Escape));
+    laid.dispatch_pointer_up(HANDLE_X, 3.0 * ROW);
+    settle(&mut laid);
 }
 
 /// A drag shows the list's feedback under the pointer, the row's label by
