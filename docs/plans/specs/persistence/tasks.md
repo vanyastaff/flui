@@ -231,4 +231,9 @@ graph LR
     проверки Home внизу, без сравнения ревизий, без проверки открытой заметки, без
     `start_over` — роняют свою строку. Зависит от `Listenable` у `RouterHandle` и `Persisted`
     и от `Persisted::revision`.
+    `Place` слушает и смещение списка (прокрутка без навигации пишет сеанс,
+    `a_list_scrolled_and_left_reopens_at_its_offset`), и сам сеанс: запись, отказанная, пока
+    свежий старт копирует нечитаемый сеанс, делается, когда он устоится
+    (`a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored`, на
+    `MemoryStorage::hold_copies`). Без каждого слушателя его строка падает.
 - [ ] P12 — нативный прогон (после flui-driver FD11)

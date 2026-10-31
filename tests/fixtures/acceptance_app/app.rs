@@ -460,8 +460,10 @@ impl Session {
     }
 }
 
-/// Writes the session whenever where the user is changes: a route change, an
-/// edit of the draft, or a data write the draft is now taken against.
+/// Writes the session whenever where the user is changes: a route change, a
+/// scroll of the list, an edit of the draft, or a data write the draft is now
+/// taken against; and once the session settles, so a write it refused while a
+/// fresh start ran is made.
 ///
 /// Its listeners hold it weakly, and it holds the router only while Home,
 /// the bottom page, is mounted, so it keeps nothing alive past the tree.
@@ -472,11 +474,21 @@ struct Place {
     editing: Rc<Cell<Option<NoteId>>>,
     scroll: ScrollController,
     router: RefCell<Option<(RouterHandle<Route>, ListenerId)>>,
-    /// The listeners on `data` and `draft`.
-    listening: RefCell<Option<(ListenerId, ListenerId)>>,
+    /// What it listens to while the loaded screens are up.
+    listening: RefCell<Option<Listening>>,
     /// The session as last read or written, so a write that changes
     /// nothing is not made.
     stored: RefCell<Session>,
+}
+
+/// The listeners a [`Place`] keeps.
+struct Listening {
+    data: ListenerId,
+    draft: ListenerId,
+    /// The scroll position's notifier and the listener on it.
+    scroll: Rc<dyn Listenable>,
+    offset: ListenerId,
+    session: ListenerId,
 }
 
 impl Place {
@@ -490,20 +502,28 @@ impl Place {
         })
     }
 
-    /// Listen to the data and the draft.
+    /// Listen to the data, the draft, the list's offset and the session
+    /// itself: a write refused while a fresh start was running is made once
+    /// the session settles.
     fn listen(self: &Rc<Self>) {
-        let ids = (
-            self.data.add_listener(self.listener()),
-            self.draft.add_listener(self.listener()),
-        );
+        let scroll = self.scroll.listenable();
+        let ids = Listening {
+            data: self.data.add_listener(self.listener()),
+            draft: self.draft.add_listener(self.listener()),
+            offset: scroll.add_listener(self.listener()),
+            session: self.session.add_listener(self.listener()),
+            scroll,
+        };
         *self.listening.borrow_mut() = Some(ids);
     }
 
     /// Stop listening to anything.
     fn stop(&self) {
-        if let Some((data, draft)) = self.listening.take() {
-            self.data.remove_listener(data);
-            self.draft.remove_listener(draft);
+        if let Some(listening) = self.listening.take() {
+            self.data.remove_listener(listening.data);
+            self.draft.remove_listener(listening.draft);
+            listening.scroll.remove_listener(listening.offset);
+            self.session.remove_listener(listening.session);
         }
         self.detach();
     }
@@ -550,7 +570,7 @@ impl Place {
             return;
         }
         // A write that fails is reported by the session's status; the place
-        // is written again on the next change.
+        // is written again on the next change or when the session settles.
         if self.session.set(session.clone()).is_ok() {
             *self.stored.borrow_mut() = session;
         }

@@ -392,3 +392,45 @@ fn unreadable_session_starts_home_at_zero() {
         "the unreadable session is kept aside"
     );
 }
+
+#[test]
+fn a_list_scrolled_and_left_reopens_at_its_offset() {
+    let mut run = AppRun::start(app());
+    run.shift_tab();
+    run.key(NamedKey::End);
+    let offset = run.list_offset();
+    assert!(offset > 0.0, "End scrolls the list");
+
+    let run = run.restart();
+    let restored = run.list_offset();
+    assert!(
+        (restored - offset).abs() <= 1.0,
+        "a scroll alone writes the session: {restored} for {offset}"
+    );
+}
+
+#[test]
+fn a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored() {
+    let run = AppRun::start(app());
+    run.storage().put(&Session::NAME, "not a session");
+    let copying = run.storage().hold_copies();
+
+    let mut run = run.restart();
+    assert!(run.shows("Note 1"), "the data loads under a slow copy");
+    run.tap("Note 3");
+    run.replace_title("Groceries");
+    drop(copying);
+    run.settle();
+    assert_eq!(
+        run.storage().kept_aside(&Session::NAME),
+        [b"not a session".to_vec()],
+        "the unreadable session is kept aside"
+    );
+
+    let run = run.restart();
+    assert!(
+        run.shows("Editing note 3"),
+        "the place taken during the fresh start is stored"
+    );
+    assert_eq!(run.title(), "Groceries");
+}
