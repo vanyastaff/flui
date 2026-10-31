@@ -39,7 +39,7 @@ request.
 | 23 | [No presentation feedback](#23-no-presentation-feedback) | iOS, Android, winit | Every animated app; every latency claim |
 | 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
 | 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
-| 26 | [Secure text entry and concealed clipboard entries are absent](#26-secure-text-entry-and-concealed-clipboard-entries-are-absent) | all | Every sign-in form; password managers |
+| 26 | [Secure text entry is absent and concealed clipboard entries are partial](#26-secure-text-entry-is-absent-and-concealed-clipboard-entries-are-partial) | all | Every sign-in form; password managers |
 | 27 | [Input latency modes and high-rate sampling are partial](#27-input-latency-modes-and-high-rate-sampling-are-partial) | all but Windows and the Web | Drawing, games and anything that tracks a finger or pen |
 | 28 | [Distribution is unaudited](#28-distribution-is-unaudited) | all | Everyone who ships |
 | 29 | [Activation ignores the OS focus rules](#29-activation-ignores-the-os-focus-rules) | Windows, Wayland | Apps brought forward by a link, a second launch or a notification |
