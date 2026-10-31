@@ -25,7 +25,8 @@ pub use canvas::{
 };
 pub use clipping::{Clip, ClipBehavior, ClipOp};
 pub use effects::{
-    BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
+    BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, ImageSampling,
+    ImageTransform, InvalidImageTransform, PathPaintMode, StrokeOptions,
 };
 pub use image::{
     BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageDataError, ImageRepeat,

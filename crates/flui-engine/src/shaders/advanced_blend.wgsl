@@ -13,7 +13,7 @@
 //     binding 0 — `BlendUniforms` uniform
 //     binding 1 — foreground texture (premultiplied RGBA f32)
 //     binding 2 — backdrop copy texture (premultiplied RGBA f32)
-//     binding 3 — nearest-clamp sampler
+//     binding 3 — clamp sampler, nearest unless the foreground is resampled
 // - FS group 1 uses the shared viewport/clip layout: binding 1 mask texture,
 //   binding 2 clip consumer. Binding 0 is present in the layout but unused here.
 //
@@ -90,7 +90,7 @@ var foreground_tex: texture_2d<f32>;
 var backdrop_tex:   texture_2d<f32>;
 
 @group(0) @binding(3)
-var nearest_sampler: sampler;
+var blend_sampler: sampler;
 
 struct CompositeClipConsumer { origin_enabled: vec4<i32> };
 @group(1) @binding(1) var composite_clip_mask: texture_2d<f32>;
@@ -255,7 +255,7 @@ fn nonseparable_blend(mode: u32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     // ── Sample foreground (premultiplied) ──────────────────────────────────
-    let fg_pm = textureSample(foreground_tex, nearest_sampler, in.src_uv);
+    let fg_pm = textureSample(foreground_tex, blend_sampler, in.src_uv);
 
     // Apply opacity + tint into the premultiplied source, matching the
     // flush_opacity_layer folding: tint = (tint_rgb * opacity, opacity).
@@ -276,7 +276,7 @@ fn fs_main(in: VsOutput) -> @location(0) vec4<f32> {
     //
     // No additional +0.5: frag_coord already carries the half-texel offset.
     let bd_uv = (in.frag_pos.xy - blend.copy_origin) / blend.copy_extent;
-    let bd_pm = textureSample(backdrop_tex, nearest_sampler, bd_uv);
+    let bd_pm = textureSample(backdrop_tex, blend_sampler, bd_uv);
 
     // ── Un-premultiply both to straight Cs / Cb ────────────────────────────
     let as_ = fg_pm_adjusted.a;   // source alpha

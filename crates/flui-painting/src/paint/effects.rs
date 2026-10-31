@@ -601,6 +601,18 @@ pub enum ImageFilter {
     /// Allows chaining multiple image filters together.
     Compose(Vec<ImageFilter>),
 
+    /// The source seen through a 2D affine transform: the pixel at a point
+    /// shows the source at the point `transform` maps it from, sampled the
+    /// way `sampling` says. [`ImageFilter::try_magnify`] builds the common
+    /// case. As a backdrop filter it draws a magnifier.
+    Transform {
+        /// Maps a point of the source to where it shows, in the filter's
+        /// local space.
+        transform: ImageTransform,
+        /// How the source is read between its pixels.
+        sampling: ImageSampling,
+    },
+
     /// Overflow indicator with diagonal stripes (debug mode only).
     ///
     /// Displays a warning tape pattern (red/yellow diagonal stripes) on the
@@ -624,6 +636,24 @@ pub enum ImageFilter {
 }
 
 impl ImageFilter {
+    /// The source magnified `scale` times about `focal`, in the filter's
+    /// local space, read with linear sampling: a magnifier when used as a
+    /// backdrop filter.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidImageTransform`] for a `scale` that is not finite and
+    /// positive, or a `focal` that is not finite.
+    pub fn try_magnify(
+        focal: flui_foundation::geometry::Point<f64>,
+        scale: f64,
+    ) -> Result<Self, InvalidImageTransform> {
+        Ok(Self::Transform {
+            transform: ImageTransform::try_scale_about(focal, scale, scale)?,
+            sampling: ImageSampling::Linear,
+        })
+    }
+
     /// Create a blur filter with the same sigma for both axes.
     #[inline]
     #[must_use]
@@ -661,7 +691,7 @@ impl ImageFilter {
     /// A colour matrix or adjustment answers as its matrix does
     /// ([`ColorMatrix::modifies_transparent_black`]); a composition does when
     /// any filter in it does. A blur or a morphology of transparent input is
-    /// transparent.
+    /// transparent, and so is a transform of it.
     #[must_use]
     pub fn modifies_transparent_black(&self) -> bool {
         match self {
@@ -670,7 +700,10 @@ impl ImageFilter {
                 adjustment.to_color_matrix().modifies_transparent_black()
             }
             Self::Compose(filters) => filters.iter().any(Self::modifies_transparent_black),
-            Self::Blur { .. } | Self::Dilate { .. } | Self::Erode { .. } => false,
+            Self::Blur { .. }
+            | Self::Dilate { .. }
+            | Self::Erode { .. }
+            | Self::Transform { .. } => false,
             #[cfg(debug_assertions)]
             Self::OverflowIndicator { .. } => false,
         }
@@ -711,4 +744,139 @@ impl ImageFilter {
             container_size,
         }
     }
+}
+
+/// An invertible 2D affine transform with finite coefficients, as
+/// [`ImageFilter::Transform`] takes it: a point `(x, y)` maps to
+/// `(xx·x + xy·y + x0, yx·x + yy·y + y0)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ImageTransform {
+    xx: f64,
+    yx: f64,
+    xy: f64,
+    yy: f64,
+    x0: f64,
+    y0: f64,
+}
+
+/// Why an [`ImageTransform`] could not be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidImageTransform {
+    /// A coefficient, a scale or a focal point is NaN or infinite.
+    #[error("an image transform needs finite coefficients")]
+    NonFinite,
+    /// The transform is not invertible: a zero determinant, an inverse that
+    /// is not finite, or a scale that is not positive.
+    #[error("an image transform must be invertible")]
+    Singular,
+}
+
+impl ImageTransform {
+    /// The transform with these coefficients, in the order
+    /// `(xx, yx, xy, yy, x0, y0)`.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidImageTransform::NonFinite`] for a coefficient that is not
+    /// finite, [`InvalidImageTransform::Singular`] when it is not invertible
+    /// or its inverse is not finite.
+    pub fn try_new(
+        xx: f64,
+        yx: f64,
+        xy: f64,
+        yy: f64,
+        x0: f64,
+        y0: f64,
+    ) -> Result<Self, InvalidImageTransform> {
+        if ![xx, yx, xy, yy, x0, y0]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(InvalidImageTransform::NonFinite);
+        }
+        let transform = Self {
+            xx,
+            yx,
+            xy,
+            yy,
+            x0,
+            y0,
+        };
+        let determinant = xx * yy - xy * yx;
+        if determinant == 0.0
+            || !determinant.is_finite()
+            || !transform
+                .inverse_coefficients()
+                .iter()
+                .all(|value| value.is_finite())
+        {
+            return Err(InvalidImageTransform::Singular);
+        }
+        Ok(transform)
+    }
+
+    /// Scales by `sx` and `sy` about `focal`, which stays where it is.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidImageTransform::NonFinite`] for a value that is not finite,
+    /// [`InvalidImageTransform::Singular`] for a scale that is not positive.
+    pub fn try_scale_about(
+        focal: flui_foundation::geometry::Point<f64>,
+        sx: f64,
+        sy: f64,
+    ) -> Result<Self, InvalidImageTransform> {
+        if ![focal.x, focal.y, sx, sy]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(InvalidImageTransform::NonFinite);
+        }
+        if sx <= 0.0 || sy <= 0.0 {
+            return Err(InvalidImageTransform::Singular);
+        }
+        Self::try_new(
+            sx,
+            0.0,
+            0.0,
+            sy,
+            focal.x - sx * focal.x,
+            focal.y - sy * focal.y,
+        )
+    }
+
+    /// The inverse transform's coefficients, in [`Self::try_new`]'s
+    /// order: it maps a shown point back to the source point it shows.
+    #[must_use]
+    pub fn inverse_coefficients(&self) -> [f64; 6] {
+        let determinant = self.xx * self.yy - self.xy * self.yx;
+        let (xx, yx, xy, yy) = (
+            self.yy / determinant,
+            -self.yx / determinant,
+            -self.xy / determinant,
+            self.xx / determinant,
+        );
+        [
+            xx,
+            yx,
+            xy,
+            yy,
+            -(xx * self.x0 + xy * self.y0),
+            -(yx * self.x0 + yy * self.y0),
+        ]
+    }
+}
+
+/// How [`ImageFilter::Transform`] reads its source between pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum ImageSampling {
+    /// The nearest source pixel.
+    Nearest,
+    /// Bilinear interpolation between the four nearest pixels.
+    #[default]
+    Linear,
 }

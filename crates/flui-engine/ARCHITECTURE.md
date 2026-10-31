@@ -1237,6 +1237,19 @@ Partial-frame damage may constrain writes but must not truncate input dependenci
 Allocations and captured records remain owned by the existing DeviceDomain and
 frame admission/completion protocol; there is no nested submission owner.
 
+A transform backdrop (`ImageFilter::Transform`, the magnifier) resamples the
+same capture through the composite's bilinear sampler: device pixel `p` shows
+the backdrop at `M · F⁻¹ · M⁻¹ (p)`, with `M` the layer's device transform and
+`F` the filter's local map. Only an axis-aligned map with positive scales has
+that lowering; a rotated or sheared one, nearest sampling, and a transform on a
+layer's own content (`ImageFilterLayer`) are typed errors
+(`UnsupportedBackdropFilter`, `UnsupportedImageFilter`), never a frame drawn
+without the transform. The output is cropped to the part that maps inside the
+readable area. Damage follows what it reads: `flui-layer`'s differ grows the
+backdrop's reach to where the inverse sends its bounds.
+`magnified_backdrop_doubles_the_stripes_it_covers` reads the stripes back on
+the Vulkan and GL paths.
+
 Reference check: Skia's `getInputBounds` and `getOutputBounds` deliberately answer
 different questions; Impeller's entity pass reads its current pass texture before
 rendering backdrop-filter children. These support separate footprints and ordered

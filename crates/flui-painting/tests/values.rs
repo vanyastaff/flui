@@ -1430,3 +1430,57 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         "finite magnitudes keep a finite midpoint"
     );
 }
+
+pub(crate) fn image_transforms_refuse_what_they_cannot_invert() {
+    use flui_painting::paint::{ImageFilter, ImageSampling, ImageTransform, InvalidImageTransform};
+    let focal = Point::new(10.0, 20.0);
+    for (scale, refusal) in [
+        (0.0, InvalidImageTransform::Singular),
+        (-2.0, InvalidImageTransform::Singular),
+        (f64::NAN, InvalidImageTransform::NonFinite),
+        (f64::INFINITY, InvalidImageTransform::NonFinite),
+    ] {
+        assert_eq!(
+            ImageFilter::try_magnify(focal, scale),
+            Err(refusal),
+            "scale {scale}"
+        );
+    }
+    assert_eq!(
+        ImageFilter::try_magnify(Point::new(f64::NAN, 0.0), 2.0),
+        Err(InvalidImageTransform::NonFinite)
+    );
+    // A collapsed axis, a determinant that underflows to zero, and one
+    // that overflows.
+    assert_eq!(
+        ImageTransform::try_new(1.0, 2.0, 2.0, 4.0, 0.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+    assert_eq!(
+        ImageTransform::try_new(1e-300, 0.0, 0.0, 1e-300, 1.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+    assert_eq!(
+        ImageTransform::try_new(1e200, 0.0, 0.0, 1e200, 0.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+
+    // A magnifier keeps its focal point and spreads the rest about it; the
+    // inverse maps a shown point back to the source point it shows.
+    let Ok(ImageFilter::Transform {
+        transform,
+        sampling,
+    }) = ImageFilter::try_magnify(focal, 2.0)
+    else {
+        panic!("a valid magnifier");
+    };
+    assert_eq!(sampling, ImageSampling::Linear);
+    assert_eq!(
+        Ok(transform),
+        ImageTransform::try_new(2.0, 0.0, 0.0, 2.0, -10.0, -20.0)
+    );
+    assert_eq!(
+        transform.inverse_coefficients(),
+        [0.5, 0.0, 0.0, 0.5, 5.0, 10.0]
+    );
+}
