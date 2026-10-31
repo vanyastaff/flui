@@ -109,7 +109,11 @@ impl ScriptedHttp {
             if let Err(panic) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
             {
-                first_panic.get_or_insert(panic);
+                match first_panic {
+                    None => first_panic = Some(panic),
+                    // Kept, not dropped: its destructor may panic too.
+                    Some(_) => flui_foundation::panic::retain_opaque_payload(panic),
+                }
             }
         }
         if let Some(panic) = first_panic {

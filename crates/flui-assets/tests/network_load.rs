@@ -239,7 +239,17 @@ fn a_held_request_may_be_polled_by_a_waker_that_reenters_the_client() {
     );
 }
 
-/// Counts its wakes, and panics on each when told to.
+/// A panic payload whose destructor panics too.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("a panic payload that panics when dropped");
+    }
+}
+
+/// Counts its wakes, and panics on each when told to, with a payload that
+/// panics again when dropped.
 struct CountingWaker {
     wakes: std::sync::atomic::AtomicUsize,
     panics: bool,
@@ -251,7 +261,9 @@ impl std::task::Wake for CountingWaker {
     }
     fn wake_by_ref(self: &std::sync::Arc<Self>) {
         self.wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        assert!(!self.panics, "a waker that panics");
+        if self.panics {
+            std::panic::panic_any(PanicsOnDrop);
+        }
     }
 }
 
@@ -299,7 +311,7 @@ fn a_held_request_keeps_one_waker_and_lets_it_go_when_dropped() {
 }
 
 /// Releasing a URL wakes every held request even when their wakers panic,
-/// then resumes the first panic.
+/// with payloads that panic again when dropped, then resumes the first panic.
 #[test]
 fn a_release_wakes_every_held_request_past_a_panicking_waker() {
     let http = ScriptedHttp::new();
@@ -322,7 +334,10 @@ fn a_release_wakes_every_held_request_past_a_panicking_waker() {
         .collect();
 
     let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| http.release(URL)));
-    assert!(released.is_err(), "the first panic is resumed");
+    let first = released.expect_err("the first panic is resumed");
+    assert!(first.is::<PanicsOnDrop>());
+    // Its destructor panics: kept, as `release` keeps the later ones.
+    std::mem::forget(first);
     assert_eq!(
         waker.wakes.load(std::sync::atomic::Ordering::SeqCst),
         3,
