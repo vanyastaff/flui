@@ -87,6 +87,7 @@ struct Probe {
     handle: Rc<RefCell<Option<Acquired>>>,
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     inits: Rc<Cell<usize>>,
+    driver: Rc<RefCell<Option<flui_scheduler::AsyncDriver>>>,
 }
 
 impl Probe {
@@ -96,6 +97,13 @@ impl Probe {
             .clone()
             .expect("the page was mounted")
             .expect("a Router<AppRoute> is above the page")
+    }
+
+    fn driver(&self) -> flui_scheduler::AsyncDriver {
+        self.driver
+            .borrow()
+            .clone()
+            .expect("the page's UI runtime runs tasks")
     }
 
     fn navigator(&self) -> NavigatorHandle {
@@ -138,6 +146,7 @@ impl ViewState<Page> for PageState {
         self.probe.inits.set(self.probe.inits.get() + 1);
         *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(cx));
         *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(cx);
+        *self.probe.driver.borrow_mut() = cx.async_driver();
     }
 
     fn build(&self, view: &Page, _cx: &dyn BuildContext) -> impl IntoView {
@@ -1920,6 +1929,39 @@ pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
     assert!(
         kept.upgrade().is_none(),
         "the listener and the router state it holds are dropped"
+    );
+}
+
+/// A frame hook that panics while a stack change is being queued leaves
+/// nothing stuck: the committed edit stands and is told with the next one.
+pub(crate) fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    let driver = home.driver();
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        router.push(AppRoute::Note { id: 1 })
+    }))
+    .expect_err("the frame hook's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("frame hook failure")
+    );
+    driver.set_request_frame(|| {});
+
+    router
+        .push(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        *heard.borrow(),
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 1 },
+            AppRoute::Note { id: 2 }
+        ]],
+        "the next change is told, with the one the panic interrupted"
     );
 }
 

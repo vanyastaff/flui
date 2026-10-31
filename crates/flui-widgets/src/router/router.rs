@@ -555,8 +555,9 @@ impl<R: Routable> RouterShared<R> {
     /// they were told of and none is queued. Runs no listener: they run in
     /// the delivery, on a later turn of the runtime's tasks.
     ///
-    /// It never panics, so it may run while a panic unwinds: a state it
-    /// cannot read now is mid-edit, and that edit announces when it ends.
+    /// It raises only a panic of the frame hook its spawn wakes, and never
+    /// while a panic unwinds, so it may run then: a state it cannot read now
+    /// is mid-edit, and that edit announces when it ends.
     pub(super) fn announce(self: &Rc<Self>) {
         let announcer = &self.announcer;
         if announcer.queued.get() {
@@ -580,9 +581,25 @@ impl<R: Routable> RouterShared<R> {
         let Ok(mut delivery) = announcer.delivery.try_borrow_mut() else {
             return;
         };
-        announcer.queued.set(true);
         let shared = Rc::downgrade(self);
-        let token = driver.spawn_local(Box::pin(async move { deliver(&shared) }));
+        // Spawning wakes the frame hook, which may panic; the task is then
+        // cancelled, and nothing stays queued, so the next announcement tries
+        // again. While a panic already unwinds, the hook's is kept, not raised.
+        let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            driver.spawn_local(Box::pin(async move { deliver(&shared) }))
+        }));
+        let token = match spawned {
+            Ok(token) => token,
+            Err(payload) => {
+                drop(delivery);
+                if std::thread::panicking() {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                    return;
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        announcer.queued.set(true);
         // The task it replaces has run, or is the delivery running now,
         // whose cancellation is honoured once its poll returns.
         let finished = delivery.replace(token);
