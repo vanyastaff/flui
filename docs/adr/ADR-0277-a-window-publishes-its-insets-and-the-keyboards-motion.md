@@ -1,8 +1,10 @@
 # ADR-0277: A window publishes its insets as one value, and the frame samples the keyboard's motion
 
 - **Status:** Accepted (2026-10-30). Implemented: the value, the capabilities, the frame sampling,
-  the recording and the headless script (§1 to §3, §5), and the Android keyboard with its motion
-  and its system gesture regions (§4). Not implemented: the iOS and Web producers (§4).
+  the recording and the headless script (§1 to §3, §5), the Android keyboard with its motion and
+  its system gesture regions, the iOS keyboard with its motion and the Web keyboard (§4). Not
+  implemented: the Web safe area (§4). Not yet checked: `SYSTEM_KEYBOARD_BEZIER` against a device
+  recording (§1).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
@@ -143,8 +145,8 @@ absence:
 | Host | keyboard | system gestures |
 |---|---|---|
 | Android | `Native` | `Native` from API 29, `NotOnThisDevice` below |
-| iOS | `NotYetOnThisHost` | `NotOnThisPlatform` (UIKit names deferred edges, not insets) |
-| Web | `NotYetOnThisHost` | `NotOnThisPlatform` |
+| iOS | `Native` | `NotOnThisPlatform` (UIKit names deferred edges, not insets) |
+| Web | `Native` with `navigator.virtualKeyboard`, `Emulated` (the visual viewport) without | `NotOnThisPlatform` |
 | Win32 | `NotYetOnThisHost` (a tablet's touch keyboard, `InputPane`) | `NotOnThisPlatform` |
 | winit shells | `NotYetOnThisHost` | `NotOnThisPlatform` |
 | macOS, X11, Wayland | `NotOnThisPlatform` | `NotOnThisPlatform` |
@@ -171,8 +173,8 @@ asks for the next frame; at or after its end the keyboard is kept settled and no
 | Host | safe area | keyboard | system gestures |
 |---|---|---|---|
 | Android | `systemBars() \| displayCutout()` as today | `Type.ime()`; API 30 and later: `WindowInsetsAnimation.Callback` publishes a motion at `onStart` (the bottom edge from `onPrepare` and at `onStart`, `getDurationMillis`, the interpolator mapped to the nearest of the insets controller's curves by its values at three times) and re-anchors its start at an `onProgress` whose `getFraction()` puts the start more than a frame away; a motion with no duration (one the user drives) and below API 30: the target alone | `systemGestures()` (API 29 and later) |
-| iOS | `safeAreaInsets` as today | `UIKeyboardWillChangeFrameNotification`: the end frame converted to the view, the duration, the curve (7 is `SystemKeyboard`) | none |
-| Web | `env(safe-area-inset-*)` with `viewport-fit=cover` | `navigator.virtualKeyboard` with `overlaysContent` and `geometrychange` where the browser has it, else the `visualViewport` resize (`innerHeight - (visualViewport.height + offsetTop)`); the target alone, and the capability is `Native` or `Emulated` by which the browser offers | none |
+| iOS | `safeAreaInsets` as today | `UIKeyboardWillChangeFrameNotification`: the end frame, kept in screen coordinates and converted to the view at each metrics sample, the duration, the curve (7 is `SystemKeyboard`); the motion starts where the keyboard is when the notification arrives, and a change with no duration is the target alone | none |
+| Web | `env(safe-area-inset-*)` with `viewport-fit=cover` | `navigator.virtualKeyboard` where the browser has it: the window sets `overlaysContent` and reads `boundingRect` at each `geometrychange`, capability `Native`; else the layout viewport below the visual viewport (`documentElement.clientHeight - (visualViewport.offsetTop + visualViewport.height)`) at its `resize` and `scroll`, none while the page is pinch-zoomed, capability `Emulated`; the target alone | none |
 | Desktop | as today | none | none |
 | Headless | `HeadlessHost::set_window_insets` sets any value; `HeadlessHost::move_keyboard` starts a motion now, from where the keyboard is | same | same |
 

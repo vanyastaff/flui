@@ -363,6 +363,8 @@ web-sys = { version = "0.3", features = [
     "Location",
     # Styling
     "CssStyleDeclaration",
+    # The soft keyboard over the page
+    "VisualViewport",
     # Console
     "console",
 ] }

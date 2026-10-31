@@ -1,6 +1,7 @@
 //! What the browser tells a page about its own life, against the same fake
 //! page as the display tests: Page Lifecycle `freeze` and `resume`, `pagehide`,
-//! `fullscreenchange`, and a canvas losing and regaining its WebGL context.
+//! `fullscreenchange`, a canvas losing and regaining its WebGL context, and
+//! the soft keyboard over it.
 //! Runs on Node in the wasm lane; nothing here touches a real browser.
 
 use flui_testing::window_commands::AdmitAndApply as _;
@@ -72,6 +73,38 @@ export function setContainerFullscreen() {
 export function setFullscreen(on) {
     globalThis.document.fullscreenElement = on ? canvases[canvases.length - 1] : null;
 }
+// A soft keyboard, hidden: a visual viewport over a layout viewport the size
+// of the page's canvas (300 by 150), and `navigator.virtualKeyboard` when
+// `virtual` is set.
+let keyboard = null;
+let visual = null;
+export function installKeyboard(virtual) {
+    keyboard = Object.assign(new EventTarget(), {
+        overlaysContent: false,
+        boundingRect: { x: 0, y: 0, width: 0, height: 0 },
+    });
+    if (virtual) globalThis.navigator.virtualKeyboard = keyboard;
+    visual = Object.assign(new EventTarget(), { offsetTop: 0, height: 150, scale: 1 });
+    globalThis.visualViewport = visual;
+    globalThis.document.documentElement = { clientWidth: 300, clientHeight: 150 };
+}
+export function removeKeyboard() {
+    delete globalThis.navigator.virtualKeyboard;
+    delete globalThis.visualViewport;
+    delete globalThis.document.documentElement;
+}
+export function keyboardOverlaysContent() { return keyboard.overlaysContent; }
+// The visual viewport shrunk to `height` at `scale`, as a keyboard or a pinch
+// leaves it.
+export function setVisualViewport(height, scale) {
+    Object.assign(visual, { height, scale });
+    visual.dispatchEvent(new Event('resize'));
+}
+// The virtual keyboard's rectangle from `top` to the layout bottom.
+export function moveVirtualKeyboard(top) {
+    keyboard.boundingRect = { x: 0, y: top, width: 300, height: 150 - top };
+    keyboard.dispatchEvent(new Event('geometrychange'));
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = watchPage)]
@@ -92,6 +125,16 @@ extern "C" {
     fn set_container_fullscreen();
     #[wasm_bindgen(js_name = setFullscreen)]
     fn set_fullscreen(on: bool);
+    #[wasm_bindgen(js_name = installKeyboard)]
+    fn install_keyboard(virtual_keyboard: bool);
+    #[wasm_bindgen(js_name = removeKeyboard)]
+    fn remove_keyboard();
+    #[wasm_bindgen(js_name = setVisualViewport)]
+    fn set_visual_viewport(height: f64, scale: f64);
+    #[wasm_bindgen(js_name = keyboardOverlaysContent)]
+    fn keyboard_overlays_content() -> bool;
+    #[wasm_bindgen(js_name = moveVirtualKeyboard)]
+    fn move_virtual_keyboard(top: f64);
 }
 
 /// The page's window and the handler it was opened with.
@@ -376,9 +419,10 @@ async fn web_page_events_leave_with_the_window() {
 #[wasm_bindgen_test]
 async fn web_window_reports_what_a_page_can_do() {
     let (_probe, running, window) = page().await;
-    // A page reads no virtual keyboard yet (ADR-0277 §4).
-    let mut expected = WindowCapabilities::NONE
-        .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost);
+    let mut expected = WindowCapabilities::NONE;
+    // An estimate from the visual viewport: the page has no
+    // `navigator.virtualKeyboard`.
+    expected.reports_keyboard_inset = flui_platform::Availability::Emulated;
     expected.sets_title = flui_platform::Availability::Native;
     expected.enters_fullscreen = flui_platform::Availability::Native;
     expected.closes = flui_platform::Availability::Emulated;
@@ -393,6 +437,65 @@ async fn web_window_reports_what_a_page_can_do() {
         expected,
         "known before a window opens"
     );
+    running.quit();
+    settle().await;
+}
+
+/// The fake page with a soft keyboard, `navigator.virtualKeyboard` among it
+/// when `virtual_keyboard` is set, and the window opened on it.
+async fn keyboard_page(virtual_keyboard: bool) -> (Probe, Running, PageWindow) {
+    install_probe("none");
+    let probe = Probe;
+    watch_page();
+    install_keyboard(virtual_keyboard);
+    let running = Running::start();
+    settle().await;
+    let window = open(&running);
+    (probe, running, window)
+}
+
+#[wasm_bindgen_test]
+async fn web_window_reads_the_keyboard_from_the_visual_viewport() {
+    let (_probe, running, window) = keyboard_page(false).await;
+    let keyboard = || window.state().insets.keyboard();
+    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    // A page zoomed in by a pinch has a smaller visual viewport and no
+    // keyboard.
+    set_visual_viewport(70.0, 2.0);
+    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    // A keyboard that shrinks the visual viewport takes the layout viewport
+    // below it.
+    set_visual_viewport(70.0, 1.0);
+    assert_eq!(keyboard().target().bottom, 80.0);
+    assert_eq!(keyboard().motion(), None, "a browser names no motion");
+    set_visual_viewport(150.0, 1.0);
+    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    remove_keyboard();
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
+    let (_probe, running, window) = keyboard_page(true).await;
+    assert!(
+        keyboard_overlays_content(),
+        "the window asks for the keyboard's rectangle"
+    );
+    assert_eq!(
+        window.state().capabilities.keyboard_inset(),
+        Ok(flui_platform::Availability::Native)
+    );
+    let keyboard = || window.state().insets.keyboard();
+    move_virtual_keyboard(100.0);
+    assert_eq!(keyboard().target().bottom, 50.0);
+    // The rectangle wins over the visual viewport, which an overlaying
+    // keyboard leaves whole.
+    set_visual_viewport(70.0, 1.0);
+    assert_eq!(keyboard().target().bottom, 50.0);
+    move_virtual_keyboard(150.0);
+    assert_eq!(keyboard(), flui_platform::KeyboardInset::HIDDEN);
+    remove_keyboard();
     running.quit();
     settle().await;
 }

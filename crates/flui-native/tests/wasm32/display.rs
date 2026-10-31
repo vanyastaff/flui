@@ -91,6 +91,8 @@ class FakeCanvas extends EventTarget {
     getRootNode() { return document; }
     contains(node) { return node === this; }
     setAttribute() {}
+    // Laid out at the page's origin.
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
 }
 
 // The page's own `flui-canvas`, laid out as a browser lays out a replaced
