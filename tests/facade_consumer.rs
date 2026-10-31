@@ -329,11 +329,23 @@ fn acceptance_app_runs_through_the_facade() {
         table.insert("flui".into(), facade_with_features(root, features));
         table
     };
-    let project = consumer_project(
-        table(&["material"]),
-        Some(table(&["material", "testing"])),
-        "",
+    // The application encodes its documents with the consumer's own codec.
+    let mut dependencies = table(&["material"]);
+    let mut serde = toml::Table::new();
+    serde.insert(
+        String::from("version"),
+        toml::Value::String(String::from("1")),
     );
+    serde.insert(
+        String::from("features"),
+        toml::Value::Array(vec![toml::Value::String(String::from("derive"))]),
+    );
+    dependencies.insert(String::from("serde"), toml::Value::Table(serde));
+    dependencies.insert(
+        String::from("serde_json"),
+        toml::Value::String(String::from("1")),
+    );
+    let project = consumer_project(dependencies, Some(table(&["material", "testing"])), "");
     let fixture = root.join("tests/fixtures/acceptance_app");
     copy_tree(&fixture, &project.path().join("src"));
     let rows = test_names(&fixture);

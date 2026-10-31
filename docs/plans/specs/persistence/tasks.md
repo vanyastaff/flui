@@ -196,5 +196,17 @@ graph LR
 - [ ] P4 — загрузка на шве (после LY50, LY52)
 - [ ] P6 — остаток: реестр сброса хоста (после LY52)
 - [ ] P5 — запись и удержание закрытия
-- [ ] P11 — строки приёмки persistence
+- [ ] P11 — строки приёмки persistence. Четыре PR: (a) данные, (b) сеанс, (c) экраны отказов
+  и `Listenable` у `Persisted` (форма одобрена координатором 2026-10-31: уведомление только
+  при настоящем изменении `status()`/`committed()`, изменения одной доставки — одним вызовом,
+  слушатель может звать `set`/`retry` без рекурсии), (d) решение при закрытии.
+  - [x] (a) данные: заметки и compact-флаг — документ `Saved` (`notes`, JSON через `serde` и
+    `serde_json` consumer'а; `facade_consumer` добавляет их в зависимости). `Loader` стал
+    воротами перед загрузкой; `FutureBuilder` несёт `Rc<Saved>`, состояние экранов (`Loaded`)
+    начинается с загруженного; «Save note», «New note» и переключатель compact пишут
+    документ. Строки (`persistence.rs`): `saved_title_survives_restart_and_others_stay` (R1),
+    `compact_rows_survive_restart` (R2), `first_launch_starts_from_initial_state_without_an_error`
+    (R9: ничего не пишет при чтении, первая правка пишет начальное состояние),
+    `a_note_id_is_never_reused_across_a_restart`. Откаты — `set` убран, экраны с `initial()`
+    вместо загруженного — роняют каждую строку, кроме R9 во втором откате.
 - [ ] P12 — нативный прогон (после flui-driver FD11)
