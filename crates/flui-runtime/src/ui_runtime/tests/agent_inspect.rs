@@ -501,3 +501,62 @@ fn every_reply_is_attempted_and_the_first_panic_is_returned() {
         .unwrap_or_default();
     assert!(message.contains("the first receiver panics"), "{message}");
 }
+
+/// A tracing subscriber that panics on every event, scoped to the current thread.
+struct PanicsOnEvent;
+
+impl tracing::Subscriber for PanicsOnEvent {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("a subscriber that cannot take a trace");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Closing a window answers every job parked on it: a reply that panics (here, a dropped
+/// receiver whose trace a subscriber refuses) must not leave the layer read behind it unanswered.
+#[test]
+fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use flui_protocol::{Condition, Locator, WaitParams};
+
+    let mut ui_runtime = UiRuntime::for_test();
+    let second = ui_runtime.install_second_presentation_for_test();
+    let agent = ui_runtime
+        .semantics_agent(second)
+        .expect("the ui_runtime hosts the second presentation");
+    let second_window = WindowId::from_u64(second.as_u64()).expect("a generation");
+    // A wait nobody listens to any more: answering it traces, and the trace panics.
+    drop(
+        agent
+            .wait(WaitParams::new(
+                second_window,
+                Condition::Appears(Locator::named("never")),
+            ))
+            .expect("the inbox has room"),
+    );
+    let _report = ui_runtime.drain_commands();
+    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(second_window));
+    assert!(parked.try_take().is_none());
+
+    let closed = tracing::subscriber::with_default(PanicsOnEvent, || {
+        catch_unwind(AssertUnwindSafe(|| {
+            ui_runtime.close_presentation_entered(second)
+        }))
+    });
+    assert!(closed.is_err(), "the trace's panic continues");
+    let error = parked
+        .try_take()
+        .expect("closing answers the layer read whatever an earlier reply did")
+        .expect_err("the window is gone");
+    assert_eq!(error, AgentError::PresentationGone);
+}

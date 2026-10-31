@@ -133,7 +133,7 @@ pub(crate) struct StagedLayerRead {
 /// Runs `deliver` for every item even if one panics, and returns the first panic: a reply goes
 /// to a receiver whose drop or trace is user code, and the obligations behind it must not be
 /// lost with it.
-pub(super) fn deliver_each<T>(
+pub(crate) fn deliver_each<T>(
     items: Vec<T>,
     mut deliver: impl FnMut(T),
 ) -> Option<Box<dyn std::any::Any + Send>> {
@@ -418,4 +418,17 @@ fn reading_of(mut root: SnapshotNode) -> InspectReading {
     reading.count = count;
     reading.truncated = truncated;
     reading
+}
+
+/// The first panic of several stages that each ran to the end, or `None` when none panicked. The
+/// others are leaked rather than dropped: a payload's destructor is user code and must not replace
+/// the failure being resumed.
+pub(crate) fn first_panic_of(
+    stages: impl IntoIterator<Item = Option<Box<dyn std::any::Any + Send>>>,
+) -> Option<Box<dyn std::any::Any + Send>> {
+    let mut first = None;
+    for stage in stages {
+        super::input::preserve_first_input_panic(&mut first, stage, "agent job abandonment");
+    }
+    first
 }

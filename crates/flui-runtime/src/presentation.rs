@@ -1925,17 +1925,20 @@ impl PresentationState {
     /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`,
     /// and every event stream ends after a last `window` event.
     pub(crate) fn abandon_agent_jobs(&self) {
-        self.end_agent_events();
+        use crate::ui_runtime::{deliver_each, first_panic_of};
+        // Every stage runs to the end whatever an earlier one did: a reply goes to a receiver
+        // whose drop or trace is user code, and a job left unanswered here is never answered.
+        // The first panic resumes after all of them.
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.end_agent_events();
+        }))
+        .err();
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
-        for pending in owed {
-            pending.abandon();
-        }
+        let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
-        for wait in waits {
-            wait.abandon();
-        }
-        // Last: it attempts every reply and then resumes the first panic of one.
-        if let Some(payload) = self.abandon_agent_layer_reads() {
+        let waited = deliver_each(waits, |wait| wait.abandon());
+        let layers = self.abandon_agent_layer_reads();
+        if let Some(payload) = first_panic_of([ended, reads, waited, layers]) {
             std::panic::resume_unwind(payload);
         }
     }
