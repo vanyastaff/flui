@@ -3,12 +3,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::ui_runtime::UiRuntime;
-use flui_foundation::{
-    PresentationAddress,
-    geometry::{EdgeInsets, WindowMetrics},
-};
+use flui_foundation::{PresentationAddress, geometry::WindowMetrics};
 use flui_interaction::InputSurface;
-use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
+use flui_platform::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState, WindowInsets};
 
 use crate::HostInput;
 
@@ -61,8 +58,9 @@ pub enum WindowObservation {
     /// is re-read for new contacts when its display changed (ADR-0212 §2), and
     /// the window is handed its input regions again (ADR-0217 §5).
     Moved,
-    /// Logical content-view safe area changed.
-    SafeArea(EdgeInsets),
+    /// The window's insets changed: the safe area, the soft keyboard and its
+    /// motion, or the system-gesture edges (ADR-0276).
+    Insets(WindowInsets),
     /// Normalized system appearance changed.
     Brightness(Brightness),
     /// The display the window is on, or that display's refresh period, changed.
@@ -189,7 +187,7 @@ impl UiRuntime {
 #[derive(Default)]
 pub(super) struct PendingWindowState {
     metrics: Option<WindowMetrics>,
-    safe_area: Option<EdgeInsets>,
+    insets: Option<WindowInsets>,
     brightness: Option<Brightness>,
     /// The newest display update; an update to "unknown" is still an update.
     display: Option<DisplayUpdate>,
@@ -225,8 +223,8 @@ impl PendingWindowState {
             WindowObservation::Moved => Err(OrderedObservation::Moved),
             WindowObservation::State => Err(OrderedObservation::State),
             WindowObservation::Metrics(metrics) => Ok(Self::metrics(metrics)),
-            WindowObservation::SafeArea(insets) => Ok(Self {
-                safe_area: Some(insets),
+            WindowObservation::Insets(insets) => Ok(Self {
+                insets: Some(insets),
                 ..Self::default()
             }),
             WindowObservation::Brightness(brightness) => Ok(Self {
@@ -242,7 +240,7 @@ impl PendingWindowState {
 
     pub(super) fn merge(&mut self, newer: &Self) {
         self.metrics = newer.metrics.or(self.metrics);
-        self.safe_area = newer.safe_area.or(self.safe_area);
+        self.insets = newer.insets.or(self.insets);
         self.brightness = newer.brightness.or(self.brightness);
         self.display = newer.display.or(self.display);
     }
@@ -260,8 +258,7 @@ impl PendingWindowState {
         let mut first = None;
         // A display update asks for its own redraw, and only when it changes the
         // display the presentation holds (see `UiRuntime::apply_window_display`).
-        let redraw =
-            self.metrics.is_some() || self.safe_area.is_some() || self.brightness.is_some();
+        let redraw = self.metrics.is_some() || self.insets.is_some() || self.brightness.is_some();
         if let Some(metrics) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
                 resize_surface(metrics);
@@ -284,6 +281,12 @@ impl PendingWindowState {
                 "accepted pixel ratio gesture projection",
             );
         }
+        // The keyboard is held before the media query's update wakes anything:
+        // a wake that panics must not leave the next frame sampling a motion
+        // this observation replaced.
+        if let Some(insets) = self.insets {
+            runtime.hold_keyboard_inset_for(id, insets.keyboard());
+        }
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
@@ -291,8 +294,15 @@ impl PendingWindowState {
                         data.size = metrics.logical();
                         data.device_pixel_ratio = metrics.scale().get();
                     }
-                    if let Some(insets) = self.safe_area {
-                        data.view_padding = insets;
+                    if let Some(insets) = self.insets {
+                        data.view_padding = insets.safe_area();
+                        data.system_gesture_insets = insets.system_gestures();
+                        // A moving keyboard is sampled by each frame at its
+                        // vsync (ADR-0276 §3); one at rest is its target.
+                        let keyboard = insets.keyboard();
+                        if keyboard.motion().is_none() {
+                            data.view_insets = keyboard.target();
+                        }
                     }
                     if let Some(brightness) = self.brightness {
                         data.platform_brightness = brightness;
@@ -328,7 +338,7 @@ impl PendingWindowState {
         if recording {
             let applied = [
                 self.metrics.map(WindowObservation::Metrics),
-                self.safe_area.map(WindowObservation::SafeArea),
+                self.insets.map(WindowObservation::Insets),
                 self.brightness.map(WindowObservation::Brightness),
                 // A display update is not recorded: its `DisplayId` names a
                 // display of this host's platform instance (ADR-0236 §3),
@@ -486,7 +496,7 @@ impl PresentationDispatcher {
             }
             HostInput::Window(observation) => {
                 let work = match PendingWindowState::from_observation(observation) {
-                    Ok(state) => RuntimeWork::WindowState(self.address, state),
+                    Ok(state) => RuntimeWork::WindowState(self.address, Box::new(state)),
                     Err(event) => RuntimeWork::Observation(self.address, event),
                 };
                 core.deliver(work, effects)?

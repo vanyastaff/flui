@@ -30,9 +30,10 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, Locale,
-    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, SystemPreferences,
-    TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
+    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, ImeEvent, InsetCurve,
+    InsetMotion, KeyboardInset, Locale, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    PlatformInput, SystemPreferences, TextWeightPreference, WheelPreferences, WheelStep,
+    WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -402,8 +403,23 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("WindowObservation", "Snapshot") => one(execution(WindowExecutionState::Running)),
         ("WindowObservation", "Hover") => one(window(WindowObservation::Hover(true))),
         ("WindowObservation", "Moved") => one(window(WindowObservation::Moved)),
-        ("WindowObservation", "SafeArea") => one(window(WindowObservation::SafeArea(
-            EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
+        ("WindowObservation", "Insets") => one(window(WindowObservation::Insets(
+            WindowInsets::try_new(
+                EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
+                KeyboardInset::try_moving(
+                    EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
+                    InsetMotion::try_new(
+                        EdgeInsets::ZERO,
+                        EventTime::from_nanos(1_000_000),
+                        Duration::from_millis(250),
+                        InsetCurve::SystemKeyboard,
+                    )
+                    .expect("a valid motion"),
+                )
+                .expect("a valid keyboard"),
+                EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
+            )
+            .expect("valid insets"),
         ))),
         ("WindowObservation", "Brightness") => {
             one(window(WindowObservation::Brightness(Brightness::Dark)))

@@ -91,6 +91,11 @@ impl<'runtime> PresentationSampling<'runtime> {
         now: Instant,
     ) {
         let presentation = self.presentation;
+        // The keyboard's occlusion at this frame's time, before anything
+        // builds against it (ADR-0276 §3).
+        self.run(SamplingStage::Animation, |_| {
+            runtime.sample_keyboard_inset(presentation, runtime.event_time_at(now));
+        });
         let mut prepared = false;
         let mut retained_sample = None;
         self.run(SamplingStage::Preparation, |recovery| {

@@ -7,8 +7,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
-use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
+use flui_foundation::geometry::WindowMetrics;
+use flui_platform::{
+    WindowAppearance, WindowCapabilities, WindowExecutionState, WindowInsets, WindowState,
+};
 use parking_lot::Mutex;
 
 /// The facts a window reports beyond its geometry, mode and flags, as each
@@ -21,8 +23,9 @@ pub(crate) struct ReportedFacts {
     pub(crate) metrics: Option<WindowMetrics>,
     /// The user's theme as applied to the window (ADR-0222).
     pub(crate) appearance: WindowAppearance,
-    /// The safe-area insets in logical pixels.
-    pub(crate) safe_area: EdgeInsets,
+    /// The safe area, the soft keyboard and the system-gesture edges, in
+    /// logical pixels (ADR-0276).
+    pub(crate) insets: WindowInsets,
     /// Whether the platform lets the window run its UI (ADR-0035).
     pub(crate) execution: WindowExecutionState,
     /// Whether the window system says none of the window reaches the screen,
@@ -44,7 +47,7 @@ impl ReportedFacts {
         state
             .with_metrics(self.metrics)
             .with_appearance(self.appearance)
-            .with_safe_area(self.safe_area)
+            .with_insets(self.insets)
             .with_execution(self.execution)
             .with_occluded(self.occluded)
             .with_hovered(self.hovered)

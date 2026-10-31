@@ -82,6 +82,8 @@ mod timer;
 mod window_commands;
 #[path = "window_conformance.rs"]
 mod window_conformance;
+#[path = "window_insets.rs"]
+mod window_insets;
 #[path = "window_scale_factor.rs"]
 mod window_scale_factor;
 
@@ -196,6 +198,8 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
+            ("window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time", window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time as fn()),
+            ("window_insets::reported_insets_reach_their_media_query_fields", window_insets::reported_insets_reach_their_media_query_fields as fn()),
             ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
             ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
             ("multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement", multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement as fn()),
