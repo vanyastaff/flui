@@ -70,9 +70,13 @@ impl Default for RenderSliverIgnorePointer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverIgnorePointer {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("ignoring", self.ignoring, "ignoring");
+impl flui_foundation::inspect::Inspect for RenderSliverIgnorePointer {
+    fn kind(&self) -> &'static str {
+        "RenderSliverIgnorePointer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("ignoring", &self.ignoring).default(&false);
     }
 }
 

@@ -982,6 +982,40 @@ fn the_diff_tells_kinds_apart_by_their_type_arguments() {
     );
 }
 
+/// A number the protocol cannot carry is published as an absent value, so no object can put
+/// infinity or NaN on the wire by holding one.
+///
+/// Fails when `Fields` hands the sink the raw float.
+#[test]
+fn a_non_finite_number_is_described_as_absent() {
+    for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let padding = whole(&sample(bad));
+        let padding = padding
+            .find_by_kind("RenderPadding")
+            .unique()
+            .expect("the padding");
+        assert!(padding.get::<f64>("left").is_err(), "{bad} is published");
+        let left = padding
+            .fields
+            .iter()
+            .find(|field| field.name == "left")
+            .expect("the field is still listed");
+        assert!(
+            matches!(left.value, OwnedValue::None),
+            "{bad} reads as absent"
+        );
+    }
+    let finite = whole(&sample(8.0));
+    assert_eq!(
+        finite
+            .find_by_kind("RenderPadding")
+            .unique()
+            .expect("the padding")
+            .get::<f64>("left"),
+        Ok(8.0)
+    );
+}
+
 fn with_attached_field(value: f64) -> Tree {
     let mut tree = sample(8.0);
     tree.nodes
@@ -1363,4 +1397,41 @@ fn a_node_reference_prints_and_parses_as_one_text() {
 
 fn nz32(n: u32) -> NonZeroU32 {
     NonZeroU32::new(n).expect("a generation is not zero")
+}
+
+/// A positioned value states its unit, and the diff compares it within that unit's tolerance: a
+/// change of a hundredth of a fraction is a change, a change of a hundredth of a pixel is not.
+///
+/// Fails when a compound value is always compared in pixels, which hides an alignment moving by
+/// half a percent of the free space.
+#[test]
+fn a_compound_value_is_compared_within_the_tolerance_of_its_unit() {
+    let with = |x: f64, unit: Unit| {
+        let mut root = whole(&sample(8.0));
+        root.fields.push(flui_foundation::inspect::OwnedField {
+            name: "position",
+            value: OwnedValue::Offset(Offset::new(x, 0.0)),
+            level: Level::Summary,
+            unit: Some(unit),
+            default: None,
+        });
+        root
+    };
+    let fraction = |x| with(x, Unit::Fraction);
+    assert_eq!(
+        diff(&fraction(0.0), &fraction(0.005), DiffOptions::default()).len(),
+        1,
+        "half a percent of the free space is a change"
+    );
+    assert_eq!(
+        diff(&fraction(0.0), &fraction(1e-9), DiffOptions::default()),
+        vec![],
+        "a billionth is not"
+    );
+    let pixels = |x| with(x, Unit::LogicalPx);
+    assert_eq!(
+        diff(&pixels(0.0), &pixels(0.005), DiffOptions::default()),
+        vec![],
+        "half a hundredth of a pixel is not a change"
+    );
 }

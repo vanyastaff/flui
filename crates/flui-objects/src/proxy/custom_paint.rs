@@ -259,19 +259,30 @@ fn finite_extent_or_zero(extent: f64) -> f64 {
     if extent.is_finite() { extent } else { 0.0 }
 }
 
-impl flui_foundation::Diagnosticable for RenderCustomPaint {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_flag("has_painter", self.painter.is_some(), "has painter");
-        properties.add_flag(
-            "has_foreground_painter",
-            self.foreground_painter.is_some(),
-            "has foreground painter",
-        );
-        properties.add_size(
-            "preferred_size",
-            self.preferred_size.width,
-            self.preferred_size.height,
-        );
+impl flui_foundation::inspect::Inspect for RenderCustomPaint {
+    fn kind(&self) -> &'static str {
+        "RenderCustomPaint"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        use flui_foundation::inspect::{Unit, Value};
+        out.field("has_painter", &self.painter.is_some())
+            .default(&false);
+        out.field("has_foreground_painter", &self.foreground_painter.is_some())
+            .default(&false);
+        // An infinite extent means "as much as the parent allows"; it is absent from the
+        // description, not published as infinity: a published number is finite.
+        let size = self.preferred_size;
+        out.field(
+            "preferred_width",
+            &Some(size.width).filter(|w| w.is_finite()),
+        )
+        .unit(Unit::LogicalPx);
+        out.field(
+            "preferred_height",
+            &Some(size.height).filter(|h| h.is_finite()),
+        )
+        .unit(Unit::LogicalPx);
         // `CustomPainter: Debug` is already a supertrait bound (every
         // implementer must derive/implement it), so this reuses an
         // already-required impl rather than adding a new trait method —
@@ -279,11 +290,8 @@ impl flui_foundation::Diagnosticable for RenderCustomPaint {
         // field values back out (e.g. a themed color reaching the real
         // painter instance a build produced) without this render object
         // needing to know anything about what a painter actually paints.
-        properties.add("painter", format!("{:?}", self.painter));
-        properties.add(
-            "foreground_painter",
-            format!("{:?}", self.foreground_painter),
-        );
+        out.value("painter", Value::Debug(&self.painter));
+        out.value("foreground_painter", Value::Debug(&self.foreground_painter));
     }
 }
 

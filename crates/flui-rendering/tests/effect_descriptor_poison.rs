@@ -33,7 +33,13 @@ struct PoisonedDescriptor {
     skip_paint: bool,
 }
 
-impl flui_foundation::Diagnosticable for PoisonedDescriptor {}
+impl flui_foundation::inspect::Inspect for PoisonedDescriptor {
+    fn kind(&self) -> &'static str {
+        "PoisonedDescriptor"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PoisonedDescriptor {
     type Arity = flui_foundation::Single;

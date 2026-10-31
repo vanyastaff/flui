@@ -6,7 +6,7 @@ use core::num::NonZeroU32;
 use core::time::Duration;
 use std::sync::Arc;
 
-use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, Size};
+use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, RelativeRect, Size};
 use crate::id::{ElementId, RenderId, SemanticsId};
 
 use super::tree::{Link, SceneLayer};
@@ -62,6 +62,24 @@ pub enum Value<'a> {
 }
 
 impl Value<'_> {
+    /// Whether every number the value carries is finite. A matrix is not checked: its entries
+    /// are not published one by one.
+    pub(crate) fn is_finite(&self) -> bool {
+        match self {
+            Self::Float(value) => value.is_finite(),
+            Self::Size(size) => size.is_finite(),
+            Self::Offset(offset) => offset.is_finite(),
+            Self::Rect(rect) => rect.is_finite(),
+            Self::EdgeInsets(insets) => {
+                insets.top.is_finite()
+                    && insets.right.is_finite()
+                    && insets.bottom.is_finite()
+                    && insets.left.is_finite()
+            }
+            _ => true,
+        }
+    }
+
     /// The variant's name, as a field error names what it found.
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
@@ -445,6 +463,19 @@ impl ToValue for Rect {
 impl ToValue for EdgeInsets {
     fn to_value(&self) -> Value<'_> {
         Value::EdgeInsets(*self)
+    }
+}
+
+/// A relative rect reports as its four edge offsets, in the order of [`EdgeInsets`]
+/// (`top,right,bottom,left`): each is the distance from the parent's edge of that name.
+impl ToValue for RelativeRect {
+    fn to_value(&self) -> Value<'_> {
+        Value::EdgeInsets(EdgeInsets::new(
+            self.top,
+            self.right,
+            self.bottom,
+            self.left,
+        ))
     }
 }
 

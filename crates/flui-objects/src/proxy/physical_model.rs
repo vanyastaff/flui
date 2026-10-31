@@ -26,7 +26,7 @@
 //!   would hit-test as its full bounding box. Instead the
 //!   [`super::clip::RenderClip`] convention (always test the shape) applies
 //!   to both variants. See [`RenderBox::hit_test`] below.
-//! - **`debug_fill_properties` surfaces the real `shadow_color`.**
+//! - **`Inspect` surfaces the real `shadow_color`.**
 //! - **`clip_behavior` defaults to `Clip::None`**, not `Clip::AntiAlias` —
 //!   the opposite of `RenderClip<S>`'s own default. Physical-model surfaces
 //!   don't clip by default.
@@ -42,7 +42,7 @@ use flui_painting::{
     styling::{BorderRadius, BorderRadiusExt, Color},
 };
 
-use flui_foundation::DiagnosticsBuilder;
+use flui_foundation::inspect::{Fields, Unit};
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, PaintCx},
@@ -151,10 +151,9 @@ pub trait PhysicalClipSource: Clone + fmt::Debug + 'static {
     /// origin at `(0, 0)` in local coordinates.
     fn compute_clip(&self, size: Size) -> Self::Shape;
 
-    /// Appends variant-specific diagnostics (`shape`/`border_radius`, or
-    /// `custom_clipper`) on top of the shared elevation/color/shadow/clip
-    /// properties.
-    fn debug_fill_extra(&self, builder: &mut DiagnosticsBuilder);
+    /// Writes the variant-specific fields (`shape`/`border_radius`, or
+    /// `custom_clipper`) after the shared elevation/color/shadow/clip fields.
+    fn inspect_extra(&self, out: &mut Fields<'_>);
 }
 
 /// [`RenderPhysicalModel`]'s clip source: a [`BoxShape`] plus an optional
@@ -196,12 +195,19 @@ impl PhysicalClipSource for RectangleClip {
         }
     }
 
-    fn debug_fill_extra(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add_enum("shape", self.shape);
-        builder.add_optional(
-            "border_radius",
-            self.border_radius.map(|br| format!("{br:?}")),
-        );
+    fn inspect_extra(&self, out: &mut Fields<'_>) {
+        out.field("shape", &self.shape);
+        if let Some(radius) = &self.border_radius {
+            for (name, corner) in [
+                ("border_radius_top_left", radius.top_left),
+                ("border_radius_top_right", radius.top_right),
+                ("border_radius_bottom_right", radius.bottom_right),
+                ("border_radius_bottom_left", radius.bottom_left),
+            ] {
+                out.field(name, &Size::new(corner.x, corner.y))
+                    .unit(Unit::LogicalPx);
+            }
+        }
     }
 }
 
@@ -269,12 +275,9 @@ impl PhysicalClipSource for PathClip {
         path
     }
 
-    fn debug_fill_extra(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add_flag(
-            "custom_clipper",
-            self.target.is_some(),
-            "has custom clipper",
-        );
+    fn inspect_extra(&self, out: &mut Fields<'_>) {
+        out.field("custom_clipper", &self.target.is_some())
+            .default(&false);
     }
 }
 
@@ -580,21 +583,18 @@ impl RenderPhysicalModelBase<PathClip> {
     }
 }
 
-impl<C: PhysicalClipSource> flui_foundation::Diagnosticable for RenderPhysicalModelBase<C> {
-    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
-        let mut node = flui_foundation::DiagnosticsNode::new(C::DIAGNOSTIC_NAME);
-        let mut builder = flui_foundation::DiagnosticsBuilder::new();
-        self.debug_fill_properties(&mut builder);
-        *node.properties_mut() = builder.build();
-        node
+impl<C: PhysicalClipSource> flui_foundation::inspect::Inspect for RenderPhysicalModelBase<C> {
+    fn kind(&self) -> &'static str {
+        C::DIAGNOSTIC_NAME
     }
 
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_double("elevation", self.elevation, None);
-        builder.add_color("color", format!("{:?}", self.color));
-        builder.add_color("shadow_color", format!("{:?}", self.shadow_color));
-        builder.add_enum("clip_behavior", self.clip_behavior);
-        self.clip_source.debug_fill_extra(builder);
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("elevation", &self.elevation)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("color", &self.color);
+        out.field("shadow_color", &self.shadow_color);
+        out.field("clip_behavior", &self.clip_behavior);
+        self.clip_source.inspect_extra(out);
     }
 }
 

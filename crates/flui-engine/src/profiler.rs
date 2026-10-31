@@ -24,14 +24,14 @@
 //! # Design note — flui-owned timing record
 //!
 //! Rather than exposing `wgpu_profiler::GpuTimerQueryResult` in the
-//! `Diagnosticable` impl (which would leak an optional dep into the public
+//! `Inspect` impl (which would leak an optional dep into the public
 //! diagnostic surface), completed timer results are mapped to [`PassTiming`],
-//! a plain flui-owned struct. This keeps the `Diagnosticable` impl fully
+//! a plain flui-owned struct. This keeps the `Inspect` impl fully
 //! unit-testable without a live GPU or the `gpu-profiler` feature.
 
 use std::fmt;
 
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Value};
 
 // ---------------------------------------------------------------------------
 // Flui-owned timing record (feature-independent, always compiled)
@@ -55,8 +55,8 @@ pub struct PassTiming {
 
 /// A snapshot of GPU pass timings for a completed frame.
 ///
-/// Implements [`Diagnosticable`] so it can be printed via the standard
-/// diagnostic tree. Each pass becomes one property: `"label" = "X.XXms"`.
+/// Implements [`Inspect`] so it can be read through the standard
+/// inspect model: per-pass label, duration and depth sequences, and the total.
 ///
 /// Produced by `GpuFrameProfiler::latest_completed_frame` (available with the
 /// `gpu-profiler` feature) when a frame's queries have resolved. `None` means
@@ -88,16 +88,45 @@ impl fmt::Display for GpuFrameProfile {
     }
 }
 
-impl Diagnosticable for GpuFrameProfile {
-    fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        for pass in &self.passes {
-            let indent = "  ".repeat(pass.depth as usize);
-            builder.add(
-                format!("{}{}", indent, pass.label),
-                format!("{:.3}ms", pass.duration_ms),
-            );
+impl Inspect for GpuFrameProfile {
+    fn kind(&self) -> &'static str {
+        "GpuFrameProfile"
+    }
+
+    /// The passes are three parallel sequences in submission order: `pass_labels`,
+    /// `pass_durations_ms` and `pass_depths`. Each reads the passes in place, so describing a
+    /// profile allocates only in the sink.
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field(
+            "pass_labels",
+            &Column(&self.passes, |pass| Value::Str(&pass.label)),
+        );
+        out.field(
+            "pass_durations_ms",
+            &Column(&self.passes, |pass| Value::Float(pass.duration_ms)),
+        );
+        out.field(
+            "pass_depths",
+            &Column(&self.passes, |pass| Value::Uint(u64::from(pass.depth))),
+        );
+        out.field("total_ms", &self.total_ms());
+    }
+}
+
+/// One attribute of every pass, as a sequence field.
+struct Column<'a>(&'a [PassTiming], fn(&PassTiming) -> Value<'_>);
+
+impl Seq for Column<'_> {
+    fn each(&self, item: &mut dyn FnMut(Value<'_>)) {
+        for pass in self.0 {
+            item((self.1)(pass));
         }
-        builder.add("total", format!("{:.3}ms", self.total_ms()));
+    }
+}
+
+impl FieldValue for Column<'_> {
+    fn payload(&self) -> Payload<'_> {
+        Payload::Seq(self)
     }
 }
 
@@ -449,5 +478,56 @@ pub(crate) mod tests {
             failed.is_empty(),
             "profiler recovery cases failed: {failed:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod inspect_tests {
+    use flui_foundation::inspect::{Field, Fields, Inspect, Meta, Seq, Sink};
+
+    use super::{GpuFrameProfile, PassTiming};
+
+    #[derive(Default)]
+    struct Rows(Vec<(String, Vec<String>)>);
+
+    impl Sink for Rows {
+        fn field(&mut self, field: Field<'_>) {
+            self.0
+                .push((field.name.to_owned(), vec![field.value.to_string()]));
+        }
+
+        fn seq(&mut self, name: &'static str, _meta: Meta<'_>, items: &dyn Seq) {
+            let mut texts = Vec::new();
+            items.each(&mut |value| texts.push(value.to_string()));
+            self.0.push((name.to_owned(), texts));
+        }
+    }
+
+    /// The passes read as three parallel sequences in submission order, with the total after them.
+    #[test]
+    fn a_profile_describes_its_passes_as_parallel_sequences() {
+        let pass = |label: &str, duration_ms, depth| PassTiming {
+            label: label.to_owned(),
+            duration_ms,
+            depth,
+        };
+        let profile = GpuFrameProfile {
+            passes: vec![pass("main", 1.5, 0), pass("blur", 0.5, 1)],
+        };
+        let mut rows = Rows::default();
+        profile.inspect(&mut Fields::new(&mut rows));
+        let names: Vec<&str> = rows.0.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "pass_labels",
+                "pass_durations_ms",
+                "pass_depths",
+                "total_ms"
+            ]
+        );
+        assert_eq!(rows.0[0].1, ["\"main\"", "\"blur\""]);
+        assert_eq!(rows.0[2].1, ["0", "1"]);
+        assert_eq!(rows.0[1].1.len(), 2);
     }
 }

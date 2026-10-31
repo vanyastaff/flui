@@ -98,9 +98,13 @@ impl Default for RenderOffstage {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderOffstage {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("offstage", self.offstage, "offstage");
+impl flui_foundation::inspect::Inspect for RenderOffstage {
+    fn kind(&self) -> &'static str {
+        "RenderOffstage"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("offstage", &self.offstage).default(&false);
     }
 }
 

@@ -185,14 +185,12 @@ pub use flui_cupertino as cupertino;
 #[cfg(feature = "dev-agent")]
 pub use flui_devtools as devtools;
 pub use flui_foundation as foundation;
-/// Structured diagnostic properties for application-defined types.
-pub use flui_foundation::Diagnosticable;
 pub use flui_foundation::geometry;
+/// The typed self-description of a node, and its derive, for application-defined types.
+pub use flui_foundation::inspect::Inspect;
 /// Development hot-reload support. Requires the `hot-reload` feature.
 #[cfg(feature = "hot-reload")]
 pub use flui_hot_reload as hot_reload;
-/// Derive structured diagnostic properties without a direct implementation-crate dependency.
-pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature.
 #[cfg(feature = "material")]

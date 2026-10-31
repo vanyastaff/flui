@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs are in review). FD28, FD29 and FD30 can start now.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 is in review). FD29 and FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -832,6 +832,19 @@ graph LR
   - no test parses a rendered property;
   - any regenerated snapshots are explained in the PR;
   - `cargo xtask check-changed` is green across the dependents.
+- **Evidence:**
+  - Render objects, layers, `DisplayList`, `GpuFrameProfile` and the view render adapters implement `Inspect`;
+    `RenderObject` requires it. `rg Diagnosticable` finds only archival docs and ADR text.
+  - The tree walk takes a render node's kind from the object's own `Inspect::kind`, so generic objects
+    (`RenderClip<S>`) keep their name.
+  - `Value::Debug` fell from about 97 describing sites to 22 in 13 files; `cargo xtask inspect-debug`
+    holds each remaining count with its reason (composites such as `BoxDecoration`, `TextStyle`,
+    `ImageFilter`, user delegates and painters).
+  - `DebugPaintConfig` was deleted rather than moved: nothing used it.
+  - Consumers read typed fields; the facade exports `flui::Inspect` and `render_snapshot`. Explained field
+    changes: `selection` and `composing_range` are start/end pairs, `selection_handles` is
+    `start_handle`/`end_handle`, `constraints` is `constraints_min_width`/`constraints_min_height` with `constraints_max_width`/`constraints_max_height` (each absent when unbounded), string-valued flags
+    are bools or `Option`s.
 
 ### FD29. Tracing conventions and one span stream
 

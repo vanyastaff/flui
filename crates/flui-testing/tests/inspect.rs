@@ -170,8 +170,8 @@ fn render_facts_read_back_typed() {
     let rect = paragraph.rect.expect("a laid-out box has a rect");
     assert_eq!((rect.width(), rect.height()), (size.width, size.height));
     assert!(
-        paragraph.get::<&[OwnedValue]>("properties").is_ok(),
-        "the render object's own properties are its fields, apart from the facts"
+        paragraph.get::<bool>("soft_wrap").is_ok(),
+        "the render object's own fields are typed, apart from the facts"
     );
 }
 

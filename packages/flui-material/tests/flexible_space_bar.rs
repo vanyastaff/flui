@@ -56,8 +56,8 @@ pub fn collapsed_background_fades_out_and_parallaxes_up() {
         .try_find_by_render_type("RenderOpacity")
         .expect("fade wrapper still in the tree");
     assert_eq!(
-        laid.render_property(opacity, "opacity").as_deref(),
-        Some("0"),
+        laid.render_node(opacity).get::<f64>("opacity"),
+        Ok(0.0),
         "fully collapsed, the background must have faded to 0"
     );
     assert_eq!(

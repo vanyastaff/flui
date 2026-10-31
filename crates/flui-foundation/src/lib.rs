@@ -15,7 +15,7 @@
 //!   (ObjectKey/GlobalKey in flui-view)
 //! - **Change Notification**: Observable patterns for reactive UI updates
 //! - **Listener IDs**: Stable identifiers for change-notification listeners
-//! - **Diagnostics**: Debugging and introspection utilities
+//! - **Inspect**: typed, borrowed self-description of nodes (`inspect`)
 //! - **Error Handling**: Standardized error types and utilities
 //! - **Notification System**: Base abstractions for event bubbling
 //!
@@ -104,19 +104,6 @@
 //! }));
 //! value_notifier.set_value(100);
 //! assert_eq!(*value_notifier.value(), 100);
-//! ```
-//!
-//! ### Diagnostics
-//!
-//! ```rust
-//! use flui_foundation::{DiagnosticsNode, DiagnosticsProperty, DiagnosticsTreeStyle};
-//!
-//! let node = DiagnosticsNode::new("MyWidget")
-//!     .with_property(DiagnosticsProperty::new("width", 100.0))
-//!     .with_property(DiagnosticsProperty::new("height", 200.0));
-//!
-//! let rendered = node.to_string();
-//! assert!(rendered.contains("MyWidget"));
 //! ```
 //!
 //! ## Thread Safety
@@ -218,8 +205,6 @@ pub mod read_scope;
 // Generic typed notification channel
 pub mod notifier_generic;
 
-// Diagnostics and debugging
-pub mod debug;
 // Typed self-description of the trees (ADR-0242); replaces `debug`'s string properties.
 pub mod inspect;
 
@@ -248,11 +233,6 @@ pub use epoch::{
 };
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
-// Diagnostics
-pub use debug::{
-    DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
-    DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle,
-};
 pub use id::{
     // Data-transfer offer identity (ADR-0038)
     DataTransferId,
@@ -315,9 +295,6 @@ pub mod prelude {
         ChangeNotifier,
         // Constants
         DEBUG_MODE,
-        // Diagnostics
-        DiagnosticLevel,
-        Diagnosticable,
         EPSILON,
         // IDs
         ElementId,

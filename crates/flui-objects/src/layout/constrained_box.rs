@@ -88,9 +88,36 @@ impl RenderConstrainedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderConstrainedBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("additional_constraints", self.additional_constraints);
+impl flui_foundation::inspect::Inspect for RenderConstrainedBox {
+    fn kind(&self) -> &'static str {
+        "RenderConstrainedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let unit = flui_foundation::inspect::Unit::LogicalPx;
+        // An unbounded bound is absent, not infinite: a published size is finite. `expand()`
+        // makes the minimum itself infinite.
+        let bounds = self.additional_constraints;
+        out.field(
+            "additional_min_width",
+            &Some(bounds.min_width).filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "additional_min_height",
+            &Some(bounds.min_height).filter(|h| h.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "additional_max_width",
+            &Some(bounds.max_width).filter(|w| w.is_finite()),
+        )
+        .unit(unit);
+        out.field(
+            "additional_max_height",
+            &Some(bounds.max_height).filter(|h| h.is_finite()),
+        )
+        .unit(unit);
     }
 }
 

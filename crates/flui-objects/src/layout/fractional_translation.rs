@@ -176,17 +176,17 @@ impl Default for RenderFractionalTranslation {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFractionalTranslation {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "translation",
-            format!("({}, {})", self.translation.dx, self.translation.dy),
-        );
-        builder.add_flag(
-            "transform_hit_tests",
-            self.transform_hit_tests,
-            "transform hit tests",
-        );
+impl flui_foundation::inspect::Inspect for RenderFractionalTranslation {
+    fn kind(&self) -> &'static str {
+        "RenderFractionalTranslation"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("translation_dx", &self.translation.dx)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("translation_dy", &self.translation.dy)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("transform_hit_tests", &self.transform_hit_tests);
     }
 }
 

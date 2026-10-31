@@ -72,6 +72,8 @@
 //!     fn set_ime_cursor_area(&self, _area: Bounds) {}
 //!
 //!     fn discard_composition(&self) {}
+//!
+//!     fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {

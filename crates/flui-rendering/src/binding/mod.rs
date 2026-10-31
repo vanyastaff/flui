@@ -356,17 +356,23 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 
 /// Prints a textual representation of the pipeline owner tree.
 ///
-/// When the owner has a root, this renders the `Diagnosticable`-backed
-/// diagnostics tree (each render object self-describes its properties, with
-/// committed geometry/offset layered on); otherwise it falls back to the
-/// owner's `Debug` representation.
+/// When the owner has a root, this renders its typed snapshot ([`PipelineOwner::inspect`](crate::pipeline::PipelineOwner::inspect)) as
+/// the plain outline: each render object's own fields, with the committed geometry, offset and
+/// dirty flags the tree adds; otherwise it falls back to the owner's `Debug` representation.
 pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) -> String {
-    binding
-        .root_pipeline_owner()
-        .with(|owner| match owner.debug_diagnostics_tree() {
-            Some(tree) => tree.to_string(),
-            None => format!("{owner:?}"),
-        })
+    use flui_foundation::inspect::{Level, Plain, SnapshotQuery, render, snapshot};
+
+    binding.root_pipeline_owner().with(|owner| {
+        match snapshot(&owner.inspect(), SnapshotQuery::default()) {
+            Ok(tree) => {
+                let mut text = String::new();
+                render(&tree, Level::Debug, &Plain, &mut text)
+                    .expect("BUG: writing to a String cannot fail");
+                text
+            }
+            Err(_) => format!("{owner:?}"),
+        }
+    })
 }
 
 // ============================================================================

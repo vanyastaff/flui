@@ -20,7 +20,8 @@ use flui_testing::replay::MouseScript;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{Column, SelectionArea, SizedBox, Text, WidgetsApp};
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out, painted_selection, rgba, tight};
+use flui_foundation::inspect::Rgba;
 
 const FIRST: &str = "Hello world";
 const SECOND: &str = "Second line";
@@ -81,8 +82,9 @@ impl Scene {
             .iter()
             .position(|&paragraph| {
                 self.laid
-                    .render_property(paragraph, "text")
-                    .is_some_and(|text| text.contains(words))
+                    .render_node(paragraph)
+                    .get::<&str>("text")
+                    .is_ok_and(|text| text.contains(words))
             })
             .expect("a paragraph shows the words")
     }
@@ -105,9 +107,8 @@ impl Scene {
     }
 
     /// The part of paragraph `index` that paints highlighted.
-    fn painted(&self, index: usize) -> Option<String> {
-        self.laid
-            .render_property(self.paragraphs()[index], "selection")
+    fn painted(&self, index: usize) -> Option<std::ops::Range<usize>> {
+        painted_selection(&self.laid, self.paragraphs()[index])
     }
 
     fn settle(&mut self) {
@@ -246,14 +247,8 @@ pub(crate) fn a_drag_selects_across_texts_and_a_click_clears() {
         scene.selected().as_deref(),
         Some("Hello world\nSecond line")
     );
-    assert_eq!(
-        scene.painted(0),
-        Some(format!("{:?}", Some(0..FIRST.len())))
-    );
-    assert_eq!(
-        scene.painted(1),
-        Some(format!("{:?}", Some(0..SECOND.len())))
-    );
+    assert_eq!(scene.painted(0), Some(0..FIRST.len()));
+    assert_eq!(scene.painted(1), Some(0..SECOND.len()));
 
     let middle = scene.at(0, 0.5);
     scene.drag(from + Offset::new(-2.0, 0.0), middle);
@@ -264,7 +259,7 @@ pub(crate) fn a_drag_selects_across_texts_and_a_click_clears() {
     );
 
     scene.clicks(scene.at(1, 0.5), 1);
-    assert_eq!(scene.painted(0), Some("None".to_owned()));
+    assert_eq!(scene.painted(0), None);
     assert_eq!(
         scene.heard.borrow().last(),
         Some(&None),
@@ -337,7 +332,7 @@ pub(crate) fn keys_extend_select_everything_copy_and_clear() {
     );
     let _ = scene.key(Key::Named(NamedKey::Escape), Code::Escape, Modifiers::NONE);
     assert_eq!(scene.heard.borrow().last(), Some(&None));
-    assert_eq!(scene.painted(0), Some("None".to_owned()));
+    assert_eq!(scene.painted(0), None);
 }
 
 /// A drag reads the texts where they are laid out even with semantics off:
@@ -375,33 +370,18 @@ pub(crate) fn a_blur_dims_the_highlight_and_keeps_the_selection() {
     let colour = |scene: &Scene| {
         scene
             .laid
-            .render_property(scene.paragraphs()[0], "selection_color")
+            .render_node(scene.paragraphs()[0])
+            .get::<Rgba>("selection_color")
     };
-    assert_eq!(
-        colour(&scene),
-        Some(format!("{:?}", style.active)),
-        "focused"
-    );
+    assert_eq!(colour(&scene), Ok(rgba(style.active)), "focused");
 
     scene.laid.focus_manager().unfocus();
     scene.settle();
-    assert_eq!(
-        colour(&scene),
-        Some(format!("{:?}", style.inactive)),
-        "blurred"
-    );
-    assert_eq!(
-        scene.painted(0),
-        Some(format!("{:?}", Some(0..5))),
-        "the selection stays"
-    );
+    assert_eq!(colour(&scene), Ok(rgba(style.inactive)), "blurred");
+    assert_eq!(scene.painted(0), Some(0..5), "the selection stays");
 
     scene.clicks(scene.at(0, 0.8), 2);
-    assert_eq!(
-        colour(&scene),
-        Some(format!("{:?}", style.active)),
-        "focused again"
-    );
+    assert_eq!(colour(&scene), Ok(rgba(style.active)), "focused again");
 }
 
 /// A text that leaves while holding an end hands that end to the text it
@@ -446,10 +426,7 @@ pub(crate) fn a_removed_text_hands_its_end_to_the_text_beside_it() {
         scene.replace(two());
         let kept = format!("{tail}\n{SECOND}");
         assert_eq!(scene.selected(), Some(kept.clone()), "backward: {backward}");
-        assert_eq!(
-            scene.painted(1),
-            Some(format!("{:?}", Some(0..SECOND.len())))
-        );
+        assert_eq!(scene.painted(1), Some(0..SECOND.len()));
 
         // The moving end stays the one the user moved: in the first text
         // when the drag ran backward, at the second text's end otherwise.
