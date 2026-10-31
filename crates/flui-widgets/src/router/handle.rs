@@ -276,8 +276,16 @@ impl<R: Routable> RouterHandle<R> {
 }
 
 impl<R: Routable> Listenable for RouterHandle<R> {
+    /// Once the router has unmounted the listener is dropped, not kept: it
+    /// would never be told, and one holding this handle would keep the
+    /// router's state alive.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.shared.announcer.notifier.add_observer(observer)
+        let notifier = &self.shared.announcer.notifier;
+        let id = notifier.add_observer(observer);
+        if !self.shared.mounted.get() {
+            notifier.remove_listener(id);
+        }
+        id
     }
 
     fn remove_listener(&self, id: ListenerId) {

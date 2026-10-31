@@ -1915,16 +1915,35 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
 }
 
 /// A listener that holds its router's handle keeps nothing alive once the
-/// router unmounts: the router lets go of its listeners then.
+/// router unmounts: the router lets go of its listeners then, and refuses a
+/// listener added afterwards, even by a capture's `Drop` while it lets go.
 pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
+    /// Adds a listener holding the handle when it is dropped.
+    struct AddsOnDrop(RouterHandle<AppRoute>, Rc<()>);
+    impl Drop for AddsOnDrop {
+        fn drop(&mut self) {
+            let reader = self.0.clone();
+            let alive = Rc::clone(&self.1);
+            self.0.add_listener(Rc::new(move || {
+                let _held = (&alive, reader.stack());
+            }));
+        }
+    }
+
     let (laid, home) = two_screen_app();
     let router = home.handle();
     let alive = Rc::new(());
     let kept = Rc::downgrade(&alive);
     let reader = router.clone();
+    let held = Rc::clone(&alive);
     router.add_listener(Rc::new(move || {
-        let _held = (&alive, reader.stack());
+        let _held = (&held, reader.stack());
     }));
+    let adds = AddsOnDrop(router.clone(), Rc::clone(&alive));
+    router.add_listener(Rc::new(move || {
+        let _held = &adds;
+    }));
+    drop(alive);
     drop((router, home, laid));
     assert!(
         kept.upgrade().is_none(),
