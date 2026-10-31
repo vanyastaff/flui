@@ -1168,7 +1168,7 @@ pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
     scene.settle();
     assert_eq!(scene.selected().as_deref(), Some("alpha beta"));
 
-    scene.touch(1, Touch::Up, 1000, scene.along(width_of("alpha beta gam")));
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("alpha beta ga")));
     scene.settle();
     assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
     assert_eq!(scene.handles(), 2);
