@@ -45,7 +45,7 @@ use std::sync::{
 use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::{MainThreadMarker, MainThreadOnly, msg_send};
+use objc2::{MainThreadMarker, msg_send};
 use objc2::{class, sel};
 use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -1131,11 +1131,17 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
-        // The loop holds the main-thread-only `NSApplication`, so it exists
-        // only on the main thread, and its marker is the proof the window's
-        // AppKit calls need.
+        // The loop is shared across threads (`host::Loop: Send + Sync`), so
+        // only asking AppKit proves this is the main thread the window's
+        // calls need; a release build keeps the check the assertion above
+        // compiles out.
+        let Some(main) = MainThreadMarker::new() else {
+            return Err(OpenWindowError::Backend {
+                message: "a macOS window opens on the main thread only".to_owned(),
+            });
+        };
         let window = MacOSWindow::try_new(
-            owner.app.mtm(),
+            main,
             options,
             handler,
             Arc::clone(&owner.windows),
