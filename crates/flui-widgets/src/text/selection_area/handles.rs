@@ -15,7 +15,7 @@ use flui_painting::paint::Alignment;
 use flui_painting::styling::{BoxDecoration, Color};
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::layer::LayerLink;
+use flui_rendering::layer::{LayerLink, LeaderClip};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{
@@ -432,7 +432,8 @@ fn handle(
 /// Lays its child out where the leader under `link` is painted: the
 /// child's top centre at the leader's bottom-left corner, which a
 /// paragraph puts at the bottom of an end's line. Nothing paints or takes
-/// a touch while no leader is published.
+/// a touch while no leader is published, or while its end is clipped out
+/// (scrolled out of a viewport).
 #[derive(Debug, Clone)]
 pub(crate) struct LinkFollower {
     link: LayerLink,
@@ -460,6 +461,7 @@ impl RenderView for LinkFollower {
             .with_show_when_unlinked(false)
             .with_leader_anchor(Alignment::BOTTOM_LEFT)
             .with_follower_anchor(Alignment::TOP_CENTER)
+            .with_leader_clip(LeaderClip::Hide)
     }
 
     fn update_render_object(

@@ -870,24 +870,25 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
 
-        // Follower hit-testing: composite-resolved follower offsets. Gated behind
+        // Follower hit-testing: composite-resolved follower transforms. Gated behind
         // both side tables being empty — true for the overwhelming
         // majority of trees (followers are rare: tooltips, dropdowns,
         // overlays), so this whole branch is a single cheap `is_empty`
         // check away from a no-op for every other tree.
-        let follower_offset =
-            if self.last_follower_offsets.is_empty() && self.last_hidden_follower_ids.is_empty() {
-                None
-            } else if self.last_hidden_follower_ids.contains(&id) {
-                // Correlated as a follower this frame but resolved to hidden
-                // (unlinked, `show_when_unlinked == false`) — mirrors the
-                // render path's `resolve_follower_offset -> None -> don't
-                // descend` (flui-engine's `render_layer_recursive`).
-                // No HitTestEntry, no descent.
-                return false;
-            } else {
-                self.last_follower_offsets.get(&id).copied()
-            };
+        let follower_transform = if self.last_follower_transforms.is_empty()
+            && self.last_hidden_follower_ids.is_empty()
+        {
+            None
+        } else if self.last_hidden_follower_ids.contains(&id) {
+            // Correlated as a follower this frame but resolved to hidden
+            // (unlinked and not shown, or its leader clipped out) — mirrors the
+            // render path's `resolve_follower_transform -> None -> don't
+            // descend` (flui-engine's `render_layer_recursive`).
+            // No HitTestEntry, no descent.
+            return false;
+        } else {
+            self.last_follower_transforms.get(&id).copied()
+        };
 
         // Borrowed, not copied: the walk only reads the tree.
         let children = node.children();
@@ -1102,12 +1103,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
         let mut hit_follower = |result: &mut crate::hit_testing::HitTestResult,
                                 position: Offset| {
-            match follower_offset {
-                Some(offset) => result
-                    .with_paint_offset(offset, |result| visit(result, walk, position - offset))
-                    .unwrap_or(false),
-                None => visit(result, walk, position),
-            }
+            let Some(transform) = follower_transform else {
+                return visit(result, walk, position);
+            };
+            // The resolver only publishes invertible transforms; a refusal
+            // here still misses rather than hit-testing in the wrong space.
+            let Some(inverse) = transform.try_inverse() else {
+                return false;
+            };
+            let Some((x, y)) = inverse.unproject_to_plane(position.dx, position.dy) else {
+                return false;
+            };
+            result.with_inverse_transform(inverse, |result| visit(result, walk, Offset::new(x, y)))
         };
         let Some(transform) = hit_transform else {
             return hit_follower(result, position);

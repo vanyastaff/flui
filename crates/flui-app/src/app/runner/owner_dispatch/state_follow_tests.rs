@@ -8,7 +8,7 @@
 
 use flui_foundation::geometry::{DeviceSize, EdgeInsets, Size, WindowMetrics};
 use flui_platform::{
-    WindowAppearance, WindowExecutionState, WindowGeometry, WindowMode, WindowState,
+    WindowAppearance, WindowExecutionState, WindowGeometry, WindowInsets, WindowMode, WindowState,
 };
 
 use super::RuntimeEvent;
@@ -19,7 +19,7 @@ fn named(event: &RuntimeEvent) -> String {
         RuntimeEvent::Resized(metrics) => format!("resized {:?}", metrics.physical()),
         RuntimeEvent::WindowFocus(focused) => format!("focus {focused}"),
         RuntimeEvent::WindowExecution(execution) => format!("execution {execution:?}"),
-        RuntimeEvent::SafeAreaChanged(insets) => format!("safe area {}", insets.top),
+        RuntimeEvent::InsetsChanged(insets) => format!("insets {}", insets.safe_area().top),
         RuntimeEvent::WindowVisibility(seen) => format!("seen {seen}"),
         RuntimeEvent::AppearanceChanged(brightness) => format!("brightness {brightness:?}"),
         RuntimeEvent::DisplayChanged(_) => "display".to_owned(),
@@ -66,9 +66,13 @@ fn each_fact_brings_exactly_its_event() {
             &["state", "resized Size { width: 1000, height: 600 }"],
         ),
         (
-            "safe area",
-            shown().with_safe_area(EdgeInsets::new(24.0, 0.0, 0.0, 0.0)),
-            &["state", "safe area 24"],
+            "insets",
+            shown().with_insets(
+                WindowInsets::ZERO
+                    .try_with_safe_area(EdgeInsets::new(24.0, 0.0, 0.0, 0.0))
+                    .expect("a finite safe area"),
+            ),
+            &["state", "insets 24"],
         ),
         (
             "appearance",

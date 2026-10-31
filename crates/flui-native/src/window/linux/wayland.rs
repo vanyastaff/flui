@@ -271,6 +271,10 @@ pub(crate) mod configure {
         activation: Activation,
     ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
+            // The text-input protocol reports no keyboard geometry, and a
+            // desktop compositor keeps no edges for system gestures.
+            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
+            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
                 CapabilityAbsence::NotOnThisPlatform,
@@ -1336,7 +1340,7 @@ mod toplevel {
     use std::sync::{Arc, Weak};
 
     use cursor_icon::CursorIcon;
-    use flui_foundation::geometry::{EdgeInsets, Size, WindowMetrics};
+    use flui_foundation::geometry::{Size, WindowMetrics};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
@@ -1745,7 +1749,7 @@ mod toplevel {
             ReportedFacts {
                 metrics: WindowMetrics::from_logical(content, scale).ok(),
                 appearance: self.portal.appearance(),
-                safe_area: EdgeInsets::ZERO,
+                insets: flui_platform::WindowInsets::ZERO,
                 execution: WindowExecutionState::Running,
                 // What the compositor says it draws: a surface it maps (a
                 // configured window with a frame) enters an output, and one

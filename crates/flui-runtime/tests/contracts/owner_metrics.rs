@@ -4240,10 +4240,18 @@ fn resize_failure_preserves_other_batched_window_state() {
             }
             for observation in [
                 WindowObservation::Brightness(Brightness::Light),
-                WindowObservation::SafeArea(EdgeInsets::all(3.0)),
+                WindowObservation::Insets(
+                    flui_platform::WindowInsets::ZERO
+                        .try_with_safe_area(EdgeInsets::all(3.0))
+                        .expect("a finite safe area"),
+                ),
                 WindowObservation::Metrics(crate::window_metrics(100.0, 100.0, 1.5)),
                 WindowObservation::Brightness(Brightness::Dark),
-                WindowObservation::SafeArea(EdgeInsets::all(12.0)),
+                WindowObservation::Insets(
+                    flui_platform::WindowInsets::ZERO
+                        .try_with_safe_area(EdgeInsets::all(12.0))
+                        .expect("a finite safe area"),
+                ),
                 WindowObservation::Metrics(crate::window_metrics(200.0, 100.0, 2.0)),
             ] {
                 target

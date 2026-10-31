@@ -166,7 +166,7 @@ fn sample_state(
         metrics,
         appearance: page_appearance(),
         // The page owns the viewport; the canvas has no safe area of its own.
-        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        insets: flui_platform::WindowInsets::ZERO,
         execution,
         occluded: hidden,
         hovered,
@@ -1024,7 +1024,11 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // A browser names when an animation frame starts (the
     // `requestAnimationFrame` timestamp), never when the frame it painted
     // reached the screen.
-    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+    // A page has no system gesture edges; the virtual keyboard
+    // (`navigator.virtualKeyboard`, `visualViewport`) is not read yet.
+    capabilities
+        .without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+        .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
 }
 
 impl std::fmt::Debug for WebWindow {

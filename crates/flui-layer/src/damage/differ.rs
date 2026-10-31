@@ -11,7 +11,7 @@ use flui_painting::paint::ImageFilter;
 
 use super::DamageMode;
 use crate::{
-    ContentToken, DamageRect, DamageRegion, Layer, LayerTree, Scene, resolve_follower_offset,
+    ContentToken, DamageRect, DamageRegion, Layer, LayerTree, Scene, resolve_follower_transform,
 };
 
 /// Produces a frame's [`DamageRegion`] by comparing its repaint-boundary
@@ -229,10 +229,10 @@ impl Frame {
                     // Placed at composite time against its leader, which may
                     // sit in another boundary: nothing here vouches for where
                     // it lands next frame.
-                    let Some(offset) = resolve_follower_offset(tree, id) else {
+                    let Some(transform) = resolve_follower_transform(tree, id) else {
                         continue;
                     };
-                    ctx.transform *= Matrix4::translation(offset.dx, offset.dy, 0.0);
+                    ctx.transform *= transform;
                     ctx.volatile = true;
                 }
                 _ => {

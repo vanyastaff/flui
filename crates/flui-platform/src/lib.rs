@@ -145,6 +145,7 @@ pub mod text_store;
 mod unsupported;
 mod window;
 mod window_handler;
+mod window_insets;
 mod window_state;
 
 pub use brightness::Brightness;
@@ -205,6 +206,7 @@ pub use window::{
     WindowOptions, WindowReveal,
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
+pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
     CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,

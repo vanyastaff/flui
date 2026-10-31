@@ -121,6 +121,7 @@ impl Inspect for Layer {
                 out.field("show_when_unlinked", &layer.show_when_unlinked());
                 out.value("leader_anchor", Value::Debug(&layer.leader_anchor()));
                 out.value("follower_anchor", Value::Debug(&layer.follower_anchor()));
+                out.value("leader_clip", Value::Debug(&layer.leader_clip()));
                 out.field("size", &layer.size()).unit(Unit::LogicalPx);
             }
             Layer::AnnotatedRegion(layer) => {

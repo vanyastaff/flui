@@ -109,10 +109,10 @@ pub(crate) fn record_layer_tree(
             self.backend.flush_active_transform();
             match layer {
                 flui_layer::Layer::Follower(_) => {
-                    let Some(offset) = flui_layer::resolve_follower_offset(tree, id) else {
+                    let Some(transform) = flui_layer::resolve_follower_transform(tree, id) else {
                         return Step::SkipSubtree;
                     };
-                    self.backend.push_offset(offset);
+                    self.backend.push_transform(&transform);
                     self.followers.push(id);
                 }
                 flui_layer::Layer::BackdropFilter(layer) => {

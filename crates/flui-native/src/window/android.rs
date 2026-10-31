@@ -472,7 +472,9 @@ fn sample_state(
         metrics: flui_foundation::geometry::WindowMetrics::try_new(Size::new(width, height), scale)
             .ok(),
         appearance: kept.appearance,
-        safe_area: kept.safe_area,
+        insets: flui_platform::WindowInsets::ZERO
+            .try_with_safe_area(kept.safe_area)
+            .expect("BUG: an accepted safe area is finite and non-negative"),
         execution: execution_of(activity),
         occluded: !activity.visible.load(Ordering::SeqCst),
         hovered: kept.hovered,
