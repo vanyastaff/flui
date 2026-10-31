@@ -227,7 +227,7 @@ fn a_read_after_a_write_answers_the_write() {
 /// before reaches whoever owned it then. Whoever owned it is let go first.
 fn offer_primary(owner: &X11Clipboard, text: Rc<dyn Fn() -> Option<String>>) {
     let (connection, _) = RustConnection::connect(None).expect("the X server answers");
-    let primary = x11rb::protocol::xproto::AtomEnum::PRIMARY.into();
+    let primary: x11rb::protocol::xproto::Atom = x11rb::protocol::xproto::AtomEnum::PRIMARY.into();
     connection
         .set_selection_owner(x11rb::NONE, primary, x11rb::CURRENT_TIME)
         .expect("the request is sent");
