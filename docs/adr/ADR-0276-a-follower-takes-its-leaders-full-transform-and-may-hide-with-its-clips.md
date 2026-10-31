@@ -1,4 +1,4 @@
-# ADR-0274: A follower takes its leader's full transform and may hide with its leader's clips
+# ADR-0276: A follower takes its leader's full transform and may hide with its leader's clips
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30

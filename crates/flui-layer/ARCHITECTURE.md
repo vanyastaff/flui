@@ -76,7 +76,7 @@ its own leader rendered double-translated. `Layer::local_translation` is now the
 of translating variants is written down. `resolve_follower_transform` walks both chains from the
 common ancestor (exclusive) and multiplies, per layer, the `Transform`'s whole matrix, a nested
 `Follower`'s own resolved transform, or the translation `local_translation` answers
-([ADR-0274](../../docs/adr/ADR-0274-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
+([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
 A follower nested under its own leader resolving to zero, and an `Opacity` offset on the
 follower's chain being counted: **Unasserted:** no test pins this.

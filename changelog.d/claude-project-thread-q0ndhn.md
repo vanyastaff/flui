@@ -4,7 +4,7 @@
   `RenderFollowerLayer`. `LeaderClip::Hide` hides a follower, and stops its hits, while its
   leader's anchor is clipped out, such as a selection handle whose end scrolled away; the default
   `Escape` keeps tooltips and menus visible past their leader's clips
-  ([ADR-0274](/docs/adr/ADR-0274-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
+  ([ADR-0276](/docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
 ### Changed
 

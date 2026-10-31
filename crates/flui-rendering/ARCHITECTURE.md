@@ -1232,7 +1232,7 @@ outside it, while the walk has already subtracted `o`; the side table therefore 
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_transform`
-([ADR-0274](../../docs/adr/ADR-0274-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
+([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
 ### Expanded hit areas are resolved after the visual walk
 
