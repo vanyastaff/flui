@@ -87,10 +87,13 @@ fn recorded_area(
 ) -> (SelectionArea, Rc<RefCell<Vec<Option<String>>>>) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let record = Rc::clone(&seen);
-    let area = SelectionArea::new(child).on_selection_changed(move |_cx, selected| {
-        record
-            .borrow_mut()
-            .push(selected.map(|selected| selected.text.clone()));
+    let area = SelectionArea::new(child).on_selection_changed(move |_cx, change| {
+        record.borrow_mut().push(
+            change
+                .selected
+                .as_ref()
+                .map(|selected| selected.text.clone()),
+        );
     });
     (area, seen)
 }

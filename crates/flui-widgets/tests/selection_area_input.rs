@@ -46,10 +46,13 @@ impl Scene {
     fn area(content: impl Into<BoxedView>, heard: &Heard) -> WidgetsApp {
         let recorded = Rc::clone(heard);
         WidgetsApp::new(SelectionArea::new(content.into()).on_selection_changed(
-            move |_cx, selected| {
-                recorded
-                    .borrow_mut()
-                    .push(selected.map(|selected| selected.text.clone()));
+            move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
             },
         ))
     }
@@ -778,10 +781,13 @@ pub(crate) fn esc_clears_then_reaches_the_enclosing_dismiss() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(FIRST),)).boxed()).on_selection_changed(
-        move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
         },
     );
     let outer = Actions::new(area).action::<DismissIntent>(CallbackAction::new(
@@ -819,10 +825,13 @@ pub(crate) fn a_panicking_listener_keeps_what_the_keys_remember() {
     let area = SelectionArea::new(
         Column::new((SizedBox::width(width).child(Text::new("aaaa b aaaa")),)).boxed(),
     )
-    .on_selection_changed(move |_cx, selected| {
-        recorded
-            .borrow_mut()
-            .push(selected.map(|selected| selected.text.clone()));
+    .on_selection_changed(move |_cx, change| {
+        recorded.borrow_mut().push(
+            change
+                .selected
+                .as_ref()
+                .map(|selected| selected.text.clone()),
+        );
         assert!(!failing.get(), "the listener fails");
     });
     let mut laid = lay_out(WidgetsApp::new(area), tight(400.0, 300.0));

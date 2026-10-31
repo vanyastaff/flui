@@ -13,6 +13,7 @@
 //!
 //! [anchor]: SemanticsAnchor
 
+mod controller;
 mod handles;
 mod input;
 
@@ -43,6 +44,7 @@ use flui_view::{
     impl_inherited_view,
 };
 
+pub use self::controller::{SelectError, SelectionController};
 pub use self::handles::{
     DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectionHandles,
 };
@@ -66,9 +68,47 @@ pub struct SelectedText {
     pub text: String,
 }
 
-/// Told the selected text after each change of the selection, `None` once
-/// nothing, or only a caret, is selected.
-type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
+/// A change of a [`SelectionArea`]'s selection, as its
+/// [`on_selection_changed`](SelectionArea::on_selection_changed) hears it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SelectionChange {
+    /// The text selected now; `None` once nothing, or only a caret, is
+    /// selected.
+    pub selected: Option<SelectedText>,
+    /// What changed the selection.
+    pub cause: SelectionChangeCause,
+}
+
+/// What changed a [`SelectionArea`]'s selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SelectionChangeCause {
+    /// The user selected, by the given input.
+    User(SelectionInput),
+    /// A [`SelectionController`] call.
+    Programmatic,
+    /// A text that held an end of the selection left the area, and the
+    /// end moved onto the texts that stay.
+    TextRemoved,
+}
+
+/// The input a user selected by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SelectionInput {
+    /// A mouse, pen or trackpad.
+    Pointer,
+    /// A touch: a long press, a tap or a handle's drag.
+    Touch,
+    /// A key, or a shortcut's select-all or dismiss.
+    Keyboard,
+    /// Assistive technology, through the document node.
+    AssistiveTechnology,
+}
+
+/// Told each change of the selection.
+type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
 
 /// Makes the static text beneath it selectable as one document.
 ///
@@ -91,8 +131,9 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 /// selection, and Esc clears it. Selecting takes the focus; a blur keeps the
 /// selection and paints it with [`SelectionStyle::inactive`]. A text that
 /// leaves while holding an end hands the end to the selected text beside
-/// it, and the selection clears once no selected text is left; the listener
-/// hears of each change.
+/// it, and the selection clears once no selected text is left. The listener
+/// hears of each change and what made it, and a [`controller`](Self::controller)
+/// reads and moves the selection from outside.
 ///
 /// A touch long press selects the word under it and shows a handle under
 /// each end, in the nearest [`Overlay`]; dragging a handle
@@ -108,8 +149,8 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, Option<&SelectedText>)>;
 /// ```rust
 /// # use flui_widgets::prelude::*;
 /// let _ = SelectionArea::new(Column::new((Text::new("Terms"), Text::new("Read them."))))
-///     .on_selection_changed(|_cx, selected| {
-///         if let Some(selected) = selected {
+///     .on_selection_changed(|_cx, change| {
+///         if let Some(selected) = &change.selected {
 ///             println!("selected {:?}", selected.text);
 ///         }
 ///     });
@@ -121,6 +162,7 @@ pub struct SelectionArea {
     role: SemanticsRole,
     style: Option<SelectionStyle>,
     handles: Option<Rc<dyn SelectionHandles>>,
+    controller: Option<SelectionController>,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -131,6 +173,7 @@ impl std::fmt::Debug for SelectionArea {
             .field("role", &self.role)
             .field("style", &self.style)
             .field("handles", &self.handles.is_some())
+            .field("controller", &self.controller.is_some())
             .finish()
     }
 }
@@ -144,6 +187,7 @@ impl SelectionArea {
             role: SemanticsRole::Document,
             style: None,
             handles: None,
+            controller: None,
         }
     }
 
@@ -156,18 +200,27 @@ impl SelectionArea {
         self
     }
 
-    /// Call `handler` with the selected text after each change of the
-    /// selection, or with `None` once nothing, or only a caret, is selected.
-    /// It runs after the selection is committed, so it may rebuild the area.
+    /// Call `handler` after each change of the selection, with the text
+    /// selected now and what changed it: the user's input, a
+    /// [`controller`](Self::controller), or a text that left. It runs after
+    /// the selection is committed, so it may rebuild the area.
     #[must_use]
     pub fn on_selection_changed<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, Option<&SelectedText>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, &SelectionChange) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_selection_changed = Some(Rc::new(move |cx, selected| {
-            handler(cx, selected).report();
+        self.on_selection_changed = Some(Rc::new(move |cx, change| {
+            handler(cx, change).report();
         }));
+        self
+    }
+
+    /// Let `controller` read and move the selection while the area is
+    /// mounted. One controller serves one area at a time.
+    #[must_use]
+    pub fn controller(mut self, controller: SelectionController) -> Self {
+        self.controller = Some(controller);
         self
     }
 
@@ -229,6 +282,7 @@ impl StatefulView for SelectionArea {
                 backward: Cell::new(false),
                 caret: Cell::new(CaretMemory::default()),
                 handles: HandleState::default(),
+                controller: RefCell::new(self.controller.clone()),
             }),
         }
     }
@@ -273,6 +327,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                 model.check_handles_after_frame();
             }
         }));
+        if let Some(controller) = self.model.controller.borrow().as_ref() {
+            controller.attach(&self.model);
+        }
     }
 
     /// Follows the overlay the handles go in.
@@ -299,6 +356,23 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .on_selection_changed
             .borrow_mut()
             .clone_from(&new_view.on_selection_changed);
+        let same = match (
+            self.model.controller.borrow().as_ref(),
+            new_view.controller.as_ref(),
+        ) {
+            (Some(old), Some(new)) => old.ptr_eq(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            let old = self.model.controller.replace(new_view.controller.clone());
+            if let Some(old) = old {
+                old.detach(&self.model);
+            }
+            if let Some(new) = new_view.controller.as_ref() {
+                new.attach(&self.model);
+            }
+        }
     }
 
     fn build(&self, view: &SelectionArea, ctx: &dyn BuildContext) -> impl IntoView {
@@ -372,7 +446,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             .merge_boundary(true)
             .text_direction(direction)
             .document_selection(self.model.selection.borrow().clone())
-            .on_set_document_selection(move |cx, selection| model.select(cx, Some(&selection)))
+            .on_set_document_selection(move |cx, selection| {
+                model.select(cx, Some(&selection), SelectionInput::AssistiveTechnology);
+            })
             .child(actions)
     }
 
@@ -380,6 +456,9 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         // A handler a frame already captured finds no area to rebuild.
         self.model.rebuild.borrow_mut().take();
         self.model.mounted.set(false);
+        if let Some(controller) = self.model.controller.borrow().as_ref() {
+            controller.detach(&self.model);
+        }
         // A selection that is gone is no longer offered to other clients,
         // and its handles leave the overlay even when the backend fails.
         let mut failure = FirstPanic::new();
@@ -428,32 +507,44 @@ struct SelectionModel {
     caret: Cell<CaretMemory>,
     /// The touch handles.
     handles: HandleState,
+    /// The controller the area serves, attached while it is mounted.
+    controller: RefCell<Option<SelectionController>>,
 }
 
 impl SelectionModel {
-    /// Takes `selection` as the area's, once each end is snapped into a
-    /// registered text: an end naming a text this area does not hold
-    /// refuses the whole request; `None` selects nothing. Every selection
-    /// comes from the user (assistive technology, the pointer or a key), so
-    /// a committed one takes the focus. Tells the listener after the
+    /// Takes `selection` from the user's `input` as the area's, once each
+    /// end is snapped into a registered text: an end naming a text this area
+    /// does not hold refuses the whole request; `None` selects nothing. A
+    /// committed selection takes the focus. Tells the listener after the
     /// selection is committed and no borrow is held, since it may rebuild
     /// the area or select again. A wake or focus listener that panics still
     /// lets the listener hear of the committed selection; the first failure
     /// is resumed afterwards.
-    fn select(&self, cx: &mut EventCx<'_>, selection: Option<&DocumentSelection>) {
-        self.commit(cx, selection, true, CaretMemory::default());
+    fn select(
+        &self,
+        cx: &mut EventCx<'_>,
+        selection: Option<&DocumentSelection>,
+        input: SelectionInput,
+    ) {
+        self.commit(
+            cx,
+            selection,
+            SelectionChangeCause::User(input),
+            CaretMemory::default(),
+        );
     }
 
-    /// [`select`](Self::select), taking the focus only when `from_user`
-    /// and something is selected, and keeping `caret` as what the keys
-    /// remember about the new moving end. The memory is stored with the
-    /// selection, before any callback runs, so a panicking callback cannot
-    /// part the two.
+    /// [`select`](Self::select) for any `cause`: only the user's selection
+    /// takes the focus, and a controller's hides the handles. `caret` is
+    /// what the keys remember about the new moving end. The memory is
+    /// stored with the selection, before any callback runs, so a panicking
+    /// callback cannot part the two. The controller's listeners hear of the
+    /// change after the area's listener.
     fn commit(
         &self,
         cx: &mut EventCx<'_>,
         selection: Option<&DocumentSelection>,
-        from_user: bool,
+        cause: SelectionChangeCause,
         caret: CaretMemory,
     ) {
         let selection = match selection {
@@ -467,6 +558,13 @@ impl SelectionModel {
         // put: Shift+End at a short line's end forgets the column.
         self.caret.set(caret);
         if *self.selection.borrow() == selection {
+            // A controller's selection hides the handles even when it keeps
+            // the range a touch selected; the range is no change to report.
+            if cause == SelectionChangeCause::Programmatic {
+                let mut failure = FirstPanic::new();
+                self.hide_handles(&mut failure);
+                failure.resume();
+            }
             return;
         }
         let coverage = selection
@@ -477,17 +575,19 @@ impl SelectionModel {
         }
         let covered = coverage.map(|(parts, _)| parts);
         let selected = covered.as_ref().map(|covered| self.joined(covered));
-        let take_focus = from_user && selection.is_some();
+        let take_focus = matches!(cause, SelectionChangeCause::User(_)) && selection.is_some();
         let selected_any = selection.is_some();
         *self.selection.borrow_mut() = selection;
         let rebuild = self.rebuild.borrow().clone();
         let listener = self.on_selection_changed.borrow().clone();
         let primary = self.primary.borrow().clone();
+        let controller = self.controller.borrow().clone();
         let mut failure = FirstPanic::new();
         // Nothing selected has nothing to hold; otherwise the handles follow
-        // the new ends, whose lines may differ in height. Hidden before the
+        // the new ends, whose lines may differ in height; a controller's
+        // selection is not under a finger, so it hides them. Hidden before the
         // highlight, which then publishes no ends.
-        if selected_any {
+        if selected_any && cause != SelectionChangeCause::Programmatic {
             self.handles.refresh(&mut failure);
         } else {
             self.handles.hide(&mut failure);
@@ -511,11 +611,15 @@ impl SelectionModel {
                 move || this.upgrade()?.selected_text()
             });
         });
+        let change = SelectionChange { selected, cause };
         failure.contain(|| {
             if let Some(listener) = listener {
-                listener(cx, selected.as_ref());
+                listener(cx, &change);
             }
         });
+        if let Some(controller) = controller {
+            controller.notify(&mut failure);
+        }
         failure.resume();
     }
 
@@ -666,7 +770,14 @@ impl SelectionModel {
         self.rebase_drag(held, next.as_ref());
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
-            writer.write(|cx| self.commit(cx, next.as_ref(), false, CaretMemory::default()));
+            writer.write(|cx| {
+                self.commit(
+                    cx,
+                    next.as_ref(),
+                    SelectionChangeCause::TextRemoved,
+                    CaretMemory::default(),
+                );
+            });
         }
     }
 
