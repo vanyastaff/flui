@@ -3,9 +3,12 @@
 //!
 //! Three screens under one [`Router`]: Home lists the notes and toggles compact
 //! rows, Note edits a title through a [`TextFormField`] and keeps its draft
-//! after Back, Settings sits over either. Readiness is a keyed
-//! [`FutureBuilder`] above the router, with Loading, an error and Retry.
-//! Everything is held in memory by the root's state, so a restart starts over.
+//! after Back, Settings sits over either. The notes and the compact flag are
+//! one [`Persisted`] document, [`Saved`], encoded as JSON: readiness is a keyed
+//! [`FutureBuilder`] above the router that waits for the [`Loader`] gate, then
+//! loads the document, with Loading, an error and Retry. Saving a title, adding
+//! a note and toggling compact rows each write the document, so a restart over
+//! the same storage finds them.
 //!
 //! [`Faults`] is the constructor's seam for injected failures, a set of
 //! [`Fault`]s: a panic in the Note editor's `build`, in the Save handler, or in
@@ -24,13 +27,16 @@ use flui::foundation::{ConnectionState, Listenable, ValueKey, ViewKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
+use flui::platform::StorageName;
 use flui::prelude::*;
 use flui::view::View;
 use flui::view::element::ElementKind;
+use flui::view::persist::{DecodeError, Document, Persisted};
 use flui::widgets::{
     BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
     column,
 };
+use serde::{Deserialize, Serialize};
 
 /// How many notes a fresh start opens with: enough to scroll.
 const SEEDED_NOTES: u64 = 40;
@@ -39,7 +45,8 @@ const COMPACT_ROW_HEIGHT: f64 = 32.0;
 
 /// A note's identity. Ids are handed out in increasing order and never
 /// reused, so a stale id can only name nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NoteId(pub u64);
 
 impl fmt::Display for NoteId {
@@ -183,7 +190,8 @@ fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
     planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
 }
 
-/// The readiness operation, called with the attempt number.
+/// The readiness gate, called with the attempt number: the stored document
+/// is loaded once it succeeds, and its error is the load's.
 ///
 /// The attempt number is a key, not a count: Retry moves it to the next value,
 /// wrapping from `u32::MAX` to 0, so it always differs from the last one and
@@ -256,17 +264,44 @@ impl StatelessView for AcceptanceApp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Note {
     id: NoteId,
     title: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Notebook {
     notes: Vec<Note>,
     /// The id the next new note takes.
     next_id: NoteId,
+}
+
+/// The application's data: what follows the user to another device.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Saved {
+    notebook: Notebook,
+    compact: bool,
+}
+
+impl Document for Saved {
+    const NAME: StorageName = StorageName::from_static("notes");
+    const VERSION: u32 = 1;
+
+    fn initial() -> Self {
+        Self {
+            notebook: Notebook::seeded(),
+            compact: false,
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("BUG: the notes serialize to JSON")
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, DecodeError> {
+        serde_json::from_slice(body).map_err(|error| DecodeError::new(error.to_string()))
+    }
 }
 
 impl Notebook {
@@ -314,8 +349,29 @@ struct Shared {
     status: Signal<String>,
     draft: TextEditingController,
     scroll: ScrollController,
+    /// Where the notebook and the compact flag are stored.
+    data: Persisted<Saved>,
     faults: Faults,
     planter: Option<Planter>,
+}
+
+impl Shared {
+    /// Write the notebook and the compact flag as they stand.
+    fn store(&self, cx: &EventCx<'_>) {
+        let saved = Saved {
+            notebook: self
+                .notebook
+                .peek(cx, Clone::clone)
+                .expect("BUG: the loaded state's signals outlive its screens"),
+            compact: self
+                .compact
+                .peek(cx, |compact| *compact)
+                .expect("BUG: the loaded state's signals outlive its screens"),
+        };
+        // A write that fails is reported by the document's status and kept
+        // in memory; the screens go on with it.
+        let _revision = self.data.set(saved);
+    }
 }
 
 #[derive(Clone, StatefulView)]
@@ -327,11 +383,9 @@ struct Root {
 }
 
 struct RootState {
-    shared: Option<Shared>,
+    data: Option<Persisted<Saved>>,
     attempt: Signal<u32>,
-    faults: Faults,
     first_attempt: u32,
-    planter: Option<Planter>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -340,11 +394,9 @@ impl StatefulView for Root {
 
     fn create_state(&self) -> Self::State {
         RootState {
-            shared: None,
+            data: None,
             attempt: Signal::default(),
-            faults: self.faults,
             first_attempt: self.first_attempt,
-            planter: self.planter.clone(),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
@@ -353,32 +405,27 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.attempt = cx.signal(self.first_attempt);
-        let draft = TextEditingController::new();
-        if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
-            draft.add_listener(Rc::new(move || {
-                let _kept = &kept;
-            }));
-        }
-        self.shared = Some(Shared {
-            notebook: cx.signal(Notebook::seeded()),
-            editing: cx.signal(None),
-            compact: cx.signal(false),
-            status: cx.signal(String::new()),
-            draft,
-            scroll: ScrollController::new(),
-            faults: self.faults,
-            planter: self.planter.clone(),
-        });
+        self.data = Some(Persisted::open(cx));
     }
 
     fn build(&self, view: &Root, cx: &dyn BuildContext) -> impl IntoView {
-        let shared = self.shared.clone().expect("BUG: init_state precedes build");
+        let data = self.data.clone().expect("BUG: init_state precedes build");
         let attempt = self.attempt;
         let current = attempt.get(cx);
         let loader = Rc::clone(&view.loader);
+        let load = data.clone();
+        let faults = view.faults;
+        let planter = view.planter.clone();
         let ready = FutureBuilder::keyed(
             Some(current),
-            Rc::new(move || loader(current)),
+            Rc::new(move || {
+                let gate = loader(current);
+                let data = load.clone();
+                Box::pin(async move {
+                    gate.await?;
+                    data.load().await.map_err(|error| error.to_string())
+                }) as BoxedResultFuture<Rc<Saved>, String>
+            }),
             Rc::new(move |_cx, snapshot| {
                 if snapshot.connection_state() != ConnectionState::Done {
                     return Text::new("Loading notes").boxed();
@@ -392,19 +439,87 @@ impl ViewState<Root> for RootState {
                     ])
                     .boxed();
                 }
-                let shared = shared.clone();
-                WidgetsApp::router(Router::new(Route::Home, move |route: &Route, _cx| {
-                    Screen {
-                        route: route.clone(),
-                        shared: shared.clone(),
-                        _kept: plant(shared.planter.as_ref(), Kept::Page),
-                    }
-                    .boxed()
-                }))
+                let saved = snapshot
+                    .data()
+                    .cloned()
+                    .expect("BUG: a load done without an error has its value");
+                Loaded {
+                    saved,
+                    data: data.clone(),
+                    faults,
+                    planter: planter.clone(),
+                }
                 .boxed()
             }),
         );
         Theme::new(ThemeData::light(), ready)
+    }
+}
+
+/// The screens over the loaded document: their state starts from it.
+#[derive(Clone, StatefulView)]
+struct Loaded {
+    saved: Rc<Saved>,
+    data: Persisted<Saved>,
+    faults: Faults,
+    planter: Option<Planter>,
+}
+
+struct LoadedState {
+    /// What `init_state` starts the shared state from.
+    start: Option<(Rc<Saved>, Persisted<Saved>)>,
+    shared: Option<Shared>,
+    faults: Faults,
+    planter: Option<Planter>,
+    _kept: Option<Rc<dyn Any>>,
+}
+
+impl StatefulView for Loaded {
+    type State = LoadedState;
+
+    fn create_state(&self) -> Self::State {
+        LoadedState {
+            start: Some((Rc::clone(&self.saved), self.data.clone())),
+            shared: None,
+            faults: self.faults,
+            planter: self.planter.clone(),
+            _kept: plant(self.planter.as_ref(), Kept::State),
+        }
+    }
+}
+
+impl ViewState<Loaded> for LoadedState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        let (saved, data) = self.start.take().expect("BUG: init_state runs once");
+        let draft = TextEditingController::new();
+        if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
+            draft.add_listener(Rc::new(move || {
+                let _kept = &kept;
+            }));
+        }
+        self.shared = Some(Shared {
+            notebook: cx.signal(saved.notebook.clone()),
+            editing: cx.signal(None),
+            compact: cx.signal(saved.compact),
+            status: cx.signal(String::new()),
+            draft,
+            scroll: ScrollController::new(),
+            data,
+            faults: self.faults,
+            planter: self.planter.clone(),
+        });
+    }
+
+    fn build(&self, _view: &Loaded, _cx: &dyn BuildContext) -> impl IntoView {
+        let shared = self.shared.clone().expect("BUG: init_state precedes build");
+        WidgetsApp::router(Router::new(Route::Home, move |route: &Route, _cx| {
+            Screen {
+                route: route.clone(),
+                shared: shared.clone(),
+                _kept: plant(shared.planter.as_ref(), Kept::Page),
+            }
+            .boxed()
+        }))
     }
 }
 
@@ -529,17 +644,17 @@ fn open_note(cx: &mut EventCx<'_>, shared: &Shared, router: &RouterHandle<Route>
     let editing = shared
         .editing
         .peek(cx, |editing| *editing)
-        .expect("BUG: the root's signals outlive its screens");
+        .expect("BUG: the loaded state's signals outlive its screens");
     if editing != Some(id) {
         let title = shared
             .notebook
             .peek(cx, |notebook| notebook.title(id).map(str::to_owned))
-            .expect("BUG: the root's signals outlive its screens");
+            .expect("BUG: the loaded state's signals outlive its screens");
         shared.draft.set_text(title.unwrap_or_default());
         shared
             .editing
             .set(cx, Some(id))
-            .expect("BUG: the root's signals outlive its screens");
+            .expect("BUG: the loaded state's signals outlive its screens");
     }
     router
         .push(Route::Note { id })
@@ -590,7 +705,7 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 .boxed()
             }))
     };
-    let toggle = shared.compact;
+    let toggle = shared.clone();
     let add = shared.clone();
     Column::new(column![
         Row::new(vec![
@@ -604,8 +719,10 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 &Route::Home,
                 move |cx, _router| {
                     toggle
+                        .compact
                         .update(cx, |compact| *compact = !*compact)
-                        .expect("BUG: the root's signals outlive its screens");
+                        .expect("BUG: the loaded state's signals outlive its screens");
+                    toggle.store(cx);
                 },
             )
             .boxed(),
@@ -613,7 +730,8 @@ fn home(cx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) ->
                 let id = add
                     .notebook
                     .update(cx, Notebook::add)
-                    .expect("BUG: the root's signals outlive its screens");
+                    .expect("BUG: the loaded state's signals outlive its screens");
+                add.store(cx);
                 open_note(cx, &add, router, id);
             })
             .boxed(),
@@ -714,14 +832,15 @@ fn editor(
                                 note.title.clone_from(&title);
                             }
                         })
-                        .expect("BUG: the root's signals outlive its screens");
+                        .expect("BUG: the loaded state's signals outlive its screens");
+                    save.store(cx);
                     format!("Saved note {id}")
                 } else {
                     "Fix the title".to_owned()
                 };
                 save.status
                     .set(cx, message)
-                    .expect("BUG: the root's signals outlive its screens");
+                    .expect("BUG: the loaded state's signals outlive its screens");
             }
         ),
     ]))
