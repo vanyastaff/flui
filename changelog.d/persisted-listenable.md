@@ -12,3 +12,9 @@
   clone still holds it.
 - With the `serde` feature (`flui-view/serde`, part of the facade's `serde`), `Revision` serializes
   as its number, so a document can record which revision of another it was taken against.
+
+### Fixed
+
+- A `Persisted` document whose frame hook panics while it queues work is left retryable, not stuck:
+  an edit's save is watched again by the next edit, and an interrupted `start_over` is left failed
+  with `StorageError::Cancelled`, so `retry` starts over.

@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
@@ -671,8 +671,29 @@ impl<D: Document> OpenDocument<D> {
                     return;
                 };
                 let copy = storage.copy_aside(&D::NAME);
-                let token =
-                    driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)));
+                // Spawning wakes the frame hook, which may panic; the copy is
+                // then cancelled, and the fresh start is left failed, so
+                // `retry` copies again. The hook's panic is raised, or kept
+                // while a panic already unwinds.
+                let spawned = catch_unwind(AssertUnwindSafe(|| {
+                    driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)))
+                }));
+                let token = match spawned {
+                    Ok(token) => token,
+                    Err(payload) => {
+                        let failed = catch_unwind(AssertUnwindSafe(|| {
+                            self.fail(PersistError::Storage(StorageError::Cancelled));
+                        }));
+                        if let Err(again) = failed {
+                            retain_opaque_payload(again);
+                        }
+                        if std::thread::panicking() {
+                            retain_opaque_payload(payload);
+                            return;
+                        }
+                        resume_unwind(payload);
+                    }
+                };
                 let stale = self.state.borrow_mut().copying.replace(token);
                 drop(stale);
                 self.refresh();
@@ -876,8 +897,24 @@ impl<D: Document> OpenDocument<D> {
         drop(released);
         drop(stale_watch);
         if spawn && let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) {
-            let token = driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())));
-            self.state.borrow_mut().watch = Some(token);
+            // Spawning wakes the frame hook, which may panic; the task is then
+            // cancelled, and nothing is left watching, so the next refresh
+            // spawns it again. While a panic already unwinds, the hook's is
+            // kept, not raised.
+            let spawned = catch_unwind(AssertUnwindSafe(|| {
+                driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
+            }));
+            match spawned {
+                Ok(token) => self.state.borrow_mut().watch = Some(token),
+                Err(payload) => {
+                    self.state.borrow_mut().watching = false;
+                    if std::thread::panicking() {
+                        retain_opaque_payload(payload);
+                        return;
+                    }
+                    resume_unwind(payload);
+                }
+            }
         }
         self.announce();
     }
@@ -918,9 +955,24 @@ impl<D: Document> OpenDocument<D> {
         if *announcer.told.borrow() == now {
             return;
         }
-        announcer.queued.set(true);
         let document = Rc::downgrade(self);
-        let token = driver.spawn_local(Box::pin(async move { deliver(&document) }));
+        // Spawning wakes the frame hook, which may panic; the task is then
+        // cancelled, and nothing stays queued, so the next announcement tries
+        // again. While a panic already unwinds, the hook's is kept, not raised.
+        let spawned = catch_unwind(AssertUnwindSafe(|| {
+            driver.spawn_local(Box::pin(async move { deliver(&document) }))
+        }));
+        let token = match spawned {
+            Ok(token) => token,
+            Err(payload) => {
+                if std::thread::panicking() {
+                    retain_opaque_payload(payload);
+                    return;
+                }
+                resume_unwind(payload);
+            }
+        };
+        announcer.queued.set(true);
         // The task it replaces has run, or is the delivery running now,
         // whose cancellation is honoured once its poll returns.
         let finished = announcer.delivery.borrow_mut().replace(token);

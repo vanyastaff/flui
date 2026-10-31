@@ -124,6 +124,7 @@ impl View for Leaf {
 struct Opened {
     document: Persisted<Note>,
     guard: Option<CloseGuard>,
+    driver: Option<flui_view::AsyncDriver>,
 }
 
 /// Opens the document in `init_state` and hands it to the test.
@@ -151,6 +152,7 @@ impl ViewState<NoteOpener> for NoteOpenerState {
         *self.opened.borrow_mut() = Some(Opened {
             document: Persisted::open(cx),
             guard: cx.close_guard(),
+            driver: cx.async_driver(),
         });
     }
 
@@ -168,6 +170,21 @@ fn mount(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>) {
 
 /// [`mount`], with the presentation's close guard the document holds.
 fn mount_guarded(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, CloseGuard) {
+    let (
+        laid,
+        Opened {
+            document, guard, ..
+        },
+    ) = mount_opened(storage);
+    (
+        laid,
+        document,
+        guard.expect("a hosted presentation has a close guard"),
+    )
+}
+
+/// [`mount`], with everything `init_state` took.
+fn mount_opened(storage: &MemoryStorage) -> (LaidOut, Opened) {
     let opened = Rc::new(RefCell::new(None));
     let laid = lay_out_with_storage(
         NoteOpener {
@@ -176,15 +193,11 @@ fn mount_guarded(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, CloseGua
         tight(10.0, 10.0),
         storage.clone(),
     );
-    let Opened { document, guard } = opened
+    let taken = opened
         .borrow_mut()
         .take()
         .expect("init_state opened the document");
-    (
-        laid,
-        document,
-        guard.expect("a hosted presentation has a close guard"),
-    )
+    (laid, taken)
 }
 
 /// Poll `future` between frames until it completes.
@@ -1417,6 +1430,67 @@ fn a_listener_panic_leaves_later_changes_told() {
         [SaveStatus::Saving, SaveStatus::Clean],
         "a later change is still told"
     );
+}
+
+/// A frame hook that panics while a document queues its work leaves nothing
+/// stuck: an edit's status is told with the next edit, and a fresh start is
+/// left failed, so `retry` takes it up.
+#[test]
+fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
+    let failing = |driver: &flui_view::AsyncDriver, step: &dyn Fn()| {
+        driver.set_request_frame(|| panic!("frame hook failure"));
+        let failure = catch_unwind(AssertUnwindSafe(step))
+            .expect_err("the frame hook's panic reaches the caller");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("frame hook failure")
+        );
+        driver.set_request_frame(|| {});
+    };
+
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    laid.pump();
+    let heard = listen(&notes);
+    failing(&driver, &|| {
+        let _ = notes.set(Note("edited".into()));
+    });
+    assert!(notes.set(Note("edited again".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "the edit after the panic is told: {:?}",
+        heard.borrow()
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+    failing(&driver, &|| notes.start_over());
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Cancelled)),
+        "the fresh start is not left saving with nothing running"
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "the retry starts over");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
 }
 
 #[test]
