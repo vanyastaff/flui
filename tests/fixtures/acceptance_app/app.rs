@@ -198,6 +198,22 @@ fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
 /// always starts a new load. A [`NoteId`] is an identity and never wraps.
 pub type Loader = Rc<dyn Fn(u32) -> BoxedResultFuture<(), String>>;
 
+/// The directory the native launchers keep the application's data in.
+///
+/// A launcher run with `cargo run --example` has no identifier from
+/// `flui build`, and without one a desktop host gives widgets no storage:
+/// the notes would never load.
+pub const DATA_DIR: &str = "dev.flui.acceptance-app";
+
+/// How the native launchers open the application: with its own storage
+/// directory, so the notes document loads on every desktop host.
+#[must_use]
+pub fn launch() -> flui::AppLaunch {
+    let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
+        .expect("BUG: the acceptance application's data directory name is valid");
+    flui::AppLaunch::new().config(flui::AppConfig::new().with_storage_dir(dir))
+}
+
 /// The acceptance application's root view.
 #[derive(Clone, StatelessView)]
 pub struct AcceptanceApp {
