@@ -405,7 +405,9 @@ trait depends on `flui-platform` instead.
   Wayland the seats' input binds each seat's `zwp_text_input_v3` through the
   owner's `SeatText` seam, which `text::linux::wayland` implements and the
   table hands the input, and records its events in the seats' queue in order
-  with the keys around them; a window's text reaches the input as an opaque
+  with the keys around them, a seat or manager that goes queued behind what
+  its text input reported, so that reaches the field first; a window's text
+  reaches the input as an opaque
   `SeatWindowText`, so neither the owner nor the input names the text
   feature's platform file. Beside it,
   one file per platform with its pure half a module inside it:

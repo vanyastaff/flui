@@ -691,3 +691,92 @@ fn a_deletion_count_past_what_the_input_method_saw_stops_at_it() {
     client.done(&*wire, wire.commits());
     assert_eq!(store.text().len(), 5000 - MAX_SURROUNDING_BYTES);
 }
+
+/// A field whose `status` moves focus once, as application code may.
+struct MovesFocusOnStatus {
+    inner: Rc<InMemoryTextStore>,
+    on_status: RefCell<Option<Box<dyn FnOnce()>>>,
+}
+
+impl TextStore for MovesFocusOnStatus {
+    fn status(&self) -> flui_platform::text_store::TextStoreStatus {
+        let on_status = self.on_status.borrow_mut().take();
+        if let Some(on_status) = on_status {
+            on_status();
+        }
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn flui_platform::text_store::TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+#[test]
+fn a_focus_moved_by_a_status_query_is_the_one_served() {
+    // When the status query moves focus: as the seat enters the window, or as
+    // the focused field's status changes.
+    for on_change in [false, true] {
+        let password = InMemoryTextStore::new("");
+        password.set_protected(true);
+        let client = TextInputClient::new();
+        let wire = Rc::new(Wire::default());
+        let plain = Rc::new(MovesFocusOnStatus {
+            inner: InMemoryTextStore::new("seen"),
+            on_status: RefCell::new(None),
+        });
+        let mut moves_focus: Option<Box<dyn FnOnce()>> = Some(Box::new({
+            let client = Rc::clone(&client);
+            let password = as_store(&password);
+            move || client.focus_store(Some(password))
+        }));
+        if !on_change {
+            *plain.on_status.borrow_mut() = moves_focus.take();
+        }
+        client.focus_store(Some(Rc::clone(&plain) as Rc<dyn TextStore>));
+        client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
+        if on_change {
+            let _ = wire.take();
+            *plain.on_status.borrow_mut() = moves_focus.take();
+            plain.inner.set_purpose(TextInputPurpose::Email);
+        }
+
+        let sent = wire.take();
+        let last = sent.iter().rev().find_map(|sent| match sent {
+            Sent::Content(content) => Some(*content),
+            _ => None,
+        });
+        assert_eq!(
+            last.map(|content| content.purpose),
+            Some(ContentType::PASSWORD),
+            "on_change={on_change}: the protected field is the last described: {sent:?}"
+        );
+        let after_last_enable = sent
+            .iter()
+            .rposition(|sent| *sent == Sent::Enable)
+            .map_or(&sent[..], |at| &sent[at..]);
+        assert!(
+            !after_last_enable
+                .iter()
+                .any(|sent| matches!(sent, Sent::Surrounding(_))),
+            "on_change={on_change}: no text follows the protected field's enable: {sent:?}"
+        );
+    }
+}

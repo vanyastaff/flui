@@ -43,6 +43,8 @@ use crate::owner::linux::wayland::{
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
 use crate::text::{TextInput, WindowTextInput};
+#[cfg(test)]
+mod tests;
 
 /// `zwp_text_input_manager_v3` version 1: the version every compositor
 /// speaks; version 2's actions and input-panel requests are not asked for.
@@ -194,6 +196,32 @@ struct HeldInput {
     seat: WlSeat,
     wire: Rc<SeatWire>,
     window: Option<WindowId>,
+    /// Where its events are recorded, which its retirement queues behind.
+    recorder: Weak<dyn TextRecorder>,
+    /// Its seat or manager went and the object is destroyed: what it
+    /// reported before is still delivered, and its recorded retirement
+    /// removes it.
+    retired: bool,
+}
+
+impl HeldInput {
+    /// Destroy the object and queue its retirement behind the events it
+    /// recorded: what to deliver now where nothing records any more.
+    fn retire(&mut self) -> Option<TextWire> {
+        self.retired = true;
+        self.wire.object.destroy();
+        let wire = TextWire {
+            input: self.wire.object.id(),
+            event: TextEvent::Retired,
+        };
+        match self.recorder.upgrade() {
+            Some(recorder) => {
+                recorder.record_text(wire);
+                None
+            }
+            None => Some(wire),
+        }
+    }
 }
 
 /// A window's text, as the seats' text inputs reach it.
@@ -231,6 +259,13 @@ impl TextObjects {
 
     fn window(&self, id: WindowId) -> Option<&AttachedText> {
         self.windows.iter().find(|window| window.id == id)
+    }
+
+    /// Whether `seat` has a text input that has not gone.
+    fn holds_seat(&self, seat: &WlSeat) -> bool {
+        self.inputs
+            .iter()
+            .any(|held| held.seat == *seat && !held.retired)
     }
 }
 
@@ -282,7 +317,7 @@ impl SeatText for SeatTexts {
             .objects
             .with(|objects| {
                 for seat in seats {
-                    if !objects.inputs.iter().any(|held| held.seat == *seat) {
+                    if !objects.holds_seat(seat) {
                         objects
                             .inputs
                             .push(make_input(&manager, seat, queue, recorder));
@@ -302,9 +337,10 @@ impl SeatText for SeatTexts {
     }
 
     /// The compositor removed global `name`: when it was the manager, every
-    /// text input goes and the windows they were in hear them leave.
+    /// text input goes. What each reported before reaches its window first,
+    /// and the window then hears it leave.
     fn global_removed(&self, name: u32) {
-        let left = self
+        let unrecorded = self
             .objects
             .with(|objects| {
                 if objects
@@ -315,25 +351,16 @@ impl SeatText for SeatTexts {
                     return Vec::new();
                 }
                 objects.manager = None;
-                let inputs = std::mem::take(&mut objects.inputs);
-                let mut left = Vec::new();
-                for held in inputs {
-                    held.wire.object.destroy();
-                    if let Some(id) = held.window
-                        && let Some(client) = objects.window(id).and_then(AttachedText::client)
-                    {
-                        left.push(Left {
-                            client,
-                            wire: held.wire,
-                            next: None,
-                        });
-                    }
-                }
-                left
+                objects
+                    .inputs
+                    .iter_mut()
+                    .filter(|held| !held.retired)
+                    .filter_map(HeldInput::retire)
+                    .collect::<Vec<TextWire>>()
             })
             .unwrap_or_default();
-        for left in left {
-            left.deliver();
+        for wire in unrecorded {
+            self.deliver(wire);
         }
     }
 
@@ -346,7 +373,7 @@ impl SeatText for SeatTexts {
     ) {
         self.objects.with(|objects| {
             if let Some((_, manager)) = &objects.manager
-                && !objects.inputs.iter().any(|held| held.seat == *seat)
+                && !objects.holds_seat(seat)
             {
                 let input = make_input(manager, seat, queue, recorder);
                 objects.inputs.push(input);
@@ -354,20 +381,21 @@ impl SeatText for SeatTexts {
         });
     }
 
-    /// Seat `seat` went: its text input goes, and the window it was in hears
-    /// it leave.
+    /// Seat `seat` went: its text input goes. What it reported before
+    /// reaches its window first, and the window then hears it leave.
     fn seat_removed(&self, seat: &WlSeat) {
-        let left = self
+        let unrecorded = self
             .objects
             .with(|objects| {
-                let index = objects.inputs.iter().position(|held| held.seat == *seat)?;
-                let held = objects.inputs.remove(index);
-                held.wire.object.destroy();
-                objects.leaving(held.window?, held.wire)
+                objects
+                    .inputs
+                    .iter_mut()
+                    .find(|held| held.seat == *seat && !held.retired)?
+                    .retire()
             })
             .flatten();
-        if let Some(left) = left {
-            left.deliver();
+        if let Some(wire) = unrecorded {
+            self.deliver(wire);
         }
     }
 
@@ -445,6 +473,14 @@ impl SeatText for SeatTexts {
                         let wire = Rc::clone(&held.wire);
                         return objects.leaving(window, wire).map(Routed::Leave);
                     }
+                    TextEvent::Retired => {
+                        let index = objects
+                            .inputs
+                            .iter()
+                            .position(|held| held.wire.object.id() == input)?;
+                        let held = objects.inputs.remove(index);
+                        return objects.leaving(held.window?, held.wire).map(Routed::Leave);
+                    }
                     event => event,
                 };
                 let held = objects.input(&input)?;
@@ -463,7 +499,7 @@ impl SeatText for SeatTexts {
                     client.delete_surrounding(&*wire, before, after);
                 }
                 TextEvent::Done(serial) => client.done(&*wire, serial),
-                TextEvent::Enter(_) | TextEvent::Leave => {}
+                TextEvent::Enter(_) | TextEvent::Leave | TextEvent::Retired => {}
             },
             None => {}
         }
@@ -526,7 +562,9 @@ impl TextObjects {
         let next = self
             .inputs
             .iter()
-            .find(|held| held.window == Some(window) && !Rc::ptr_eq(&held.wire, &wire))
+            .find(|held| {
+                held.window == Some(window) && !held.retired && !Rc::ptr_eq(&held.wire, &wire)
+            })
             .map(|held| Rc::clone(&held.wire));
         Some(Left { client, wire, next })
     }
@@ -552,6 +590,8 @@ fn make_input(
             commits: Cell::new(0),
         }),
         window: None,
+        recorder: recorder.clone(),
+        retired: false,
     }
 }
 

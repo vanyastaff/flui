@@ -547,6 +547,9 @@ mod event_loop {
             after: u32,
         },
         Done(u32),
+        /// The text input went with its seat or its manager: recorded
+        /// behind what it reported before, so that reaches the field first.
+        Retired,
     }
 
     /// Where a text input's dispatch records its events: the seats' queue,

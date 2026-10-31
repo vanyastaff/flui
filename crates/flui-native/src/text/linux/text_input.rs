@@ -546,7 +546,14 @@ impl TextInputClient {
         }
         self.enabled.set(false);
         *self.pending.borrow_mut() = Pending::default();
-        self.sync_enablement();
+        {
+            // The store's `status` is application code, which may move
+            // focus: a request it makes waits in the queue until this
+            // enablement is whole, and the drain below applies it after.
+            let _entered = self.queue.enter();
+            self.sync_enablement();
+        }
+        self.drain();
     }
 
     /// Whether `wire` is the text input this window serves: the last seat's
@@ -704,13 +711,14 @@ impl TextInputClient {
         let (Some(wire), Some(store)) = (self.wire(), self.focused()) else {
             return;
         };
-        if self.content.get() == Some(ContentType::of_store(&*store)) {
-            return;
-        }
         {
+            // The status query and the enablement it decides run application
+            // code: a focus change they request waits for the drain below.
             let _entered = self.queue.enter();
-            let _ = flui_platform::text_store::commit_composition_in_place(&*store);
-            self.enable_on(&wire, &store);
+            if self.content.get() != Some(ContentType::of_store(&*store)) {
+                let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+                self.enable_on(&wire, &store);
+            }
         }
         self.drain();
     }
@@ -828,13 +836,20 @@ impl TextInputClient {
             let Some(client) = this.upgrade() else {
                 return;
             };
-            if let Some(wire) = client.wire_of(session)
-                && let Some(store) = client.focused()
-            {
-                // `enable` resets the content type too: it is sent again,
-                // read as the grant runs, so a status that changed while the
-                // store held the grant is the one the input method keeps.
-                let content = ContentType::of_store(&*store);
+            let Some(store) = client.wire_of(session).and(client.focused()) else {
+                return;
+            };
+            // `enable` resets the content type too: it is sent again, read as
+            // the grant runs, so a status that changed while the store held
+            // the grant is the one the input method keeps. The status query
+            // is application code: a focus change it requests runs once the
+            // query returns, and this `enable` is then no longer current.
+            let content = {
+                let _entered = client.queue.enter();
+                ContentType::of_store(&*store)
+            };
+            client.drain();
+            if let Some(wire) = client.wire_of(session) {
                 client.content.set(Some(content));
                 wire.enable();
                 wire.set_content_type(content);
