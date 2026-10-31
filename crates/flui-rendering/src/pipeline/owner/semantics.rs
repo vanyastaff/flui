@@ -39,7 +39,8 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
-    SemanticsNode, SemanticsOwner, SemanticsTree, SetSize, TableShape, TextDirection,
+    SemanticsNode, SemanticsOwner, SemanticsRegions, SemanticsTree, SetSize, TableShape,
+    TextDirection,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -1155,6 +1156,7 @@ fn build_semantics_fragments_impl(
     {
         regions.callbacks.retain(&region.config);
     }
+    debug_assert_hosted_runs(&config, &authored);
 
     let mut child_fragments = Vec::with_capacity(node.children().len());
     let mut children_block_previous = append_region_fragments(
@@ -1280,6 +1282,41 @@ fn build_semantics_fragments_impl(
         }],
         blocks_previous_siblings,
     })
+}
+
+/// Checks that the regions holding a text's runs (ADR-0214 §2 as amended)
+/// hold each of its runs once, in run order: their ranges, in region order,
+/// are consecutive and cover every run. Regions hold runs only of the text
+/// they are drawn by.
+fn debug_assert_hosted_runs(config: &SemanticsConfiguration, authored: &SemanticsRegions) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let hosted: Vec<std::ops::Range<usize>> = authored
+        .before_children
+        .iter()
+        .chain(&authored.after_children)
+        .filter_map(|region| region.config.hosted_runs())
+        .collect();
+    if hosted.is_empty() {
+        return;
+    }
+    let runs = config
+        .text_content()
+        .map(|content| content.runs().len())
+        .expect("BUG: regions hold runs of a text that declares none");
+    let mut next = 0;
+    for range in &hosted {
+        debug_assert_eq!(
+            range.start, next,
+            "BUG: hosted run ranges overlap, skip runs or leave run order: {hosted:?}"
+        );
+        next = range.end;
+    }
+    debug_assert_eq!(
+        next, runs,
+        "BUG: hosted run ranges do not cover the text's {runs} runs: {hosted:?}"
+    );
 }
 
 #[expect(

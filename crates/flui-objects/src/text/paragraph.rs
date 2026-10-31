@@ -301,8 +301,9 @@ impl RenderParagraph {
 
     /// The laid-out text as runs, or `None` before layout. A run the
     /// semantics model refuses is a bug in this description: it is logged
-    /// and the text publishes its label alone.
-    fn semantics_text_content(&self, text: &str) -> Option<TextContent> {
+    /// and the text publishes its label alone. No run crosses a byte of
+    /// `cuts`.
+    fn semantics_text_content(&self, text: &str, cuts: &[usize]) -> Option<TextContent> {
         if !self.painter.has_layout() {
             return None;
         }
@@ -322,6 +323,7 @@ impl RenderParagraph {
                     line.bottom,
                 )
             },
+            cuts,
         );
         match runs.and_then(TextContent::try_new) {
             Ok(content) => Some(content),
@@ -330,6 +332,25 @@ impl RenderParagraph {
                 None
             }
         }
+    }
+
+    /// The runs selectable text publishes (ADR-0214 §2 as amended): its
+    /// authored text, cut at its links' edges so each link holds its own.
+    /// `None` for text that is not selectable, not laid out, or that a
+    /// span's accessibility override reads differently from its glyphs.
+    fn selectable_runs(&self) -> Option<TextContent> {
+        self.selectable.as_ref()?;
+        let span = self.painter.text()?;
+        let plain = span.to_plain_text();
+        if span.to_semantics_text() != plain {
+            return None;
+        }
+        let cuts = if self.routes_links() {
+            self.runs.link_edges()
+        } else {
+            Vec::new()
+        };
+        self.semantics_text_content(&plain, &cuts)
     }
 
     /// Names the link that holds the primary keyboard focus and the ring it
@@ -823,11 +844,22 @@ impl RenderBox for RenderParagraph {
     }
 
     /// A paragraph with routed links publishes one region per link and per
-    /// stretch of text between them, bounded by their glyphs.
+    /// stretch of text between them, bounded by their glyphs. Selectable,
+    /// each region holds the paragraph's runs in its bytes.
     fn semantics_regions(&self, size: Size) -> SemanticsRegions {
         if !self.routes_links() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
+        let run_starts: Vec<usize> = self
+            .selectable_runs()
+            .map(|content| {
+                content
+                    .runs()
+                    .iter()
+                    .map(|run| run.byte_range().start)
+                    .collect()
+            })
+            .unwrap_or_default();
         SemanticsRegions {
             before_children: self.runs.semantics_regions(
                 &self.painter,
@@ -835,6 +867,7 @@ impl RenderBox for RenderParagraph {
                 self.link_focus.map(|focus| focus.link),
                 self.painter.text_direction().map(semantics_text_direction),
                 flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, size.width, size.height),
+                &run_starts,
             ),
             after_children: Vec::new(),
         }
@@ -864,9 +897,6 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
-        let plain = span.to_plain_text();
-        // A span's accessibility override reads differently from its glyphs.
-        let overridden = text != plain;
         if self.routes_links() {
             config.set_semantics_boundary(true);
             config.set_explicit_child_nodes(true);
@@ -879,16 +909,16 @@ impl RenderBox for RenderParagraph {
         // override replaces or silences keeps its label and publishes no
         // runs until runs can carry overrides. With routed links it stays
         // the boundary of its link regions, so each link keeps its own node
-        // and handler, and publishes no runs until links carry runs of their
-        // own. Either way it names its anchor.
+        // and handler, and each region holds the runs in its bytes
+        // (`semantics_regions`). Either way it names its anchor.
         if let Some(anchor) = &self.selectable {
             config.add_anchor(anchor.clone());
             config.set_semantics_boundary(true);
-            if !self.routes_links() && !overridden {
-                config.set_merging_semantics_of_descendants(true);
-                if let Some(content) = self.semantics_text_content(&plain) {
-                    config.set_text_content(content);
+            if let Some(content) = self.selectable_runs() {
+                if !self.routes_links() {
+                    config.set_merging_semantics_of_descendants(true);
                 }
+                config.set_text_content(content);
             }
         }
         if let Some(direction) = self.painter.text_direction() {

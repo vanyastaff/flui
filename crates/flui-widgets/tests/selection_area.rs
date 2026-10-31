@@ -1109,3 +1109,97 @@ pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
         "byte 4 splits 京, so the end moves down to the boundary before it"
     );
 }
+
+/// The values of the text runs a node holds, in order.
+fn run_values(node: &accesskit_consumer::NodeRef<'_>) -> Vec<String> {
+    node.children()
+        .filter(|child| child.role() == Role::TextRun)
+        .map(|child| child.data().value().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// "Read the terms and the privacy notice", its two stretches of link
+/// routed, in an area that records what it selects.
+fn linked_area(width: f64) -> (LaidOut, Rc<RefCell<Vec<Option<String>>>>) {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let (area, seen) = recorded_area(
+        SizedBox::new(width, 400.0).child(
+            RichText::new(TextSpan::with_children(vec![
+                TextSpan::new("Read the "),
+                TextSpan::new("terms").with_link("app://terms"),
+                TextSpan::new(" and the "),
+                TextSpan::new("privacy notice").with_link("app://privacy"),
+            ]))
+            .on_link(|_cx, _link| {}),
+        ),
+    );
+    (mounted(area), seen)
+}
+
+/// Selectable text with links publishes runs too: each link and each
+/// stretch between links holds the runs of its own text, so an assistive
+/// selection reaches into a link and past it, and the links keep their
+/// nodes.
+///
+/// Red-check: cut no runs at link edges (a run spans "Read the terms", so
+/// no region holds runs); leave the runs on the paragraph (a link holds
+/// none).
+pub(crate) fn links_in_selectable_text_hold_their_own_runs() {
+    let (mut laid, seen) = linked_area(4000.0);
+    let (document, before, privacy) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let links = find_all(state, Role::Link);
+        assert_eq!(run_values(&links[0]), ["terms"]);
+        assert_eq!(run_values(&links[1]), ["privacy notice"]);
+        let before = find_all(state, Role::Label)
+            .into_iter()
+            .find(|node| run_values(node) == ["Read the "])
+            .expect("the text before the first link holds its runs");
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(&before)[0],
+            runs_of(&links[1])[0],
+        )
+    };
+    laid.invoke_semantics_action(selection_request(document, at(before, 5), at(privacy, 7)))
+        .expect("a selection into a link is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("the terms and the privacy")
+    );
+}
+
+/// A link that wraps holds a run on each of its lines, and an assistive
+/// selection from one to the other selects the whole link.
+///
+/// Red-check: leave the runs on the paragraph (the link holds none).
+pub(crate) fn a_wrapped_link_holds_a_run_on_each_line() {
+    let (mut laid, seen) = linked_area(60.0);
+    let (document, runs) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let privacy = find_all(state, Role::Link)
+            .into_iter()
+            .find(|link| link.label().as_deref() == Some("privacy notice"))
+            .expect("the second link is published");
+        let values = run_values(&privacy);
+        assert!(values.len() >= 2, "the link wraps: {values:?}");
+        assert_eq!(values.concat(), "privacy notice");
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(&privacy),
+        )
+    };
+    let last = *runs.last().expect("runs");
+    laid.invoke_semantics_action(selection_request(document, at(runs[0], 0), at(last, 99)))
+        .expect("a selection across the link's lines is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("privacy notice")
+    );
+}

@@ -580,10 +580,41 @@ impl SemanticsTree {
                         children.push(id);
                     }
                 }
+                children.extend(self.run_children(node));
                 children
             },
             text_selection: self.published_document_selection(node),
         })
+    }
+
+    /// The text runs `node` lists after its children: the runs of the text it
+    /// is, unless regions beneath it hold them, or the runs of the enclosing
+    /// text a region holds (ADR-0214 §2 as amended).
+    fn run_children(&self, node: &SemanticsNode) -> Vec<crate::AccessibilityNodeId> {
+        if let Some(runs) = node.config().hosted_runs() {
+            let text = node.parent().and_then(|parent| self.get(parent));
+            return text
+                .and_then(|text| {
+                    crate::accesskit_translation::published_text(text.config().attributes())
+                })
+                .and_then(|(_, identities)| identities.get(runs))
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
+        }
+        let Some((_, identities)) =
+            crate::accesskit_translation::published_text(node.config().attributes())
+        else {
+            return Vec::new();
+        };
+        let hosted = node.children().iter().any(|&child| {
+            self.get(child)
+                .is_some_and(|child| child.config().hosted_runs().is_some())
+        });
+        if hosted {
+            Vec::new()
+        } else {
+            identities.to_vec()
+        }
     }
 
     /// `node`'s document selection (ADR-0214 §3) as positions in the runs of
