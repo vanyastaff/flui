@@ -23,11 +23,12 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
+use flui_platform::ClipboardRead;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard};
+use crate::host::{NativeClipboard, SyncClipboard, host_text};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -148,8 +149,8 @@ impl crate::host::Clipboard<MacOSLoop> for MacOSClipboard {
 }
 
 impl SyncClipboard for MacOSClipboard {
-    fn read_now(&self) -> Option<String> {
-        self.with_pasteboard_on_owner(|pasteboard| {
+    fn read_now(&self) -> ClipboardRead {
+        let text = self.with_pasteboard_on_owner(|pasteboard| {
             let string_type = string_type();
 
             // `types()` is `None` only when the pasteboard has no types at
@@ -164,7 +165,8 @@ impl SyncClipboard for MacOSClipboard {
             let rust_string = ns_string.to_string();
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
             Some(rust_string)
-        })
+        });
+        text.map_or(Ok(None), host_text)
     }
 
     fn write_now(&self, text: String) {
@@ -221,13 +223,17 @@ mod tests {
             let known_payloads = known_payloads.clone();
             threads.push(std::thread::spawn(move || {
                 clipboard.write_now(format!("payload-{i}"));
-                let read = clipboard.read_now();
+                let read = clipboard
+                    .read_now()
+                    .expect("a pasteboard read on the serialized lane succeeds");
                 assert!(
                     read.is_some(),
                     "Read must never be None on the serialized lane"
                 );
                 assert!(
-                    known_payloads.iter().any(|p| p == read.as_deref().unwrap()),
+                    known_payloads
+                        .iter()
+                        .any(|p| Some(p.as_str()) == read.as_deref()),
                     "Read must be one of the known complete payloads, got {read:?}"
                 );
             }));
@@ -240,6 +246,9 @@ mod tests {
 
         let final_guard = MacOSClipboard::for_test(test_owner_queue(), board);
         final_guard.write_now("final".to_string());
-        assert_eq!(final_guard.read_now().as_deref(), Some("final"));
+        assert_eq!(
+            final_guard.read_now().ok().flatten().as_deref(),
+            Some("final")
+        );
     }
 }

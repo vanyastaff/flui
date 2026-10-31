@@ -76,7 +76,7 @@ mod cases {
             .expect("sway has a primary selection")
     }
 
-    fn read(client: &Client) -> Option<String> {
+    fn read(client: &Client) -> Option<std::sync::Arc<str>> {
         let primary = primary(client);
         client.read(|answer| primary.read_text(answer))
     }

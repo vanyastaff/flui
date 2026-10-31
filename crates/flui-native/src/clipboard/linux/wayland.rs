@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
@@ -47,7 +47,7 @@ use web_time::Instant;
 
 use super::owners::Owners;
 use super::text::TextForm;
-use crate::host::{NativeClipboard, NativePrimarySelection};
+use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 
@@ -59,8 +59,6 @@ const MANAGER_VERSION: u32 = 3;
 /// How long a read waits for the selection's owner to write its text, and a
 /// write for the reader to take it. An owner that hangs answers nothing.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-/// The most text a read takes: past it the selection is not read.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// The most `send`s the application answers at once. Each holds a thread
 /// until its reader has the text or the deadline passes; a client asking
 /// faster than it reads is answered with nothing past this.
@@ -286,7 +284,7 @@ impl NativePrimarySelection for SeatClipboard {
         self.owns_primary()
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.read_primary(answer);
     }
 }
@@ -294,13 +292,13 @@ impl NativePrimarySelection for SeatClipboard {
 /// What a read does once the state is let go of.
 enum Read {
     /// The answer is known now.
-    Now(Option<String>),
+    Now(ClipboardRead),
     /// The offer's owner writes the text in `form` to the pipe.
     Pipe(OwnedFd, TextForm),
 }
 
 impl NativeClipboard for SeatClipboard {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         let last_seat = self.shared.last_input.latest().map(|input| input.seat);
         let read = self
             .shared
@@ -319,13 +317,13 @@ impl NativeClipboard for SeatClipboard {
                             .find(|device| device.selection.is_some())
                     });
                 if let Some(owned) = state.owned.read(device.map(|device| &device.seat)) {
-                    return Read::Now(Some(owned.text.to_string()));
+                    return Read::Now(owned_text(&owned.text));
                 }
                 let Some((offer, (form, mime))) = device
                     .and_then(|device| device.selection.as_ref())
                     .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
                 else {
-                    return Read::Now(None);
+                    return Read::Now(Ok(None));
                 };
                 match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
                     Ok((reader, writer)) => {
@@ -339,11 +337,11 @@ impl NativeClipboard for SeatClipboard {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "no pipe for a clipboard read");
-                        Read::Now(None)
+                        Read::Now(Err(ClipboardError::Unavailable))
                     }
                 }
             })
-            .unwrap_or(Read::Now(None));
+            .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
@@ -352,7 +350,7 @@ impl NativeClipboard for SeatClipboard {
                     .name("flui-wayland-clipboard".to_owned())
                     .spawn(move || {
                         let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .map(|bytes| form.decode(bytes));
+                            .and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 // The closure, and the resolver in it, is dropped: the read
@@ -627,6 +625,8 @@ pub(crate) mod transfer {
     use rustix::io::Errno;
     use web_time::Instant;
 
+    use flui_platform::ClipboardError;
+
     use super::{MAX_TEXT, MAX_WRITERS};
 
     /// The writes running now, at most [`MAX_WRITERS`].
@@ -677,30 +677,31 @@ pub(crate) mod transfer {
         }
     }
 
-    /// Everything the owner writes to `reader` until it closes its end; `None`
-    /// when it is still writing at `deadline`, writes past [`MAX_TEXT`], or
-    /// the read fails.
-    pub(crate) fn read(reader: OwnedFd, deadline: Instant) -> Option<Vec<u8>> {
+    /// Everything the owner writes to `reader` until it closes its end:
+    /// [`ClipboardError::Timeout`] when it is still writing at `deadline`,
+    /// [`ClipboardError::TooLarge`] past [`MAX_TEXT`], and
+    /// [`ClipboardError::Unavailable`] when the read fails.
+    pub(crate) fn read(reader: OwnedFd, deadline: Instant) -> Result<Vec<u8>, ClipboardError> {
         let mut bytes = Vec::new();
         let mut chunk = vec![0_u8; 64 * 1024];
         loop {
             if !ready(&reader, PollFlags::IN, deadline) {
                 tracing::debug!("a clipboard read timed out");
-                return None;
+                return Err(ClipboardError::Timeout);
             }
             match rustix::io::read(&reader, &mut chunk) {
-                Ok(0) => return Some(bytes),
+                Ok(0) => return Ok(bytes),
                 Ok(count) => {
                     if bytes.len() + count > MAX_TEXT {
                         tracing::warn!("a clipboard read past {MAX_TEXT} bytes was dropped");
-                        return None;
+                        return Err(ClipboardError::TooLarge);
                     }
                     bytes.extend_from_slice(&chunk[..count]);
                 }
                 Err(Errno::INTR | Errno::AGAIN) => {}
                 Err(error) => {
                     tracing::debug!(%error, "a clipboard read failed");
-                    return None;
+                    return Err(ClipboardError::Unavailable);
                 }
             }
         }
@@ -767,7 +768,7 @@ pub(crate) mod transfer {
             let sent = text.clone();
             let deadline = Instant::now() + Duration::from_secs(5);
             let writing = std::thread::spawn(move || write(writer, &sent, deadline));
-            assert_eq!(read(reader, deadline), Some(text));
+            assert_eq!(read(reader, deadline), Ok(text));
             writing.join().expect("the writer ends");
         }
 
@@ -777,7 +778,10 @@ pub(crate) mod transfer {
         fn a_transfer_ends_at_its_deadline_or_its_peer() {
             let (reader, writer) = pipe();
             let started = Instant::now();
-            assert_eq!(read(reader, started + Duration::from_millis(50)), None);
+            assert_eq!(
+                read(reader, started + Duration::from_millis(50)),
+                Err(ClipboardError::Timeout)
+            );
             assert!(started.elapsed() < Duration::from_secs(2));
             drop(writer);
 

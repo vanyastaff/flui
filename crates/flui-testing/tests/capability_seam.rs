@@ -1,10 +1,12 @@
 //! The capability seam as a widget meets it (ADR-0152 §4): what a UI
 //! runtime answers without a provider, a provider's refusal, an answer from
 //! another thread, a runtime that drops before the answer, an answer that is
-//! never given, the registry's conflicts, and a handle's last clone.
+//! never given, reads that share one answer or one failure, the registry's
+//! conflicts, and a handle's last clone.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use flui_interaction::{
@@ -15,7 +17,7 @@ use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
 };
-use flui_platform::{Unsupported, UnsupportedReason};
+use flui_platform::{ClipboardError, ClipboardRead, Unsupported, UnsupportedReason};
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedClipboard};
 use flui_view::{
@@ -86,14 +88,37 @@ pub(crate) fn acquire_capability<C: Capability>(
     acquired.take().expect("init_state ran")
 }
 
+/// Mount an [`Acquirer`] of the clipboard as the root of `window` on `host`
+/// and return what it was answered.
+fn acquire_in(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+) -> Result<ClipboardHandle, Unsupported> {
+    let acquired = Acquired::<ClipboardCapability>::default();
+    host.attach_to(
+        window,
+        &Acquirer::<ClipboardCapability> {
+            acquired: Rc::clone(&acquired),
+        },
+    )
+    .expect("root attaches");
+    let _ = host.pump(Duration::ZERO);
+    acquired.take().expect("init_state ran")
+}
+
 fn window() -> HeadlessWindow {
     HeadlessWindow::new(10, 10)
 }
 
 /// Where a test keeps what a completion settled with.
-type Settled = Rc<RefCell<Option<Result<Option<String>, Abandoned>>>>;
+type Settled = Rc<RefCell<Option<Result<ClipboardRead, Abandoned>>>>;
 
-fn settle_into(completion: Completion<Option<String>>) -> Settled {
+/// The text a read of `text` settles with.
+fn answered(text: &str) -> Arc<str> {
+    Arc::from(text)
+}
+
+fn settle_into(completion: Completion<ClipboardRead>) -> Settled {
     let settled = Settled::default();
     let sink = Rc::clone(&settled);
     completion.on_complete(move |outcome| {
@@ -128,7 +153,7 @@ pub(crate) fn copy_and_paste_round_trip_through_the_headless_clipboard() {
     let settled = settle_into(clipboard.read_text());
     assert_eq!(*settled.borrow(), None, "never inside read_text");
     let _ = host.pump(Duration::ZERO);
-    assert_eq!(*settled.borrow(), Some(Ok(Some("copied".to_owned()))));
+    assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("copied"))))));
 }
 
 /// Answers every read from a thread of its own, as an OS callback does.
@@ -137,8 +162,8 @@ struct OtherThread;
 struct OtherThreadBackend;
 
 impl ClipboardBackend for OtherThreadBackend {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
-        std::thread::spawn(move || answer.resolve(Some("from the OS".to_owned())))
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
+        std::thread::spawn(move || answer.resolve(Ok(Some(Arc::from("from the OS")))))
             .join()
             .expect("the OS thread")
             .expect("the owner is live");
@@ -149,10 +174,7 @@ impl ClipboardBackend for OtherThreadBackend {
 
 impl CapabilityProvider<ClipboardCapability> for OtherThread {
     fn provide(&self, cx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
-        Ok(ClipboardHandle::new(
-            OtherThreadBackend,
-            cx.completions().clone(),
-        ))
+        Ok(ClipboardHandle::new(OtherThreadBackend, cx))
     }
 }
 
@@ -178,7 +200,10 @@ pub(crate) fn an_answer_from_another_thread_settles_at_an_owner_turn() {
         "answered, but not settled before the owner's turn"
     );
     let _ = host.pump(Duration::ZERO);
-    assert_eq!(*settled.borrow(), Some(Ok(Some("from the OS".to_owned()))));
+    assert_eq!(
+        *settled.borrow(),
+        Some(Ok(Ok(Some(answered("from the OS")))))
+    );
 }
 
 /// Records that it was dropped, to tell "dropped unrun" from "kept".
@@ -215,8 +240,8 @@ pub(crate) fn a_read_pending_when_its_runtime_drops_ends_as_owner_retired() {
     assert_eq!(polled.poll(), Some(Err(Abandoned::OwnerRetired)));
     assert_eq!(
         scripted.answer_held_reads(),
-        2,
-        "a late answer finds nobody, and does not panic"
+        1,
+        "the two reads share one host read, whose late answer finds nobody and does not panic"
     );
     assert_eq!(polled.poll(), None, "a completion ends once");
 }
@@ -231,6 +256,154 @@ pub(crate) fn a_read_whose_answer_is_dropped_ends_as_provider_dropped() {
     assert_eq!(*settled.borrow(), None, "ends at the owner's turn");
     let _ = host.pump(Duration::ZERO);
     assert_eq!(*settled.borrow(), Some(Err(Abandoned::ProviderDropped)));
+}
+
+/// The text a settled read holds, which the test compares by allocation.
+fn settled_text(settled: &Settled) -> Arc<str> {
+    match settled.borrow().clone() {
+        Some(Ok(Ok(Some(text)))) => text,
+        other => panic!("the read settles with text, not {other:?}"),
+    }
+}
+
+pub(crate) fn reads_asked_while_one_is_in_flight_share_its_answer() {
+    // Two widgets' handles in two windows of one runtime: one read.
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("shared");
+    scripted.hold_reads();
+    let clipboard = acquire(&mut host).expect("provided");
+    // A widget in another window of the same runtime acquires its own handle.
+    let second_window = host.open_window(window());
+    let other = acquire_in(&mut host, second_window).expect("provided");
+    let readers = [
+        settle_into(clipboard.read_text()),
+        settle_into(other.read_text()),
+        settle_into(clipboard.read_text()),
+    ];
+    assert_eq!(scripted.reads_asked(), 1, "one host read for the burst");
+    assert_eq!(scripted.answer_held_reads(), 1);
+    let _ = host.pump(Duration::ZERO);
+    let first = settled_text(&readers[0]);
+    assert_eq!(&*first, "shared");
+    for reader in &readers[1..] {
+        assert!(
+            Arc::ptr_eq(&first, &settled_text(reader)),
+            "every reader holds the same copy of the text"
+        );
+    }
+
+    let later = settle_into(clipboard.read_text());
+    assert_eq!(
+        scripted.reads_asked(),
+        2,
+        "a read after the answer asks again"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*later.borrow(), Some(Ok(Ok(Some(answered("shared"))))));
+}
+
+pub(crate) fn each_runtime_asks_for_its_own_read() {
+    let scripted = ScriptedClipboard::new();
+    scripted.set_text("per runtime");
+    scripted.hold_reads();
+    let host_of = || {
+        HeadlessHost::with_capabilities(
+            window(),
+            registry_of(|registrar| scripted.register(registrar)),
+        )
+    };
+    let (mut first, mut second) = (host_of(), host_of());
+    let readers = [
+        settle_into(acquire(&mut first).expect("provided").read_text()),
+        settle_into(acquire(&mut second).expect("provided").read_text()),
+    ];
+    assert_eq!(
+        scripted.reads_asked(),
+        2,
+        "one provider, a read per runtime"
+    );
+    drop(second);
+    assert_eq!(scripted.answer_held_reads(), 2);
+    let _ = first.pump(Duration::ZERO);
+    assert_eq!(
+        *readers[0].borrow(),
+        Some(Ok(Ok(Some(answered("per runtime")))))
+    );
+    assert_eq!(
+        *readers[1].borrow(),
+        None,
+        "the retired runtime's reader is dropped unrun with it, and strands nobody else"
+    );
+}
+
+pub(crate) fn a_read_after_a_write_never_joins_the_read_before_it() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+    // The host answers at once, but the answer settles at the owner's turn:
+    // the earlier read is still in flight when the write lands.
+    let before = settle_into(clipboard.read_text());
+    clipboard.write_text("after");
+    let after = settle_into(clipboard.read_text());
+    assert_eq!(scripted.reads_asked(), 2, "the write ends the sharing");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*before.borrow(), Some(Ok(Ok(Some(answered("before"))))));
+    assert_eq!(*after.borrow(), Some(Ok(Ok(Some(answered("after"))))));
+}
+
+pub(crate) fn a_failed_read_reaches_every_reader_that_joined_it() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.fail_reads_with(ClipboardError::Timeout);
+    scripted.hold_reads();
+    let clipboard = acquire(&mut host).expect("provided");
+    let readers = [
+        settle_into(clipboard.read_text()),
+        settle_into(clipboard.read_text()),
+    ];
+    assert_eq!(scripted.answer_held_reads(), 1);
+    let _ = host.pump(Duration::ZERO);
+    for reader in &readers {
+        assert_eq!(
+            *reader.borrow(),
+            Some(Ok(Err(ClipboardError::Timeout))),
+            "a failure is no empty clipboard"
+        );
+    }
+
+    scripted.stop_failing_reads();
+    let settled = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *settled.borrow(),
+        Some(Ok(Ok(None))),
+        "an empty clipboard reads as none"
+    );
+}
+
+pub(crate) fn an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("after");
+    scripted.hold_reads();
+    let clipboard = acquire(&mut host).expect("provided");
+    let readers = [
+        settle_into(clipboard.read_text()),
+        settle_into(clipboard.read_text()),
+    ];
+    assert_eq!(scripted.drop_held_reads(), 1);
+    let _ = host.pump(Duration::ZERO);
+    for reader in &readers {
+        assert_eq!(*reader.borrow(), Some(Err(Abandoned::ProviderDropped)));
+    }
+
+    scripted.answer_held_reads();
+    let next = settle_into(clipboard.read_text());
+    assert_eq!(scripted.reads_asked(), 2, "the abandoned read is over");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*next.borrow(), Some(Ok(Ok(Some(answered("after"))))));
 }
 
 pub(crate) fn a_dropped_handle_ends_its_subscription() {
@@ -419,6 +592,24 @@ pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
 /// borrow of the selection held; a newer claim, or another application
 /// selecting, makes it stale, and a stale claim's drop leaves the selection
 /// alone.
+pub(crate) fn a_primary_read_after_a_release_never_joins_the_read_before_it() {
+    let mut host = HeadlessHost::new(window());
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+    let claim = selection.claim(|| Some("withdrawn".to_owned()));
+    // Answered at once, settled at the owner's turn: still in flight.
+    let before = settle_into(selection.read_text());
+    drop(claim);
+    let after = settle_into(selection.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*before.borrow(), Some(Ok(Ok(Some(answered("withdrawn"))))));
+    assert_eq!(
+        *after.borrow(),
+        Some(Ok(Ok(None))),
+        "the released text is not read again"
+    );
+}
+
 pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() {
     let mut host = HeadlessHost::new(window());
     let scripted = host.primary_selection();
@@ -440,7 +631,7 @@ pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() 
 
     let settled = settle_into(selection.read_text());
     let _ = host.pump(Duration::ZERO);
-    assert_eq!(*settled.borrow(), Some(Ok(Some("first".to_owned()))));
+    assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("first"))))));
     assert_eq!(asked.get(), 1, "a read asks the claim once");
 
     let second = selection.claim(|| Some("second".to_owned()));
