@@ -575,8 +575,13 @@ impl SyncClipboard for Absent<position::Clipboard> {
         Err(flui_platform::ClipboardError::Unavailable)
     }
 
-    fn write_now(&self, text: String) {
-        drop(text);
+    fn write_now(&self, write: flui_platform::ClipboardWrite) {
+        drop(write);
+    }
+
+    /// A dropped write is kept nowhere.
+    fn concealment(&self) -> flui_platform::Concealment {
+        flui_platform::Concealment::Honored
     }
 }
 

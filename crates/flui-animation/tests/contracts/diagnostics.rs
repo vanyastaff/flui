@@ -70,7 +70,7 @@ struct OpaqueFault(Arc<AtomicBool>);
 impl Drop for OpaqueFault {
     fn drop(&mut self) {
         self.0.store(true, Ordering::Relaxed);
-        panic!("opaque subscriber payload must not retire");
+        panic!("opaque subscriber payload destroyed");
     }
 }
 
@@ -406,8 +406,8 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                 "subscriber reentry must not cross a borrow: {fault:?}"
             );
             assert!(
-                !payload_retired.load(Ordering::Relaxed),
-                "opaque payload custody: {fault:?}"
+                payload_retired.load(Ordering::Relaxed) == fault.opaque,
+                "a discarded opaque payload is destroyed under containment (ADR-0281): {fault:?}"
             );
         }
     }
@@ -586,8 +586,8 @@ fn subscriber_retirement_after_failed_close() {
     );
     assert!(run.is_complete());
     assert!(
-        !dropped.load(Ordering::Relaxed),
-        "subscriber retirement must retain first-failure custody"
+        dropped.load(Ordering::Relaxed),
+        "the retired subscriber is destroyed under containment (ADR-0281)"
     );
 }
 

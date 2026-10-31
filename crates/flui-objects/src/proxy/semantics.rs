@@ -426,55 +426,38 @@ impl Default for RenderSemanticsAnnotations {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("container", self.container, "container");
-        builder.add_flag(
-            "explicit_child_nodes",
-            self.explicit_child_nodes,
-            "explicit child nodes",
-        );
-        builder.add_flag(
-            "exclude_semantics",
-            self.exclude_semantics,
-            "exclude semantics",
-        );
-        builder.add_flag(
-            "block_user_actions",
-            self.block_user_actions,
-            "block user actions",
-        );
-        builder.add_flag(
-            "has_semantics",
-            self.configuration.has_been_annotated(),
-            "has semantics",
-        );
+impl flui_foundation::inspect::Inspect for RenderSemanticsAnnotations {
+    fn kind(&self) -> &'static str {
+        "RenderSemanticsAnnotations"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("container", &self.container).default(&false);
+        out.field("explicit_child_nodes", &self.explicit_child_nodes)
+            .default(&false);
+        out.field("exclude_semantics", &self.exclude_semantics)
+            .default(&false);
+        out.field("block_user_actions", &self.block_user_actions)
+            .default(&false);
+        out.field("has_semantics", &self.configuration.has_been_annotated())
+            .default(&false);
         // The two route flags a route's page wrapper sets, so a widget test can
         // assert the wrapper scopes (and names) a route.
-        builder.add_flag(
-            "scopes_route",
-            self.configuration.scopes_route(),
-            "scopes route",
-        );
-        builder.add_flag(
-            "names_route",
-            self.configuration.names_route(),
-            "names route",
-        );
+        out.field("scopes_route", &self.configuration.scopes_route())
+            .default(&false);
+        out.field("names_route", &self.configuration.names_route())
+            .default(&false);
         // The shape of a `GestureDetector`'s action-advertising helper node,
         // so a test asking for a control's own wrapper can leave it out.
-        builder.add_flag(
-            "actions_only",
-            self.configuration.is_actions_only(),
-            "actions only",
-        );
+        out.field("actions_only", &self.configuration.is_actions_only())
+            .default(&false);
         // The shape of a `Focus` widget's focus-state node, left out the same
         // way.
-        builder.add_flag(
+        out.field(
             "focus_state_only",
-            self.configuration.is_focus_state_only(),
-            "focus state only",
-        );
+            &self.configuration.is_focus_state_only(),
+        )
+        .default(&false);
     }
 }
 
@@ -607,9 +590,13 @@ impl RenderIndexedSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIndexedSemantics {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("index", u64::try_from(self.index).unwrap_or(u64::MAX));
+impl flui_foundation::inspect::Inspect for RenderIndexedSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderIndexedSemantics"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("index", &self.index);
     }
 }
 
@@ -677,7 +664,13 @@ impl RenderBox for RenderMergeSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderMergeSemantics {}
+impl flui_foundation::inspect::Inspect for RenderMergeSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderMergeSemantics"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 /// A render object that drops its descendant semantics while leaving layout,
 /// paint, and hit testing unchanged.
@@ -718,9 +711,13 @@ impl Default for RenderExcludeSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderExcludeSemantics {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("excluding", self.excluding, "excluding");
+impl flui_foundation::inspect::Inspect for RenderExcludeSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderExcludeSemantics"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("excluding", &self.excluding).default(&false);
     }
 }
 

@@ -130,21 +130,12 @@ fn a_panicking_waker_leaves_the_other_held_copies_woken() {
     );
 }
 
-/// A panic payload whose destructor panics too.
-struct PanicsOnDrop;
+/// A waker that panics with a payload of its own when woken.
+struct PanicsSecond;
 
-impl Drop for PanicsOnDrop {
-    fn drop(&mut self) {
-        panic!("the second panic's payload panics when dropped");
-    }
-}
-
-/// A waker that panics with a [`PanicsOnDrop`] payload when woken.
-struct PanicsWithBadPayload;
-
-impl Wake for PanicsWithBadPayload {
+impl Wake for PanicsSecond {
     fn wake(self: Arc<Self>) {
-        std::panic::panic_any(PanicsOnDrop);
+        panic!("the second waiting copy's waker panics");
     }
 }
 
@@ -154,7 +145,7 @@ fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
     storage.put(&NOTES, "old");
     let held = storage.hold_copies();
     let first_waker = Waker::from(Arc::new(PanicsOnWake));
-    let second_waker = Waker::from(Arc::new(PanicsWithBadPayload));
+    let second_waker = Waker::from(Arc::new(PanicsSecond));
     let woken = Arc::new(Woken::default());
     let third_waker = Waker::from(Arc::clone(&woken));
     let mut first = pin!(storage.copy_aside(&NOTES));

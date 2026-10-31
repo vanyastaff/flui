@@ -266,3 +266,14 @@ pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
         activations: said.activations,
     })
 }
+
+/// Whether the selection offer the last input's seat of `platform`, a
+/// `WaylandPlatform`, holds names KDE's concealment hint
+/// (`x-kde-passwordManagerHint`, ADR-0152 §6): what a clipboard manager
+/// reading that hint sees. `None` while the seat holds no selection offer.
+#[must_use]
+pub fn selection_offers_concealed_hint<H: Host<Loop = WaylandLoop>>(
+    platform: &HostPlatform<H>,
+) -> Option<bool> {
+    platform.owner().selection_offers_hint()
+}

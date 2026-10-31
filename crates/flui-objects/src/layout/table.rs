@@ -606,21 +606,24 @@ impl RenderTable {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderTable {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_int("column_count", self.column_count as i64, None);
-        builder.add_enum(
+impl flui_foundation::inspect::Inspect for RenderTable {
+    fn kind(&self) -> &'static str {
+        "RenderTable"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // `TableColumnWidth` is a recursive enum (`Max`/`Min` box two more), so no single
+        // typed value describes it; it stays a counted `Debug` field.
+        out.field("column_count", &self.column_count);
+        out.field(
             "default_vertical_alignment",
-            self.default_vertical_alignment,
+            &self.default_vertical_alignment,
         );
-        builder.add_enum("default_column_width", self.default_column_width.clone());
-        builder.add(
-            "border",
-            match &self.border {
-                Some(_) => "set".to_string(),
-                None => "none".to_string(),
-            },
+        out.value(
+            "default_column_width",
+            flui_foundation::inspect::Value::Debug(&self.default_column_width),
         );
+        out.field("has_border", &self.border.is_some());
     }
 }
 

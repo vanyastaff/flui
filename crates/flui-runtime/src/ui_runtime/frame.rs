@@ -251,7 +251,7 @@ impl UiRuntime {
                         self.frame_failure_detail.get().panic_text(&*payload);
                     // The payload may contain several panicking destructors.
                     // Retain it before any recovery operation or diagnostics.
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
                         // The pipeline already consumed this presentation's
                         // paint dirtiness before either post-pipeline segment
@@ -852,6 +852,8 @@ impl UiRuntime {
         // Only a scene the screen shows (or already showed: no damage) may
         // change the system bars; a withheld one keeps its style staged.
         let mut deliver_overlay_style = false;
+        // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
+        let mut hover_panic = None;
         use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
@@ -861,237 +863,274 @@ impl UiRuntime {
             // `SceneSnapshot` (the mailbox seam's own no-`Arc<Scene>`
             // contract); the direct path borrows it internally and drops it
             // when the render returns.
-            let render_verdict = sink.submit(scene);
-            // Telemetry: sampled AFTER the submit returns, never before
-            // it -- a `Presented` verdict means the backend called
-            // `output.present()`, and whatever pacing block that call carries
-            // happens inside it rather than after it (under the default
-            // `Fifo` mode the block is a wait for the next vsync on the
-            // Vulkan/Wayland path; the native AppKit backend returns from the
-            // present in ~42 µs — ADR-0058's per-backend facts. On the inline
-            // raster lane the pump runs synchronously inside `submit`, so the
-            // call's own duration lands here either way). Sampling before the
-            // call (as an
-            // earlier version of this method did) understates every
-            // "input-to-present"/"produce-to-present" latency by up to a
-            // full frame interval -- it would measure submit, not present,
-            // while `flui_scheduler::frame_histogram`'s
-            // `input_to_present_histogram`/`produce_to_present_histogram`
-            // names (and `FrameSnapshot::submit_at`'s own doc) already
-            // claim the present-inclusive meaning. Sampling once, here,
-            // after the call returns -- for EVERY verdict, not just
-            // `Presented` -- keeps that claim true uniformly: a failure
-            // arm's `submit_at` is likewise "whenever the backend finished
-            // attempting this submit", including whatever work (partial
-            // blocking, driver validation) it did before failing. Never
-            // recorded for `NoPresent`/`NotShown` (no damage, or surface
-            // unavailable -- either way the frame never reached the
-            // screen): those branches' pending input
-            // epochs stay buffered on the clock for whichever later pump
-            // does submit, per `FrameClock::record_frame`'s own doc.
-            let submit_at = producer.clock().now();
-            match render_verdict {
-                SubmitVerdict::Presented => {
-                    self.commit_painted_frame(producer);
-                    // The frame reached `present()`: frame-aligned haptics
-                    // play with it (ADR-0210 §4). Only this arm plays them;
-                    // the others leave the queue to its deadline.
-                    producer.haptics().frame_presented();
-                    deliver_overlay_style = true;
-                    presented = true;
-                    producer.record_frame_rendered();
-                    // The surface is demonstrably available: any withheld
-                    // streak ends here, so a later withdrawal gets the full
-                    // retry budget again.
-                    producer.clear_not_shown_streak();
-                    self.record_submit_telemetry(
-                        frame_time,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Presented,
-                        EpochDisposition::Drain,
-                    );
-                    tracing::trace!(
-                        frame = frame_number,
-                        total = producer.frames_rendered(),
-                        "Frame rendered successfully"
-                    );
-                    replay_committed_input = true;
+            // The layer reads parked for this scene read it now and are answered once the sink
+            // shows it. A sink that panics leaves them parked, with a repaint owed.
+            producer.stage_agent_layer_reads(scene.tree());
+            let render_verdict = match catch_unwind(AssertUnwindSafe(|| sink.submit(scene))) {
+                Ok(verdict) => verdict,
+                Err(payload) => {
+                    producer.restore_staged_agent_layer_reads();
+                    resume_unwind(payload);
                 }
-                SubmitVerdict::NoPresent => {
-                    self.commit_painted_frame(producer);
-                    // No frame-aligned haptics: the backend found no damage,
-                    // so the screen kept the previous frame and the change a
-                    // queued request confirms never showed. A request queued
-                    // before that previous frame already resolved with it; the
-                    // rest resolve `Suppressed` at their deadline.
-                    deliver_overlay_style = true;
-                    // Nothing was owed and nothing was lost — the surface was
-                    // never asked to show anything, so a withheld streak is
-                    // over just as it is on a present.
-                    producer.clear_not_shown_streak();
-                    tracing::trace!(
-                        frame = frame_number,
-                        "Frame skipped: no damage (no present)"
-                    );
-                    replay_committed_input = true;
-                }
-                // The backend had content in hand and could not put it on
-                // screen. Everything `NoPresent` does about the TREE still
-                // applies — the pipeline ran, produced a scene, and that
-                // scene is the latest one this presentation has — but the
-                // frame itself is NOT finished, and treating it as finished
-                // is how a window ends up permanently blank: the work that
-                // produced this scene has already been consumed out of the
-                // pipeline, so a loop that parks here has nothing left to
-                // wake it and nothing left to draw if it did.
-                //
-                // Hence the same two-part retention the submit-failure arms
-                // below use, and for the identical reason issue #637
-                // records: `wake_frame()` alone re-opens the segment gate
-                // but not `PipelineOwner`'s own dirty tracking, so the
-                // retry pump would find nothing to do, produce `Idle`, and
-                // clear the flag having never reached `render_scene`.
-                // `mark_needs_full_repaint_for` is what gives the retry
-                // real work.
-                //
-                // The retry is paced by the runner's fallback gate
-                // (`keeps_frame_gate_open` / `FallbackWake`, ADR-0058) — one
-                // pipeline pass per display period — and capped here at
-                // `MAX_NOT_SHOWN_RETRIES` consecutive attempts.
-                //
-                // The cap is load-bearing, not belt-and-braces. A window that
-                // AppKit reports as occluded does stop reaching this arm, but
-                // by a route that does NOT cover this condition: occlusion
-                // reaches the frame loop as
-                // `windowDidChangeOcclusionState:` -> `WindowVisibility` ->
-                // `AppLifecycleState::Hidden` -> `frames_enabled == false`, and
-                // the visibility bit there is AppKit's `occlusionState`. What
-                // withdraws the drawable, however, is the *swapchain's* own
-                // availability, and the two disagree — the cold-start trace
-                // that motivated this arm has `occlusionState` reporting the
-                // window visible throughout while the drawable was
-                // unavailable for 12 consecutive frames. Wherever they
-                // disagree and stay disagreeing (a window on an inactive
-                // Space, a display asleep) the lifecycle gate never engages and
-                // an unbounded retry is an unbounded loop. The transient that
-                // clears is the common case; the cap is what makes the
-                // pathological one terminate.
-                SubmitVerdict::NotShown => {
-                    // The frame never reached the screen, so frame-aligned
-                    // haptics wait: a retry that presents before their
-                    // deadline plays them, otherwise they resolve `Suppressed`.
-                    self.commit_painted_frame(producer);
-                    producer.record_frame_dropped();
-                    let streak = producer.record_frame_withheld();
-                    replay_committed_input = true;
-                    if streak <= MAX_NOT_SHOWN_RETRIES {
-                        tracing::debug!(
-                            frame = frame_number,
-                            streak,
-                            "Frame rendered but never shown (surface unavailable); \
-                             retaining it — retry armed via wake_frame()"
+            };
+            // Before anything else that can panic: the staged layer reads are answered if the
+            // window showed the scene, and parked again if it did not.
+            super::input::preserve_first_input_panic(
+                &mut hover_panic,
+                producer.settle_agent_layer_reads(matches!(
+                    render_verdict,
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
+                )),
+                "agent layer read reply",
+            );
+            // The first panic of the work that follows the submit is kept beside a layer read's
+            // reply panic (`hover_panic`), so neither replaces the other.
+            let post_submit = catch_unwind(AssertUnwindSafe(|| {
+                // Telemetry: sampled AFTER the submit returns, never before
+                // it -- a `Presented` verdict means the backend called
+                // `output.present()`, and whatever pacing block that call carries
+                // happens inside it rather than after it (under the default
+                // `Fifo` mode the block is a wait for the next vsync on the
+                // Vulkan/Wayland path; the native AppKit backend returns from the
+                // present in ~42 µs — ADR-0058's per-backend facts. On the inline
+                // raster lane the pump runs synchronously inside `submit`, so the
+                // call's own duration lands here either way). Sampling before the
+                // call (as an
+                // earlier version of this method did) understates every
+                // "input-to-present"/"produce-to-present" latency by up to a
+                // full frame interval -- it would measure submit, not present,
+                // while `flui_scheduler::frame_histogram`'s
+                // `input_to_present_histogram`/`produce_to_present_histogram`
+                // names (and `FrameSnapshot::submit_at`'s own doc) already
+                // claim the present-inclusive meaning. Sampling once, here,
+                // after the call returns -- for EVERY verdict, not just
+                // `Presented` -- keeps that claim true uniformly: a failure
+                // arm's `submit_at` is likewise "whenever the backend finished
+                // attempting this submit", including whatever work (partial
+                // blocking, driver validation) it did before failing. Never
+                // recorded for `NoPresent`/`NotShown` (no damage, or surface
+                // unavailable -- either way the frame never reached the
+                // screen): those branches' pending input
+                // epochs stay buffered on the clock for whichever later pump
+                // does submit, per `FrameClock::record_frame`'s own doc.
+                let submit_at = producer.clock().now();
+                match render_verdict {
+                    SubmitVerdict::Presented => {
+                        self.commit_painted_frame(producer);
+                        // The frame reached `present()`: frame-aligned haptics
+                        // play with it (ADR-0210 §4). Only this arm plays them;
+                        // the others leave the queue to its deadline.
+                        producer.haptics().frame_presented();
+                        deliver_overlay_style = true;
+                        presented = true;
+                        producer.record_frame_rendered();
+                        // The surface is demonstrably available: any withheld
+                        // streak ends here, so a later withdrawal gets the full
+                        // retry budget again.
+                        producer.clear_not_shown_streak();
+                        self.record_submit_telemetry(
+                            frame_time,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Presented,
+                            EpochDisposition::Drain,
                         );
+                        tracing::trace!(
+                            frame = frame_number,
+                            total = producer.frames_rendered(),
+                            "Frame rendered successfully"
+                        );
+                        replay_committed_input = true;
+                    }
+                    SubmitVerdict::NoPresent => {
+                        self.commit_painted_frame(producer);
+                        // No frame-aligned haptics: the backend found no damage,
+                        // so the screen kept the previous frame and the change a
+                        // queued request confirms never showed. A request queued
+                        // before that previous frame already resolved with it; the
+                        // rest resolve `Suppressed` at their deadline.
+                        deliver_overlay_style = true;
+                        // Nothing was owed and nothing was lost — the surface was
+                        // never asked to show anything, so a withheld streak is
+                        // over just as it is on a present.
+                        producer.clear_not_shown_streak();
+                        tracing::trace!(
+                            frame = frame_number,
+                            "Frame skipped: no damage (no present)"
+                        );
+                        replay_committed_input = true;
+                    }
+                    // The backend had content in hand and could not put it on
+                    // screen. Everything `NoPresent` does about the TREE still
+                    // applies — the pipeline ran, produced a scene, and that
+                    // scene is the latest one this presentation has — but the
+                    // frame itself is NOT finished, and treating it as finished
+                    // is how a window ends up permanently blank: the work that
+                    // produced this scene has already been consumed out of the
+                    // pipeline, so a loop that parks here has nothing left to
+                    // wake it and nothing left to draw if it did.
+                    //
+                    // Hence the same two-part retention the submit-failure arms
+                    // below use, and for the identical reason issue #637
+                    // records: `wake_frame()` alone re-opens the segment gate
+                    // but not `PipelineOwner`'s own dirty tracking, so the
+                    // retry pump would find nothing to do, produce `Idle`, and
+                    // clear the flag having never reached `render_scene`.
+                    // `mark_needs_full_repaint_for` is what gives the retry
+                    // real work.
+                    //
+                    // The retry is paced by the runner's fallback gate
+                    // (`keeps_frame_gate_open` / `FallbackWake`, ADR-0058) — one
+                    // pipeline pass per display period — and capped here at
+                    // `MAX_NOT_SHOWN_RETRIES` consecutive attempts.
+                    //
+                    // The cap is load-bearing, not belt-and-braces. A window that
+                    // AppKit reports as occluded does stop reaching this arm, but
+                    // by a route that does NOT cover this condition: occlusion
+                    // reaches the frame loop as
+                    // `windowDidChangeOcclusionState:` -> `WindowVisibility` ->
+                    // `AppLifecycleState::Hidden` -> `frames_enabled == false`, and
+                    // the visibility bit there is AppKit's `occlusionState`. What
+                    // withdraws the drawable, however, is the *swapchain's* own
+                    // availability, and the two disagree — the cold-start trace
+                    // that motivated this arm has `occlusionState` reporting the
+                    // window visible throughout while the drawable was
+                    // unavailable for 12 consecutive frames. Wherever they
+                    // disagree and stay disagreeing (a window on an inactive
+                    // Space, a display asleep) the lifecycle gate never engages and
+                    // an unbounded retry is an unbounded loop. The transient that
+                    // clears is the common case; the cap is what makes the
+                    // pathological one terminate.
+                    SubmitVerdict::NotShown => {
+                        // The frame never reached the screen, so frame-aligned
+                        // haptics wait: a retry that presents before their
+                        // deadline plays them, otherwise they resolve `Suppressed`.
+                        self.commit_painted_frame(producer);
+                        producer.record_frame_dropped();
+                        let streak = producer.record_frame_withheld();
+                        replay_committed_input = true;
+                        if streak <= MAX_NOT_SHOWN_RETRIES {
+                            tracing::debug!(
+                                frame = frame_number,
+                                streak,
+                                "Frame rendered but never shown (surface unavailable); \
+                             retaining it — retry armed via wake_frame()"
+                            );
+                            retry_needed = true;
+                            retry_needs_repaint = true;
+                        } else {
+                            // Budget exhausted: park rather than retry. The tree
+                            // stays committed (the scene above is still the latest
+                            // this presentation has).
+                            //
+                            // Reset the streak with the park, not on the next
+                            // presented frame alone. Left above the limit, the
+                            // very next event-driven frame that lands here — the
+                            // drawable still unavailable, which is exactly the
+                            // case this cap exists for — would increment the stale
+                            // count and park again immediately, never opening the
+                            // fresh retry burst the comment above promises. If the
+                            // drawable returned asynchronously afterwards the
+                            // window could stay blank until some unrelated event
+                            // forced a successful frame. Clearing here makes the
+                            // cap a bound on a *continuous* withdrawal, never a
+                            // permanent disable: the next real event gets a full
+                            // budget again.
+                            producer.clear_not_shown_streak();
+                            tracing::warn!(
+                                frame = frame_number,
+                                streak,
+                                "Frame withheld by the surface for {} consecutive attempts; \
+                             giving up until the next real event",
+                                MAX_NOT_SHOWN_RETRIES
+                            );
+                        }
+                    }
+                    SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
+                        producer.record_frame_dropped();
+                        self.record_submit_telemetry(
+                            frame_time,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Retain,
+                        );
+                        // The failed submit consumed painting work. A wake alone
+                        // cannot repaint a clean static tree, so retain its epochs
+                        // and dirty the producer for the ordinary paced retry.
                         retry_needed = true;
                         retry_needs_repaint = true;
-                    } else {
-                        // Budget exhausted: park rather than retry. The tree
-                        // stays committed (the scene above is still the latest
-                        // this presentation has).
-                        //
-                        // Reset the streak with the park, not on the next
-                        // presented frame alone. Left above the limit, the
-                        // very next event-driven frame that lands here — the
-                        // drawable still unavailable, which is exactly the
-                        // case this cap exists for — would increment the stale
-                        // count and park again immediately, never opening the
-                        // fresh retry burst the comment above promises. If the
-                        // drawable returned asynchronously afterwards the
-                        // window could stay blank until some unrelated event
-                        // forced a successful frame. Clearing here makes the
-                        // cap a bound on a *continuous* withdrawal, never a
-                        // permanent disable: the next real event gets a full
-                        // budget again.
-                        producer.clear_not_shown_streak();
-                        tracing::warn!(
-                            frame = frame_number,
-                            streak,
-                            "Frame withheld by the surface for {} consecutive attempts; \
-                             giving up until the next real event",
-                            MAX_NOT_SHOWN_RETRIES
+                        tracing::debug!(
+                            ?render_verdict,
+                            "Transient render failure; paced retry armed"
                         );
                     }
-                }
-                SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
-                    producer.record_frame_dropped();
-                    self.record_submit_telemetry(
-                        frame_time,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Retain,
-                    );
-                    // The failed submit consumed painting work. A wake alone
-                    // cannot repaint a clean static tree, so retain its epochs
-                    // and dirty the producer for the ordinary paced retry.
-                    retry_needed = true;
-                    retry_needs_repaint = true;
-                    tracing::debug!(
-                        ?render_verdict,
-                        "Transient render failure; paced retry armed"
-                    );
-                }
-                SubmitVerdict::DeviceLost => {
-                    producer.record_frame_dropped();
-                    // `Retain`, not `Drain`: the frame is tried again, and the
-                    // eventual real submit must still find the epochs that
-                    // arrived before this failure — see
-                    // `record_submit_telemetry`'s own doc.
-                    self.record_submit_telemetry(
-                        frame_time,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Retain,
-                    );
-                    // The submit consumed the paint demand, so the frame the
-                    // rebuilt device shows needs a full repaint whenever it
-                    // comes.
-                    self.mark_needs_full_repaint_for(producer);
-                    // Paced like any dropped frame (ADR-0267): a frame asked
-                    // for at once would run again before the renderer's owner
-                    // next rebuilds the device, and fail the same way. A
-                    // given-up rebuild was reported when it was given up and
-                    // holds the frames until a rebuild is asked for again.
-                    if !producer.device_abandoned() {
-                        let recovery = producer.device_recovery().unwrap_or_default();
-                        self.report_frame_failure(
+                    SubmitVerdict::DeviceLost => {
+                        producer.record_frame_dropped();
+                        // `Retain`, not `Drain`: the frame is tried again, and the
+                        // eventual real submit must still find the epochs that
+                        // arrived before this failure — see
+                        // `record_submit_telemetry`'s own doc.
+                        self.record_submit_telemetry(
+                            frame_time,
                             producer,
-                            FrameFailureKind::DeviceLost { recovery },
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Retain,
                         );
-                        Self::arm_failure_retry(producer);
+                        // The submit consumed the paint demand, so the frame the
+                        // rebuilt device shows needs a full repaint whenever it
+                        // comes.
+                        self.mark_needs_full_repaint_for(producer);
+                        // Paced like any dropped frame (ADR-0267): a frame asked
+                        // for at once would run again before the renderer's owner
+                        // next rebuilds the device, and fail the same way. A
+                        // given-up rebuild was reported when it was given up and
+                        // holds the frames until a rebuild is asked for again.
+                        if !producer.device_abandoned() {
+                            let recovery = producer.device_recovery().unwrap_or_default();
+                            self.report_frame_failure(
+                                producer,
+                                FrameFailureKind::DeviceLost { recovery },
+                            );
+                            Self::arm_failure_retry(producer);
+                        }
+                    }
+                    SubmitVerdict::Failed => {
+                        producer.record_frame_dropped();
+                        self.record_submit_telemetry(
+                            frame_time,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Drain,
+                        );
+                        // The sink already logged the backend-specific error at
+                        // classification time; this records the transaction-
+                        // level consequence.
+                        tracing::error!("Render error (non-recoverable this frame)");
                     }
                 }
-                SubmitVerdict::Failed => {
-                    producer.record_frame_dropped();
-                    self.record_submit_telemetry(
-                        frame_time,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Drain,
-                    );
-                    // The sink already logged the backend-specific error at
-                    // classification time; this records the transaction-
-                    // level consequence.
-                    tracing::error!("Render error (non-recoverable this frame)");
-                }
+            }))
+            .err();
+            if let Some(payload) = post_submit {
+                // A panic here must not drop the first panic of a layer read's reply: the first
+                // one is the one resumed.
+                super::input::preserve_first_input_panic(
+                    &mut hover_panic,
+                    Some(payload),
+                    "frame post-submit work",
+                );
+                resume_unwind(
+                    hover_panic
+                        .take()
+                        .expect("BUG: the post-submit panic was just stored"),
+                );
             }
         }
 
         // Each window refreshes from its own acknowledged tree. A sibling's
         // failed segment cannot substitute its tree or suppress this work.
-        let mut hover_panic = None;
         for presentation in self
             .presentations
             .iter()
@@ -1275,7 +1314,7 @@ impl UiRuntime {
         match (delivery_panic, wake_panic) {
             (Some(first), later) => {
                 if let Some(later) = later {
-                    flui_foundation::panic::retain_opaque_payload(later);
+                    flui_foundation::panic::discard_payload(later);
                 }
                 resume_unwind(first);
             }

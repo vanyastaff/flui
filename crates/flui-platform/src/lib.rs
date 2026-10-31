@@ -72,6 +72,8 @@
 //!     fn set_ime_cursor_area(&self, _area: Bounds) {}
 //!
 //!     fn discard_composition(&self) {}
+//!
+//!     fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -152,7 +154,7 @@ mod window_insets;
 mod window_state;
 
 pub use brightness::Brightness;
-pub use clipboard::{ClipboardError, ClipboardRead};
+pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;

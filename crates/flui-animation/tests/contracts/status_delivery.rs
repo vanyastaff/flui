@@ -163,7 +163,7 @@ fn competing_status_listener_panics_re_raise_the_first() {
     assert_eq!(
         payload_text(payload.as_ref()),
         Some("first"),
-        "the first payload is re-raised, the second is retained"
+        "the first payload is re-raised, the second is dropped"
     );
 }
 
@@ -559,21 +559,20 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
     lifecycle.dispose();
 }
 
-struct DropFailure(Arc<AtomicUsize>);
+struct DropCount(Arc<AtomicUsize>);
 
-impl Drop for DropFailure {
+impl Drop for DropCount {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        panic_any("opaque destructor failure");
     }
 }
 
-struct HostileOwnership {
-    _first: DropFailure,
-    _second: DropFailure,
+struct Captures {
+    _first: DropCount,
+    _second: DropCount,
 }
 
-fn status_failure_retains_removed_captures_and_competing_payloads() {
+fn status_failure_drops_removed_captures_and_competing_payloads() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -586,16 +585,16 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
             }
         }))
         .detach();
-    let capture = HostileOwnership {
-        _first: DropFailure(Arc::clone(&drops)),
-        _second: DropFailure(Arc::clone(&drops)),
+    let capture = Captures {
+        _first: DropCount(Arc::clone(&drops)),
+        _second: DropCount(Arc::clone(&drops)),
     };
     let payload_drops = Arc::clone(&drops);
     let failed = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
-        panic_any(HostileOwnership {
-            _first: DropFailure(Arc::clone(&payload_drops)),
-            _second: DropFailure(Arc::clone(&payload_drops)),
+        panic_any(Captures {
+            _first: DropCount(Arc::clone(&payload_drops)),
+            _second: DropCount(Arc::clone(&payload_drops)),
         });
     }));
     let removal = std::rc::Rc::new(Mutex::new(None));
@@ -606,9 +605,9 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
             drop(removal);
         }))
         .detach();
-    let capture = HostileOwnership {
-        _first: DropFailure(Arc::clone(&drops)),
-        _second: DropFailure(Arc::clone(&drops)),
+    let capture = Captures {
+        _first: DropCount(Arc::clone(&drops)),
+        _second: DropCount(Arc::clone(&drops)),
     };
     let removed = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
@@ -624,8 +623,8 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
     assert_eq!(seen(&tail), [Forward]);
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "opaque captures and competing payloads retain failure custody"
+        6,
+        "removed captures and competing payloads are dropped under the first failure"
     );
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(
@@ -634,7 +633,7 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
         "the next frame still delivers"
     );
     lifecycle.dispose();
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 6);
 }
 
 #[test]
@@ -668,23 +667,20 @@ fn status_delivery_failure_custody() {
         ("drop_nested", dropping_nested_silences_its_tail),
         (
             "status_to_value",
-            status_failure_retains_removed_value_captures,
+            status_failure_drops_removed_value_captures,
         ),
-        (
-            "value_removal",
-            value_failure_retains_removed_value_captures,
-        ),
-        ("value_peer", peer_failure_retains_removed_value_captures),
+        ("value_removal", value_failure_drops_removed_value_captures),
+        ("value_peer", peer_failure_drops_removed_value_captures),
         (
             "snapshot",
-            status_failure_retains_removed_captures_and_competing_payloads,
+            status_failure_drops_removed_captures_and_competing_payloads,
         ),
         (
             "late_removal",
-            status_failure_retains_a_reentrantly_removed_new_subscription,
+            status_failure_drops_a_reentrantly_removed_new_subscription,
         ),
-        ("run", status_failure_retains_completed_run_captures),
-        ("waiter", status_failure_retains_completed_run_waiter),
+        ("run", status_failure_drops_completed_run_captures),
+        ("waiter", status_failure_drops_completed_run_waiter),
         ("explicit_finish_run", || {
             completed_run_capture_custody(true);
         }),
@@ -698,8 +694,8 @@ fn status_delivery_failure_custody() {
             "run_competition",
             status_failure_remains_authoritative_over_run_failure,
         ),
-        ("sibling", frame_failure_retains_a_siblings_run_captures),
-        ("child", child_failure_retains_the_parents_run_captures),
+        ("sibling", frame_failure_drops_a_siblings_run_captures),
+        ("child", child_failure_drops_the_parents_run_captures),
     ];
     if let Some(selected) = child_process::selected_case() {
         let (_, row) = rows
@@ -713,7 +709,7 @@ fn status_delivery_failure_custody() {
     child_process::run_rows("status_delivery::status_delivery_failure_custody", &names);
 }
 
-fn status_failure_retains_removed_value_captures() {
+fn status_failure_drops_removed_value_captures() {
     removed_value_capture_custody("status");
 }
 
@@ -832,9 +828,9 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                 wrapper.add_listener(std::rc::Rc::new(move || drop(retire.borrow_mut().take())));
             }
             let drops = Arc::new(AtomicUsize::new(0));
-            let captures = failed.then(|| HostileOwnership {
-                _first: DropFailure(drops.clone()),
-                _second: DropFailure(drops.clone()),
+            let captures = failed.then(|| Captures {
+                _first: DropCount(drops.clone()),
+                _second: DropCount(drops.clone()),
             });
             let tail = std::rc::Rc::new(std::cell::Cell::new(0));
             let observed = tail.clone();
@@ -871,7 +867,7 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                 0,
                 "last wrapper owner withdraws its tail: {kind}, status={status}, failed={failed}"
             );
-            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            assert_eq!(drops.load(Ordering::SeqCst), usize::from(failed) * 2);
             if let Some(id) = failure_id {
                 id.remove(&parent);
             }
@@ -910,9 +906,9 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     let captures = Arc::clone(&drops);
     let retire = move || {
         let wrapper = weak.upgrade().expect("wrapper alias");
-        let capture = HostileOwnership {
-            _first: DropFailure(captures.clone()),
-            _second: DropFailure(captures.clone()),
+        let capture = Captures {
+            _first: DropCount(captures.clone()),
+            _second: DropCount(captures.clone()),
         };
         if status {
             let id = wrapper.subscribe_status(std::rc::Rc::new(move |_| {
@@ -952,8 +948,8 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     assert_eq!(calls.get(), 1, "wrapper tail runs after parent failure");
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "wrapper retirement preserves parent custody"
+        2,
+        "wrapper retirement drops its capture under the parent failure"
     );
     failure_id.remove(&parent);
     removal_id.remove(&*wrapper);
@@ -1075,25 +1071,25 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     assert_eq!(calls.get(), 2, "healthy parent tail still runs");
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        1,
-        "parent retirement inherits failure caught by its child relay"
+        2,
+        "parent retirement still runs under the failure caught by its child relay"
     );
     armed.set(false);
     source.set_value(values[2]).expect("no build is running");
     assert_eq!(calls.get(), 3, "next notification still arrives");
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        2,
+        3,
         "healthy retirement resumes"
     );
     lifecycle.dispose();
 }
 
-fn value_failure_retains_removed_value_captures() {
+fn value_failure_drops_removed_value_captures() {
     removed_value_capture_custody("value");
 }
 
-fn peer_failure_retains_removed_value_captures() {
+fn peer_failure_drops_removed_value_captures() {
     removed_value_capture_custody("peer");
 }
 
@@ -1127,9 +1123,9 @@ fn removed_value_capture_custody(mode: &str) {
         let Some(controller) = pending_owner.borrow_mut().take() else {
             return;
         };
-        let capture = HostileOwnership {
-            _first: DropFailure(captures.clone()),
-            _second: DropFailure(captures.clone()),
+        let capture = Captures {
+            _first: DropCount(captures.clone()),
+            _second: DropCount(captures.clone()),
         };
         let id = controller.add_listener(std::rc::Rc::new(move || {
             let _ = &capture;
@@ -1188,8 +1184,8 @@ fn removed_value_capture_custody(mode: &str) {
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "outgoing value captures keep first-failure custody"
+        2,
+        "outgoing value captures are dropped under the first failure"
     );
     failure_id.remove(&controller);
     peer.remove_listener(peer_failure);
@@ -1206,10 +1202,10 @@ fn removed_value_capture_custody(mode: &str) {
     );
     driven.dispose();
     peer_owner.dispose();
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
-fn status_failure_retains_a_reentrantly_removed_new_subscription() {
+fn status_failure_drops_a_reentrantly_removed_new_subscription() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -1228,9 +1224,9 @@ fn status_failure_retains_a_reentrantly_removed_new_subscription() {
         .subscribe_status(std::rc::Rc::new(move |_| {
             let owner = owner.lock().expect("late subscription owner").take();
             if let Some(owner) = owner {
-                let capture = HostileOwnership {
-                    _first: DropFailure(Arc::clone(&captures)),
-                    _second: DropFailure(Arc::clone(&captures)),
+                let capture = Captures {
+                    _first: DropCount(Arc::clone(&captures)),
+                    _second: DropCount(Arc::clone(&captures)),
                 };
                 let id = owner.subscribe_status(std::rc::Rc::new(move |_| {
                     let _ = &capture;
@@ -1245,21 +1241,21 @@ fn status_failure_retains_a_reentrantly_removed_new_subscription() {
         catch_unwind(AssertUnwindSafe(|| controller.forward())).expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
     assert_eq!(seen(&tail), [Forward]);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(seen(&tail), [Forward, ForwardSettled]);
     lifecycle.dispose();
 }
 
-fn install_hostile_continuation(
+fn install_capturing_continuation(
     controller: &AnimationController,
     drops: &Arc<AtomicUsize>,
 ) -> Arc<AtomicUsize> {
     let calls = Arc::new(AtomicUsize::new(0));
     let called = Arc::clone(&calls);
-    let capture = HostileOwnership {
-        _first: DropFailure(Arc::clone(drops)),
-        _second: DropFailure(Arc::clone(drops)),
+    let capture = Captures {
+        _first: DropCount(Arc::clone(drops)),
+        _second: DropCount(Arc::clone(drops)),
     };
     controller
         .forward()
@@ -1282,7 +1278,7 @@ fn fail_on_completion(controller: &AnimationController) {
         .detach();
 }
 
-fn status_failure_retains_completed_run_captures() {
+fn status_failure_drops_completed_run_captures() {
     completed_run_capture_custody(false);
 }
 
@@ -1292,7 +1288,7 @@ fn completed_run_capture_custody(explicit: bool) {
     let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     fail_on_completion(&controller);
-    let calls = install_hostile_continuation(&controller, &drops);
+    let calls = install_capturing_continuation(&controller, &drops);
     let (tail, listener) = recorder();
     controller.subscribe_status(listener).detach();
     let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -1306,7 +1302,7 @@ fn completed_run_capture_custody(explicit: bool) {
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
     assert_eq!(seen(&tail), [ForwardSettled]);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     let _run = controller.reverse().expect("reverse starts");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(seen(&tail), [ForwardSettled, Reverse, ReverseSettled]);
@@ -1314,12 +1310,12 @@ fn completed_run_capture_custody(explicit: bool) {
     lifecycle.dispose();
 }
 
-struct HostileWaiter {
-    _captures: HostileOwnership,
+struct CapturingWaiter {
+    _captures: Captures,
     calls: Arc<AtomicUsize>,
 }
 
-impl Wake for HostileWaiter {
+impl Wake for CapturingWaiter {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -1329,7 +1325,7 @@ impl Wake for HostileWaiter {
     }
 }
 
-fn status_failure_retains_completed_run_waiter() {
+fn status_failure_drops_completed_run_waiter() {
     completed_run_waiter_custody(false);
 }
 
@@ -1342,10 +1338,10 @@ fn completed_run_waiter_custody(explicit: bool) {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut run = Box::pin(controller.forward().expect("waited run starts"));
     {
-        let waker = Waker::from(Arc::new(HostileWaiter {
-            _captures: HostileOwnership {
-                _first: DropFailure(Arc::clone(&drops)),
-                _second: DropFailure(Arc::clone(&drops)),
+        let waker = Waker::from(Arc::new(CapturingWaiter {
+            _captures: Captures {
+                _first: DropCount(Arc::clone(&drops)),
+                _second: DropCount(Arc::clone(&drops)),
             },
             calls: Arc::clone(&calls),
         }));
@@ -1364,7 +1360,7 @@ fn completed_run_waiter_custody(explicit: bool) {
     .expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     assert!(matches!(
         run.as_mut().poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(()))
@@ -1387,9 +1383,9 @@ fn completed_run_failure_custody(explicit: bool) {
     let payload_drops = Arc::clone(&drops);
     let run = controller.forward().expect("competing run starts");
     run.when_complete_or_cancel(move |_| {
-        panic_any(HostileOwnership {
-            _first: DropFailure(Arc::clone(&payload_drops)),
-            _second: DropFailure(Arc::clone(&payload_drops)),
+        panic_any(Captures {
+            _first: DropCount(Arc::clone(&payload_drops)),
+            _second: DropCount(Arc::clone(&payload_drops)),
         })
     });
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1408,7 +1404,7 @@ fn completed_run_failure_custody(explicit: bool) {
     .expect_err("first status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     let _reverse = controller.reverse().expect("recovery run starts");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 0.0);
@@ -1416,15 +1412,15 @@ fn completed_run_failure_custody(explicit: bool) {
     lifecycle.dispose();
 }
 
-fn frame_failure_retains_a_siblings_run_captures() {
-    frame_failure_retains_run_captures(false);
+fn frame_failure_drops_a_siblings_run_captures() {
+    frame_failure_drops_run_captures(false);
 }
 
-fn child_failure_retains_the_parents_run_captures() {
-    frame_failure_retains_run_captures(true);
+fn child_failure_drops_the_parents_run_captures() {
+    frame_failure_drops_run_captures(true);
 }
 
-fn frame_failure_retains_run_captures(nested: bool) {
+fn frame_failure_drops_run_captures(nested: bool) {
     let parent = Vsync::new();
     let child = Vsync::new();
     let _child = nested.then(|| parent.attach_child(&child).expect("child registry"));
@@ -1437,7 +1433,7 @@ fn frame_failure_retains_run_captures(nested: bool) {
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&parent));
     let sibling = sibling_owner.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
-    let calls = install_hostile_continuation(&sibling, &drops);
+    let calls = install_capturing_continuation(&sibling, &drops);
     parent.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -1450,7 +1446,7 @@ fn frame_failure_retains_run_captures(nested: bool) {
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
     assert_eq!(sibling.value(), 1.0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
     let _reverse = sibling.reverse().expect("sibling reverses");
     parent.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),

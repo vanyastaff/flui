@@ -17,7 +17,9 @@ use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
 };
-use flui_platform::{ClipboardError, ClipboardRead, Unsupported, UnsupportedReason};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported, UnsupportedReason,
+};
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedClipboard};
 use flui_view::{
@@ -156,6 +158,28 @@ pub(crate) fn copy_and_paste_round_trip_through_the_headless_clipboard() {
     assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("copied"))))));
 }
 
+/// A concealed write reaches the host marked, pastes like any other, and an
+/// ordinary write after it is unmarked again; the handle answers what the
+/// host does with one (ADR-0152 §6).
+pub(crate) fn a_concealed_write_reaches_the_host_marked() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    let clipboard = acquire(&mut host).expect("provided");
+    assert_eq!(clipboard.concealment(), Concealment::Honored);
+    scripted.answer_concealment(Concealment::HintOnly);
+    assert_eq!(clipboard.concealment(), Concealment::HintOnly);
+
+    clipboard.write(ClipboardWrite::text("hunter2").concealed());
+    assert_eq!(scripted.text().as_deref(), Some("hunter2"));
+    assert!(scripted.is_concealed(), "the write reaches the host marked");
+    let settled = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("hunter2"))))));
+
+    clipboard.write_text("plain");
+    assert!(!scripted.is_concealed(), "an ordinary write is unmarked");
+}
+
 /// Answers every read from a thread of its own, as an OS callback does.
 struct OtherThread;
 
@@ -169,7 +193,11 @@ impl ClipboardBackend for OtherThreadBackend {
             .expect("the owner is live");
     }
 
-    fn write_text(&self, _text: String) {}
+    fn write(&self, _write: flui_platform::ClipboardWrite) {}
+
+    fn concealment(&self) -> flui_platform::Concealment {
+        flui_platform::Concealment::Unavailable
+    }
 }
 
 impl CapabilityProvider<ClipboardCapability> for OtherThread {

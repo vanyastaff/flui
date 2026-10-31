@@ -32,8 +32,9 @@ use crate::common;
 
 use std::rc::Rc;
 
-use common::{lay_out, tight};
+use common::{lay_out, rgba, tight};
 use flui_material::{InputDecoration, TextField, Theme, ThemeData};
+use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::ViewExt;
 use flui_sdk::widgets::{SizedBox, TextEditingController};
@@ -71,7 +72,7 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
         .expect("TextField must compose an InputDecorator's DecoratedBox");
 
     let unfocused = laid
-        .render_property(decorated_box, "decoration")
+        .render_debug_field(decorated_box, "decoration")
         .expect("decoration property");
     assert!(
         unfocused.contains(&format!("{:?}", colors.on_surface_variant)),
@@ -89,7 +90,7 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
     laid.tick();
 
     let focused = laid
-        .render_property(decorated_box, "decoration")
+        .render_debug_field(decorated_box, "decoration")
         .expect("decoration property");
     assert!(
         focused.contains(&format!("{:?}", colors.primary)),
@@ -109,7 +110,7 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
     );
 
     let reverted = laid
-        .render_property(decorated_box, "decoration")
+        .render_debug_field(decorated_box, "decoration")
         .expect("decoration property");
     assert!(
         reverted.contains(&format!("{:?}", colors.on_surface_variant)),
@@ -153,7 +154,7 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         .try_find_by_render_type("RenderDecoratedBox")
         .expect("replacement field's decorated box");
     let focused = laid
-        .render_property(decorated_box, "decoration")
+        .render_debug_field(decorated_box, "decoration")
         .expect("resolved decoration");
     assert!(
         focused.contains(&format!("{:?}", colors.primary)),
@@ -163,7 +164,7 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
     replacement.unfocus();
     laid.tick();
     let unfocused = laid
-        .render_property(decorated_box, "decoration")
+        .render_debug_field(decorated_box, "decoration")
         .expect("resolved unfocused decoration");
     assert!(unfocused.contains(&format!("{:?}", colors.on_surface_variant)));
     // A retained external node may be reused elsewhere in the presentation.
@@ -196,7 +197,7 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         "the outgoing node must not schedule the replacement field"
     );
     assert_eq!(
-        laid.render_property(decorated_box, "decoration")
+        laid.render_debug_field(decorated_box, "decoration")
             .expect("decoration after old-node notification"),
         unfocused
     );
@@ -524,15 +525,15 @@ pub fn a_field_highlights_its_selection_in_the_theme_colours() {
         .try_find_by_render_type("RenderEditable")
         .expect("TextField composes an EditableText");
     assert_eq!(
-        laid.render_property(editable, "selection_color"),
-        Some(format!("{:?}", colors.primary.with_opacity(0.40))),
+        laid.render_node(editable).get::<Rgba>("selection_color"),
+        Ok(rgba(colors.primary.with_opacity(0.40))),
         "a focused field highlights with the theme's primary"
     );
     focus_node.unfocus();
     laid.tick();
     assert_eq!(
-        laid.render_property(editable, "selection_color"),
-        Some(format!("{:?}", colors.on_surface.with_opacity(0.16))),
+        laid.render_node(editable).get::<Rgba>("selection_color"),
+        Ok(rgba(colors.on_surface.with_opacity(0.16))),
         "a blurred field dims to the theme's on_surface"
     );
 }

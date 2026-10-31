@@ -37,9 +37,9 @@ use std::ops::Range;
 
 mod runs;
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_painting::paint::Clip;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 use flui_painting::{
@@ -690,35 +690,40 @@ impl RenderEditable {
     }
 }
 
-impl Diagnosticable for RenderEditable {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add("text", self.plain_text.clone());
-        properties.add_enum("text_align", self.painter.text_align());
-        properties.add(
-            "text_direction",
-            self.painter
-                .text_direction()
-                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
+impl Inspect for RenderEditable {
+    fn kind(&self) -> &'static str {
+        "RenderEditable"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("text", &self.plain_text);
+        out.field("text_align", &self.painter.text_align());
+        out.field("text_direction", &self.painter.text_direction());
+        out.field("caret_byte_offset", &self.caret_byte_offset);
+        out.field("show_caret", &self.show_caret);
+        out.field("caret_width", &self.caret_width)
+            .unit(Unit::LogicalPx);
+        out.field("caret_height", &self.resolved_caret_height())
+            .unit(Unit::LogicalPx);
+        out.field("caret_color", &self.caret_color);
+        out.field("force_line", &self.force_line);
+        out.field(
+            "composing_start",
+            &self.composing_range.as_ref().map(|range| range.start),
         );
-        properties.add("caret_byte_offset", self.caret_byte_offset);
-        properties.add_flag("show_caret", self.show_caret, "show caret");
-        properties.add("caret_width", self.caret_width);
-        properties.add("caret_height", self.resolved_caret_height());
-        properties.add("caret_color", format!("{:?}", self.caret_color));
-        properties.add_flag("force_line", self.force_line, "force line");
-        properties.add(
-            "composing_range",
-            self.composing_range
-                .as_ref()
-                .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
+        out.field(
+            "composing_end",
+            &self.composing_range.as_ref().map(|range| range.end),
         );
-        properties.add(
-            "selection",
-            self.selection
-                .as_ref()
-                .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
+        out.field(
+            "selection_start",
+            &self.selection.as_ref().map(|range| range.start),
         );
-        properties.add("selection_color", format!("{:?}", self.selection_color));
+        out.field(
+            "selection_end",
+            &self.selection.as_ref().map(|range| range.end),
+        );
+        out.field("selection_color", &self.selection_color);
     }
 }
 

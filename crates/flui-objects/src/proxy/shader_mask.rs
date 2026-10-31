@@ -178,14 +178,15 @@ impl fmt::Debug for RenderShaderMask {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderShaderMask {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("blend_mode", self.blend_mode);
-        builder.add_flag(
-            "shader_target",
-            self.shader_target.is_some(),
-            "shader_target",
-        );
+impl flui_foundation::inspect::Inspect for RenderShaderMask {
+    fn kind(&self) -> &'static str {
+        "RenderShaderMask"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("blend_mode", &self.blend_mode);
+        out.field("shader_target", &self.shader_target.is_some())
+            .default(&false);
     }
 }
 

@@ -38,6 +38,18 @@ impl<S: PartialEq, T> Owners<S, T> {
         replaced
     }
 
+    /// The selection set on `seat`, made the newest: a write that changes it
+    /// in place is the last one made.
+    pub(crate) fn get_mut(&mut self, seat: &S) -> Option<&mut T> {
+        let at = self
+            .entries
+            .iter()
+            .position(|(held, _)| held.as_ref() == Some(seat))?;
+        let entry = self.entries.remove(at);
+        self.entries.push(entry);
+        self.entries.last_mut().map(|(_, item)| item)
+    }
+
     /// The selection a read on `seat` answers: the newest set on that seat or
     /// held under none. A read with no seat answers only the one held under
     /// none.
@@ -47,6 +59,14 @@ impl<S: PartialEq, T> Owners<S, T> {
             .rev()
             .find(|(held, _)| held.is_none() || held.as_ref() == seat)
             .map(|(_, item)| item)
+    }
+
+    /// The first selection `matches` names, in place.
+    pub(crate) fn find_mut(&mut self, matches: impl Fn(&T) -> bool) -> Option<&mut T> {
+        self.entries
+            .iter_mut()
+            .map(|(_, item)| item)
+            .find(|item| matches(item))
     }
 
     /// Removes the first selection `matches` names: the one whose source the
@@ -117,5 +137,18 @@ mod tests {
         assert_eq!(owners.remove(|item| *item == "on 1"), None);
         assert_eq!(owners.read(Some(&1)), None);
         assert_eq!(owners.read(Some(&2)), Some(&"on 2"));
+    }
+
+    /// A selection changed in place is the newest: it answers its seat over
+    /// text held under no seat since.
+    #[test]
+    fn a_selection_changed_in_place_is_the_newest() {
+        let mut owners = Owners::<u32, &str>::default();
+        owners.set(Some(1), "on 1");
+        owners.set(None, "held");
+        assert_eq!(owners.get_mut(&2), None);
+        *owners.get_mut(&1).expect("set on 1") = "changed on 1";
+        assert_eq!(owners.read(Some(&1)), Some(&"changed on 1"));
+        assert_eq!(owners.into_items(), ["held", "changed on 1"]);
     }
 }

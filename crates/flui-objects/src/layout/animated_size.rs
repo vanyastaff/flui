@@ -411,7 +411,7 @@ impl std::fmt::Debug for SizeMotionHandle {
 /// The four-state retarget state machine driving [`RenderAnimatedSize`]'s
 /// size-change detection. See the module docs for the precise per-transition
 /// rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, flui_foundation::inspect::Inspect)]
 pub enum AnimatedSizeState {
     /// No committed size yet; the very first layout snaps with no animation.
     Start,
@@ -608,12 +608,16 @@ impl std::fmt::Debug for RenderAnimatedSize {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedSize {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        let alignment = self.inner.alignment();
-        builder.add("alignment", format!("({}, {})", alignment.x, alignment.y));
-        builder.add_enum("clip_behavior", self.clip_behavior);
-        builder.add_enum("state", self.state);
+impl flui_foundation::inspect::Inspect for RenderAnimatedSize {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedSize"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("alignment", &self.inner.alignment())
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("clip_behavior", &self.clip_behavior);
+        out.field("state", &self.state);
     }
 }
 

@@ -316,6 +316,8 @@ impl PlatformTextInput for Push {
             .push(if allowed { "enable" } else { "disable" });
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         self.0.lock().push("discard");
     }
@@ -392,7 +394,7 @@ fn expect_host_panic(expected: &str, run: impl FnOnce()) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 
 /// Both queued host operations would panic during a close: the first
@@ -425,7 +427,7 @@ fn run_rows(cases: &[(&str, fn())]) {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             failed.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");

@@ -628,6 +628,11 @@ mod event_loop {
         /// gone lets go of its own.
         fn seats(&self, seats: &[WlSeat]);
 
+        /// Whether the selection offer the last input's seat holds names
+        /// the concealment hint; `None` without one. For a test.
+        #[cfg(any(test, feature = "testing"))]
+        fn selection_offers_hint(&self) -> Option<bool>;
+
         /// The loop ends: let go of the devices and the selection.
         fn release(&self);
     }
@@ -1565,6 +1570,13 @@ mod event_loop {
         #[cfg(any(test, feature = "testing"))]
         pub(crate) fn last_input_serial(&self) -> Option<u32> {
             self.protocol.last_input.latest().map(|input| input.serial)
+        }
+
+        /// Whether the seat's selection offer names the concealment hint,
+        /// for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn selection_offers_hint(&self) -> Option<bool> {
+            self.clipboard.selection_offers_hint()
         }
 
         /// The cursor the seats' input last showed, for a test.

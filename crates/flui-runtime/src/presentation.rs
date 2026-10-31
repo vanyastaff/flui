@@ -445,6 +445,9 @@ pub struct PresentationState {
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
+    /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
+    pub(crate) agent_layer_reads: RefCell<Vec<crate::ui_runtime::PendingLayerRead>>,
+    pub(crate) agent_layer_staged: RefCell<Vec<crate::ui_runtime::StagedLayerRead>>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1072,6 +1075,8 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_layer_reads: RefCell::default(),
+            agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1202,6 +1207,8 @@ impl PresentationState {
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
             agent_waits: RefCell::default(),
+            agent_layer_reads: RefCell::default(),
+            agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1918,14 +1925,21 @@ impl PresentationState {
     /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`,
     /// and every event stream ends after a last `window` event.
     pub(crate) fn abandon_agent_jobs(&self) {
-        self.end_agent_events();
+        use crate::ui_runtime::{deliver_each, first_panic_of};
+        // Every stage runs to the end whatever an earlier one did: a reply goes to a receiver
+        // whose drop or trace is user code, and a job left unanswered here is never answered.
+        // The first panic resumes after all of them.
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.end_agent_events();
+        }))
+        .err();
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
-        for pending in owed {
-            pending.abandon();
-        }
+        let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
-        for wait in waits {
-            wait.abandon();
+        let waited = deliver_each(waits, crate::ui_runtime::PendingWait::abandon);
+        let layers = self.abandon_agent_layer_reads();
+        if let Some(payload) = first_panic_of([ended, reads, waited, layers]) {
+            std::panic::resume_unwind(payload);
         }
     }
 
@@ -2565,7 +2579,7 @@ impl<'a> PresentationCloseRecovery<'a> {
             Ok(value) => Some(value),
             Err(payload) => {
                 if self.preserving() {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 } else {
                     crate::lifecycle_state::preserve_first_lifecycle_panic(
                         &mut self.first,
@@ -2605,7 +2619,7 @@ impl<'a> PresentationCloseRecovery<'a> {
     fn finish(self) {
         if let Some(payload) = self.first {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

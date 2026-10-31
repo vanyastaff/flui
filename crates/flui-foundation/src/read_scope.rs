@@ -418,10 +418,10 @@ fn finish_read<R>(
     let outcome = match out {
         Some(Ok(Err(payload))) => {
             if let Err(secondary) = graph_outcome {
-                discard_panic_payload(secondary);
+                crate::panic::discard_payload(secondary);
             }
             if let Err(secondary) = disposed {
-                discard_panic_payload(secondary);
+                crate::panic::discard_payload(secondary);
             }
             Err(payload)
         }
@@ -443,7 +443,7 @@ fn finish_read<R>(
             Err(payload) => {
                 discard_secondary(result);
                 if let Err(secondary) = disposed {
-                    discard_panic_payload(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -463,7 +463,7 @@ fn finish_read<R>(
             }
             Err(payload) => {
                 if let Err(secondary) = disposed {
-                    discard_panic_payload(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -486,7 +486,7 @@ fn finish_read<R>(
             }
             Err(payload) => {
                 if let Err(secondary) = disposed {
-                    discard_panic_payload(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -525,7 +525,7 @@ fn finish_subscription<R>(
         },
         Err(payload) => {
             if let Some(Err(secondary)) = subscription {
-                discard_panic_payload(secondary);
+                crate::panic::discard_payload(secondary);
             }
             std::panic::resume_unwind(payload)
         }
@@ -540,13 +540,6 @@ fn finish_subscription<R>(
 /// leak the exceptional-path value.
 fn discard_secondary<T>(value: T) {
     std::mem::forget(value);
-}
-
-/// Dispose a secondary panic payload without risking a double-panic abort.
-fn discard_panic_payload(payload: Box<dyn Any + Send>) {
-    // A panic payload is opaque and may itself contain multiple hostile
-    // destructors. Retiring it through `drop` cannot be made unwind-safe.
-    crate::panic::retain_opaque_payload(payload);
 }
 
 impl<T: 'static> Signal<T> {

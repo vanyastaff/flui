@@ -39,7 +39,13 @@ impl RenderPaintAnchor {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderPaintAnchor {}
+impl flui_foundation::inspect::Inspect for RenderPaintAnchor {
+    fn kind(&self) -> &'static str {
+        "RenderPaintAnchor"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for RenderPaintAnchor {
     type Arity = Single;

@@ -81,12 +81,16 @@ impl Default for RenderVisibility {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderVisibility {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        // `add_flag` prints nothing when the flag is false, which would hide
-        // the one state worth seeing here, so this reports unconditionally.
-        builder.add("visible", if self.visible { "visible" } else { "hidden" });
-        builder.add_flag("maintain_semantics", self.maintain_semantics, "retained");
+impl flui_foundation::inspect::Inspect for RenderVisibility {
+    fn kind(&self) -> &'static str {
+        "RenderVisibility"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // No default on `visible`: the hidden state is the one worth seeing.
+        out.field("visible", &self.visible);
+        out.field("maintain_semantics", &self.maintain_semantics)
+            .default(&false);
     }
 }
 

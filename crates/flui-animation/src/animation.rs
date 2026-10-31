@@ -145,7 +145,7 @@ impl ParentSubscription {
 }
 
 /// Private custody for independently owned animation resources. Owners withdraw
-/// every field before retirement; unwind retains the remaining opaque envelopes.
+/// every field before retirement; a destructor failure is contained (ADR-0281).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Terminal<T>(Option<T>);
 
@@ -196,14 +196,6 @@ impl<T: serde::Serialize> serde::Serialize for Terminal<T> {
 impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Terminal<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         T::deserialize(deserializer).map(Self::new)
-    }
-}
-
-impl<T> Drop for Terminal<T> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.0.take());
-        }
     }
 }
 

@@ -328,7 +328,7 @@ fn without_a_sink_a_named_route_is_announced() {
     );
 }
 
-/// A sink that panics, with a payload whose destructor panics too, is
+/// A sink that panics is
 /// contained, nothing is announced in its place, and
 /// the next change still reaches it; a delivery that fails raises its change
 /// on the retry, once.
@@ -342,10 +342,10 @@ fn a_failed_sink_or_delivery_loses_no_change_and_speaks_once() {
         .set_route_change_sink(Some(Arc::new(move |change: RouteChange| {
             log.lock().push(change.name().map(str::to_owned));
             let calls = log.lock().len();
-            if calls == 1 {
-                // A payload whose destructor fails too: containment keeps it.
-                std::panic::panic_any(PanicsOnDrop);
-            }
+            assert!(
+                calls != 1,
+                "the first delivery fails; containment settles it"
+            );
         })));
     routes.page(2, Some("Home"));
     routes.owner.flush();
@@ -397,13 +397,4 @@ fn a_new_adapter_hears_changes_from_the_route_it_was_handed() {
         [(home, Some("Home".into()), RouteChangeKind::Popped)],
         "the new adapter held Settings"
     );
-}
-
-/// A panic payload whose destructor panics.
-struct PanicsOnDrop;
-
-impl Drop for PanicsOnDrop {
-    fn drop(&mut self) {
-        panic!("the payload's destructor fails");
-    }
 }

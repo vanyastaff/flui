@@ -250,7 +250,7 @@ fn semantics_listener_retirement_child(mode: &str) {
         (Ok(()), None) => {}
         (Err(payload), Some(expected)) => {
             assert_eq!(payload.downcast_ref::<&'static str>(), Some(&expected));
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         _ => panic!("unexpected semantics outcome for {mode}"),
     }
