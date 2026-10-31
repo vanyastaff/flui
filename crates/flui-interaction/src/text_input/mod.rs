@@ -68,8 +68,8 @@ use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, RetainOnFailure, TextStore, TextStoreHost,
-    commit_composition_in_place, project_ime_event,
+    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, RetainOnFailure, TextChange, TextStore,
+    TextStoreHost, TextStoreObserver, commit_composition_in_place, project_ime_event,
 };
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
@@ -280,6 +280,28 @@ struct AttachedClient {
     client: TextInputClient,
 }
 
+/// A push platform's field, observed for its status alone: the platform
+/// reads no store, so a change of protection or purpose reaches it through
+/// the owner. Inert once another client is attached in its place.
+struct PushStatusObserver {
+    owner: Weak<TextInputOwner>,
+    token: ClientToken,
+}
+
+impl TextStoreObserver for PushStatusObserver {
+    fn text_changed(&self, _change: TextChange) {}
+
+    fn selection_changed(&self) {}
+
+    fn layout_changed(&self) {}
+
+    fn status_changed(&self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.field_status_changed(self.token);
+        }
+    }
+}
+
 impl RetainOnFailure for TextInputClient {
     fn retain(self) {
         RetainOnFailure::retain(self.on_session_start);
@@ -451,13 +473,17 @@ pub struct TextInputOwner {
     /// store.
     gate: CommitGate,
     state: RefCell<OwnerState>,
+    /// This owner, for the observer a push platform's field reports its
+    /// status changes through.
+    this: Weak<Self>,
 }
 
 impl TextInputOwner {
     /// Create the text-input owner for one presentation.
     #[must_use]
     pub fn new(backend: TextInputBackend) -> Rc<Self> {
-        Rc::new(Self {
+        Rc::new_cyclic(|this| Self {
+            this: this.clone(),
             close_mode: CloseTombstone::default(),
             backend: RefCell::new(backend),
             host_depth: Cell::new(0),
@@ -631,6 +657,7 @@ impl TextInputOwner {
         // Open, so close has not taken the capability.
         let platform = self.push_platform();
         let focus = self.is_pull().then(|| Rc::clone(&client.store));
+        let pushed = platform.as_ref().map(|_| Rc::clone(&client.store));
         let transaction_open = self.is_transaction_open();
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
@@ -660,6 +687,26 @@ impl TextInputOwner {
             let mut state = self.state.borrow_mut();
             state.platform_enabled =
                 state.lifecycle == OwnerLifecycle::Open && state.active.is_some();
+        }
+        // A push platform reads no store, so it is told the incoming field's
+        // status here and hears of each change through the store's observer,
+        // which answers only while this client is the active one. The
+        // platform's enable may have attached another client in its place,
+        // whose observer this one must not replace.
+        if let Some(platform) = &platform
+            && let Some(store) = pushed
+        {
+            if self.is_active(token) {
+                let observer: Rc<dyn TextStoreObserver> = Rc::new(PushStatusObserver {
+                    owner: self.this.clone(),
+                    token,
+                });
+                calls.run_parking(&self.gate, || store.set_observer(Some(observer)));
+                self.tell_field_status(token, &store, platform, &mut calls);
+            }
+            // The platform's call may have detached the client, leaving this
+            // clone the store's last owner.
+            calls.retire_parking(&self.gate, store);
         }
         // Callback captures and custom stores may reenter through this owner.
         // Both owner state and platform enablement are committed first, and
@@ -764,6 +811,63 @@ impl TextInputOwner {
             calls.resume();
         }
         Ok(())
+    }
+
+    /// Whether `token` names the active client of an open owner.
+    fn is_active(&self, token: ClientToken) -> bool {
+        let state = self.state.borrow();
+        state.lifecycle == OwnerLifecycle::Open
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.token == token)
+    }
+
+    /// Tell the push `platform` the status of `store`, the field `token`
+    /// names, while that client is still the active one of an open owner:
+    /// the store's own code may have moved focus or closed the owner. Both
+    /// calls reach code whose grants park failures in the gate, so they are
+    /// ordered against those failures as every owner call is.
+    fn tell_field_status(
+        &self,
+        token: ClientToken,
+        store: &Rc<dyn TextStore>,
+        platform: &Arc<dyn PlatformTextInput>,
+        calls: &mut OwnerCalls,
+    ) {
+        let Some(status) = calls.run_parking(&self.gate, || store.status()) else {
+            return;
+        };
+        if self.is_active(token) {
+            calls.run_parking(&self.gate, || platform.set_field_status(status));
+        }
+    }
+
+    /// The field `token` names reported a status change: a push platform
+    /// hears it while that field is the active one.
+    fn field_status_changed(&self, token: ClientToken) {
+        self.gate.owner_entry(|| {
+            let store = {
+                let state = self.state.borrow();
+                state
+                    .active
+                    .as_ref()
+                    .filter(|active| {
+                        active.token == token && state.lifecycle == OwnerLifecycle::Open
+                    })
+                    .map(|active| Rc::clone(&active.client.store))
+            };
+            let Some(store) = store else {
+                return;
+            };
+            let mut calls = OwnerCalls::new();
+            if let Some(platform) = self.push_platform() {
+                self.tell_field_status(token, &store, &platform, &mut calls);
+                release_platform(platform, &mut calls);
+            }
+            calls.retire_parking(&self.gate, store);
+            calls.resume();
+        });
     }
 
     /// Commit the active client's composition, keeping its text: what a
@@ -1462,6 +1566,8 @@ mod tests {
         fn set_ime_cursor_area(&self, area: Bounds<f64>) {
             self.calls.lock().push(PlatformCall::CursorArea(area));
         }
+
+        fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
 
         fn discard_composition(&self) {
             self.calls.lock().push(PlatformCall::Discard);

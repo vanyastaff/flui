@@ -822,7 +822,13 @@ fn accessibility_input_reaches_the_semantics_owner() {
 /// A 40x40 leaf whose hit test panics.
 #[derive(Debug)]
 struct PanicOnHit;
-impl flui_foundation::Diagnosticable for PanicOnHit {}
+impl flui_foundation::inspect::Inspect for PanicOnHit {
+    fn kind(&self) -> &'static str {
+        "PanicOnHit"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanicOnHit {
     type Arity = flui_foundation::Leaf;

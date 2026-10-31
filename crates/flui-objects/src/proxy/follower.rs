@@ -236,20 +236,24 @@ impl RenderFollowerLayer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFollowerLayer {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderFollowerLayer {
+    fn kind(&self) -> &'static str {
+        "RenderFollowerLayer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        use flui_foundation::inspect::Unit;
         // A derived current transform matrix has no resolved value to show
         // at this point (module doc) — omitted here rather than fabricated.
-        builder.add_enum("link", self.link);
-        builder.add_flag(
-            "show_when_unlinked",
-            self.show_when_unlinked,
-            "show when unlinked",
-        );
-        builder.add("offset", self.offset);
-        builder.add_enum("leader_anchor", self.leader_anchor);
-        builder.add_enum("follower_anchor", self.follower_anchor);
-        builder.add_enum("leader_clip", self.leader_clip);
+        out.field("link", &self.link.id());
+        out.field("show_when_unlinked", &self.show_when_unlinked)
+            .default(&true);
+        out.field("offset", &self.offset).unit(Unit::LogicalPx);
+        out.field("leader_anchor", &self.leader_anchor)
+            .unit(Unit::Fraction);
+        out.field("follower_anchor", &self.follower_anchor)
+            .unit(Unit::Fraction);
+        out.field("leader_clip", &self.leader_clip);
     }
 }
 

@@ -103,6 +103,7 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 mod media_query;
+mod popup_menu;
 // Effects, reversible transitions and `Animate`; flat re-exports below.
 pub mod motion;
 

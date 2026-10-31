@@ -62,10 +62,14 @@ impl RenderInputRegion {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderInputRegion {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("kind", self.kind);
-        builder.add_flag("disabled", !self.enabled, "disabled");
+impl flui_foundation::inspect::Inspect for RenderInputRegion {
+    fn kind(&self) -> &'static str {
+        "RenderInputRegion"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("kind", &self.kind);
+        out.field("disabled", &!self.enabled).default(&false);
     }
 }
 

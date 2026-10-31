@@ -152,9 +152,8 @@ and the others work in a package that names no internal crate. The SDK comes fir
 package may carry the facade or an internal crate as a dev-dependency, which `proc-macro-crate`
 does not tell from a normal one. The one shape this order cannot serve, an owner crate as a
 normal dependency beside `flui-sdk` as a dev-dependency only, has no instance
-(`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `Diagnosticable` derive
-itself has no SDK path; its expansion still resolves through the SDK. Its replacement,
-`#[derive(Inspect)]` (ADR-0242), sits beside its trait as `flui_sdk::foundation::inspect::Inspect`;
+(`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `#[derive(Inspect)]` derive
+(ADR-0242) sits beside its trait as `flui_sdk::foundation::inspect::Inspect`;
 `inspect_through_sdk` in `tests/compiler_guards.rs` derives and reads it through that path.
 
 Whenever a build enables `flui/material` or `flui/cupertino` (the test scope and `--all-features`

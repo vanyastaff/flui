@@ -21,7 +21,7 @@ autotests = false
 default = []
 
 # testing: the `crate::testing::inspect` walkers (structure, clip/transform
-# collectors, a Diagnosticable-backed dump). Off by default; this crate's unit
+# collectors). Off by default; this crate's unit
 # tests see the module through `cfg(test)`, and downstream crates that want it
 # forward the feature.
 testing = []

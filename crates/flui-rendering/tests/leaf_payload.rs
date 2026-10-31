@@ -1,6 +1,6 @@
 //! Opaque layout failure payloads do not execute destruction while reporting.
 
-use flui_foundation::{Diagnosticable, Leaf, geometry::Size};
+use flui_foundation::{Leaf, geometry::Size};
 use flui_rendering::{
     TextContextHandle,
     constraints::BoxConstraints,
@@ -37,7 +37,13 @@ struct Source {
     failure: u8,
     drops: Arc<AtomicUsize>,
 }
-impl Diagnosticable for Source {}
+impl flui_foundation::inspect::Inspect for Source {
+    fn kind(&self) -> &'static str {
+        "Source"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl RenderBox for Source {
     type Arity = Leaf;
     type ParentData = BoxParentData;
@@ -104,7 +110,13 @@ fn competing_payload_fields_recovers() {
 }
 #[derive(Debug)]
 struct BoxParent(Source);
-impl Diagnosticable for BoxParent {}
+impl flui_foundation::inspect::Inspect for BoxParent {
+    fn kind(&self) -> &'static str {
+        "BoxParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl RenderBox for BoxParent {
     type Arity = flui_foundation::Single;
     type ParentData = BoxParentData;
@@ -121,7 +133,13 @@ impl RenderBox for BoxParent {
 
 #[derive(Debug)]
 struct SliverParent(Source);
-impl Diagnosticable for SliverParent {}
+impl flui_foundation::inspect::Inspect for SliverParent {
+    fn kind(&self) -> &'static str {
+        "SliverParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl flui_rendering::traits::RenderSliver for SliverParent {
     type Arity = flui_foundation::Single;
     type ParentData = flui_rendering::parent_data::SliverParentData;
@@ -150,7 +168,13 @@ fn throw_source_failure(source: &Source) {
 
 #[derive(Debug)]
 struct SliverHost(std::rc::Rc<std::cell::Cell<flui_rendering::constraints::SliverGeometry>>);
-impl Diagnosticable for SliverHost {}
+impl flui_foundation::inspect::Inspect for SliverHost {
+    fn kind(&self) -> &'static str {
+        "SliverHost"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl RenderBox for SliverHost {
     type Arity = flui_foundation::Single;
     type ParentData = BoxParentData;
