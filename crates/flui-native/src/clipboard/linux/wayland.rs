@@ -23,7 +23,11 @@
 //!   [`TextForm::OFFERED`] and sets it as the selection of the last user
 //!   input's seat, under that input's serial: a compositor takes a selection
 //!   only from a client the user is working in, and only that seat's earlier
-//!   selection is replaced: another seat keeps its own. Each `send` is
+//!   selection is replaced: another seat keeps its own. A write under the
+//!   serial the seat's selection was set under changes what that source
+//!   answers instead of setting a second one, which Weston would drop: the
+//!   next paste reads the new text, and a clipboard manager that copied the
+//!   selection as it was set keeps the copy it took. Each `send` is
 //!   written by a thread of its own, at most [`MAX_WRITERS`] at once, from
 //!   the text encoded once per form; `cancelled` (another client took the
 //!   selection) ends that seat's ownership. With no user input yet the text
@@ -117,11 +121,12 @@ impl SeatDevice {
 }
 
 /// One of the application's selections: its text, and the source the
-/// compositor asks for it through; `None` while it is held in this process
-/// alone, under no seat.
+/// compositor asks for it through, with the serial it was set under; `None`
+/// while it is held in this process alone, under no seat.
 struct Owned {
     text: Arc<str>,
     source: Option<WlDataSource>,
+    serial: Option<u32>,
 }
 
 impl Owned {
@@ -375,6 +380,22 @@ impl NativeClipboard for SeatClipboard {
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
+            // A write under the serial the seat's selection was set under
+            // replaces what that source answers with: a compositor takes no
+            // second selection under one serial (Weston keeps the first and
+            // reports nothing), and destroying the first would leave the
+            // seat with no selection, or with a clipboard manager's copy of
+            // the old text.
+            if let Some(input) = &last
+                && let Some(owned) = state.owned.get_mut(&input.seat)
+                && let Some(source) = &owned.source
+                && owned.serial == Some(input.serial)
+                && let Some(data) = source.data::<SourceData>()
+            {
+                data.replace(Arc::clone(&text), concealed);
+                owned.text = text;
+                return None;
+            }
             let source = last.and_then(|input| {
                 let (_, manager) = state.manager.as_ref()?;
                 let queue = state.queue.as_ref()?;
@@ -384,28 +405,33 @@ impl NativeClipboard for SeatClipboard {
                     .find(|device| device.seat == input.seat)?;
                 let source = manager.create_data_source(
                     queue,
-                    SourceData {
-                        shared: Arc::downgrade(&self.shared),
-                        text: Arc::clone(&text),
-                        concealed,
-                        encoded: OwnerCell::new(),
-                    },
+                    SourceData::new(Arc::downgrade(&self.shared), Arc::clone(&text), concealed),
                 );
                 for mime in offered(concealed) {
                     source.offer(mime.to_owned());
                 }
                 device.device.set_selection(Some(&source), input.serial);
-                Some((input.seat, source))
+                Some((input.seat, source, input.serial))
             });
             if source.is_none() {
                 tracing::debug!(
                     "no user input to set the selection under: the text is held in this process"
                 );
             }
-            let (seat, source) = source.unzip();
+            let (seat, source, serial) = match source {
+                Some((seat, source, serial)) => (Some(seat), Some(source), Some(serial)),
+                None => (None, None, None),
+            };
             // Only this seat's earlier selection is replaced: another seat
             // keeps the source it reads.
-            state.owned.set(seat, Owned { text, source })
+            state.owned.set(
+                seat,
+                Owned {
+                    text,
+                    source,
+                    serial,
+                },
+            )
         });
         if let Some(previous) = previous.flatten() {
             previous.release();
@@ -475,21 +501,57 @@ fn offered(concealed: bool) -> impl Iterator<Item = &'static str> {
 /// A data source's user data: the text it answers with.
 pub(crate) struct SourceData {
     shared: Weak<Shared>,
+    /// Whether the source offers [`CONCEALED_HINT`], fixed as it is set: a
+    /// type offered after `set_selection` reaches no offer already made.
+    offers_hint: bool,
+    /// What the source answers with now, read on the owner thread alone. A
+    /// later write under the same serial replaces it (see
+    /// [`SeatClipboard::write`](NativeClipboard::write)).
+    content: OwnerCell<Content>,
+}
+
+/// The write a source answers with.
+#[derive(Default)]
+struct Content {
     text: Arc<str>,
-    /// Whether the write was concealed: [`CONCEALED_HINT`] is offered too.
+    /// Whether the write was concealed.
     concealed: bool,
     /// The text in each form asked for so far, encoded once and shared by
-    /// every `send` of that form; read on the owner thread alone.
-    encoded: OwnerCell<Vec<(TextForm, Arc<[u8]>)>>,
+    /// every `send` of that form.
+    encoded: Vec<(TextForm, Arc<[u8]>)>,
 }
 
 impl SourceData {
+    /// A source's data, answering with `text` and offering the hint when the
+    /// write is `concealed`; made on the owner thread.
+    fn new(shared: Weak<Shared>, text: Arc<str>, concealed: bool) -> Self {
+        let data = Self {
+            shared,
+            offers_hint: concealed,
+            content: OwnerCell::new(),
+        };
+        data.replace(text, concealed);
+        data
+    }
+
+    /// Answer with `text` from now on, a write `concealed` or not.
+    fn replace(&self, text: Arc<str>, concealed: bool) {
+        self.content.with(|content| {
+            *content = Content {
+                text,
+                concealed,
+                encoded: Vec::new(),
+            };
+        });
+    }
+
     /// What a `send` of `mime` answers: the text in that form, the hint's
-    /// value for a concealed write, or `None` for a type not offered.
+    /// value while the write it answers with is concealed, or `None` for a
+    /// type not offered.
     fn answer(&self, mime: &str) -> Option<Arc<[u8]>> {
         if mime == CONCEALED_HINT {
-            return self
-                .concealed
+            let concealed = self.content.with(|content| content.concealed)?;
+            return (self.offers_hint && concealed)
                 .then(|| Arc::<[u8]>::from(CONCEALED_HINT_VALUE));
         }
         TextForm::named(mime).and_then(|form| self.bytes(form))
@@ -497,12 +559,12 @@ impl SourceData {
 
     /// The text in `form`.
     fn bytes(&self, form: TextForm) -> Option<Arc<[u8]>> {
-        self.encoded.with(|encoded| {
-            if let Some((_, bytes)) = encoded.iter().find(|(held, _)| *held == form) {
+        self.content.with(|content| {
+            if let Some((_, bytes)) = content.encoded.iter().find(|(held, _)| *held == form) {
                 return Arc::clone(bytes);
             }
-            let bytes: Arc<[u8]> = form.encode(&self.text).into();
-            encoded.push((form, Arc::clone(&bytes)));
+            let bytes: Arc<[u8]> = form.encode(&content.text).into();
+            content.encoded.push((form, Arc::clone(&bytes)));
             bytes
         })
     }
@@ -857,12 +919,7 @@ mod tests {
         for concealed in [false, true] {
             let offers = offered(concealed).collect::<Vec<&str>>();
             assert_eq!(offers.contains(&CONCEALED_HINT), concealed, "{concealed}");
-            let data = SourceData {
-                shared: Weak::new(),
-                text: Arc::<str>::from("hunter2"),
-                concealed,
-                encoded: OwnerCell::new(),
-            };
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("hunter2"), concealed);
             assert_eq!(
                 data.answer(CONCEALED_HINT).as_deref(),
                 concealed.then_some(CONCEALED_HINT_VALUE),
@@ -872,6 +929,30 @@ mod tests {
                 data.answer("text/plain;charset=utf-8").as_deref(),
                 Some(&b"hunter2"[..]),
                 "{concealed}"
+            );
+        }
+    }
+
+    /// A source changed in place answers the new text in every form, and the
+    /// hint only while it offers it and the write it answers is concealed.
+    #[test]
+    fn a_source_changed_in_place_answers_the_new_write() {
+        for (offered_hint, concealed) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let data = SourceData::new(Weak::new(), Arc::<str>::from("first"), offered_hint);
+            assert_eq!(data.answer("UTF8_STRING").as_deref(), Some(&b"first"[..]));
+            data.replace(Arc::<str>::from("second"), concealed);
+            let row = format!("offered {offered_hint}, concealed {concealed}");
+            assert_eq!(
+                data.answer("UTF8_STRING").as_deref(),
+                Some(&b"second"[..]),
+                "{row}"
+            );
+            assert_eq!(
+                data.answer(CONCEALED_HINT).as_deref(),
+                (offered_hint && concealed).then_some(CONCEALED_HINT_VALUE),
+                "{row}"
             );
         }
     }
