@@ -1582,6 +1582,42 @@ fn a_session_whose_selection_is_taken_ends_and_keeps_off_it() {
     assert_eq!(owner, foreign.window, "the other client keeps it");
 }
 
+/// A session whose claim on `XdndSelection` is older than another client's
+/// does not start: the server ignored the claim, and the other client would
+/// answer the drop.
+#[test]
+fn a_session_the_selection_refuses_does_not_start() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    // The other client takes the selection at the server's time now.
+    let other = Source::new();
+    let _held = Held::press(&other.connection);
+    // The last time the transfer heard is older than that.
+    let press = xinput::ButtonPressEvent {
+        event: target.xid,
+        detail: 1,
+        time: 1,
+        ..xinput::ButtonPressEvent::default()
+    };
+    target.drag.event(&Event::XinputButtonPress(press));
+    let ended = Rc::new(Cell::new(None));
+    assert!(matches!(
+        target.start(request(&ended)),
+        Err(DragError::Unsupported(_))
+    ));
+    assert_eq!(target.drag.pointers_taken(), Vec::<xproto::Window>::new());
+    let owner = other
+        .connection
+        .get_selection_owner(other.atoms.selection)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .owner;
+    assert_eq!(owner, other.window, "the other client keeps it");
+}
+
 /// Fails as it drops.
 struct FailsOnDrop;
 

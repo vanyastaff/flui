@@ -175,6 +175,24 @@ impl X11Drag {
             tracing::debug!(%error, "cannot take XdndSelection for a drag");
             return Err(refused(UnsupportedReason::Unavailable));
         }
+        // The server ignores a claim older than the selection's last change,
+        // and says nothing: a session starts only on the selection it owns,
+        // or another client would answer its drop.
+        let owner = xcb
+            .get_selection_owner(self.atoms.selection)
+            .map_err(x11rb::errors::ReplyError::from)
+            .and_then(x11rb::cookie::Cookie::reply);
+        match owner {
+            Ok(reply) if reply.owner == window => {}
+            Ok(_) => {
+                tracing::debug!("another client holds XdndSelection past the drag's time");
+                return Err(refused(UnsupportedReason::Unavailable));
+            }
+            Err(error) => {
+                tracing::debug!(%error, "cannot ask who holds XdndSelection");
+                return Err(refused(UnsupportedReason::Unavailable));
+            }
+        }
         let session = Session {
             window,
             types,

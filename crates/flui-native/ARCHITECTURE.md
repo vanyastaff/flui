@@ -3755,7 +3755,8 @@ wherever it goes, and the session takes them before the input does. The
 press is the session's from then on: at the loop's next turn the window's
 input ends its contacts as `CaptureLost` (`LoopDrag::pointers_taken`,
 `LoopInput::pointer_taken`), as a Wayland compositor's leave does, so the next
-click starts afresh. The window owns `XdndSelection` and lists the session's
+click starts afresh. The window owns `XdndSelection`, a session starting only
+once the server names it the owner, and lists the session's
 types in `XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other
 format as its media type, the private identity included). Each movement finds
 the `XdndAware` window under the pointer, FLUI's own among them, entering and
@@ -3797,6 +3798,7 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_release_waits_for_the_answer_where_it_let_go`,
 `a_finish_with_an_action_not_allowed_is_cancelled`,
 `a_session_whose_selection_is_taken_ends_and_keeps_off_it`,
+`a_session_the_selection_refuses_does_not_start`,
 `an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`,
 `a_session_enters_an_older_target_in_its_version`,
 `a_session_started_over_a_target_enters_it_at_once`,
