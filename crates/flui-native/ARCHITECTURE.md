@@ -1758,7 +1758,8 @@ and writes only what changed between two specs.
   `<input type="range">`, which the browser adjusts for a screen reader where
   it adjusts no ARIA slider; the moved value asks for `SetValue` or a step,
   and the input shows the node's value until the tree publishes the moved
-  one. A value its step does not reach from the minimum gets `step="any"`,
+  one, written again whenever its range changes, which the input sanitizes it
+  against. A value its step does not reach from the minimum gets `step="any"`,
   as the input would snap it. A node mirrored as another element later (a
   link given its address) gets a new element in its old one's place, with
   its children. Both are out of the Tab order (`tabindex="-1"`).

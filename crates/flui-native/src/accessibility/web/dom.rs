@@ -991,7 +991,9 @@ fn write(
     if old.map(|old| &old.text) != Some(&new.text) {
         write_text(element, new.text.as_deref())?;
     }
-    if old.map(|old| &old.value) != Some(&new.value)
+    // An input sanitizes its value against its range as `min`, `max` and
+    // `step` are written, so a changed attribute writes the value again.
+    if old.map(|old| (&old.value, &old.attributes)) != Some((&new.value, &new.attributes))
         && let (Some(value), Some(input)) = (&new.value, element.dyn_ref::<HtmlInputElement>())
     {
         input.set_value(value);

@@ -723,6 +723,16 @@ fn moving_a_slider_s_input_asks_the_node_for_its_value() {
         focus: ROOT,
     });
     assert_eq!(slider_value("volume"), "55");
+    // A new minimum the old step would snap the value to.
+    let mut moved_range = slider(55.0);
+    moved_range.set_min_numeric_value(2.0);
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(SLIDER, moved_range)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(slider_value("volume"), "55", "the published value stays");
     window.close_now();
 }
 
