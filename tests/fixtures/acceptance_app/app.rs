@@ -27,15 +27,17 @@ use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{ConnectionState, Listenable, ListenerId, ValueKey, ViewKey};
+use flui::foundation::{
+    ChangeNotifier, ConnectionState, Listenable, ListenerId, ValueKey, ViewKey,
+};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
 use flui::platform::StorageName;
 use flui::prelude::*;
-use flui::view::View;
 use flui::view::element::ElementKind;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
+use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
     AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
     WidgetStateProperty, column,
@@ -591,11 +593,55 @@ struct Shared {
     scroll: ScrollController,
     /// Where the notebook and the compact flag are stored.
     data: Persisted<Saved>,
+    /// Where the screens and the draft are stored.
+    session: Persisted<Session>,
     /// What writes the session; weak, since the router's pages hold this
     /// state and the place holds the router.
     place: Weak<Place>,
+    /// The window's close as the screens show it; `None` on a host that
+    /// hands out no close guard.
+    close: Option<CloseWatch>,
     faults: Faults,
     planter: Option<Planter>,
+}
+
+/// A presentation's close guard and a notifier told each time what it has
+/// recorded changes, for the screens to show a close waiting on the user.
+#[derive(Clone)]
+struct CloseWatch {
+    guard: CloseGuard,
+    changed: Rc<ChangeNotifier>,
+    /// The task that follows the guard; it ends with the last clone.
+    _following: Rc<TaskToken>,
+}
+
+impl CloseWatch {
+    fn start(guard: CloseGuard, driver: &AsyncDriver) -> Self {
+        let changed = Rc::new(ChangeNotifier::new());
+        let told = Rc::downgrade(&changed);
+        let followed = guard.clone();
+        // Taken now, before the screens first read what is recorded: the task
+        // is first polled a turn later, and a close recorded in between must
+        // still wake it.
+        let mut next = guard.changed();
+        let following = driver.spawn_local(Box::pin(async move {
+            loop {
+                next.await;
+                // Taken before the listeners read, so a change they cause, or
+                // one after them, wakes the next round.
+                next = followed.changed();
+                let Some(told) = told.upgrade() else {
+                    return;
+                };
+                told.notify_listeners();
+            }
+        }));
+        Self {
+            guard,
+            changed,
+            _following: Rc::new(following),
+        }
+    }
 }
 
 impl Shared {
@@ -890,7 +936,12 @@ impl ViewState<Loaded> for LoadedState {
             draft,
             scroll,
             data,
+            session: place.session.clone(),
             place: Rc::downgrade(&place),
+            close: cx
+                .close_guard()
+                .zip(cx.async_driver())
+                .map(|(guard, driver)| CloseWatch::start(guard, &driver)),
             faults: self.faults,
             planter: self.planter.clone(),
         });
@@ -978,6 +1029,8 @@ impl ViewState<Screen> for ScreenState {
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(cx)),
             storage_banner(&shared.data),
+            place_banner(&shared.session),
+            close_decision(shared.close.as_ref()),
             Expanded::new(content),
         ]))
     }
@@ -1304,6 +1357,29 @@ fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
     .boxed()
 }
 
+/// A failed write of where the user is, with its own Retry: the notes'
+/// banner does not show it, and an unchanged place is not written again by
+/// itself, so without it a close the failure holds could only discard.
+fn place_banner(session: &Persisted<Session>) -> BoxedView {
+    let watched = session.clone();
+    let listenable: Rc<dyn Listenable> = Rc::new(session.clone());
+    AnimatedBuilder::new(listenable, move || match watched.status() {
+        SaveStatus::Failed(error) => {
+            let session = watched.clone();
+            Row::new(vec![
+                Text::new(format!("Saving the place failed: {error}")).boxed(),
+                TextButton::new(Text::new("Retry saving the place"))
+                    .on_pressed(move |_cx| session.retry())
+                    .boxed(),
+            ])
+            .boxed()
+        }
+        // No storage, or storage this build must not write, is the notes'
+        // banner to tell.
+        _ => SizedBox::shrink().boxed(),
+    })
+    .boxed()
+}
 /// Wait until the fresh start of `data` is stored: its value is loaded and
 /// takes edits from then on. A failed step ends the wait with its error.
 async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
@@ -1345,4 +1421,47 @@ async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
         Poll::Pending
     })
     .await
+}
+
+/// A close the window holds, with the user's two ways out: close without
+/// saving what the holds protect, or keep the window open. Retry saving is
+/// on the notes' and the place's banners; a save that succeeds then carries
+/// the close out.
+fn close_decision(close: Option<&CloseWatch>) -> BoxedView {
+    let Some(close) = close else {
+        return SizedBox::shrink().boxed();
+    };
+    let listenable: Rc<dyn Listenable> = Rc::clone(&close.changed) as Rc<dyn Listenable>;
+    let guard = close.guard.clone();
+    AnimatedBuilder::new(listenable, move || {
+        if guard.pending().is_none() {
+            return SizedBox::shrink().boxed();
+        }
+        // Each button acts on the close recorded when it is pressed: one
+        // shown earlier may have been carried out or withdrawn since.
+        let discard = guard.clone();
+        let keep = guard.clone();
+        let buttons = Row::new(vec![
+            TextButton::new(Text::new("Close without saving"))
+                .on_pressed(move |_cx| {
+                    if let Some(pending) = discard.pending() {
+                        let _gone: Result<(), StaleClose> = pending.discard_and_close();
+                    }
+                })
+                .boxed(),
+            TextButton::new(Text::new("Keep open"))
+                .on_pressed(move |_cx| {
+                    if let Some(pending) = keep.pending() {
+                        let _gone: Result<(), StaleClose> = pending.stay_open();
+                    }
+                })
+                .boxed(),
+        ]);
+        Column::new(column![
+            Text::new("Closing: unsaved changes would be lost"),
+            buttons
+        ])
+        .boxed()
+    })
+    .boxed()
 }

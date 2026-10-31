@@ -97,6 +97,7 @@ pub(crate) fn a_held_close_is_carried_out_once_the_hold_is_released() {
         "the hold refuses it"
     );
     assert_eq!(seen.detached.get(), 0, "a refused close tears nothing down");
+    assert!(!tree.is_closed(), "and does not close the presentation");
     let guard = seen.guard.borrow().clone().expect("guard acquired");
     assert_eq!(
         guard.pending().map(|pending| pending.reason()),
@@ -109,8 +110,45 @@ pub(crate) fn a_held_close_is_carried_out_once_the_hold_is_released() {
     seen.holds.borrow_mut().clear();
     tree.pump_for(Duration::ZERO);
     assert_eq!(seen.detached.get(), 1, "the released close is carried out");
+    assert!(tree.is_closed(), "and the presentation is closed");
     tree.pump_for(Duration::ZERO);
     assert_eq!(seen.detached.get(), 1, "and carried out once");
+}
+
+/// A close waiting for the user's decision stays open until the decision:
+/// kept open, a later release closes nothing; closed without saving, the
+/// pump closes the presentation past the hold.
+pub(crate) fn a_decided_close_is_carried_out_past_the_hold() {
+    let seen = Seen::default();
+    let mut tree = lay_out(
+        Guarded {
+            hold: false,
+            seen: seen.clone(),
+        },
+        tight(10.0, 10.0),
+    );
+    let guard = seen.guard.borrow().clone().expect("guard acquired");
+    let decision = guard.require_decision();
+
+    assert!(!tree.request_close(CloseReason::User));
+    guard
+        .pending()
+        .expect("the close is recorded")
+        .stay_open()
+        .expect("the recording is current");
+    tree.pump_for(Duration::ZERO);
+    assert!(!tree.is_closed(), "kept open");
+
+    assert!(!tree.request_close(CloseReason::User));
+    guard
+        .pending()
+        .expect("the close is recorded again")
+        .discard_and_close()
+        .expect("the recording is current");
+    tree.pump_for(Duration::ZERO);
+    assert!(tree.is_closed(), "closed past the hold");
+    assert_eq!(seen.detached.get(), 1);
+    drop(decision);
 }
 
 /// Each window of one UI runtime has a guard of its own: a hold in one window
@@ -232,6 +270,10 @@ fn close_guard_hosting() {
             (
                 "a_held_close_is_carried_out_once_the_hold_is_released",
                 a_held_close_is_carried_out_once_the_hold_is_released,
+            ),
+            (
+                "a_decided_close_is_carried_out_past_the_hold",
+                a_decided_close_is_carried_out_past_the_hold,
             ),
             (
                 "each_window_of_one_runtime_holds_its_own_close",

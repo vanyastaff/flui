@@ -9,6 +9,7 @@ use std::task::{Poll, Waker};
 use flui::platform::StorageError;
 use flui::platform::keyboard::NamedKey;
 use flui::testing::storage::MemoryStorage;
+use flui::view::CloseReason;
 use flui::view::persist::Document;
 use serde_json::{Value, json};
 
@@ -713,4 +714,155 @@ fn start_over_drops_the_place_taken_in_the_notes_given_up() {
         !run.shows("Editing note 3") && run.shows("Note 3"),
         "nor does a later launch restore it over the fresh notes"
     );
+}
+
+/// A close while the notes could not be saved holds the window and offers
+/// the user's ways out: Keep open, Retry saving (which then closes), or
+/// Close without saving.
+#[test]
+fn close_with_a_failed_write_requires_a_decision() {
+    let failed_save = || {
+        let mut run = AppRun::start(app());
+        run.tap("Note 2");
+        run.replace_title("Groceries");
+        run.storage().fail_next(StorageError::Full);
+        run.tap("Save note");
+        assert!(run.shows_starting("Saving failed: "));
+        run.request_close();
+        assert!(!run.is_closed(), "the failed save holds the window");
+        assert!(
+            run.shows("Close without saving") && run.shows("Keep open"),
+            "and the decision is shown"
+        );
+        run
+    };
+
+    let mut run = failed_save();
+    run.tap("Keep open");
+    assert!(!run.is_closed() && !run.shows("Keep open"), "kept open");
+    run.request_close();
+    assert!(!run.is_closed(), "a later close is held again");
+    run.tap("Retry saving");
+    assert!(
+        run.is_closed(),
+        "a save that succeeds carries the close out"
+    );
+    assert!(
+        run.storage()
+            .contents(&Saved::NAME)
+            .is_some_and(|stored| String::from_utf8_lossy(&stored).contains("\"Groceries\"")),
+        "with the notes stored"
+    );
+
+    let mut run = failed_save();
+    run.tap("Close without saving");
+    assert!(run.is_closed(), "the user's choice closes the window");
+    assert!(
+        run.storage().contents(&Saved::NAME).is_none(),
+        "and nothing is written"
+    );
+}
+
+/// A close held by a failed write of the place alone, with the notes clean,
+/// shows that failure with its own Retry, whose write carries the close out.
+#[test]
+fn a_close_held_by_a_failed_place_write_offers_its_retry() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.storage().fail_next(StorageError::Full);
+    run.type_text("!");
+    assert!(
+        run.shows_starting("Saving the place failed: ") && !run.shows_starting("Saving failed: "),
+        "the place's failure is shown, the notes' banner stays clear"
+    );
+    run.request_close();
+    assert!(!run.is_closed(), "the failed place write holds the window");
+    assert!(run.shows("Close without saving"));
+
+    run.tap("Retry saving the place");
+    assert!(run.is_closed(), "the retried write carries the close out");
+    assert!(
+        run.storage()
+            .contents(&Session::NAME)
+            .is_some_and(|stored| String::from_utf8_lossy(&stored).contains("\"Groceries!\"")),
+        "with the draft stored in the place"
+    );
+}
+
+/// A close during a save waits for it, asks nothing, and closes once the
+/// notes are stored.
+#[test]
+fn close_during_a_save_waits_for_it() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    let held = run.storage().hold_writes();
+    run.tap("Save note");
+    run.request_close();
+    assert!(!run.is_closed(), "the save in flight holds the window");
+    drop(held);
+    run.settle();
+    assert!(
+        run.is_closed(),
+        "the close is carried out once it is stored"
+    );
+    assert!(run.storage().contents(&Saved::NAME).is_some());
+}
+
+/// Hiding the window leaves the place stored; showing it again reads
+/// nothing back over what is in memory.
+#[test]
+fn hidden_writes_the_session_and_resume_does_not_reread() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.laid().set_window_visible(false);
+    run.settle();
+    let stored = run
+        .storage()
+        .contents(&Session::NAME)
+        .expect("the session is stored while hidden");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("\"Groceries\""),
+        "with the draft"
+    );
+
+    edit_session(run.storage(), |session| {
+        session["draft"]["title"] = json!("Changed elsewhere");
+    });
+    run.storage().put(&Saved::NAME, "not notes");
+    run.laid().set_window_visible(true);
+    run.settle();
+    assert_eq!(run.title(), "Groceries", "the draft in memory stays");
+    assert!(
+        !run.shows_starting("Load failed: "),
+        "and nothing is read back"
+    );
+}
+
+/// A close recorded on the first loaded frame, before anything has run on
+/// the runtime's tasks, still reaches the screens.
+#[test]
+fn a_close_recorded_on_the_first_loaded_frame_is_shown() {
+    let (app, gate) = gated();
+    let storage = MemoryStorage::new();
+    storage.put(&Session::NAME, "not a session");
+    let mut run = AppRun::start_over(app, storage);
+    // The unreadable session starts over, and its write is held.
+    let held = run.storage().hold_writes();
+    gate.set_open(true);
+    run.laid().pump();
+    assert!(
+        !run.laid().request_close(CloseReason::User),
+        "the session write in flight holds the close"
+    );
+    run.settle();
+    assert!(
+        !run.is_closed() && run.shows("Close without saving"),
+        "the recorded close is shown"
+    );
+    drop(held);
+    run.settle();
+    assert!(run.is_closed(), "and carried out once the write lands");
 }
