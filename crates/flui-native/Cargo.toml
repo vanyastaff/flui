@@ -465,6 +465,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIFontMetrics",
     "UIContentSizeCategory",
     "UIAccessibility",
+    # A new screen: `UIAccessibilityPostNotification` and its notices.
+    "UIAccessibilityConstants",
     "objc2-core-foundation",
     "UIApplication",
     "UIScene",
