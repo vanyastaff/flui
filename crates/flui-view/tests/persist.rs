@@ -270,6 +270,42 @@ fn saved_status_appears_only_after_commit() {
     assert_eq!(notes.committed(), revision.ok());
 }
 
+/// A crash before the storage commits loses only the edit it held: the
+/// committed edit before it survives the restart, and the lost one was
+/// never reported saved (R15).
+#[test]
+fn drop_before_commit_loses_only_that_edit() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "first"));
+    let (mut laid, notes) = mount(&storage);
+    let loaded = drive(&mut laid, notes.load());
+    assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "committed, then saved");
+
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Saving, "never reported saved");
+    // The process dies before its write replaced the file.
+    drop((laid, notes));
+    drop(barrier);
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert_eq!(
+        reloaded.as_deref().map(|note| note.0.as_str()),
+        Ok("second"),
+        "the committed edit survives, the held one is lost"
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+}
+
 /// Mount a tree with no storage at all, as on a platform without files.
 fn mount_without_storage() -> (LaidOut, Persisted<Note>) {
     let opened = Rc::new(RefCell::new(None));
