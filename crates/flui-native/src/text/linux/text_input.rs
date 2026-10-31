@@ -509,7 +509,15 @@ impl TextInputClient {
         if self.retired.get() {
             return;
         }
-        *self.wire.borrow_mut() = Some(wire);
+        let previous = self.wire.borrow_mut().replace(wire);
+        // Another seat's text input served the window: its input method is
+        // let go first, so it neither keeps the field nor hears its keys.
+        if self.enabled.get()
+            && let Some(previous) = previous
+        {
+            previous.disable();
+            previous.commit();
+        }
         self.enabled.set(false);
         *self.pending.borrow_mut() = Pending::default();
         self.sync_enablement();

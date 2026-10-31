@@ -546,7 +546,13 @@ fn a_second_seat_leaving_keeps_the_seat_the_window_serves() {
     let store = InMemoryTextStore::new("");
     let (client, first) = serving(&store);
     let second = Rc::new(Wire::default());
+    let _ = first.take();
     client.entered(Rc::clone(&second) as Rc<dyn TextInputWire>);
+    assert_eq!(
+        first.take(),
+        [Sent::Disable, Sent::Commit],
+        "the seat no longer served lets the field go"
+    );
 
     assert!(!client.left(&*first), "the first seat is no longer served");
     client.commit_string(&*first, Some("x".into()));
