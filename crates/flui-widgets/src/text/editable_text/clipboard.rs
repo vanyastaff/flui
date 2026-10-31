@@ -8,6 +8,7 @@ use std::{
 
 use flui_interaction::ClipboardHandle;
 use flui_interaction::focus::{FocusAttachment, FocusNode};
+use flui_platform::ClipboardRead;
 use flui_platform::capability::Abandoned;
 use flui_platform::text_store::OwnerCalls;
 use flui_view::EventCx;
@@ -143,7 +144,7 @@ impl ClipboardTextAction {
     fn paste_answer(
         &self,
         at: Option<usize>,
-    ) -> impl FnMut(Result<Option<String>, Abandoned>) + 'static {
+    ) -> impl FnMut(Result<ClipboardRead, Abandoned>) + 'static {
         let authority = self.clone();
         let controller = self.controller();
         let edits = self.edits.clone();
@@ -152,7 +153,8 @@ impl ClipboardTextAction {
             {
                 return;
             }
-            let Ok(Some(text)) = text else {
+            // No text, a failed read and an abandoned one paste nothing.
+            let Ok(Ok(Some(text))) = text else {
                 return;
             };
             // A single-line field: line breaks are dropped, `\r` included,

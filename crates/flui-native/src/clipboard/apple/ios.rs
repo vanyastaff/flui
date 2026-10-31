@@ -11,6 +11,9 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
+use std::sync::Arc;
+
+use flui_platform::{ClipboardError, ClipboardRead};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_foundation::NSString;
@@ -59,12 +62,14 @@ impl host::Clipboard<IOSLoop> for IOSClipboard {
 }
 
 impl SyncClipboard for IOSClipboard {
-    fn read_now(&self) -> Option<String> {
-        let pasteboard = Self::pasteboard()?;
+    fn read_now(&self) -> ClipboardRead {
+        let pasteboard = Self::pasteboard().ok_or(ClipboardError::Unavailable)?;
         // SAFETY: the pasteboard is main-thread-affine and this runs after
         // the `MainThreadMarker` check above; `string` is a documented getter.
-        let string = unsafe { pasteboard.string() }?;
-        Some(string.to_string())
+        let Some(string) = (unsafe { pasteboard.string() }) else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::from(string.to_string())))
     }
 
     fn write_now(&self, text: String) {

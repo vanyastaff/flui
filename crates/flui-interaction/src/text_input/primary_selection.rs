@@ -15,7 +15,12 @@
 
 use std::{fmt, num::NonZeroU64, rc::Rc};
 
-use flui_platform::capability::{Capability, Completion, CompletionSource, Resolver};
+use flui_platform::ClipboardRead;
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
+
+use super::shared_read::SharedRead;
 
 /// The primary selection capability:
 /// `cx.capability::<PrimarySelectionCapability>()` hands out a
@@ -191,9 +196,11 @@ pub trait PrimarySelectionBackend: 'static {
     /// no other application selected.
     fn is_current(&self, claim: PrimaryClaimId) -> bool;
 
-    /// Read the selection's text and answer `answer` with it, or with `None`
-    /// when there is none.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the selection's text and answer `answer`: `Ok(None)` when there
+    /// is none, a [`ClipboardError`](flui_platform::ClipboardError) when the
+    /// host could not read it. The handle asks one read at a time and shares
+    /// its answer with every reader that asked meanwhile.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 }
 
 /// Widget-facing primary selection for one presentation.
@@ -204,15 +211,20 @@ pub trait PrimarySelectionBackend: 'static {
 pub struct PrimarySelectionHandle {
     backend: Rc<dyn PrimarySelectionBackend>,
     completions: CompletionSource,
+    /// The read in flight of every handle of this UI runtime.
+    reads: Rc<PrimaryReads>,
 }
 
 impl PrimarySelectionHandle {
-    /// A handle over `backend`, whose reads settle through `completions`.
+    /// A handle over `backend` for the acquisition `cx`: its reads settle
+    /// through the UI runtime's completions, and share the read in flight
+    /// with every other handle of that runtime.
     #[must_use]
-    pub fn new(backend: impl PrimarySelectionBackend, completions: CompletionSource) -> Self {
+    pub fn new(backend: impl PrimarySelectionBackend, cx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
-            completions,
+            completions: cx.completions().clone(),
+            reads: cx.runtime_local::<PrimaryReads>(),
         }
     }
 
@@ -232,14 +244,18 @@ impl PrimarySelectionHandle {
         claim
     }
 
-    /// Read the primary selection's text: `None` when there is none.
+    /// Read the primary selection's text: `Ok(None)` when there is none, an
+    /// error when the host could not read it.
+    ///
+    /// Reads asked while one is in flight join it and get the same answer,
+    /// one shared copy of the text (ADR-0152 §5).
     ///
     /// The completion settles at an owner turn after the platform answers,
     /// never inside this call.
-    pub fn read_text(&self) -> Completion<Option<String>> {
-        let (completion, answer) = self.completions.pending();
-        self.backend.read_text(answer);
-        completion
+    pub fn read_text(&self) -> Completion<ClipboardRead> {
+        self.reads
+            .0
+            .read(&self.completions, |answer| self.backend.read_text(answer))
     }
 }
 
@@ -331,3 +347,8 @@ mod tests {
         assert!(claims.release(past).is_none());
     }
 }
+
+/// The slot of the primary selection reads in flight a UI runtime keeps
+/// (ADR-0152 §5).
+#[derive(Default)]
+struct PrimaryReads(SharedRead);

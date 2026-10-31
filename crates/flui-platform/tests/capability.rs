@@ -274,9 +274,11 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
         assert_eq!(entries.len(), 1, "one provider registered");
         assert_eq!(entries[0].name(), Vibration::NAME);
         assert_eq!(entries[0].capability(), std::any::TypeId::of::<Vibration>());
+        let locals = flui_platform::capability::RuntimeLocals::new();
         let cx = flui_platform::capability::ProviderContext::new(
             owner.source.poster(),
             &owner.source,
+            &locals,
             None,
         );
         entries[0].provide(&cx).map(|handle| {
@@ -573,5 +575,47 @@ fn an_answer_settled_while_the_waker_is_cloned_is_read_by_that_poll() {
         future.as_mut().poll(&mut Context::from_waker(&waker)),
         Poll::Ready(Ok(8)),
         "the clone settled the answer; this poll must not return Pending with no wake to come"
+    );
+}
+
+/// A runtime-local slot that holds whatever the test puts in it.
+struct Slot<T>(RefCell<Option<T>>);
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self(RefCell::new(None))
+    }
+}
+
+#[test]
+fn runtime_locals_keep_one_value_per_type_until_retirement() {
+    use flui_platform::capability::RuntimeLocals;
+
+    let locals = RuntimeLocals::new();
+    let flags = locals.get_or_default::<Slot<DropFlag>>();
+    assert!(
+        Rc::ptr_eq(&flags, &locals.get_or_default::<Slot<DropFlag>>()),
+        "every ask of one type is answered by one value"
+    );
+    let dropped = Rc::new(Cell::new(false));
+    flags.0.replace(Some(DropFlag(Rc::clone(&dropped))));
+    drop(flags);
+    locals
+        .get_or_default::<Slot<PanicOnDrop>>()
+        .0
+        .replace(Some(PanicOnDrop("a slot dropped at retirement")));
+
+    let failure = locals
+        .retire()
+        .expect("the faulty slot's panic is returned");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some("a slot dropped at retirement")
+    );
+    assert!(dropped.get(), "the other slot is dropped too");
+    let after = locals.get_or_default::<Slot<DropFlag>>();
+    assert!(
+        !Rc::ptr_eq(&after, &locals.get_or_default::<Slot<DropFlag>>()),
+        "a retired runtime keeps nothing"
     );
 }

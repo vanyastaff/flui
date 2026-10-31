@@ -80,6 +80,7 @@ mod clipboard;
 mod composition_ledger;
 mod generation;
 mod primary_selection;
+mod shared_read;
 
 pub use arbiter::LockArbiter;
 pub use clipboard::{ClipboardBackend, ClipboardCapability, ClipboardHandle};

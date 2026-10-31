@@ -14,6 +14,11 @@
   `NotOnThisDevice`: below the version that has the feature the device lacks it, and only from
   that version on is the host's gap `NotYetOnThisHost`. How a window carries it follows from
   this decision (ADR-0254 §6).
+- **Amended:** 2026-10-31 — §5: a clipboard or primary-selection read answers
+  `Result<Option<Arc<str>>, ClipboardError>`, and the readers that ask while one read is in flight
+  share its answer, so a failed host read is no empty clipboard and a burst of pastes holds one
+  copy of the text. The read in flight is per UI runtime, kept in
+  `ProviderContext::runtime_local`, the one place for a provider's per-runtime state.
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -421,6 +426,66 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 - a package fixture that depends only on `flui-sdk` and the contract declares, registers and
   acquires its own capability, and so does a leaf-crate fixture that depends on the contract alone.
 
+### 5. Clipboard reads share one answer and name their failure
+
+Amendment of 2026-10-31. A read answered `Option<String>`: every read held its own copy of the
+text, so a burst of pastes of a large clipboard held as many copies as readers, and a host that
+could not read answered `None`, which a caller could not tell from an empty clipboard. The
+clipboard and the primary selection now answer one shape:
+
+```rust
+pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
+
+#[non_exhaustive]
+pub enum ClipboardError { Unavailable, Denied, Timeout, Malformed, TooLarge }
+
+impl ClipboardHandle {
+    pub fn new(backend: impl ClipboardBackend, cx: &ProviderContext<'_>) -> Self;
+    pub fn read_text(&self) -> Completion<ClipboardRead>;
+}
+pub trait ClipboardBackend { fn read_text(&self, answer: Resolver<ClipboardRead>); /* … */ }
+
+impl ProviderContext<'_> { pub fn runtime_local<T: Default + 'static>(&self) -> Rc<T>; }
+```
+
+The primary selection's handle and backend take the same types.
+
+- **One read in flight per UI runtime.** Every handle a UI runtime hands out shares one read in
+  flight, whichever widget or window acquired it. A reader that asks while it is in flight joins
+  it; the first reader starts the host read. When the host answers, every reader settles with a
+  clone of the same `ClipboardRead`, so they all hold one allocation of the text, and ten fields
+  pasting at once ask the host once. The next read after the answer starts afresh. The read lives
+  and ends with its runtime, so a runtime retiring never strands another's readers. The X11
+  thread still refuses reads past `MAX_READERS` waiting at once, as `Unavailable`, a backstop
+  for many runtimes reading together.
+- **Per-runtime provider state.** A provider is registered once and asked by every UI runtime,
+  so state it holds itself is shared across them. `ProviderContext::runtime_local::<T>()` is the
+  one place a provider keeps state for one runtime, shared by every handle it hands out there:
+  a typed slot per `T`, made with `T::default()` on first ask, which a capability names with a
+  private type. The handles' constructors take the context and find their slot there, so no
+  provider has to remember to share it. Later capabilities keep their per-runtime state the same
+  way (an HTTP pool, an open store).
+- **Drop order at retirement.** The runtime ends its pending completions first, then drops the
+  jobs still queued, then retires its runtime-local slots, each drop contained and the first
+  failure kept. A completion's closure dropped in the first step still finds its provider's
+  slot alive. A slot a handle still holds ends when that handle drops; an acquisition after
+  retirement gets a fresh value kept nowhere.
+- **Containment.** No borrow of the shared state is held while the backend runs. A backend that
+  drops its resolver, or panics and drops it, abandons the read: every reader that joined it
+  settles `Abandoned::ProviderDropped`. A runtime that retires before the answer drops the
+  waiting closure unrun; the readers go with it, and a later read never finds the stale one,
+  because a read clears only its own entry.
+- **Ok(None) means no text.** A clipboard that holds nothing, or only data that is not text,
+  answers `Ok(None)`. `Unavailable` is a clipboard the host could not reach (another application
+  holds it open, the display connection is gone, a host without one). `Denied` is a permission:
+  the browser's `NotAllowedError`. `Timeout` is a selection owner that did not answer in time
+  (X11, Wayland). `Malformed` is text invalid in its encoding (an unterminated `CF_UNICODETEXT`,
+  `arboard`'s conversion failure). `TooLarge` is a transfer past the host's limit (64 MiB on X11
+  and Wayland). On the web, a refused read still answers what the page last wrote, and names
+  its refusal only before the page wrote anything.
+- **Cost.** An answer takes one more owner job than before: the host's answer settles the shared
+  read, which then resolves each reader.
+
 ### As built
 
 The clipboard landing spells the shape of §3 as follows; the properties of §2 hold as written.
@@ -456,9 +521,10 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   UIKit and `arboard` answer at once, the web when `navigator.clipboard.readText()` settles
   (falling back to what the page wrote when the browser refuses). Android reads and writes
   `ClipboardManager` through JNI.
-- **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, drops or refuses
-  reads and counts live handles; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin`
-  mount a tree over another registry. `CompletionSource` is public, so the contract needs no
+- **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, fails, drops or
+  refuses reads, and counts the reads it was asked and the live handles;
+  `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` mount a tree over another
+  registry. `CompletionSource` is public, so the contract needs no
   `scripted` feature; ADR-0243 names test support `testing` in any case.
 - **Checked failures.** `capability` on a `BuildContext` is the E0599 doctest of
   `LifecycleContextExt`; `ClipboardHandle: Send` and `Completion<T>: Send` are the E0277 cases
@@ -509,6 +575,16 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   when the last clone of a handle drops (§2, item 3). That long-lived OS work is an application
   service and not a widget-held handle is a row of each capability conformance table (ADR-0154),
   not of the seam.
+- §5: `reads_asked_while_one_is_in_flight_share_its_answer` (two widgets in two windows of one
+  runtime: one host read for a burst, every reader holding the same allocation, a later read
+  asking again),
+  `each_runtime_asks_for_its_own_read` (one provider, two runtimes: a read each, and the retired
+  one strands nobody),
+  `a_failed_read_reaches_every_reader_that_joined_it` (a failure is no empty clipboard) and
+  `an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again`, in the `capability_seam`
+  table of `flui-testing`; `runtime_locals_keep_one_value_per_type_until_retirement`
+  (`flui-platform`: one value per type, every slot dropped at retirement though one panics, the
+  first failure returned, nothing kept after).
 
 ## Pros and cons of the options
 

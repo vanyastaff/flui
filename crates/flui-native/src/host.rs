@@ -552,11 +552,12 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
     }
 }
 
-/// A host without a clipboard holds nothing: a read answers `None`, a write
+/// A host without a clipboard reads none: a read answers
+/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError), a write
 /// is dropped.
 impl SyncClipboard for Absent<position::Clipboard> {
-    fn read_now(&self) -> Option<String> {
-        None
+    fn read_now(&self) -> flui_platform::ClipboardRead {
+        Err(flui_platform::ClipboardError::Unavailable)
     }
 
     fn write_now(&self, text: String) {

@@ -5,15 +5,17 @@
 //! completion still settles at the next owner turn.
 //! [`hold_reads`](ScriptedClipboard::hold_reads) keeps reads unanswered until
 //! [`answer_held_reads`](ScriptedClipboard::answer_held_reads), as the web's
-//! asynchronous clipboard does, and
+//! asynchronous clipboard does,
 //! [`refuse`](ScriptedClipboard::refuse) makes the provider refuse, as a host
-//! without a clipboard does.
+//! without a clipboard does, and
+//! [`fail_reads_with`](ScriptedClipboard::fail_reads_with) makes reads fail as
+//! a host that cannot reach its clipboard does.
 
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
-    Unsupported,
+    ClipboardError, ClipboardRead, Unsupported,
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
 
@@ -26,9 +28,11 @@ pub struct ScriptedClipboard {
 
 #[derive(Default)]
 struct State {
-    text: Option<String>,
+    text: Option<Arc<str>>,
+    failure: Option<ClipboardError>,
+    reads: usize,
     hold: bool,
-    held: Vec<Resolver<Option<String>>>,
+    held: Vec<Resolver<ClipboardRead>>,
     refusal: Option<Unsupported>,
     handles: Rc<()>,
 }
@@ -44,12 +48,12 @@ impl ScriptedClipboard {
     /// test put there.
     #[must_use]
     pub fn text(&self) -> Option<String> {
-        self.state.borrow().text.clone()
+        self.state.borrow().text.as_deref().map(str::to_owned)
     }
 
     /// Put `text` on the clipboard, as another application copying would.
     pub fn set_text(&self, text: impl Into<String>) {
-        self.state.borrow_mut().text = Some(text.into());
+        self.state.borrow_mut().text = Some(Arc::from(text.into()));
     }
 
     /// Keep every later read unanswered until
@@ -64,7 +68,7 @@ impl ScriptedClipboard {
         let (held, text) = {
             let mut state = self.state.borrow_mut();
             state.hold = false;
-            (std::mem::take(&mut state.held), state.text.clone())
+            (std::mem::take(&mut state.held), state.answer())
         };
         let answered = held.len();
         for answer in held {
@@ -81,6 +85,25 @@ impl ScriptedClipboard {
         let dropped = held.len();
         drop(held);
         dropped
+    }
+
+    /// Make every later answer fail with `error`, as a host whose clipboard
+    /// is out of reach answers, until [`stop_failing_reads`](Self::stop_failing_reads).
+    pub fn fail_reads_with(&self, error: ClipboardError) {
+        self.state.borrow_mut().failure = Some(error);
+    }
+
+    /// Answer later reads with the clipboard's text again.
+    pub fn stop_failing_reads(&self) {
+        self.state.borrow_mut().failure = None;
+    }
+
+    /// How many reads reached this clipboard. A handle shares one read among
+    /// the readers that ask while it is in flight, so a burst of pastes
+    /// counts once.
+    #[must_use]
+    pub fn reads_asked(&self) -> usize {
+        self.state.borrow().reads
     }
 
     /// Make the provider refuse every later acquisition with `refusal`.
@@ -111,7 +134,7 @@ impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
             state: Rc::clone(&self.state),
             _handle: Rc::clone(&state.handles),
         };
-        Ok(ClipboardHandle::new(backend, cx.completions().clone()))
+        Ok(ClipboardHandle::new(backend, cx))
     }
 }
 
@@ -120,6 +143,8 @@ impl fmt::Debug for ScriptedClipboard {
         let state = self.state.borrow();
         f.debug_struct("ScriptedClipboard")
             .field("text", &state.text)
+            .field("failure", &state.failure)
+            .field("reads", &state.reads)
             .field("held_reads", &state.held.len())
             .field("refusal", &state.refusal)
             .finish()
@@ -133,19 +158,30 @@ struct Backend {
 }
 
 impl ClipboardBackend for Backend {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         let mut state = self.state.borrow_mut();
+        state.reads += 1;
         if state.hold {
             state.held.push(answer);
             return;
         }
-        let text = state.text.clone();
+        let text = state.answer();
         drop(state);
         // A retired owner has nobody left to tell.
         let _ = answer.resolve(text);
     }
 
     fn write_text(&self, text: String) {
-        self.state.borrow_mut().text = Some(text);
+        self.state.borrow_mut().text = Some(Arc::from(text));
+    }
+}
+
+impl State {
+    /// What a read answers now: the scripted failure, or the text.
+    fn answer(&self) -> ClipboardRead {
+        match self.failure {
+            Some(error) => Err(error),
+            None => Ok(self.text.clone()),
+        }
     }
 }

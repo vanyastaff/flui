@@ -136,12 +136,13 @@ mod measured {
         ProviderContext as _, Resolver as _, WindowRef as _,
     };
     use flui_sdk::platform::{
-        AdmissionError as _, Brightness as _, DurationScale as _, GesturePreferences as _,
-        HapticFeedback as _, HostNotice as _, InvalidLocale as _, InvalidPreference as _,
-        Locale as _, MemoryPressureLevel as _, MotionPreference as _, NativeMouseGeometry as _,
-        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _, SubmitError as _,
-        SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
-        WheelPreferences as _, WheelStep as _, WindowMode as _, WindowState as _,
+        AdmissionError as _, Brightness as _, ClipboardError as _, DurationScale as _,
+        GesturePreferences as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _,
+        InvalidPreference as _, Locale as _, MemoryPressureLevel as _, MotionPreference as _,
+        NativeMouseGeometry as _, NativeTouchGeometry as _, SessionEndBlock as _,
+        SessionEndRequest as _, SubmitError as _, SystemPreferences as _, TargetPlatform as _,
+        TextWeightPreference as _, WheelPreferences as _, WheelStep as _, WindowMode as _,
+        WindowState as _,
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
@@ -586,6 +587,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::AdmissionError;",
         "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
+        "pub use flui_platform::ClipboardError;",
+        "pub use flui_platform::ClipboardRead;",
         "pub use flui_platform::DurationScale;",
         "pub use flui_platform::EventTime;",
         "pub use flui_platform::GesturePreferences;",

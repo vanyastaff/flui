@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use flui_platform::{ClipboardError, ClipboardRead};
+
 use crate::host::SyncClipboard;
 
 /// Arboard-based clipboard implementation
@@ -105,21 +107,27 @@ impl Default for ArboardClipboard {
 }
 
 impl SyncClipboard for ArboardClipboard {
-    fn read_now(&self) -> Option<String> {
+    fn read_now(&self) -> ClipboardRead {
         let mut clipboard = self.clipboard.lock();
         let Some(clipboard) = clipboard.as_mut() else {
             tracing::debug!("clipboard read on an inert (backend-less) clipboard");
-            return None;
+            return Err(ClipboardError::Unavailable);
         };
 
         match clipboard_session(|| clipboard.get_text()) {
             Ok(text) => {
                 tracing::debug!(len = text.len(), "Read text from clipboard");
-                Some(text)
+                Ok(Some(Arc::from(text)))
+            }
+            // No text, whatever else the clipboard holds.
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(arboard::Error::ConversionFailure) => {
+                tracing::warn!("clipboard text is not valid in its encoding");
+                Err(ClipboardError::Malformed)
             }
             Err(err) => {
                 tracing::warn!(?err, "Failed to read clipboard text");
-                None
+                Err(ClipboardError::Unavailable)
             }
         }
     }

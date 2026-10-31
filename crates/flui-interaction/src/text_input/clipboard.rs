@@ -10,7 +10,12 @@
 
 use std::{fmt, rc::Rc};
 
-use flui_platform::capability::{Capability, Completion, CompletionSource, Resolver};
+use flui_platform::ClipboardRead;
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
+
+use super::shared_read::SharedRead;
 
 /// The clipboard capability: `cx.capability::<ClipboardCapability>()` hands
 /// out a [`ClipboardHandle`].
@@ -33,9 +38,11 @@ impl Capability for ClipboardCapability {
 /// synchronously, later where it does not (the web, Wayland). It never calls
 /// back into the handle.
 pub trait ClipboardBackend: 'static {
-    /// Read the clipboard's text and answer `answer` with it, or with `None`
-    /// when it holds no text.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the clipboard's text and answer `answer`: `Ok(None)` when it
+    /// holds no text, a [`ClipboardError`](flui_platform::ClipboardError)
+    /// when the host could not read it. The handle asks one read at a time
+    /// and shares its answer with every reader that asked meanwhile.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 
     /// Replace the clipboard's text.
     fn write_text(&self, text: String);
@@ -51,15 +58,20 @@ pub trait ClipboardBackend: 'static {
 pub struct ClipboardHandle {
     backend: Rc<dyn ClipboardBackend>,
     completions: CompletionSource,
+    /// The read in flight of every handle of this UI runtime.
+    reads: Rc<ClipboardReads>,
 }
 
 impl ClipboardHandle {
-    /// A handle over `backend`, whose reads settle through `completions`.
+    /// A handle over `backend` for the acquisition `cx`: its reads settle
+    /// through the UI runtime's completions, and share the read in flight
+    /// with every other handle of that runtime.
     #[must_use]
-    pub fn new(backend: impl ClipboardBackend, completions: CompletionSource) -> Self {
+    pub fn new(backend: impl ClipboardBackend, cx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
-            completions,
+            completions: cx.completions().clone(),
+            reads: cx.runtime_local::<ClipboardReads>(),
         }
     }
 
@@ -68,14 +80,18 @@ impl ClipboardHandle {
         self.backend.write_text(text.into());
     }
 
-    /// Read the clipboard's text: `None` when it holds none.
+    /// Read the clipboard's text: `Ok(None)` when it holds none, an error
+    /// when the host could not read it.
+    ///
+    /// Reads asked while one is in flight join it and get the same answer,
+    /// one shared copy of the text (ADR-0152 §5).
     ///
     /// The completion settles at an owner turn after the operating system
     /// answers, never inside this call.
-    pub fn read_text(&self) -> Completion<Option<String>> {
-        let (completion, answer) = self.completions.pending();
-        self.backend.read_text(answer);
-        completion
+    pub fn read_text(&self) -> Completion<ClipboardRead> {
+        self.reads
+            .0
+            .read(&self.completions, |answer| self.backend.read_text(answer))
     }
 }
 
@@ -84,3 +100,8 @@ impl fmt::Debug for ClipboardHandle {
         f.debug_struct("ClipboardHandle").finish_non_exhaustive()
     }
 }
+
+/// The slot of the clipboard reads in flight a UI runtime keeps
+/// (ADR-0152 §5).
+#[derive(Default)]
+struct ClipboardReads(SharedRead);

@@ -3,7 +3,9 @@
 //! system clipboard. It lives beside the table, not in the `clipboard` feature,
 //! because a loop holds it and the owner thread names no feature.
 
-use flui_platform::capability::Resolver;
+use std::sync::Arc;
+
+use flui_platform::{ClipboardRead, capability::Resolver};
 
 /// The host's plain-text clipboard, owner-local: what
 /// [`Platform::clipboard`](crate::Platform::clipboard) hands out and the
@@ -13,9 +15,10 @@ use flui_platform::capability::Resolver;
 /// system reads synchronously (Win32, AppKit, UIKit, `arboard`), when the
 /// browser's promise settles on the web. It never calls back into its caller.
 pub trait NativeClipboard {
-    /// Read the clipboard's text and answer `answer` with it, or with `None`
-    /// when it holds no text.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the clipboard's text and answer `answer`: `Ok(None)` when it
+    /// holds no text, a [`ClipboardError`](flui_platform::ClipboardError) when
+    /// the host could not read it.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 
     /// Replace the clipboard's text.
     fn write_text(&self, text: String);
@@ -24,15 +27,15 @@ pub trait NativeClipboard {
 /// A clipboard the operating system reads synchronously: its read answers
 /// at once.
 pub(crate) trait SyncClipboard {
-    /// The clipboard's text now.
-    fn read_now(&self) -> Option<String>;
+    /// The clipboard's text now, or why it could not be read.
+    fn read_now(&self) -> ClipboardRead;
 
     /// Replace the clipboard's text.
     fn write_now(&self, text: String);
 }
 
 impl<C: SyncClipboard> NativeClipboard for C {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         // A retired owner has nobody left to answer.
         let _ = answer.resolve(self.read_now());
     }
@@ -49,8 +52,8 @@ pub(crate) trait SharedClipboard: NativeClipboard + Send + Sync {}
 
 impl<C: NativeClipboard + Send + Sync> SharedClipboard for C {}
 
-impl<C: NativeClipboard + ?Sized> NativeClipboard for std::sync::Arc<C> {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+impl<C: NativeClipboard + ?Sized> NativeClipboard for Arc<C> {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         (**self).read_text(answer);
     }
 
@@ -63,7 +66,7 @@ impl<C: NativeClipboard + ?Sized> NativeClipboard for std::sync::Arc<C> {
 /// system clipboard yet: it reads back what the application wrote.
 #[derive(Default)]
 pub struct MemoryClipboard {
-    text: parking_lot::Mutex<Option<String>>,
+    text: parking_lot::Mutex<Option<Arc<str>>>,
 }
 
 impl MemoryClipboard {
@@ -83,12 +86,12 @@ impl std::fmt::Debug for MemoryClipboard {
 }
 
 impl SyncClipboard for MemoryClipboard {
-    fn read_now(&self) -> Option<String> {
-        self.text.lock().clone()
+    fn read_now(&self) -> ClipboardRead {
+        Ok(self.text.lock().clone())
     }
 
     fn write_now(&self, text: String) {
-        *self.text.lock() = Some(text);
+        *self.text.lock() = Some(Arc::from(text));
     }
 }
 
@@ -115,12 +118,13 @@ pub trait NativePrimarySelection {
     /// offered one, withdrew none since, and no other client selected.
     fn owns(&self) -> bool;
 
-    /// Read the primary selection's text and answer `answer` with it, or
-    /// with `None` when it holds none.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the primary selection's text and answer `answer`: `Ok(None)`
+    /// when it holds none, a [`ClipboardError`](flui_platform::ClipboardError)
+    /// when the host could not read it.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 }
 
-impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for std::sync::Arc<C> {
+impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
     fn offer(&self, text: std::rc::Rc<dyn Fn() -> Option<String>>) {
         (**self).offer(text);
     }
@@ -133,7 +137,7 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for std::sync::A
         (**self).owns()
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         (**self).read_text(answer);
     }
 }

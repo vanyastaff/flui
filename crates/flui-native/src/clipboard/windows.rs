@@ -8,7 +8,9 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
+
+use flui_platform::{ClipboardError, ClipboardRead};
 
 use windows::{
     Win32::{
@@ -70,10 +72,10 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
 }
 
 impl SyncClipboard for WindowsClipboard {
-    fn read_now(&self) -> Option<String> {
+    fn read_now(&self) -> ClipboardRead {
         let Some(_session) = ClipboardSession::open() else {
             tracing::warn!("Failed to open clipboard for reading");
-            return None;
+            return Err(ClipboardError::Unavailable);
         };
 
         // SAFETY: `_session` holds the clipboard open, exclusively among
@@ -91,7 +93,7 @@ impl SyncClipboard for WindowsClipboard {
         // below is hard-bounded by `GlobalSize(hglobal)` (the allocation's
         // actual byte length, halved for `u16` units): the scan never reads
         // past `wide_ptr.add(max_len - 1)`, and a missing terminator within
-        // that bound is treated as malformed data (`None`), not walked past.
+        // that bound is treated as malformed data, not walked past.
         // `GlobalUnlock`'s result is discarded deliberately on every path:
         // its return value cannot distinguish "already unlocked, success"
         // from "failed" without a further `GetLastError` check, and there is
@@ -102,7 +104,7 @@ impl SyncClipboard for WindowsClipboard {
             // Check if Unicode text is available
             if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() {
                 tracing::debug!("Clipboard does not contain Unicode text");
-                return None;
+                return Ok(None);
             }
 
             // Get clipboard data - returns HANDLE which we convert to HGLOBAL
@@ -110,13 +112,13 @@ impl SyncClipboard for WindowsClipboard {
                 Ok(handle) => handle,
                 Err(e) => {
                     tracing::warn!(?e, "Failed to get clipboard data");
-                    return None;
+                    return Err(ClipboardError::Unavailable);
                 }
             };
 
             if handle.is_invalid() {
                 tracing::debug!("Clipboard handle is invalid");
-                return None;
+                return Err(ClipboardError::Unavailable);
             }
 
             // Convert HANDLE to HGLOBAL for GlobalLock
@@ -126,7 +128,7 @@ impl SyncClipboard for WindowsClipboard {
             let ptr = GlobalLock(hglobal);
             if ptr.is_null() {
                 tracing::warn!("Failed to lock global memory");
-                return None;
+                return Err(ClipboardError::Unavailable);
             }
 
             // Bound the NUL scan by the allocation's actual size — never
@@ -148,7 +150,7 @@ impl SyncClipboard for WindowsClipboard {
                     "Clipboard CF_UNICODETEXT data has no NUL terminator within its allocated size"
                 );
                 let _ = GlobalUnlock(hglobal);
-                return None;
+                return Err(ClipboardError::Malformed);
             }
 
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
@@ -158,7 +160,7 @@ impl SyncClipboard for WindowsClipboard {
             let _ = GlobalUnlock(hglobal);
 
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
-            Some(rust_string)
+            Ok(Some(Arc::from(rust_string)))
         }
     }
 

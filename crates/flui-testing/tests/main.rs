@@ -296,6 +296,23 @@ fn capability_seam() {
                 capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
             ),
             (
+                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
+                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
+            ),
+            (
+                "capability_seam::each_runtime_asks_for_its_own_read",
+                capability_seam::each_runtime_asks_for_its_own_read as fn(),
+            ),
+            (
+                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
+                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
+                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_dropped_handle_ends_its_subscription",
                 capability_seam::a_dropped_handle_ends_its_subscription as fn(),
             ),
