@@ -650,6 +650,19 @@ impl PresentationState {
                     }
                 },
             ));
+            // A bridge with a native notice of a new screen is told each route
+            // change; any other leaves the owner to announce it (ADR-0204 §5).
+            let sink = (bridge.route_change_support()
+                == flui_semantics::platform::RouteChangeSupport::Native)
+                .then(|| {
+                    let bridge = Arc::downgrade(bridge);
+                    Arc::new(move |change: flui_semantics::platform::RouteChange| {
+                        if let Some(bridge) = bridge.upgrade() {
+                            bridge.route_changed(change);
+                        }
+                    }) as flui_semantics::platform::RouteChangeSink
+                });
+            owner.set_semantics_route_change_sink(sink);
         });
 
         let enabled_flag = semantics.platform_semantics_enabled_handle();

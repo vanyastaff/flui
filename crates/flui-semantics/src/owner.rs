@@ -366,6 +366,12 @@ pub struct SemanticsOwner {
     /// The presentation's announcement queue and announcer nodes, published
     /// as the last children of the root (ADR-0204 §4).
     announcements: Option<crate::Announcements>,
+    /// The tree's routes and the innermost one the last delivery showed
+    /// (ADR-0204 §5).
+    routes: crate::route_change::RouteTracker,
+    /// Told each route change once it is delivered, where the adapter has a
+    /// native notice for it; without one the owner announces the route.
+    route_change_sink: Option<crate::platform::RouteChangeSink>,
 }
 
 /// An author error a publication found: published as declared, or left out,
@@ -777,6 +783,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -804,6 +812,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -825,6 +835,8 @@ impl SemanticsOwner {
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
+            routes: crate::route_change::RouteTracker::default(),
+            route_change_sink: None,
         }
     }
 
@@ -1717,11 +1729,62 @@ impl SemanticsOwner {
                 _ => true,
             };
 
-        if needs_full {
+        let routes = self.pending_routes(needs_full);
+        let published = if needs_full {
             self.publish_full()
         } else {
             self.publish_incremental()
+        };
+        // Delivered: a panic above, or a tree the full path refused, leaves
+        // the routes as last shown, so the retry raises the change.
+        if let Some(routes) = routes.filter(|routes| published > 0 || routes.change.is_none()) {
+            self.routes.commit(routes.next);
+            if let (Some(change), Some(sink)) = (routes.change, self.route_change_sink.clone()) {
+                // The sink is the adapter's: a panic in it is contained, and
+                // nothing is announced in its place, which would speak twice.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink(change)));
+            }
         }
+        published
+    }
+
+    /// The routes the flush in progress shows (ADR-0204 §5), with the change
+    /// the sink is told once it is delivered. Without a sink the change is
+    /// announced instead, queued into this flush's update and recorded now,
+    /// so a failed delivery retries the announcement rather than raising
+    /// the change again.
+    fn pending_routes(&mut self, needs_full: bool) -> Option<crate::route_change::PendingRoutes> {
+        if needs_full {
+            self.routes.rescan(&self.tree);
+        } else {
+            for sid in self
+                .tree
+                .dirty_ids()
+                .collect::<SmallVec<[SemanticsId; 16]>>()
+            {
+                if let Some(node) = self.tree.get(sid).filter(|node| node.is_dirty()) {
+                    self.routes.observe(sid, node);
+                }
+            }
+        }
+        let mut routes = self.routes.pending(&self.tree)?;
+        if self.route_change_sink.is_some() {
+            return Some(routes);
+        }
+        if let Some(change) = routes.change.take()
+            && let (Some(name), Some(announcements)) = (change.name(), &self.announcements)
+        {
+            announcements.enqueue(name, crate::Urgency::Polite);
+        }
+        self.routes.commit(routes.next);
+        None
+    }
+
+    /// Installs the sink told each route change (ADR-0204 §5), for an adapter
+    /// that conveys route changes natively; `None` makes the owner announce
+    /// each named route instead.
+    pub fn set_route_change_sink(&mut self, sink: Option<crate::platform::RouteChangeSink>) {
+        self.route_change_sink = sink;
     }
 
     /// The stable identity the current root would publish under.

@@ -239,6 +239,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// publishes nowhere (the state before a bridge is installed).
     semantics_update_callback: Option<flui_semantics::SemanticsUpdateCallback>,
 
+    /// The route-change sink for semantics owners this pipeline creates, set
+    /// where the platform bridge conveys route changes natively
+    /// ([`Self::set_semantics_route_change_sink`]); without one an owner
+    /// announces each named route.
+    semantics_route_change_sink: Option<flui_semantics::platform::RouteChangeSink>,
+
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
@@ -425,6 +431,7 @@ where
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
+        semantics_route_change_sink: from.semantics_route_change_sink,
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
         last_follower_transforms: from.last_follower_transforms,

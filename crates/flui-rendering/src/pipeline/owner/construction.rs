@@ -87,6 +87,7 @@ impl PipelineOwner<Idle> {
             #[cfg(any(test, feature = "testing"))]
             unchecked_semantics_diagnostics: Vec::new(),
             semantics_update_callback: None,
+            semantics_route_change_sink: None,
             last_layer_tree: None,
             scenes_painted: 0,
             last_follower_transforms: FxHashMap::default(),

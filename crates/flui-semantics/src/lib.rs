@@ -55,6 +55,7 @@ mod numeric_range;
 pub mod owner;
 pub mod platform;
 mod reading_order;
+mod route_change;
 pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
 pub use platform::AssistiveFocusSupport;
 pub mod properties;
