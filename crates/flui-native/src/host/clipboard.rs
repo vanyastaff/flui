@@ -3,7 +3,9 @@
 //! system clipboard. It lives beside the table, not in the `clipboard` feature,
 //! because a loop holds it and the owner thread names no feature.
 
-use flui_platform::capability::Resolver;
+use std::sync::Arc;
+
+use flui_platform::{ClipboardRead, capability::Resolver};
 
 /// The host's plain-text clipboard, owner-local: what
 /// [`Platform::clipboard`](crate::Platform::clipboard) hands out and the
@@ -13,26 +15,67 @@ use flui_platform::capability::Resolver;
 /// system reads synchronously (Win32, AppKit, UIKit, `arboard`), when the
 /// browser's promise settles on the web. It never calls back into its caller.
 pub trait NativeClipboard {
-    /// Read the clipboard's text and answer `answer` with it, or with `None`
-    /// when it holds no text.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the clipboard's text and answer `answer`: `Ok(None)` when it
+    /// holds no text, a [`ClipboardError`](flui_platform::ClipboardError) when
+    /// the host could not read it.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 
     /// Replace the clipboard's text.
     fn write_text(&self, text: String);
 }
 
+/// The most bytes of text a clipboard or primary-selection read answers, on
+/// every host: past it the read answers
+/// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
+pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
+
+/// What a read answers with `text` the application wrote and the host still
+/// holds: shared, not copied, and refused past [`MAX_TEXT`] bytes as text
+/// from any other client is, so a read's answer never depends on who owns
+/// the clipboard.
+pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
+    if text.len() > MAX_TEXT {
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(Some(Arc::clone(text)))
+}
+
+/// What a read answers with `text` the host handed over whole: refused past
+/// [`MAX_TEXT`] bytes before the shared copy is made, so text a host already
+/// holds is never copied a second time at any size the read refuses.
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) fn host_text(text: String) -> ClipboardRead {
+    if text.len() > MAX_TEXT {
+        tracing::warn!(
+            len = text.len(),
+            "a clipboard read past {MAX_TEXT} bytes was refused"
+        );
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(Some(Arc::from(text)))
+}
+
 /// A clipboard the operating system reads synchronously: its read answers
 /// at once.
 pub(crate) trait SyncClipboard {
-    /// The clipboard's text now.
-    fn read_now(&self) -> Option<String>;
+    /// The clipboard's text now, or why it could not be read.
+    fn read_now(&self) -> ClipboardRead;
 
     /// Replace the clipboard's text.
     fn write_now(&self, text: String);
 }
 
 impl<C: SyncClipboard> NativeClipboard for C {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         // A retired owner has nobody left to answer.
         let _ = answer.resolve(self.read_now());
     }
@@ -49,8 +92,8 @@ pub(crate) trait SharedClipboard: NativeClipboard + Send + Sync {}
 
 impl<C: NativeClipboard + Send + Sync> SharedClipboard for C {}
 
-impl<C: NativeClipboard + ?Sized> NativeClipboard for std::sync::Arc<C> {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+impl<C: NativeClipboard + ?Sized> NativeClipboard for Arc<C> {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         (**self).read_text(answer);
     }
 
@@ -63,7 +106,7 @@ impl<C: NativeClipboard + ?Sized> NativeClipboard for std::sync::Arc<C> {
 /// system clipboard yet: it reads back what the application wrote.
 #[derive(Default)]
 pub struct MemoryClipboard {
-    text: parking_lot::Mutex<Option<String>>,
+    text: parking_lot::Mutex<Option<Arc<str>>>,
 }
 
 impl MemoryClipboard {
@@ -83,12 +126,12 @@ impl std::fmt::Debug for MemoryClipboard {
 }
 
 impl SyncClipboard for MemoryClipboard {
-    fn read_now(&self) -> Option<String> {
-        self.text.lock().clone()
+    fn read_now(&self) -> ClipboardRead {
+        self.text.lock().as_ref().map_or(Ok(None), owned_text)
     }
 
     fn write_now(&self, text: String) {
-        *self.text.lock() = Some(text);
+        *self.text.lock() = Some(Arc::from(text));
     }
 }
 
@@ -115,12 +158,13 @@ pub trait NativePrimarySelection {
     /// offered one, withdrew none since, and no other client selected.
     fn owns(&self) -> bool;
 
-    /// Read the primary selection's text and answer `answer` with it, or
-    /// with `None` when it holds none.
-    fn read_text(&self, answer: Resolver<Option<String>>);
+    /// Read the primary selection's text and answer `answer`: `Ok(None)`
+    /// when it holds none, a [`ClipboardError`](flui_platform::ClipboardError)
+    /// when the host could not read it.
+    fn read_text(&self, answer: Resolver<ClipboardRead>);
 }
 
-impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for std::sync::Arc<C> {
+impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
     fn offer(&self, text: std::rc::Rc<dyn Fn() -> Option<String>>) {
         (**self).offer(text);
     }
@@ -133,7 +177,60 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for std::sync::A
         (**self).owns()
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         (**self).read_text(answer);
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        windows,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        wayland_host,
+        x11_host,
+        feature = "winit-backend"
+    )
+))]
+mod tests {
+    use flui_platform::ClipboardError;
+
+    use super::{MAX_TEXT, host_text};
+
+    /// Text a host handed over is answered up to the limit and refused past
+    /// it, the refusal made before any copy of the text.
+    #[test]
+    fn host_text_is_refused_past_the_limit() {
+        let at_limit = "a".repeat(MAX_TEXT);
+        assert_eq!(
+            host_text(at_limit).map(|text| text.map(|text| text.len())),
+            Ok(Some(MAX_TEXT))
+        );
+        let past = "a".repeat(MAX_TEXT + 1);
+        assert_eq!(host_text(past), Err(ClipboardError::TooLarge));
+    }
+}
+
+#[cfg(test)]
+mod owned_tests {
+    use flui_platform::ClipboardError;
+
+    use super::{MAX_TEXT, MemoryClipboard, SyncClipboard as _};
+
+    /// Text the application wrote is read back up to the limit and refused
+    /// past it, as text from any other client is.
+    #[test]
+    fn owned_text_is_refused_past_the_limit() {
+        let clipboard = MemoryClipboard::new();
+        clipboard.write_now("a".repeat(MAX_TEXT));
+        assert_eq!(
+            clipboard.read_now().map(|text| text.map(|text| text.len())),
+            Ok(Some(MAX_TEXT))
+        );
+        clipboard.write_now("a".repeat(MAX_TEXT + 1));
+        assert_eq!(clipboard.read_now(), Err(ClipboardError::TooLarge));
     }
 }

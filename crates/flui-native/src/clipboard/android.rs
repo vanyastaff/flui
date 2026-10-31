@@ -4,16 +4,17 @@
 //! manager posts to the Java main thread itself, so the owner thread may call
 //! it. A read takes the primary clip's first item as text
 //! (`ClipData.Item.coerceToText`), so a URI or an intent reads as its textual
-//! form. From Android 10 a read answers `None` unless the app has input focus,
-//! and from Android 13 the system shows its own notice on a read: both are the
-//! system's policy, not a failure. A failed call is logged and reads as empty
-//! or writes nothing, as on the other hosts.
+//! form. From Android 10 a read answers `Ok(None)` unless the app has input
+//! focus, and from Android 13 the system shows its own notice on a read: both
+//! are the system's policy, not a failure. A failed call is logged; a read
+//! answers [`ClipboardError::Unavailable`], a write writes nothing.
 
 use android_activity::AndroidApp;
+use flui_platform::{ClipboardError, ClipboardRead};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::SyncClipboard;
+use crate::host::{SyncClipboard, host_text};
 use crate::owner::android::activity::with_activity;
 
 /// The system clipboard of the Activity `app` runs.
@@ -49,8 +50,8 @@ fn clipboard_manager<'local>(
 }
 
 impl SyncClipboard for AndroidClipboard {
-    fn read_now(&self) -> Option<String> {
-        with_activity(&self.app, |env, activity| {
+    fn read_now(&self) -> ClipboardRead {
+        let text = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
                 return Ok(None);
@@ -102,14 +103,15 @@ impl SyncClipboard for AndroidClipboard {
             let text = env.cast_local::<jni::objects::JString<'_>>(text)?;
             Ok(Some(text.try_to_string(env)?))
         })
-        .unwrap_or_else(|error| {
+        .map_err(|error| {
             tracing::warn!(
                 target: "flui_native::android",
                 %error,
-                "clipboard read failed; it reads as empty"
+                "clipboard read failed"
             );
-            None
-        })
+            ClipboardError::Unavailable
+        })?;
+        text.map_or(Ok(None), host_text)
     }
 
     fn write_now(&self, text: String) {

@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 
 use flui_native::testing::wayland::{present, run_for};
 use flui_native::{HostWindow, Platform as _, WaylandPlatform};
-use flui_platform::WindowOptions;
 use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
     PendingCompletions, Resolver,
 };
+use flui_platform::{ClipboardRead, WindowOptions};
 use flui_testing::window_handler::RecordingWindowHandler;
 
 /// How long a step may take before the case fails.
@@ -106,15 +106,17 @@ impl Client {
     }
 
     /// Start a read with `start`, turning the loop until it answers.
-    pub(crate) fn read(&self, start: impl FnOnce(Resolver<Option<String>>)) -> Option<String> {
-        let (mut completion, resolver): (Completion<Option<String>>, _) =
-            self.answers.source.pending::<Option<String>>();
+    pub(crate) fn read(&self, start: impl FnOnce(Resolver<ClipboardRead>)) -> Option<Arc<str>> {
+        let (mut completion, resolver): (Completion<ClipboardRead>, _) =
+            self.answers.source.pending::<ClipboardRead>();
         start(resolver);
         let deadline = Instant::now() + STEP;
         loop {
             self.turn();
             if let Some(outcome) = completion.poll() {
-                return outcome.expect("the read is answered, not abandoned");
+                return outcome
+                    .expect("the read is answered, not abandoned")
+                    .expect("the Wayland read succeeds");
             }
             assert!(Instant::now() < deadline, "timed out waiting for the read");
         }

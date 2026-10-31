@@ -35,6 +35,21 @@
 
 mod clipboard;
 
+#[cfg(any(windows, wayland_host, x11_host))]
+pub(crate) use clipboard::MAX_TEXT;
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) use clipboard::host_text;
+#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
+pub(crate) use clipboard::owned_text;
 pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 
@@ -552,11 +567,12 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
     }
 }
 
-/// A host without a clipboard holds nothing: a read answers `None`, a write
+/// A host without a clipboard reads none: a read answers
+/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError), a write
 /// is dropped.
 impl SyncClipboard for Absent<position::Clipboard> {
-    fn read_now(&self) -> Option<String> {
-        None
+    fn read_now(&self) -> flui_platform::ClipboardRead {
+        Err(flui_platform::ClipboardError::Unavailable)
     }
 
     fn write_now(&self, text: String) {

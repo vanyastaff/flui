@@ -58,7 +58,7 @@ mod cases {
         client.platform.clipboard().write_text(text.to_owned());
     }
 
-    fn read(client: &Client) -> Option<String> {
+    fn read(client: &Client) -> Option<std::sync::Arc<str>> {
         client.read(|answer| client.platform.clipboard().read_text(answer))
     }
 
@@ -109,8 +109,8 @@ mod cases {
             );
         };
         assert_eq!(
-            report,
-            Some("written by the first".to_owned()),
+            report.as_deref(),
+            Some("written by the first"),
             "the second client reads the first's text through the compositor"
         );
         first.until("the keyboard to come back", || first.window.state().focused);

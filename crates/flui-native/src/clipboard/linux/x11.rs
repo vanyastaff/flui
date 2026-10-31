@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardRead, capability::Resolver};
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
@@ -94,7 +94,7 @@ fn ring(bell: &OwnedFd) {
 }
 
 impl host::NativeClipboard for X11Clipboard {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.send(Command::Read(answer));
     }
 
