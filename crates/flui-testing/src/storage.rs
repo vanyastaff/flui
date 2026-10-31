@@ -39,7 +39,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use flui_platform::{
-    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
+    CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
+    WriteMode,
 };
 use parking_lot::Mutex;
 
@@ -72,6 +73,10 @@ struct State {
     fail_next: VecDeque<StorageError>,
     /// The error every read fails with, if set.
     fail_reads: Option<StorageError>,
+    /// The error every copy aside fails with, if set.
+    fail_copies: Option<StorageError>,
+    /// The copies [`Storage::copy_aside`] kept of each name, in order.
+    kept: HashMap<StorageName, Vec<Vec<u8>>>,
 }
 
 /// An accepted value on its way to [`State::values`].
@@ -228,6 +233,24 @@ impl MemoryStorage {
         self.state.lock().fail_reads = error;
     }
 
+    /// Fail every [`copy_aside`](Storage::copy_aside) with `error` from now
+    /// on, keeping nothing; `None` lets copies succeed again.
+    pub fn fail_copies(&self, error: Option<StorageError>) {
+        self.state.lock().fail_copies = error;
+    }
+
+    /// The copies [`copy_aside`](Storage::copy_aside) kept of `name`, oldest
+    /// first: the copy named `<name>.corrupt-<n>` is at index `n - 1`.
+    #[must_use]
+    pub fn kept_aside(&self, name: &StorageName) -> Vec<Vec<u8>> {
+        self.state
+            .lock()
+            .kept
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// How many read and write futures are alive: issued and not yet
     /// dropped, whether or not they completed.
     #[must_use]
@@ -273,7 +296,7 @@ impl Storage for MemoryStorage {
             }
         };
         drop(state);
-        Box::pin(ReadRequest {
+        Box::pin(Answered {
             state: Arc::clone(&self.state),
             answer: Some(answer),
         })
@@ -316,6 +339,31 @@ impl Storage for MemoryStorage {
         Box::pin(WriteRequest {
             state: Arc::clone(&self.state),
             id,
+        })
+    }
+
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside> {
+        let mut state = self.state.lock();
+        state.live += 1;
+        let answer = match &state.fail_copies {
+            Some(error) => Err(error.clone()),
+            None => match state.values.get(name).cloned() {
+                None => Err(StorageError::NotFound),
+                Some(bytes) => {
+                    let version = StoredVersion::of_bytes(&bytes);
+                    let kept = state.kept.entry(*name).or_default();
+                    kept.push(bytes);
+                    Ok(CopiedAside {
+                        kept_as: format!("{}.corrupt-{}", name.as_str(), kept.len()),
+                        version,
+                    })
+                }
+            },
+        };
+        drop(state);
+        Box::pin(Answered {
+            state: Arc::clone(&self.state),
+            answer: Some(answer),
         })
     }
 }
@@ -397,21 +445,21 @@ impl Drop for CommitBarrier {
     }
 }
 
-/// A read: answered when issued, counted until dropped.
-struct ReadRequest {
+/// A read or a copy: answered when issued, counted until dropped.
+struct Answered<T: Unpin> {
     state: Arc<Mutex<State>>,
-    answer: Option<Result<Stored, StorageError>>,
+    answer: Option<Result<T, StorageError>>,
 }
 
-impl Future for ReadRequest {
-    type Output = Result<Stored, StorageError>;
+impl<T: Unpin> Future for Answered<T> {
+    type Output = Result<T, StorageError>;
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.answer.take().map_or(Poll::Pending, Poll::Ready)
     }
 }
 
-impl Drop for ReadRequest {
+impl<T: Unpin> Drop for Answered<T> {
     fn drop(&mut self) {
         self.state.lock().live -= 1;
     }

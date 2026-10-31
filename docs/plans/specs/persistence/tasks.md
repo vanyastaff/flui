@@ -104,8 +104,12 @@ graph LR
   UI-runtime (общий механизм дедлайнов runtime, дизайн — координатору), немедленная запись на
   `Hidden`/`Paused` и запросе закрытия — сделано: таймер runtime (ADR-0275) и повтор в
   `Persisted`, строки `busy_retry_follows_the_runtime_clock` (R16) и
-  `a_hidden_application_or_a_close_retries_a_busy_write_at_once`; P5c — `start_over` через `Storage::copy_aside` (форма —
-  координатору); R15 `drop_before_commit_loses_only_that_edit` и R17 — с ними.
+  `a_hidden_application_or_a_close_retries_a_busy_write_at_once`; P5c — `start_over` через
+  `Storage::copy_aside` (копия в первое свободное `<name>.corrupt-<n>`, `StorageError::NotFound`;
+  `FileStore` — `create_new`, IndexedDB — одна транзакция) — сделано: строки
+  `corrupt_bytes_are_kept_until_start_over` (R17) и
+  `copy_aside_keeps_the_value_under_the_first_free_name`. Остаток P5: R15
+  `drop_before_commit_loses_only_that_edit`.
 
 ## Устаревшие задачи
 

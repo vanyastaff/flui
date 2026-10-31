@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::GestureEndReason;
 use flui_objects::RenderFollowerLayer;
@@ -16,6 +17,7 @@ use flui_painting::styling::{BoxDecoration, Color};
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::{LayerLink, LeaderClip};
+use flui_rendering::pipeline::LeaderWatch;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{
@@ -191,11 +193,9 @@ pub(super) struct HandleState {
     entry: RefCell<Option<OverlayEntry>>,
     /// What the handles look like, resolved at the area's last build.
     look: RefCell<Option<Look>>,
-    /// The line heights the shown handles were last built for, `None`
-    /// for an end that was not laid out.
-    built: Cell<[Option<f64>; 2]>,
-    /// Whether a check of the built line heights waits for the frame.
-    check_pending: Cell<bool>,
+    /// Watches on the two ends' leaders: a leader's size is its end's line,
+    /// so a change rebuilds shown handles, a relayout without a build too.
+    watches: RefCell<Vec<LeaderWatch>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
     /// Whether the missing overlay was already reported.
@@ -210,8 +210,7 @@ impl Default for HandleState {
             overlay: RefCell::new(None),
             entry: RefCell::new(None),
             look: RefCell::new(None),
-            built: Cell::new([None; 2]),
-            check_pending: Cell::new(false),
+            watches: RefCell::new(Vec::new()),
             grip: Cell::new(None),
             warned: Cell::new(false),
         }
@@ -313,8 +312,6 @@ impl StatelessView for HandlesView {
             .upgrade()
             .map(|model| {
                 let heights = model.end_line_heights();
-                model.handles.built.set(heights);
-                model.check_handles_after_frame();
                 [HandleSide::Start, HandleSide::End]
                     .into_iter()
                     .zip(heights)
@@ -336,33 +333,35 @@ impl SelectionModel {
         ]
     }
 
-    /// After the frame, rebuilds shown handles built for lines that have
-    /// since been laid out again: a build runs before layout, so handles
-    /// built in the frame that changes their text read the old lines, or
-    /// none. Without a post-frame lane they keep what they were built for.
-    pub(super) fn check_handles_after_frame(self: &Rc<Self>) {
-        if !self.handles.shown.get() || self.handles.check_pending.replace(true) {
-            return;
-        }
-        let Some(post_frame) = self.post_frame.borrow().clone() else {
-            self.handles.check_pending.set(false);
+    /// Watches the two ends' leaders, once: a leader's size is its end's
+    /// line, so shown handles rebuild when a line changes, a relayout no
+    /// build caused too. A change is heard after the frame that painted it,
+    /// and the handles rebuild in the next. Without a pipeline or a
+    /// post-frame lane the handles keep the lines they were built for.
+    pub(super) fn watch_handle_lines(self: &Rc<Self>) {
+        let pipeline = self.pipeline.borrow().clone();
+        let post_frame = self.post_frame.borrow().clone();
+        let (Some(pipeline), Some(post_frame)) = (pipeline, post_frame) else {
             return;
         };
-        let model = Rc::downgrade(self);
-        let scheduled = post_frame.schedule(move |_| {
-            let Some(model) = Weak::upgrade(&model) else {
-                return;
-            };
-            model.handles.check_pending.set(false);
-            if model.handles.shown.get() && model.end_line_heights() != model.handles.built.get() {
-                let mut failure = FirstPanic::new();
-                model.handles.refresh(&mut failure);
-                failure.resume();
-            }
-        });
-        if let Err(error) = scheduled {
-            self.handles.check_pending.set(false);
-            tracing::warn!(?error, "SelectionArea: the post-frame lane is closed");
+        let mut watches = self.handles.watches.borrow_mut();
+        if !watches.is_empty() {
+            return;
+        }
+        for link in self.handles.links {
+            let watch = pipeline.watch_leader(link, post_frame.clone());
+            let model = Rc::downgrade(self);
+            watch.add_listener(Rc::new(move || {
+                let Some(model) = Weak::upgrade(&model) else {
+                    return;
+                };
+                if model.handles.shown.get() {
+                    let mut failure = FirstPanic::new();
+                    model.handles.refresh(&mut failure);
+                    failure.resume();
+                }
+            }));
+            watches.push(watch);
         }
     }
 }

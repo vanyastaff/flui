@@ -16,7 +16,7 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{EdgeInsets, Size};
+use flui_foundation::geometry::Size;
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
@@ -46,7 +46,7 @@ use crate::{
     version::gate::android::TouchpadGestures,
     window::state::{ReportedFacts, WindowStateCell},
 };
-use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
+use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowInsets};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -68,7 +68,7 @@ pub struct AndroidWindow {
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
-    safe_area: Arc<Mutex<safe_area::Capture>>,
+    insets: Arc<Mutex<insets::Capture>>,
     /// The exclusion rectangles last handed to the decor view, as projected.
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
     /// What the table's positions made for the window: its actuator (the
@@ -141,7 +141,7 @@ impl AndroidWindow {
             &activity,
             &Kept {
                 appearance,
-                safe_area: EdgeInsets::ZERO,
+                insets: WindowInsets::ZERO,
                 hovered: false,
             },
         )));
@@ -156,7 +156,7 @@ impl AndroidWindow {
             owner,
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
-            safe_area: Arc::new(Mutex::new(safe_area::Capture::default())),
+            insets: Arc::new(Mutex::new(insets::Capture::default())),
             input_regions: Arc::default(),
             java_view,
             drag_source,
@@ -174,11 +174,11 @@ impl AndroidWindow {
         Size::new(width, height)
     }
 
-    fn accept_safe_area(&self, sample: Option<safe_area::Sample>) {
+    fn accept_insets(&self, sample: Option<insets::Sample>) {
         let size = self.device_size();
         let scale = self.scale();
         {
-            let mut capture = self.safe_area.lock();
+            let mut capture = self.insets.lock();
             let Some(sample) = sample else {
                 return;
             };
@@ -188,7 +188,7 @@ impl AndroidWindow {
                 // must not keep the Java thread busy.
                 if std::mem::take(&mut capture.retry_stale) {
                     drop(capture);
-                    self.query_safe_area();
+                    self.query_insets();
                 }
                 return;
             }
@@ -204,23 +204,23 @@ impl AndroidWindow {
         self.request_redraw();
     }
 
-    fn query_safe_area(&self) {
+    fn query_insets(&self) {
         {
-            let mut capture = self.safe_area.lock();
-            if !matches!(capture.query, safe_area::Query::Idle)
+            let mut capture = self.insets.lock();
+            if !matches!(capture.query, insets::Query::Idle)
                 || !self.geometry_live.load(Ordering::Acquire)
             {
                 return;
             }
-            capture.query = safe_area::Query::Waiting;
+            capture.query = insets::Query::Waiting;
         }
         let app = self.app.clone();
         let api = self.api;
-        let capture = Arc::downgrade(&self.safe_area);
+        let capture = Arc::downgrade(&self.insets);
         let live = Arc::downgrade(&self.geometry_live);
         let signal = self.owner_signal.clone();
         self.app.run_on_java_main_thread(Box::new(move || {
-            let sample = safe_area::sample(&app, api);
+            let sample = insets::sample(&app, api);
             if !live
                 .upgrade()
                 .is_some_and(|live| live.load(Ordering::Acquire))
@@ -228,7 +228,7 @@ impl AndroidWindow {
                 return;
             }
             if let Some(capture) = capture.upgrade() {
-                capture.lock().query = safe_area::Query::Ready(sample);
+                capture.lock().query = insets::Query::Ready(sample);
             }
             if let Some(signal) = signal.upgrade() {
                 let _ = signal.wake();
@@ -262,7 +262,7 @@ impl AndroidWindow {
             &self.activity,
             &Kept {
                 appearance: *self.appearance.lock(),
-                safe_area: self.safe_area.lock().accepted,
+                insets: self.insets.lock().accepted,
                 hovered: self.delivery.hovered(),
             },
         )
@@ -304,32 +304,32 @@ impl ActivityWindow for AndroidWindow {
     /// Ask the Java thread for the insets. A reply taken at a size the window
     /// no longer has is asked for once more; a request while a reply is out is
     /// asked again once that reply settles.
-    fn request_safe_area(&self) {
+    fn request_insets(&self) {
         {
-            let mut capture = self.safe_area.lock();
+            let mut capture = self.insets.lock();
             capture.retry_stale = true;
-            if !matches!(capture.query, safe_area::Query::Idle) {
+            if !matches!(capture.query, insets::Query::Idle) {
                 capture.requery = true;
                 return;
             }
         }
-        self.query_safe_area();
+        self.query_insets();
     }
 
-    fn settle_safe_area(&self) {
+    fn settle_insets(&self) {
         let (sample, requery) = {
-            let mut capture = self.safe_area.lock();
-            let safe_area::Query::Ready(sample) = capture.query else {
+            let mut capture = self.insets.lock();
+            let insets::Query::Ready(sample) = capture.query else {
                 return;
             };
-            capture.query = safe_area::Query::Idle;
+            capture.query = insets::Query::Idle;
             (sample, std::mem::take(&mut capture.requery))
         };
-        self.accept_safe_area(sample);
+        self.accept_insets(sample);
         if requery {
             // Asked directly, without arming the stale retry again, so this
             // asks once more and no more.
-            self.query_safe_area();
+            self.query_insets();
         }
     }
 
@@ -432,11 +432,11 @@ fn native_scale(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> f64 
 }
 
 /// What the window kept of facts the Activity reported earlier: the night
-/// mode its configuration last said, the safe area last accepted and the
+/// mode its configuration last said, the insets last accepted and the
 /// hover last reported.
 struct Kept {
     appearance: WindowAppearance,
-    safe_area: EdgeInsets,
+    insets: WindowInsets,
     hovered: bool,
 }
 
@@ -472,9 +472,7 @@ fn sample_state(
         metrics: flui_foundation::geometry::WindowMetrics::try_new(Size::new(width, height), scale)
             .ok(),
         appearance: kept.appearance,
-        insets: flui_platform::WindowInsets::ZERO
-            .try_with_safe_area(kept.safe_area)
-            .expect("BUG: an accepted safe area is finite and non-negative"),
+        insets: kept.insets,
         execution: execution_of(activity),
         occluded: !activity.visible.load(Ordering::SeqCst),
         hovered: kept.hovered,
@@ -930,19 +928,32 @@ impl flui_platform::SurfaceTarget for AndroidSurface {
     fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
 }
 
-mod safe_area {
-    //! Capture immutable system-bar/cutout geometry on the Java view thread.
+mod insets {
+    //! Capture the system bars, cutout, keyboard and system gesture regions on
+    //! the Java view thread.
 
     use android_activity::AndroidApp;
     use flui_foundation::geometry::{EdgeInsets, Size};
-    use jni::{JValue, jni_sig, jni_str};
+    use flui_platform::{KeyboardInset, WindowInsets};
+    use jni::objects::JObject;
+    use jni::{Env, JValue, jni_sig, jni_str};
 
-    use crate::version::gate::android::{AndroidApi, DisplayCutout, InsetsByType};
+    use crate::version::gate::android::{
+        AndroidApi, DisplayCutout, InsetsByType, SystemGestureInsets,
+    };
+
+    /// Device-pixel edges as top, right, bottom, left.
+    type Edges = [i32; 4];
 
     #[derive(Clone, Copy)]
     pub(super) struct Sample {
         size: Size<i32>,
-        insets: [i32; 4],
+        /// The system bars and the display cutout.
+        safe_area: Edges,
+        /// The input method's window where it covers the view.
+        keyboard: Edges,
+        /// The edges system gestures take.
+        system_gestures: Edges,
     }
 
     impl Sample {
@@ -951,7 +962,11 @@ mod safe_area {
             self.size == size
         }
 
-        pub(super) fn logical(self, size: Size<i32>, scale: f64) -> Option<EdgeInsets> {
+        /// The sample in logical pixels at `scale`, the keyboard at rest: a
+        /// keyboard's motion arrives through its animation callback. `None`
+        /// for a sample taken at another size or a scale that makes no
+        /// logical pixels.
+        pub(super) fn logical(self, size: Size<i32>, scale: f64) -> Option<WindowInsets> {
             if self.size != size
                 || size.width <= 0
                 || size.height <= 0
@@ -960,17 +975,21 @@ mod safe_area {
             {
                 return None;
             }
-            let [top, right, bottom, left] = self.insets;
-            let edges = [
-                f64::from(top.clamp(0, size.height)) / scale,
-                f64::from(right.clamp(0, size.width)) / scale,
-                f64::from(bottom.clamp(0, size.height)) / scale,
-                f64::from(left.clamp(0, size.width)) / scale,
-            ];
-            edges
-                .iter()
-                .all(|edge| edge.is_finite())
-                .then(|| EdgeInsets::new(edges[0], edges[1], edges[2], edges[3]))
+            let logical = |[top, right, bottom, left]: Edges| {
+                EdgeInsets::new(
+                    f64::from(top.clamp(0, size.height)) / scale,
+                    f64::from(right.clamp(0, size.width)) / scale,
+                    f64::from(bottom.clamp(0, size.height)) / scale,
+                    f64::from(left.clamp(0, size.width)) / scale,
+                )
+            };
+            let keyboard = KeyboardInset::try_at_rest(logical(self.keyboard)).ok()?;
+            WindowInsets::try_new(
+                logical(self.safe_area),
+                keyboard,
+                logical(self.system_gestures),
+            )
+            .ok()
         }
     }
 
@@ -982,7 +1001,7 @@ mod safe_area {
     }
 
     pub(super) struct Capture {
-        pub(super) accepted: EdgeInsets,
+        pub(super) accepted: WindowInsets,
         pub(super) query: Query,
         /// A reply taken at a size the window no longer has is asked for again.
         pub(super) retry_stale: bool,
@@ -994,7 +1013,7 @@ mod safe_area {
     impl Default for Capture {
         fn default() -> Self {
             Self {
-                accepted: EdgeInsets::ZERO,
+                accepted: WindowInsets::ZERO,
                 query: Query::Idle,
                 retry_stale: false,
                 requery: false,
@@ -1002,11 +1021,15 @@ mod safe_area {
         }
     }
 
-    /// Must run on Android's Java main thread. The insets are the system bars and
-    /// the display cutout; keyboard occlusion is not included. From API 30 they
-    /// are the bars as they are now, so a hidden bar (immersive or fullscreen
-    /// content) reserves no space. Below it the only reading without the keyboard
-    /// is the stable one, which keeps a hidden bar's space.
+    /// Must run on Android's Java main thread. The safe area is the system bars
+    /// and the display cutout: from API 30 the bars as they are now, so a hidden
+    /// bar (immersive or fullscreen content) reserves no space; below it the
+    /// stable reading, which keeps a hidden bar's space. The keyboard is the
+    /// input method's insets (`Type.ime()`) from API 30; below it, the whole
+    /// system window bottom once it exceeds the stable one (the input method is
+    /// up under `adjustResize`), measured from the window's edge as `Type.ime()`
+    /// is, the way AndroidX's `WindowInsetsCompat` reads it. The system gesture
+    /// regions are read from API 29.
     pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
         crate::owner::android::activity::with_activity(app, |env, activity| {
             let window = env
@@ -1042,48 +1065,33 @@ mod safe_area {
             let height = env
                 .call_method(&decor, jni_str!("getHeight"), jni_sig!("()I"), &[])?
                 .i()?;
-            let mut edges = [0; 4];
+            let mut safe_area = [0; 4];
+            let mut keyboard = [0; 4];
             if api.since::<InsetsByType>().is_some() {
-                let bars = env
-                    .call_static_method(
-                        jni_str!("android/view/WindowInsets$Type"),
-                        jni_str!("systemBars"),
-                        jni_sig!("()I"),
-                        &[],
-                    )?
-                    .i()?;
-                let cutout = env
-                    .call_static_method(
-                        jni_str!("android/view/WindowInsets$Type"),
-                        jni_str!("displayCutout"),
-                        jni_sig!("()I"),
-                        &[],
-                    )?
-                    .i()?;
-                let system = env
-                    .call_method(
-                        &insets,
-                        jni_str!("getInsets"),
-                        jni_sig!("(I)Landroid/graphics/Insets;"),
-                        &[JValue::Int(bars | cutout)],
-                    )?
-                    .l()?;
-                for (edge, name) in edges.iter_mut().zip([
-                    jni_str!("top"),
-                    jni_str!("right"),
-                    jni_str!("bottom"),
-                    jni_str!("left"),
-                ]) {
-                    *edge = env.get_field(&system, name, jni_sig!("I"))?.i()?;
-                }
+                let bars = insets_type(env, jni_str!("systemBars"))?;
+                let cutout = insets_type(env, jni_str!("displayCutout"))?;
+                safe_area = insets_of_type(env, &insets, bars | cutout)?;
+                let ime = insets_type(env, jni_str!("ime"))?;
+                keyboard = insets_of_type(env, &insets, ime)?;
             } else {
-                for (edge, name) in edges.iter_mut().zip([
+                for (edge, name) in safe_area.iter_mut().zip([
                     jni_str!("getStableInsetTop"),
                     jni_str!("getStableInsetRight"),
                     jni_str!("getStableInsetBottom"),
                     jni_str!("getStableInsetLeft"),
                 ]) {
                     *edge = env.call_method(&insets, name, jni_sig!("()I"), &[])?.i()?;
+                }
+                let system_bottom = env
+                    .call_method(
+                        &insets,
+                        jni_str!("getSystemWindowInsetBottom"),
+                        jni_sig!("()I"),
+                        &[],
+                    )?
+                    .i()?;
+                if system_bottom > safe_area[2] {
+                    keyboard[2] = system_bottom;
                 }
             }
             if api.since::<DisplayCutout>().is_some() && api.since::<InsetsByType>().is_none() {
@@ -1096,7 +1104,7 @@ mod safe_area {
                     )?
                     .l()?;
                 if !cutout.is_null() {
-                    for (edge, name) in edges.iter_mut().zip([
+                    for (edge, name) in safe_area.iter_mut().zip([
                         jni_str!("getSafeInsetTop"),
                         jni_str!("getSafeInsetRight"),
                         jni_str!("getSafeInsetBottom"),
@@ -1107,13 +1115,70 @@ mod safe_area {
                     }
                 }
             }
+            let system_gestures = if api.since::<SystemGestureInsets>().is_some() {
+                let gestures = env
+                    .call_method(
+                        &insets,
+                        jni_str!("getSystemGestureInsets"),
+                        jni_sig!("()Landroid/graphics/Insets;"),
+                        &[],
+                    )?
+                    .l()?;
+                edges_of(env, &gestures)?
+            } else {
+                [0; 4]
+            };
             Ok(Some(Sample {
                 size: Size::new(width, height),
-                insets: edges,
+                safe_area,
+                keyboard,
+                system_gestures,
             }))
         })
         .ok()
         .flatten()
+    }
+
+    /// The `WindowInsets.Type` mask its static method `name` answers (API 30).
+    fn insets_type(env: &mut Env<'_>, name: &jni::strings::JNIStr) -> jni::errors::Result<i32> {
+        env.call_static_method(
+            jni_str!("android/view/WindowInsets$Type"),
+            name,
+            jni_sig!("()I"),
+            &[],
+        )?
+        .i()
+    }
+
+    /// The edges `insets` gives the types in `mask` (API 30).
+    fn insets_of_type(
+        env: &mut Env<'_>,
+        insets: &JObject<'_>,
+        mask: i32,
+    ) -> jni::errors::Result<Edges> {
+        let edges = env
+            .call_method(
+                insets,
+                jni_str!("getInsets"),
+                jni_sig!("(I)Landroid/graphics/Insets;"),
+                &[JValue::Int(mask)],
+            )?
+            .l()?;
+        edges_of(env, &edges)
+    }
+
+    /// The fields of an `android.graphics.Insets`, as top, right, bottom, left.
+    fn edges_of(env: &mut Env<'_>, insets: &JObject<'_>) -> jni::errors::Result<Edges> {
+        let mut edges = [0; 4];
+        for (edge, name) in edges.iter_mut().zip([
+            jni_str!("top"),
+            jni_str!("right"),
+            jni_str!("bottom"),
+            jni_str!("left"),
+        ]) {
+            *edge = env.get_field(insets, name, jni_sig!("I"))?.i()?;
+        }
+        Ok(edges)
     }
 
     #[cfg(test)]
@@ -1121,15 +1186,30 @@ mod safe_area {
         use super::*;
 
         #[test]
-        fn android_safe_area_native_metrics() {
+        fn android_insets_native_metrics() {
             let size = Size::new(1080, 2400);
             let sample = Sample {
                 size,
-                insets: [128, 0, 63, 0],
+                safe_area: [128, 0, 63, 0],
+                keyboard: [0, 0, 840, 0],
+                system_gestures: [0, 63, 63, 63],
             };
+            let insets = sample
+                .logical(size, 2.625)
+                .expect("a sample at its own size");
             assert_eq!(
-                sample.logical(size, 2.625),
-                Some(EdgeInsets::new(128.0 / 2.625, 0.0, 24.0, 0.0))
+                insets.safe_area(),
+                EdgeInsets::new(128.0 / 2.625, 0.0, 24.0, 0.0)
+            );
+            assert_eq!(
+                insets.keyboard(),
+                KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 320.0, 0.0))
+                    .expect("a valid keyboard"),
+                "a keyboard sampled from the insets is at rest"
+            );
+            assert_eq!(
+                insets.system_gestures(),
+                EdgeInsets::new(0.0, 24.0, 24.0, 24.0)
             );
             assert!(
                 sample.logical(Size::new(2400, 1080), 2.625).is_none(),
