@@ -108,6 +108,7 @@ const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
 mod agent_events;
+mod agent_inspect;
 mod agent_stability;
 mod agent_wait;
 mod attach;

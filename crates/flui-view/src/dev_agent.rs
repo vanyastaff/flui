@@ -57,7 +57,8 @@ use std::time::Duration;
 
 use flui_protocol::{
     ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, Event, EventFilter,
-    LocateParams, Matches, ReadQuery, Retry, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
+    InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Retry, Snapshot, Tree,
+    WaitOutcome, WaitParams, WindowId,
 };
 
 use crate::__runtime::{AgentPort, EventSource, PendingAnswer};
@@ -112,6 +113,18 @@ pub trait DevAgentHook: Send + 'static {
 
     /// A window with content to read has opened.
     fn window_opened(&mut self, window: AgentWindow);
+}
+
+/// Which of a window's trees an inspection reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InspectTarget {
+    /// The element tree (`inspect.widgets`, ids `v3.2`).
+    Widgets,
+    /// The render tree (`inspect.render`, ids `r12`).
+    Render,
+    /// The layers of the last painted scene (`inspect.layers`, ids `l4.37`).
+    Layers,
 }
 
 /// The kind of handle a `gone` or `unknown_handle` fault names.
@@ -450,6 +463,26 @@ impl AgentWindow {
             .wait(params)
     }
 
+    /// Read one of this window's trees as the typed snapshot it describes itself with, or the
+    /// subtree under `params.root` (a tree-local handle such as `v3.2`, or a `p3/v3.2` reference
+    /// that must name this window). `params.window` is the caller's own bookkeeping: the read is
+    /// this window's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest, among them `unknown_handle` (a window)
+    /// for a reference to another window, `gone` for a root that is no longer in its tree, and
+    /// `busy` while a frame holds the tree.
+    pub fn inspect(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .inspect(target, params)
+    }
+
     /// Subscribe to this window's events: `filters` select the kinds, and a filter that names
     /// another window selects nothing here. The answer is the stream once the owner has
     /// registered it; events emitted after that reach it.
@@ -578,6 +611,14 @@ mod tests {
             &self,
             _filters: Vec<EventFilter>,
         ) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+            Err(AgentFault::window_gone())
+        }
+
+        fn inspect(
+            &self,
+            _target: InspectTarget,
+            _params: InspectParams,
+        ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
             Err(AgentFault::window_gone())
         }
 

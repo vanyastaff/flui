@@ -929,6 +929,20 @@ the registration are delivered, never a replay. `input` and `announcement` are a
 filters and not emitted yet (they come from the input journal and the announcement fan-out);
 `frame.time_us` is not filled yet. Pinned by `src/ui_runtime/tests/agent_events.rs`.
 
+**Inspect.** `inspect` (`UiCommand::SemanticsAgentInspect`) answers at the owner with the typed
+snapshot a tree describes itself with (`flui_foundation::inspect`): `inspect_elements` for
+`Widgets`, `inspect_render` for `Render`. The snapshot becomes the protocol's owned
+`InspectNode` tree in `agent_inspect.rs` (the protocol crate has no foundation edge), with an
+iterative walk so a deep chain costs no Rust stack; at most 4096 nodes are reported whatever the
+caller asks. Ids on the wire are the tree's own handles (`v3.2`, `r12`); a `root` may be a
+`NodeRef` (`p3/v3.2`), which must name this presentation: a reference to another or a closed
+window is `UnknownPresentation` (`unknown_handle`, kind window) and is never looked up here, and
+a handle of another tree is `invalid_argument`. A root that left its tree is `NodeGone`
+(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` answers
+`LayersNotKept` (`not_supported`): the sink takes the scene a frame paints, and the window keeps
+no copy to read between frames. Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
+reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render object or view that panics while the tree is read (`debug_name`, `inspect`) answers `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does; pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
+
 **Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first

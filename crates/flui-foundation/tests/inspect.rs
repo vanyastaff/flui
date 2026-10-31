@@ -1296,3 +1296,71 @@ fn a_panicking_description_is_recorded_on_its_node_and_the_walk_goes_on() {
         "only the node that panicked records it"
     );
 }
+
+/// A link or a window-qualified reference reads back as the text that printed it, and text that
+/// is not one spelling of a node is refused.
+#[test]
+fn a_node_reference_prints_and_parses_as_one_text() {
+    use flui_foundation::PresentationId;
+    use flui_foundation::inspect::NodeRef;
+
+    let layer = Link::Layer(SceneLayer {
+        scene: NonZeroU64::new(37).expect("37 is not zero"),
+        id: LayerId::new(4),
+    });
+    let links = [
+        (Link::Element(ElementId::new_gen(3, nz32(2))), "v3.2"),
+        (Link::Element(ElementId::new_gen(12, nz32(1))), "v12"),
+        (Link::Render(RenderId::new_gen(12, nz32(4))), "r12.4"),
+        (layer, "l4.37"),
+        (Link::Semantics(SemanticsId::new(7)), "s7"),
+    ];
+    for (link, text) in links {
+        assert_eq!(link.to_string(), text);
+        assert_eq!(text.parse::<Link>(), Ok(link), "{text}");
+    }
+
+    let window = PresentationId::new_gen(3, nz32(1));
+    let reference = NodeRef::new(window, Link::Element(ElementId::new_gen(12, nz32(4))));
+    assert_eq!(reference.to_string(), "p3/v12.4");
+    assert_eq!("p3/v12.4".parse::<NodeRef>(), Ok(reference));
+    let reused = NodeRef::new(PresentationId::new_gen(3, nz32(2)), links[4].0);
+    assert_eq!(reused.to_string(), "p3.2/s7");
+    assert_eq!("p3.2/s7".parse::<NodeRef>(), Ok(reused));
+    assert_ne!(
+        reused,
+        NodeRef::new(window, links[4].0),
+        "a reused slot is another window"
+    );
+
+    for text in [
+        "",
+        "x3",
+        "v",
+        "v.2",
+        "v3.",
+        "v3.0",
+        "v3.1",
+        "v-3",
+        "v3.2.1",
+        "s7.2",
+        "l0",
+        "s0",
+        "v99999999999",
+        " v3",
+    ] {
+        assert!(text.parse::<Link>().is_err(), "`{text}` is not a link");
+    }
+    for text in [
+        "v3", "p3", "p3/", "/v3", "q3/v3", "p/v3", "p3.1/v3", "p3/x3", "p3/v3/v4",
+    ] {
+        assert!(
+            text.parse::<NodeRef>().is_err(),
+            "`{text}` is not a node reference"
+        );
+    }
+}
+
+fn nz32(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).expect("a generation is not zero")
+}
