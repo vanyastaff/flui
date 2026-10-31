@@ -2,6 +2,7 @@
 
 use flui_objects::{RenderParagraph, TextLinkFocus};
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection, TextLink};
+use flui_rendering::layer::LayerLink;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::SemanticsAnchor;
 use flui_view::element::ElementKind;
@@ -211,6 +212,8 @@ impl RenderView for ResolvedParagraph {
         if let Some(highlight) = &self.highlight {
             let _ = paragraph.set_selection_color(highlight.color);
         }
+        let (start, end) = self.handles();
+        let _ = paragraph.set_selection_handles(start, end);
         paragraph.set_shown_links_listener(self.shown_links_listener());
         paragraph
     }
@@ -223,6 +226,7 @@ impl RenderView for ResolvedParagraph {
         let existing = render_object.link_routes().to_vec();
         let routes = LinkRouting::sync(self.links.as_ref(), ctx, &existing);
         render_object.set_shown_links_listener(self.shown_links_listener());
+        let (start, end) = self.handles();
         render_object.set_text(self.authored.text.clone())
             | render_object.set_text_align(self.authored.align)
             | render_object.set_text_direction(self.authored.direction)
@@ -243,6 +247,7 @@ impl RenderView for ResolvedParagraph {
                 .map_or(flui_rendering::RenderUpdateImpact::NONE, |highlight| {
                     render_object.set_selection_color(highlight.color)
                 })
+            | render_object.set_selection_handles(start, end)
     }
 
     fn did_unmount_render_object(
@@ -256,6 +261,14 @@ impl RenderView for ResolvedParagraph {
 }
 
 impl ResolvedParagraph {
+    /// The links the selection's start and end are published under, for a
+    /// selection area's handles.
+    fn handles(&self) -> (Option<LayerLink>, Option<LayerLink>) {
+        self.highlight
+            .as_ref()
+            .map_or((None, None), |highlight| highlight.handles)
+    }
+
     fn shown_links_listener(&self) -> Option<flui_objects::ShownLinksListener> {
         self.links
             .as_ref()

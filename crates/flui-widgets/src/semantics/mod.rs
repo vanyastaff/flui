@@ -243,8 +243,7 @@ pub struct Semantics {
     options: SemanticsOptions,
     scroll: Option<(
         flui_rendering::view::ScrollPosition,
-        flui_foundation::geometry::Axis,
-        bool,
+        flui_foundation::geometry::AxisDirection,
     )>,
     child: Child,
 }
@@ -292,10 +291,9 @@ impl Semantics {
     pub(crate) fn scroll_source(
         mut self,
         position: flui_rendering::view::ScrollPosition,
-        axis: flui_foundation::geometry::Axis,
-        reversed: bool,
+        direction: flui_foundation::geometry::AxisDirection,
     ) -> Self {
-        self.scroll = Some((position, axis, reversed));
+        self.scroll = Some((position, direction));
         self
     }
 

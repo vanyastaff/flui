@@ -590,6 +590,36 @@ fn selection_area_text_runs() {
     );
 }
 
+/// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
+/// of a handle moves its end, and a tap, Esc or the mouse hides them.
+#[test]
+fn selection_area_handles() {
+    run_cases(
+        "selection_area_handles",
+        &[
+            ("selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end", crate::selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end as fn()),
+            ("selection_area_handles::dragging_a_handle_moves_its_end", crate::selection_area_handles::dragging_a_handle_moves_its_end),
+            ("selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles", crate::selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles),
+            ("selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay", crate::selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay),
+            ("selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is", crate::selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is),
+            ("selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits", crate::selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits),
+            ("selection_area_handles::a_failing_primary_release_still_takes_the_handles_away", crate::selection_area_handles::a_failing_primary_release_still_takes_the_handles_away),
+            ("selection_area_handles::shown_handles_rebuild_with_a_new_direction", crate::selection_area_handles::shown_handles_rebuild_with_a_new_direction),
+            ("selection_area_handles::a_handle_released_past_its_last_move_ends_there", crate::selection_area_handles::a_handle_released_past_its_last_move_ends_there),
+            ("selection_area_handles::shown_handles_follow_their_text_laid_out_anew", crate::selection_area_handles::shown_handles_follow_their_text_laid_out_anew),
+            ("selection_area_handles::an_end_inside_a_new_cluster_sits_where_the_highlight_ends", crate::selection_area_handles::an_end_inside_a_new_cluster_sits_where_the_highlight_ends),
+            ("selection_area_handles::shown_handles_follow_an_inherited_style", crate::selection_area_handles::shown_handles_follow_an_inherited_style),
+            ("selection_area_handles::losing_the_focus_hides_the_handles", crate::selection_area_handles::losing_the_focus_hides_the_handles),
+            ("selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them", crate::selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them),
+            ("selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles", crate::selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles),
+            ("selection_area_handles::failing_wakes_as_the_focus_leaves_surface_the_first", crate::selection_area_handles::failing_wakes_as_the_focus_leaves_surface_the_first),
+            ("selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging", crate::selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging),
+            ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
+            ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
+        ],
+    );
+}
+
 /// A `SelectionArea` selects with a mouse and the keyboard, copies, clears and dims its
 /// highlight on a blur, reading its texts where they are laid out.
 #[test]
@@ -698,6 +728,7 @@ fn scroll_physics_and_activity() {
             ("scroll::retiring_scroll_curves_preserves_newer_reentrant_commands", crate::scroll::retiring_scroll_curves_preserves_newer_reentrant_commands),
             ("scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers", crate::scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers),
             ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
+            ("scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge", crate::scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge),
             ("scroll::hover_holds_while_a_touch_scroll_is_latched", crate::scroll::hover_holds_while_a_touch_scroll_is_latched),
             ("scroll::constrained_sliver_updates_layout_without_replacing_the_child", crate::scroll::constrained_sliver_updates_layout_without_replacing_the_child),
             ("scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics", crate::scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics),

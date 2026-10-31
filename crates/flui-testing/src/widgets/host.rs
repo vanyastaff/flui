@@ -10,7 +10,6 @@
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Vsync, VsyncRegistration, VsyncRegistrationError};
@@ -52,7 +51,7 @@ impl WidgetHost {
     pub(super) fn mount(
         tree: BoxedView,
         window: HeadlessWindow,
-        storage: Option<Arc<dyn flui_platform::Storage>>,
+        storage: Option<crate::host::KitStorage>,
     ) -> Self {
         let ui_runtime = HeadlessHost::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));

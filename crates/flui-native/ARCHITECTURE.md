@@ -29,7 +29,7 @@ trait depends on `flui-platform` instead.
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
   OS versions (`version/`), the storage position's vocabulary (`storage/`) and
   one directory per feature of the closed list: `window`, `input`, `text`,
-  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `preferences`,
+  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `preferences`,
   `lifecycle`. There is no directory of code shared across features and no
   directory per platform: what two platforms of a feature share is that
   feature's model, and each platform is a file (or, where one OS object or the
@@ -417,6 +417,20 @@ trait depends on `flui-platform` instead.
   tells it whether the field composes. Tests of the model and the pure
   halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
   `text::web::ime::tests`, `text::windows::geometry::tests`).
+- **`fonts` answers which system faces fall back, for a locale (ADR-0271
+  §3).** `fonts::system_fallback` is the one entry; the composition root hands
+  it to the font feed, which calls it on its own thread, never the owner's
+  and never in a frame. A platform that cannot answer gives
+  `SystemFallback::none`, never a panic. `fonts::linux` opens fontconfig with
+  `dlopen` for the query and closes it after; `fonts::android` reads
+  `fonts.xml` below API 29 (its parse runs on every host over AOSP's recorded
+  files) and gives none from API 29 until `AFontMatcher` answers.
+  `fonts::windows` hands DirectWrite the sample through an
+  `IDWriteTextAnalysisSource` of its own, whose methods cross `os_entry`;
+  `fonts::apple` looks `CTFontCreateForStringWithLanguage` up at run time,
+  since the macOS floor predates it. What two platforms share and can be
+  decided without the OS (naming a face by file or family, reading a sample
+  around a position) is the model's, tested on every host.
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
   platform, and `[package.metadata.flui.modules]` lists the four as

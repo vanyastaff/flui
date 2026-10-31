@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::AxisDirection;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -78,9 +78,9 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) hint_overrides: Option<SemanticsHintOverrides>,
     /// Scroll position.
     pub(crate) scroll_position: Option<f64>,
-    /// The axis the scroll range runs along; absent, the range publishes as
-    /// vertical.
-    pub(crate) scroll_axis: Option<Axis>,
+    /// The direction the scroll position grows in; absent, the range grows
+    /// from top to bottom.
+    pub(crate) scroll_axis_direction: Option<AxisDirection>,
     /// Scroll extent maximum.
     pub(crate) scroll_extent_max: Option<f64>,
     /// Scroll extent minimum.
