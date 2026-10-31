@@ -133,6 +133,23 @@ pub(crate) enum ViewEvent {
     SettingsChanged,
     /// The window insets the view received changed.
     InsetsChanged,
+    /// The keyboard began to move, or its motion drifted from the clock it
+    /// was reported on (API 30).
+    KeyboardMotion(KeyboardReport),
+    /// The keyboard's motion ended or was cancelled (API 30).
+    KeyboardSettled,
+}
+
+/// A keyboard motion as `FluiKeyboardMotion` reports it: bottom edges in device
+/// pixels, the start on the monotonic clock, the length, and the
+/// interpolator's values a quarter, half and three quarters of the way.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeyboardReport {
+    pub(crate) from: i32,
+    pub(crate) to: i32,
+    pub(crate) start_nanos: i64,
+    pub(crate) duration_millis: i64,
+    pub(crate) values: [f32; 3],
 }
 
 /// Work a feature hands the owner to run against the window.
@@ -774,6 +791,16 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 native_insets_changed as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
+                jni_str!("nativeKeyboardMotion"),
+                jni_str!("(JIIJJFFF)V"),
+                native_keyboard_motion as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeKeyboardSettled"),
+                jni_str!("(J)V"),
+                native_keyboard_settled as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
                 jni_str!("nativeNodeInfo"),
                 jni_str!(
                     "(JLandroid/view/View;I)Landroid/view/accessibility/AccessibilityNodeInfo;"
@@ -992,6 +1019,43 @@ extern "system" fn native_insets_changed<'local>(
     jni_native("nativeInsetsChanged", || {
         if let Some(view) = bridge(handle) {
             view.push_event(ViewEvent::InsetsChanged);
+        }
+    });
+}
+
+extern "system" fn native_keyboard_motion<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    from: jint,
+    to: jint,
+    start_nanos: jlong,
+    duration_millis: jlong,
+    q1: jfloat,
+    q2: jfloat,
+    q3: jfloat,
+) {
+    jni_native("nativeKeyboardMotion", || {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::KeyboardMotion(KeyboardReport {
+                from,
+                to,
+                start_nanos,
+                duration_millis,
+                values: [q1, q2, q3],
+            }));
+        }
+    });
+}
+
+extern "system" fn native_keyboard_settled<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) {
+    jni_native("nativeKeyboardSettled", || {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::KeyboardSettled);
         }
     });
 }
