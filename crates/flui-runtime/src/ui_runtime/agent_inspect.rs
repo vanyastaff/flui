@@ -77,24 +77,6 @@ impl UiRuntime {
         reading_from(taken)
     }
 
-    /// A submit was classified. `producer`'s staged layer reads are answered when `shown`; every
-    /// other presentation's, and the producer's when not shown, are parked again. A reply that
-    /// panics is kept in `panic` (the first one wins) after every reply was attempted.
-    pub(super) fn settle_layer_reads_after_submit(
-        &self,
-        producer: &PresentationState,
-        shown: bool,
-        panic: &mut Option<Box<dyn std::any::Any + Send>>,
-    ) {
-        for presentation in self.presentations.iter() {
-            super::input::preserve_first_input_panic(
-                panic,
-                presentation.settle_agent_layer_reads(shown && presentation.id() == producer.id()),
-                "agent layer read reply",
-            );
-        }
-    }
-
     /// The owner half of a read of the layer tree: parks it for the window's next scene and asks
     /// for a repaint, so a window with nothing dirty shows one. Answers at once what cannot wait:
     /// a root that is not a layer handle, a reference to another window, a full parking list.
@@ -185,20 +167,39 @@ impl PresentationState {
         &self,
         shown: bool,
     ) -> Option<Box<dyn std::any::Any + Send>> {
-        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
-        if staged.is_empty() {
+        if !shown {
+            self.repark_staged_agent_layer_reads();
             return None;
         }
-        if shown {
-            return deliver_each(staged, |staged| {
-                send_reply(&staged.read.reply, None, staged.reading);
-            });
+        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
+        deliver_each(staged, |staged| {
+            send_reply(&staged.read.reply, None, staged.reading);
+        })
+    }
+
+    /// The staged reads wait again, ahead of any parked since. Returns whether there were any.
+    fn repark_staged_agent_layer_reads(&self) -> bool {
+        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
+        if staged.is_empty() {
+            return false;
         }
         let mut parked = self.agent_layer_reads.borrow_mut();
         let later = std::mem::take(&mut *parked);
         parked.extend(staged.into_iter().map(|staged| staged.read));
         parked.extend(later);
-        None
+        true
+    }
+
+    /// The submit never returned a verdict (the sink panicked): the staged reads wait for the next
+    /// scene, and a repaint is owed to produce one.
+    pub(crate) fn restore_staged_agent_layer_reads(&self) {
+        if self.repark_staged_agent_layer_reads() {
+            self.pipeline().with_mut(|pipeline| {
+                if let Some(root) = pipeline.root_id() {
+                    pipeline.mark_needs_paint(root);
+                }
+            });
+        }
     }
 
     /// The window closes: every read parked or staged is answered `gone`. Returns the first panic
