@@ -389,7 +389,7 @@ pub(crate) fn a_listener_selecting_elsewhere_leaves_no_handles() {
     let heard: Heard = Rc::default();
     let (recorded, redirect) = (Rc::clone(&heard), controller.clone());
     let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
-        .controller(controller.clone())
+        .controller(controller)
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
                 change
