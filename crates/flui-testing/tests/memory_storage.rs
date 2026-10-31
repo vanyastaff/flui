@@ -129,3 +129,54 @@ fn a_panicking_waker_leaves_the_other_held_copies_woken() {
             .is_ready()
     );
 }
+
+/// A panic payload whose destructor panics too.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("the second panic's payload panics when dropped");
+    }
+}
+
+/// A waker that panics with a [`PanicsOnDrop`] payload when woken.
+struct PanicsWithBadPayload;
+
+impl Wake for PanicsWithBadPayload {
+    fn wake(self: Arc<Self>) {
+        std::panic::panic_any(PanicsOnDrop);
+    }
+}
+
+#[test]
+fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
+    let storage = MemoryStorage::new();
+    storage.put(&NOTES, "old");
+    let held = storage.hold_copies();
+    let first_waker = Waker::from(Arc::new(PanicsOnWake));
+    let second_waker = Waker::from(Arc::new(PanicsWithBadPayload));
+    let woken = Arc::new(Woken::default());
+    let third_waker = Waker::from(Arc::clone(&woken));
+    let mut first = pin!(storage.copy_aside(&NOTES));
+    let mut second = pin!(storage.copy_aside(&NOTES));
+    let mut third = pin!(storage.copy_aside(&NOTES));
+    for (copy, waker) in [
+        (first.as_mut(), &first_waker),
+        (second.as_mut(), &second_waker),
+        (third.as_mut(), &third_waker),
+    ] {
+        assert!(copy.poll(&mut Context::from_waker(waker)).is_pending());
+    }
+
+    let released = catch_unwind(AssertUnwindSafe(|| drop(held)));
+    let payload = released.expect_err("the first waker's panic reaches the release");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"the first waiting copy's waker panics"),
+        "the first failure is the one resumed"
+    );
+    assert!(
+        woken.0.load(Ordering::SeqCst),
+        "the third copy is woken all the same"
+    );
+}

@@ -39,6 +39,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use flui_foundation::panic::retain_opaque_payload;
 use flui_platform::{
     CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
     WriteMode,
@@ -137,12 +138,18 @@ impl State {
 }
 
 /// Wake every waker, each under its own catch: a waker that panics leaves
-/// the rest woken, and the first panic resumes once they all are.
+/// the rest woken, and the first panic resumes once they all are. A later
+/// panic's payload is retained, never dropped, so its destructor cannot cut
+/// the loop short.
 fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
     let mut first = None;
     for waker in wakers {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
-            first.get_or_insert(payload);
+            if first.is_none() {
+                first = Some(payload);
+            } else {
+                retain_opaque_payload(payload);
+            }
         }
     }
     if let Some(payload) = first {
