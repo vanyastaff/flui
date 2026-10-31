@@ -725,7 +725,6 @@ impl ViewState<Root> for RootState {
                         // stored, so no edit is refused while the old ones
                         // are kept aside.
                         started_over(&data).await.map_err(LoadFailure::Other)?;
-                        fresh.set(false);
                         Rc::new(Saved::initial())
                     } else {
                         match data.load().await {
@@ -746,6 +745,15 @@ impl ViewState<Root> for RootState {
                             session.start_over();
                             Rc::new(Session::initial())
                         }
+                    };
+                    // A place taken in notes given up is never restored over
+                    // fresh ones, which can take their revision and note ids.
+                    // The session is still loaded, so the new place is
+                    // written over it once the fresh notes' revision is told.
+                    let place = if fresh.replace(false) {
+                        Rc::new(Session::initial())
+                    } else {
+                        place
                     };
                     Ok((saved, place))
                 }) as BoxedResultFuture<Read, LoadFailure>

@@ -247,6 +247,8 @@ graph LR
     тело, новая версия, недоступный файл: Start over только у первых двух, файл не тронут),
     `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones` (R17),
     `start_over_shows_the_notes_once_they_take_edits`, `a_start_over_whose_copy_fails_offers_retry`,
+    `start_over_drops_the_place_taken_in_the_notes_given_up` (место отброшенных заметок не
+    восстанавливается над свежими: ревизия и id заметок могут совпасть),
     `without_storage_the_notes_run_in_memory_with_a_banner`,
     `a_failed_save_shows_a_banner_whose_retry_stores_the_notes` (R20),
     `reload_replaces_a_pending_load` (R10), `a_held_write_keeps_typing_and_scrolling_live`

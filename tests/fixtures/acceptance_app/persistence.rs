@@ -688,3 +688,29 @@ fn a_start_over_whose_copy_fails_offers_retry() {
         [b"not notes".to_vec()]
     );
 }
+
+#[test]
+fn start_over_drops_the_place_taken_in_the_notes_given_up() {
+    let mut run = AppRun::start(app());
+    run.tap("Note 2");
+    run.replace_title("Groceries");
+    run.tap("Save note");
+    run.tap("Back");
+    run.tap("Note 3");
+    run.replace_title("Old draft");
+    let run = run.restart();
+    assert!(run.shows("Editing note 3"), "the draft is restored");
+
+    run.storage().put(&Saved::NAME, "not notes");
+    let mut run = run.restart();
+    run.tap("Start over");
+    assert!(
+        !run.shows("Editing note 3") && !run.shows("Back"),
+        "the fresh notes open at Home, without the old draft"
+    );
+    let run = run.restart();
+    assert!(
+        !run.shows("Editing note 3") && run.shows("Note 3"),
+        "nor does a later launch restore it over the fresh notes"
+    );
+}
