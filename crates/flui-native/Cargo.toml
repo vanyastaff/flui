@@ -195,6 +195,10 @@ objc2-foundation = { workspace = true, features = [
     "NSNotification",
     "NSDistributedNotificationCenter",
     "NSLocale",
+    # The regional formats (`preferences::apple::regional`).
+    "NSCalendar",
+    "NSDateFormatter",
+    "NSFormatter",
     "NSOperation",
     "block2",
 ] }
@@ -451,6 +455,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSEnumerator",
     "NSRunLoop",
     "NSLocale",
+    "NSCalendar",
+    "NSDateFormatter",
+    "NSFormatter",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIFont",

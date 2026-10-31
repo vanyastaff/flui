@@ -16,23 +16,26 @@ mod browser {
     //! Browser accessibility and language observations, owned by the host rather
     //! than its canvas.
     //!
-    //! Media queries report motion and contrast, and `navigator.languages` the
-    //! preferred locales. Each query's `change` and the window's `languagechange`
-    //! only wake the owner, which then samples every observation again.
+    //! Media queries report motion and contrast, `navigator.languages` the
+    //! preferred locales, and `Intl` the hour cycle and first weekday the
+    //! browser formats with. Each query's `change` and the window's
+    //! `languagechange` only wake the owner, which then samples every
+    //! observation again.
 
     use std::sync::{
         Arc, Weak,
         atomic::{AtomicBool, Ordering},
     };
 
-    use flui_platform::SystemPreferences;
-    use wasm_bindgen::{JsCast, closure::Closure};
+    use flui_platform::{HourCycle, RegionalFormats, SystemPreferences, Weekday};
+    use js_sys::{Array, Intl, Object, Reflect};
+    use wasm_bindgen::{JsCast, JsValue, closure::Closure};
     use web_sys::{Event, EventTarget, MediaQueryList, Window};
 
     use super::media::{MediaFeature, MediaMatches};
     use crate::{
         PlatformError, owner::signal::OwnerSignal, owner::sources::SystemPreferenceSource,
-        preferences::locales as preferred_locales,
+        preferences::locales as preferred_locales, preferences::regional,
     };
 
     const LANGUAGE_CHANGE: &str = "languagechange";
@@ -80,7 +83,7 @@ mod browser {
             if let Some(locales) = preferred_locales::from_language_tags(tags) {
                 preferences = preferences.with_locales(locales);
             }
-            Ok(preferences)
+            Ok(preferences.with_regional(regional_formats()))
         }
 
         fn ensure_active(&self, message: &'static str) -> Result<(), PlatformError> {
@@ -92,6 +95,48 @@ mod browser {
                 })
             }
         }
+    }
+
+    /// The hour cycle of the browser's default time format and its default
+    /// locale's first weekday (ADR-0278 §3). A browser without `Intl.Locale`
+    /// week info reports no weekday.
+    fn regional_formats() -> RegionalFormats {
+        let mut formats = RegionalFormats::default();
+        let options = Object::new();
+        // Without an hour field the resolved options carry no hour cycle.
+        if Reflect::set(&options, &"hour".into(), &"numeric".into()).is_err() {
+            return formats;
+        }
+        let resolved = Intl::DateTimeFormat::new(&Array::new(), &options).resolved_options();
+        let field = |name: &str| {
+            Reflect::get(&resolved, &JsValue::from_str(name))
+                .ok()
+                .and_then(|value| value.as_string())
+        };
+        if let Some(cycle) = field("hourCycle")
+            .as_deref()
+            .and_then(HourCycle::from_unicode_value)
+        {
+            formats = formats.with_hour_cycle(cycle);
+        }
+        if let Some(day) = field("locale").and_then(|tag| first_day(&tag)) {
+            formats = formats.with_first_weekday(day);
+        }
+        formats
+    }
+
+    fn first_day(tag: &str) -> Option<Weekday> {
+        let locale = Intl::Locale::new(tag).ok()?;
+        let info = match locale.get_week_info() {
+            Ok(info) => info,
+            // Engines that shipped week info before `getWeekInfo` expose it
+            // as a getter.
+            Err(_) => Reflect::get(&locale, &"weekInfo".into())
+                .ok()
+                .filter(JsValue::is_object)?
+                .unchecked_into::<Intl::WeekInfo>(),
+        };
+        regional::iso_weekday(info.first_day())
     }
 
     pub(crate) struct WebPreferences {

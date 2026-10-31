@@ -31,7 +31,15 @@
 pub(crate) mod locales;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod read;
-#[cfg(any(windows, linux_host, test))]
+#[cfg(any(
+    target_arch = "wasm32",
+    windows,
+    linux_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 pub(crate) mod regional;
 
 #[cfg(any(target_os = "android", test))]
