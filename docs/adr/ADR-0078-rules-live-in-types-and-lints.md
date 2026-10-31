@@ -205,7 +205,8 @@ impl UnmountHook {
 - **No re-entry.** A hook registered while hooks run is refused, with a debug assertion, so
   teardown never extends itself.
 - **Ownership.** The hooks live in the owner's table by element, like keep-alive holds; the token
-  holds that table weakly, so a value that drops before its state leaves nothing registered.
+  holds that table weakly, so a value that drops before its state leaves nothing registered. Each
+  hook leaves the table only at its turn, so a token an earlier hook drops still unregisters.
 
 `Persisted::open` registers a hook that drops the document's queued delivery and its listeners,
 and a listener added after that is not kept. A router's listeners go the same way.
@@ -213,7 +214,8 @@ and a listener added after that is not kept. A router's listeners go the same wa
 Confirmed by `crates/flui-view/tests/unmount_hook.rs`
 (`hooks_run_once_after_dispose_in_registration_order`,
 `a_panicking_hook_leaves_the_next_one_running_and_is_the_dispose_failure`,
-`a_dropped_token_unregisters_and_a_forgotten_one_runs`, `a_move_is_not_an_unmount`,
+`a_dropped_token_unregisters_and_a_forgotten_one_runs`,
+`a_token_dropped_by_an_earlier_hook_keeps_its_hook_from_running`, `a_move_is_not_an_unmount`,
 `a_tree_torn_down_runs_its_hooks`), the unit test `a_hook_registered_while_hooks_run_is_refused`,
 `unmounting_the_opening_state_drops_the_listeners` in `crates/flui-view/tests/persist.rs`, and
 `an_unmounted_router_lets_go_of_its_listeners` in `crates/flui-widgets/tests/router.rs`.

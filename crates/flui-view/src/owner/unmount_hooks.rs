@@ -17,10 +17,11 @@
 //! - Registering from inside a running hook is refused (a debug assertion),
 //!   so teardown never re-enters itself.
 //! - The [`UnmountHook`] token unregisters the hook when it drops, without
-//!   running it; [`UnmountHook::forget`] keeps the hook registered.
+//!   running it, also from inside an earlier hook of the same element;
+//!   [`UnmountHook::forget`] keeps the hook registered.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -31,7 +32,7 @@ type Entry = (u64, Box<dyn FnOnce()>);
 
 #[derive(Default)]
 struct Inner {
-    hooks: HashMap<ElementId, Vec<Entry>>,
+    hooks: HashMap<ElementId, VecDeque<Entry>>,
     /// The id the next hook takes; ids are never reused, so a stale token
     /// can only name nothing.
     next: u64,
@@ -64,7 +65,11 @@ impl UnmountHooks {
         inner.next = id
             .checked_add(1)
             .expect("BUG: fewer than u64::MAX unmount hooks are ever registered");
-        inner.hooks.entry(element).or_default().push((id, hook));
+        inner
+            .hooks
+            .entry(element)
+            .or_default()
+            .push_back((id, hook));
         UnmountHook {
             hooks: Rc::downgrade(&self.inner),
             element: Some(element),
@@ -75,16 +80,21 @@ impl UnmountHooks {
     /// Run `element`'s hooks in registration order, each contained. Returns
     /// the payload of the first that panicked; the later ones still run, and
     /// the payloads after the first are retained.
+    ///
+    /// Each hook is taken out of the table only when its turn comes, so a
+    /// hook that drops a later hook's token unregisters it as at any other
+    /// time, and that hook does not run.
     pub(crate) fn run(&self, element: ElementId) -> Option<Box<dyn std::any::Any + Send>> {
-        let hooks = {
+        {
             let mut inner = self.inner.borrow_mut();
-            let hooks = inner.hooks.remove(&element)?;
+            if !inner.hooks.contains_key(&element) {
+                return None;
+            }
             inner.running = true;
-            hooks
-        };
+        }
         let _running = Running(&self.inner);
         let mut first = None;
-        for (_id, hook) in hooks {
+        while let Some(hook) = self.take_next(element) {
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)) {
                 if first.is_none() {
                     first = Some(payload);
@@ -96,9 +106,24 @@ impl UnmountHooks {
         first
     }
 
+    /// Take `element`'s oldest registered hook out of the table.
+    fn take_next(&self, element: ElementId) -> Option<Box<dyn FnOnce()>> {
+        let mut inner = self.inner.borrow_mut();
+        let entries = inner.hooks.get_mut(&element)?;
+        let (_id, hook) = entries.pop_front()?;
+        if entries.is_empty() {
+            inner.hooks.remove(&element);
+        }
+        Some(hook)
+    }
+
     #[cfg(test)]
     fn registered(&self, element: ElementId) -> usize {
-        self.inner.borrow().hooks.get(&element).map_or(0, Vec::len)
+        self.inner
+            .borrow()
+            .hooks
+            .get(&element)
+            .map_or(0, VecDeque::len)
     }
 }
 
@@ -152,9 +177,9 @@ impl Drop for UnmountHook {
         };
         let removed = {
             let Ok(mut inner) = hooks.try_borrow_mut() else {
-                // The hooks are being taken or registered right now; the
-                // element's hooks are already out of the table, or this one
-                // was not yet in it.
+                // The table is borrowed only for moments that run no user
+                // code, so nothing reaches here from a hook; a token
+                // dropped by one finds the table free.
                 return;
             };
             let Some(entries) = inner.hooks.get_mut(&element) else {
@@ -163,7 +188,7 @@ impl Drop for UnmountHook {
             let removed = entries
                 .iter()
                 .position(|(entry, _)| *entry == id)
-                .map(|index| entries.remove(index));
+                .and_then(|index| entries.remove(index));
             if entries.is_empty() {
                 inner.hooks.remove(&element);
             }

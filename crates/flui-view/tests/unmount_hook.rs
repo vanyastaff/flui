@@ -52,6 +52,8 @@ enum Hooks {
     FirstPanics,
     /// One hook whose token is dropped at once, one forgotten.
     DroppedAndForgotten,
+    /// Two hooks, the first of which drops the second's token.
+    FirstDropsSecond,
 }
 
 #[derive(Clone)]
@@ -106,6 +108,17 @@ impl ViewState<Hooked> for HookedState {
             Hooks::DroppedAndForgotten => {
                 drop(cx.on_unmount(logging(&self.log, "dropped")));
                 cx.on_unmount(logging(&self.log, "forgotten")).forget();
+            }
+            Hooks::FirstDropsSecond => {
+                let second = Rc::new(RefCell::new(None::<UnmountHook>));
+                let log = Rc::clone(&self.log);
+                let slot = Rc::clone(&second);
+                cx.on_unmount(Box::new(move || {
+                    log.borrow_mut().push("first");
+                    drop(slot.borrow_mut().take());
+                }))
+                .forget();
+                *second.borrow_mut() = Some(cx.on_unmount(logging(&self.log, "second")));
             }
         }
     }
@@ -173,6 +186,17 @@ fn a_dropped_token_unregisters_and_a_forgotten_one_runs() {
     let (mut tree, mut owner, root, log) = mounted(Hooks::DroppedAndForgotten);
     let _removed = tree.remove(root, &mut owner.element_owner_mut());
     assert_eq!(*log.borrow(), ["dispose", "forgotten"]);
+}
+
+#[test]
+fn a_token_dropped_by_an_earlier_hook_keeps_its_hook_from_running() {
+    let (mut tree, mut owner, root, log) = mounted(Hooks::FirstDropsSecond);
+    let _removed = tree.remove(root, &mut owner.element_owner_mut());
+    assert_eq!(
+        *log.borrow(),
+        ["dispose", "first"],
+        "the second hook was unregistered before its turn"
+    );
 }
 
 #[test]
