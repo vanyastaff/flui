@@ -16,7 +16,10 @@ use std::{
 
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
 
-use super::PipelineOwner;
+use flui_layer::LayerLink;
+use flui_scheduler::PostFrameHandle;
+
+use super::{LeaderWatch, LeaderWatches, PipelineOwner};
 
 /// Owner-local shared handle to one presentation's [`PipelineOwner`].
 ///
@@ -59,6 +62,8 @@ pub struct PipelineCell(Rc<PipelineSlot>);
 struct PipelineSlot {
     owner: RefCell<PipelineOwner>,
     layout_available: Cell<bool>,
+    /// The owner's live leader watches, registered here without a checkout.
+    leader_watches: Rc<LeaderWatches>,
     /// Whether [`PipelineCell::inspect_render`] is walking the tree.
     inspecting: Cell<bool>,
 }
@@ -66,8 +71,10 @@ struct PipelineSlot {
 impl PipelineCell {
     /// Wraps a fresh, idle [`PipelineOwner`] in an owner-local cell.
     pub fn new(owner: PipelineOwner) -> Self {
+        let leader_watches = Rc::clone(&owner.leader_watches);
         Self(Rc::new(PipelineSlot {
             owner: RefCell::new(owner),
+            leader_watches,
             layout_available: Cell::new(true),
             inspecting: Cell::new(false),
         }))
@@ -188,7 +195,24 @@ impl PipelineCell {
             "BUG: PipelineCell::with_mut called reentrantly -- a with/with_mut borrow from \
              this cell is already live on the call stack",
         );
-        f(&mut owner)
+        let result = f(&mut owner);
+        // An owner replaced wholesale (a test rig, a hot reload) takes this
+        // cell's watches, so a watch made before keeps hearing its frames.
+        if !Rc::ptr_eq(&owner.leader_watches, &self.0.leader_watches) {
+            owner.leader_watches = Rc::clone(&self.0.leader_watches);
+        }
+        result
+    }
+
+    /// A watch on the leader that publishes under `link` in this pipeline's
+    /// frames, delivered through `lane`, the post-frame lane of the frames
+    /// that paint them.
+    ///
+    /// Registers without checking the owner out, so it may be called during a
+    /// build. See [`LeaderWatch`] for when listeners run.
+    #[must_use]
+    pub fn watch_leader(&self, link: LayerLink, lane: PostFrameHandle) -> LeaderWatch {
+        self.0.leader_watches.watch(link, lane)
     }
 
     /// Runs one frame of the owner: layout of whatever is dirty,

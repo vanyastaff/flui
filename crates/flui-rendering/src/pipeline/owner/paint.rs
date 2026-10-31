@@ -348,6 +348,8 @@ impl PipelineOwner<PaintPhase> {
                     }
                     self.last_follower_transforms = follower_transforms;
                     self.last_hidden_follower_ids = hidden_follower_ids;
+                    // Queued, not run: listeners run in the post-frame lane.
+                    self.leader_watches.check(&layer_tree);
 
                     // A u64 of frames outlasts any process; reusing the last number instead
                     // would let a kept layer id read the next scene's layer.
