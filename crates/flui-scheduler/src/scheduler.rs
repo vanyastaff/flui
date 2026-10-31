@@ -1543,7 +1543,7 @@ impl UpdateScheduler {
             // not silently lost, only not the one that propagates. Matching
             // on both `Result`s (rather than `Option::or`-ing their errors
             // together) is what routes the DISCARDED side through
-            // `drop` instead of an uncontained `drop` --
+            // `discard_payload` instead of an uncontained `drop` --
             // the payload can itself be a type whose own `Drop` panics.
             match (callback_result, notify_result) {
                 (Ok(()), Ok(())) => {}
@@ -1551,7 +1551,7 @@ impl UpdateScheduler {
                     std::panic::resume_unwind(payload);
                 }
                 (Err(callback_payload), Err(notify_payload)) => {
-                    drop(notify_payload);
+                    flui_foundation::panic::discard_payload(notify_payload);
                     std::panic::resume_unwind(callback_payload);
                 }
             }

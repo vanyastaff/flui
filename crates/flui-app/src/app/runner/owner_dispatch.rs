@@ -1081,12 +1081,15 @@ impl ExitWatchdog {
                         "the exit did not end within its watchdog; ending the process"
                     );
                 });
-                if let Some(flush) = flush {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        flush.flush_within(
-                            std::time::Instant::now() + std::time::Duration::from_secs(1),
-                        )
-                    }));
+                if let Some(flush) = flush
+                    && let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            flush.flush_within(
+                                std::time::Instant::now() + std::time::Duration::from_secs(1),
+                            )
+                        }))
+                {
+                    flui_foundation::panic::discard_payload(payload);
                 }
                 flui_native::end_process(EXIT_CODE_HUNG)
             });

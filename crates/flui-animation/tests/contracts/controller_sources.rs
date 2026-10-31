@@ -1613,11 +1613,19 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
     SERDE_CURVE_DROPS.store(0, Ordering::SeqCst);
     let failure = decode(0.5, "bomb first", SerdeInput::Failure).expect_err("partial decode error");
     assert_eq!(failure.to_string(), "second curve decode failure");
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        SERDE_CURVE_DROPS.load(Ordering::SeqCst),
+        1,
+        "the partial curve is destroyed and the error returned"
+    );
     let failure = decode(f64::NAN, "bomb first", SerdeInput::Text("bomb second"))
         .expect_err("invalid decoded range");
     assert_eq!(failure.to_string(), "curve parameter `split` is not finite");
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        SERDE_CURVE_DROPS.load(Ordering::SeqCst),
+        3,
+        "both decoded curves are destroyed and the error returned"
+    );
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("valid split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))
         .expect_err("decoded ordinary retirement");
@@ -1626,7 +1634,7 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         Some("serde curve retirement")
     );
     flui_foundation::panic::discard_payload(failure);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 5);
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("incoming split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _split = split;
@@ -1638,13 +1646,13 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         Some("serde incoming")
     );
     flui_foundation::panic::discard_payload(failure);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 7);
 
     let split =
         decode(0.5, "healthy first", SerdeInput::Text("healthy second")).expect("next split");
     assert_eq!(split.transform(0.75), 0.75);
     drop(split);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 3);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 9);
 }
 
 #[test]
