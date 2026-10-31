@@ -66,7 +66,9 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// them. They are told on a later turn of the UI runtime's tasks, never from
 /// inside a call on the document, and once for all the changes since the
 /// last time they were told; a change undone before then tells nobody. A
-/// listener may call any method of the document.
+/// listener may call any method of the document. A listener is kept as long
+/// as the document, so one that holds a clone of it keeps both alive for good:
+/// it holds a [`WeakPersisted`] from [`downgrade`](Self::downgrade) instead.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
 }
@@ -189,6 +191,40 @@ impl<D: Document> Clone for Persisted<D> {
         Self {
             document: Rc::clone(&self.document),
         }
+    }
+}
+
+/// A [`Persisted`] that does not keep its document alive, for a listener of
+/// the document to hold: [`upgrade`](Self::upgrade) gives the document while
+/// another clone still holds it.
+pub struct WeakPersisted<D: Document> {
+    document: Weak<OpenDocument<D>>,
+}
+
+impl<D: Document> WeakPersisted<D> {
+    /// The document, unless every [`Persisted`] of it is gone.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Persisted<D>> {
+        self.document
+            .upgrade()
+            .map(|document| Persisted { document })
+    }
+}
+
+impl<D: Document> Clone for WeakPersisted<D> {
+    fn clone(&self) -> Self {
+        Self {
+            document: Weak::clone(&self.document),
+        }
+    }
+}
+
+impl<D: Document> fmt::Debug for WeakPersisted<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WeakPersisted")
+            .field("name", &D::NAME.as_str())
+            .field("alive", &(self.document.strong_count() > 0))
+            .finish()
     }
 }
 
@@ -376,6 +412,15 @@ impl<D: Document> Persisted<D> {
         // is published after this one and wins.
         drop(replaced);
         Ok(revision)
+    }
+
+    /// A handle that does not keep this document alive, for its listeners
+    /// to hold.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakPersisted<D> {
+        WeakPersisted {
+            document: Rc::downgrade(&self.document),
+        }
     }
 
     /// The latest revision the storage confirmed, if any.

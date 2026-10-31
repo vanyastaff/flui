@@ -1261,9 +1261,36 @@ fn an_initial_value_that_panics_fails_the_fresh_start() {
 fn listen(notes: &Persisted<Note>) -> Rc<RefCell<Vec<SaveStatus>>> {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&heard);
-    let reader = notes.clone();
-    notes.add_listener(Rc::new(move || log.borrow_mut().push(reader.status())));
+    let reader = notes.downgrade();
+    notes.add_listener(Rc::new(move || {
+        if let Some(notes) = reader.upgrade() {
+            log.borrow_mut().push(notes.status());
+        }
+    }));
     heard
+}
+
+/// A listener holding a weak handle keeps neither itself nor the document
+/// alive: both go with the document's last clone.
+#[test]
+fn a_listener_holding_a_weak_handle_lets_the_document_go() {
+    let storage = MemoryStorage::new();
+    let (laid, notes) = mount(&storage);
+    let weak = notes.downgrade();
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = weak.clone();
+    notes.add_listener(Rc::new(move || {
+        let _held = (&alive, reader.upgrade());
+    }));
+    assert!(weak.upgrade().is_some(), "the document is alive while held");
+
+    drop((notes, laid));
+    assert!(
+        weak.upgrade().is_none(),
+        "the document goes with its last clone"
+    );
+    assert!(kept.upgrade().is_none(), "and its listener with it");
 }
 
 #[test]
@@ -1433,4 +1460,22 @@ fn revision_names_only_a_value_on_disk() {
     let reloaded = drive(&mut laid, notes.load());
     assert!(reloaded.is_ok(), "the kept edit loads: {reloaded:?}");
     assert_eq!(notes.revision(), kept, "and a load reads it back");
+}
+
+/// A revision serializes as its number and reads back as the same revision,
+/// so a document can record which revision of another it was taken against.
+#[cfg(feature = "serde")]
+#[test]
+fn a_revision_round_trips_as_its_number() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let revision = notes
+        .set(Note("first".into()))
+        .expect("a loaded document accepts a value");
+    let json = serde_json::to_string(&revision).expect("a revision serializes");
+    assert_eq!(json, revision.get().to_string());
+    let read: Revision = serde_json::from_str(&json).expect("and deserializes");
+    assert_eq!(read, revision);
+    assert_ne!(read, Revision::NONE);
 }

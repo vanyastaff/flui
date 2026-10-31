@@ -151,8 +151,13 @@ impl<D: Document> Persisted<D> {
     pub fn status(&self) -> SaveStatus;
     pub fn retry(&self);
     pub fn start_over(&self);
+    pub fn downgrade(&self) -> WeakPersisted<D>;
 }
 impl<D: Document> Listenable for Persisted<D> { /* status() and committed() changes */ }
+pub struct WeakPersisted<D: Document> { /* Weak: does not keep the document alive */ }
+impl<D: Document> WeakPersisted<D> {
+    pub fn upgrade(&self) -> Option<Persisted<D>>;
+}
 ```
 
 The framework writes a one-line header, `flui-document <name> <version> <revision>\n`, before the
@@ -177,13 +182,16 @@ of the UI runtime's tasks, never inside a call on the document, and tells the li
 all the changes to `status()`, `committed()` and `revision()` since they were last told. A status
 that stands tells nobody and queues nothing, so a document at rest wakes no frame. A listener may
 call any method of the document: what it changes is told in the next delivery, and a listener that
-panics leaves the next delivery to come.
+panics leaves the next delivery to come. A listener lives as long as the document, so one that holds
+a clone of it keeps both alive for good; it holds a `WeakPersisted` from `downgrade()`.
 
 `revision()` is the revision of the value in memory only while that value is the stored one: the
 file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
 confirms it, `None` before a load and while a write is in flight or failed. What the application
 records against it (a session's draft taken against a version of the data) therefore names bytes on
-disk: an edit lost before its write commits never matches what a later load reads back.
+disk: an edit lost before its write commits never matches what a later load reads back. With the
+`serde` feature a `Revision` serializes as its number for that record; `get()` is for display and
+diagnostics.
 
 ### §4. A codec panic fails one save and keeps the document
 
@@ -257,7 +265,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `start_over_never_writes_over_a_file_replaced_since_the_load`,
   `listeners_hear_each_change_once_and_nothing_while_it_stands`,
   `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`,
-  `revision_names_only_a_value_on_disk`.
+  `revision_names_only_a_value_on_disk`, `a_listener_holding_a_weak_handle_lets_the_document_go`,
+  `a_revision_round_trips_as_its_number` (with `serde`).
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
