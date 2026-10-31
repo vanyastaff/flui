@@ -221,6 +221,38 @@ fn a_read_after_a_write_answers_the_write() {
     }
 }
 
+/// `owner` offers `text` as the primary selection, and the case waits until
+/// the server names an owner: the offer is the application's at once, but its
+/// thread takes the selection at the server's next stamp, and a read sent
+/// before reaches whoever owned it then. Whoever owned it is let go first.
+fn offer_primary(owner: &X11Clipboard, text: Rc<dyn Fn() -> Option<String>>) {
+    let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+    let primary = x11rb::protocol::xproto::AtomEnum::PRIMARY.into();
+    connection
+        .set_selection_owner(x11rb::NONE, primary, x11rb::CURRENT_TIME)
+        .expect("the request is sent");
+    connection
+        .get_input_focus()
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    owner.offer(text);
+    let deadline = Instant::now() + STEP;
+    while connection
+        .get_selection_owner(primary)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .owner
+        == x11rb::NONE
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the offer never took the primary selection"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
 /// A closure over `text` that counts how often it is asked.
 fn counted(text: &str, asked: &Rc<Cell<u32>>) -> Rc<dyn Fn() -> Option<String>> {
     let text = text.to_owned();
@@ -244,7 +276,7 @@ fn the_primary_selection_is_asked_only_when_read() {
     let reader = clipboard();
     let asked = Rc::new(Cell::new(0));
 
-    owner.offer(counted("selected", &asked));
+    offer_primary(&owner, counted("selected", &asked));
     assert!(owner.owns());
     assert_eq!(asked.get(), 0, "an offer asks nothing");
     assert_eq!(
@@ -273,7 +305,7 @@ fn another_selection_takes_the_primary_from_the_offer() {
     let first_text = counted("from the first", &asked);
     let held = Rc::downgrade(&first_text);
 
-    first.offer(first_text);
+    offer_primary(&first, first_text);
     assert_eq!(
         answers.read_primary(&second, &[&first]).as_deref(),
         Some("from the first")
@@ -307,7 +339,7 @@ fn a_withdrawn_offer_reads_as_nothing() {
     let reader = clipboard();
     let asked = Rc::new(Cell::new(0));
 
-    owner.offer(counted("selected", &asked));
+    offer_primary(&owner, counted("selected", &asked));
     assert_eq!(
         answers.read_primary(&reader, &[&owner]).as_deref(),
         Some("selected")
@@ -334,7 +366,7 @@ fn withdrawing_a_replacement_lets_go_of_the_offer_it_replaced() {
     let reader = clipboard();
     let asked = Rc::new(Cell::new(0));
 
-    owner.offer(counted("first", &asked));
+    offer_primary(&owner, counted("first", &asked));
     assert_eq!(
         answers.read_primary(&reader, &[&owner]).as_deref(),
         Some("first")
@@ -376,7 +408,7 @@ fn a_failing_selection_answers_its_reader_with_nothing() {
     let answers = Answers::new();
     let owner = clipboard();
     let reader = clipboard();
-    owner.offer(Rc::new(|| panic!("the selection failed")));
+    offer_primary(&owner, Rc::new(|| panic!("the selection failed")));
 
     let failure = std::cell::RefCell::new(None);
     let started = Instant::now();
@@ -589,7 +621,7 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
     let owner = clipboard();
     let asked = Rc::new(Cell::new(0));
     // Longer than one request: each answer is an `INCR` transfer.
-    owner.offer(counted(&"x".repeat(1 << 20), &asked));
+    offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
 
     let (requestor, screen) = RustConnection::connect(None).expect("the X server answers");
     let root = requestor.setup().roots[screen].root;
