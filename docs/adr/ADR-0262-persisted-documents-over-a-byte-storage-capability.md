@@ -182,8 +182,12 @@ of the UI runtime's tasks, never inside a call on the document, and tells the li
 all the changes to `status()`, `committed()` and `revision()` since they were last told. A status
 that stands tells nobody and queues nothing, so a document at rest wakes no frame. A listener may
 call any method of the document: what it changes is told in the next delivery, and a listener that
-panics leaves the next delivery to come. A listener lives as long as the document, so one that holds
-a clone of it keeps both alive for good; it holds a `WeakPersisted` from `downgrade()`.
+panics leaves the next delivery to come. While it has listeners the document follows the registry,
+so a commit by another document of its name in the same runtime is told too. A frame hook that
+panics while the document queues a task leaves it retryable: nothing stays marked queued or
+watching without a task, and an interrupted fresh start is `Failed`. A listener lives as long as
+the document, so one that holds a clone of it keeps both alive for good; it holds a
+`WeakPersisted` from `downgrade()`.
 
 `revision()` is the revision of the value in memory only while that value is the stored one: the
 file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
@@ -266,7 +270,9 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `listeners_hear_each_change_once_and_nothing_while_it_stands`,
   `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`,
   `revision_names_only_a_value_on_disk`, `a_listener_holding_a_weak_handle_lets_the_document_go`,
-  `a_revision_round_trips_as_its_number` (with `serde`).
+  `a_revision_round_trips_as_its_number` (with `serde`),
+  `a_frame_hook_panic_while_queueing_leaves_later_changes_told`,
+  `a_commit_by_another_document_of_its_name_is_told`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.

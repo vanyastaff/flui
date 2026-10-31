@@ -2,8 +2,9 @@
 
 - `Persisted<D>` is `Listenable`: its listeners are told when `status()` or `committed()` changes,
   on a later turn of the UI runtime's tasks and once for all the changes since they were last told,
-  so a widget can rebuild with a document's save status. A status that stands tells nobody and wakes
-  no frame, and a listener may call any method of the document.
+  so a widget can rebuild with a document's save status, including a commit by another document of
+  its name in the same runtime. A status that stands tells nobody and wakes no frame, and a listener
+  may call any method of the document.
 - `Persisted::revision` is the revision of the value in memory while it is the stored one: the
   file's after a load, a set value's once the storage confirms it, `None` otherwise, so it always
   names bytes on disk. `Revision::NONE` is the revision of a document that was never stored.
@@ -17,4 +18,5 @@
 
 - A `Persisted` document whose frame hook panics while it queues work is left retryable, not stuck:
   an edit's save is watched again by the next edit, and an interrupted `start_over` is left failed
-  with `StorageError::Cancelled`, so `retry` starts over.
+  with `StorageError::Cancelled`, so `retry` starts over. A save watch ended by such a panic no
+  longer keeps later writes from being watched.

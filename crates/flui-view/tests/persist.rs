@@ -161,6 +161,36 @@ impl ViewState<NoteOpener> for NoteOpenerState {
     }
 }
 
+/// Opens the document in `init_state` above a [`NoteOpener`] that opens it
+/// again: two documents of one name in one runtime.
+#[derive(Clone, StatefulView)]
+struct TwoOpeners {
+    outer: Rc<RefCell<Option<Persisted<Note>>>>,
+    inner: Rc<RefCell<Option<Opened>>>,
+}
+
+struct TwoOpenersState(TwoOpeners);
+
+impl StatefulView for TwoOpeners {
+    type State = TwoOpenersState;
+
+    fn create_state(&self) -> Self::State {
+        TwoOpenersState(self.clone())
+    }
+}
+
+impl ViewState<TwoOpeners> for TwoOpenersState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        *self.0.outer.borrow_mut() = Some(Persisted::open(cx));
+    }
+
+    fn build(&self, _view: &TwoOpeners, _cx: &dyn BuildContext) -> impl IntoView {
+        NoteOpener {
+            opened: Rc::clone(&self.0.inner),
+        }
+    }
+}
+
 /// Mount a tree over `storage` and take the document it opened: a fresh
 /// mount over the same storage is a restart.
 fn mount(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>) {
@@ -1491,6 +1521,85 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
     laid.pump();
     assert_eq!(notes.status(), SaveStatus::Clean, "the retry starts over");
     assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+
+    // The hook panics while the save watch tells of a finished write.
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    laid.pump();
+    let heard = listen(&notes);
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("first".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    let hook_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ran = std::sync::Arc::clone(&hook_ran);
+    driver.set_request_frame(move || {
+        ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        panic!("frame hook failure");
+    });
+    let watched = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    driver.set_request_frame(|| {});
+    drop(watched);
+    assert!(
+        hook_ran.load(std::sync::atomic::Ordering::SeqCst),
+        "the watch's announcement woke the panicking hook"
+    );
+    let barrier = storage.hold_commits();
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "the next write is watched again: {:?}",
+        heard.borrow()
+    );
+}
+
+/// A document's listeners hear a commit by another document of its name in
+/// the same runtime: both name the same stored value.
+#[test]
+fn a_commit_by_another_document_of_its_name_is_told() {
+    let storage = MemoryStorage::new();
+    let (outer, inner) = (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None)));
+    let mut laid = lay_out_with_storage(
+        TwoOpeners {
+            outer: Rc::clone(&outer),
+            inner: Rc::clone(&inner),
+        },
+        tight(10.0, 10.0),
+        storage,
+    );
+    let outer = outer
+        .borrow_mut()
+        .take()
+        .expect("the outer document opened");
+    let inner = inner
+        .borrow_mut()
+        .take()
+        .expect("the inner document opened")
+        .document;
+    assert!(drive(&mut laid, outer.load()).is_ok());
+    assert!(drive(&mut laid, inner.load()).is_ok());
+    laid.pump();
+    let heard = listen(&outer);
+
+    assert!(inner.set(Note("from inner".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Clean],
+        "the other document's commit is told"
+    );
+    assert_eq!(outer.committed(), inner.committed());
 }
 
 #[test]

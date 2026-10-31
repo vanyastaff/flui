@@ -112,7 +112,8 @@ struct DocumentState<D> {
     failure: Option<PersistError>,
     /// The close hold the status calls for.
     hold: Option<(HoldKind, CloseHold)>,
-    /// The watch over the registry while a write is in flight, if one runs.
+    /// The watch over the registry while a write is in flight or the
+    /// document has listeners, if one runs.
     watch: Option<TaskToken>,
     /// Whether the watch is still running.
     watching: bool,
@@ -533,8 +534,12 @@ impl<D: Document> Persisted<D> {
 }
 
 impl<D: Document> Listenable for Persisted<D> {
+    /// The document follows the registry while it has listeners, so a
+    /// commit by another document of this name is told too.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.document.announcer.notifier.add_observer(observer)
+        let id = self.document.announcer.notifier.add_observer(observer);
+        self.document.refresh();
+        id
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -884,7 +889,10 @@ impl<D: Document> OpenDocument<D> {
                 std::mem::replace(&mut state.hold, taken)
             };
             let saving = state.status == SaveStatus::Saving;
-            let spawn = saving && !state.watching && self.driver.is_some();
+            // Listeners follow the registry too: another document of this
+            // name may commit, which changes `committed()` here.
+            let watched = saving || self.announcer.notifier.has_listeners();
+            let spawn = watched && !state.watching && self.driver.is_some();
             let stale_watch = if spawn {
                 state.watching = true;
                 state.watch.take()
@@ -1005,10 +1013,13 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     }
 }
 
-/// Follow the registry while `document` has a write in flight: each change
-/// the registry settles brings the status and the close hold in line, and a
-/// busy store is tried again after its back-off.
+/// Follow the registry while `document` has a write in flight or listeners:
+/// each change the registry settles brings the status, the close hold and the
+/// listeners in line, and a busy store is tried again after its back-off.
 async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegistry) {
+    // However the watch ends, a panic in user code it runs (a listener's
+    // frame hook) included, the next refresh may start another.
+    let _watching = Watching(document.clone());
     loop {
         // Taken before the state is read, so a change in between resolves it.
         let changed = registry.changed();
@@ -1016,14 +1027,18 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
             return;
         };
         open.refresh();
-        let deadline = {
-            let mut state = open.state.borrow_mut();
-            if state.status != SaveStatus::Saving {
-                state.watching = false;
+        let (saving, deadline) = {
+            let state = open.state.borrow();
+            (state.status == SaveStatus::Saving, state.busy_deadline)
+        };
+        if !saving {
+            if !open.announcer.notifier.has_listeners() {
                 return;
             }
-            state.busy_deadline
-        };
+            drop(open);
+            changed.await;
+            continue;
+        }
         let Some(deadline) = deadline else {
             drop(open);
             changed.await;
@@ -1045,6 +1060,19 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
         };
         if woke == Woke::Due {
             open.retry_busy(deadline);
+        }
+    }
+}
+
+/// Marks a document's watch ended when the watch's future is dropped.
+struct Watching<D: Document>(Weak<OpenDocument<D>>);
+
+impl<D: Document> Drop for Watching<D> {
+    fn drop(&mut self) {
+        if let Some(open) = self.0.upgrade()
+            && let Ok(mut state) = open.state.try_borrow_mut()
+        {
+            state.watching = false;
         }
     }
 }
