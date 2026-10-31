@@ -2112,7 +2112,7 @@ impl BuildOwner {
         // render parent's children into element-slot order (no-op unless an
         // insert flagged a possible drift), so a render sibling that attached
         // before a component-deferred sibling does not invert their layout.
-        tree.reorder_render_children_after_build();
+        tree.reorder_render_children_after_build(&self.child_manager_registry);
 
         // Record onto whichever span is current — `build_scope`'s own "build"
         // span and `service_layout_builders`'s `during_layout` "build" span
