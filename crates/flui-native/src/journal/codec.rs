@@ -28,12 +28,13 @@ use flui_platform::pointer::{
 };
 use flui_platform::{
     Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts, DisplayId,
-    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, ImeEvent, InsetCurve,
-    InsetMotion, InvalidPreference, KeyboardInset, Locale, MemoryPressureLevel, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts, RefreshPeriod,
+    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
+    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
     SessionEndPhase, SizeConstraints, SystemNotice, SystemPreferences, TextWeightPreference,
-    WheelParts, WheelStep, WindowAppearance, WindowExecutionState, WindowGeometry, WindowInsets,
-    WindowMode, WindowState, WindowStateParts,
+    Weekday, WheelParts, WheelStep, WindowAppearance, WindowExecutionState, WindowGeometry,
+    WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -1702,6 +1703,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
         haptics,
         text_weight,
         locales,
+        regional,
         gestures:
             GestureParts {
                 double_click_interval,
@@ -1742,6 +1744,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
             })
             .transpose()?,
         locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        regional: regional_to_wire(regional),
         gestures: wire::Gestures {
             double_click_interval_ns: double_click_interval.map(duration_nanos).transpose()?,
             double_tap_interval_ns: double_tap_interval.map(duration_nanos).transpose()?,
@@ -1780,6 +1783,71 @@ fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
     DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
+/// `parts` in the schema, each format as its Unicode value; none when no
+/// format was observed.
+fn regional_to_wire(parts: RegionalParts) -> Option<Box<wire::Regional>> {
+    if parts == RegionalParts::default() {
+        return None;
+    }
+    let RegionalParts {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = parts;
+    Some(Box::new(wire::Regional {
+        first_weekday: first_weekday.map(|day| day.unicode_value().to_owned()),
+        hour_cycle: hour_cycle.map(|cycle| cycle.unicode_value().to_owned()),
+        measurement: measurement.map(|system| system.unicode_value().to_owned()),
+        numbering: numbering.map(|numbering| numbering.unicode_value().to_owned()),
+        region: region.map(|region| region.code().to_owned()),
+    }))
+}
+
+/// The formats `wire` names, each checked as its type checks it.
+fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> DtoResult<RegionalParts> {
+    let Some(wire) = wire else {
+        return Ok(RegionalParts::default());
+    };
+    let wire::Regional {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = *wire;
+    Ok(RegionalParts {
+        first_weekday: first_weekday
+            .map(|value| {
+                Weekday::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("first weekday {value}")))
+            })
+            .transpose()?,
+        hour_cycle: hour_cycle
+            .map(|value| {
+                HourCycle::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("hour cycle {value}")))
+            })
+            .transpose()?,
+        measurement: measurement
+            .map(|value| {
+                MeasurementSystem::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("measurement system {value}")))
+            })
+            .transpose()?,
+        numbering: numbering
+            .map(|value| {
+                NumberingSystem::try_new(&value).map_err(|error| invalid(error.to_string()))
+            })
+            .transpose()?,
+        region: region
+            .map(|value| {
+                RegionOverride::try_new(&value).map_err(|error| invalid(error.to_string()))
+            })
+            .transpose()?,
+    })
+}
 /// The preferences `wire` describes, validated as the `with_*` methods
 /// validate them.
 fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences> {
@@ -1790,6 +1858,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
         haptics,
         text_weight,
         locales,
+        regional,
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
@@ -1833,6 +1902,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
                     .collect::<DtoResult<Arc<[Locale]>>>()
             })
             .transpose()?,
+        regional: regional_from_wire(regional)?,
         gestures: GestureParts {
             double_click_interval: gestures.double_click_interval_ns.map(Duration::from_nanos),
             double_tap_interval: gestures.double_tap_interval_ns.map(Duration::from_nanos),

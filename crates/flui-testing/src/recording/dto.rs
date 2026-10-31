@@ -37,10 +37,11 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, Locale, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    PlatformInput, PreferenceParts, SystemPreferences, TextWeightPreference, WheelParts, WheelStep,
-    WindowExecutionState, WindowId, WindowInsets,
+    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
+    WheelStep, WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_protocol::native_recording as wire;
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -2242,6 +2243,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
         haptics,
         text_weight,
         locales,
+        regional,
         gestures:
             GestureParts {
                 double_click_interval,
@@ -2282,6 +2284,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
             })
             .transpose()?,
         locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        regional: regional_wire(regional),
         gestures: wire::Gestures {
             double_click_interval_ns: double_click_interval.map(nanos),
             double_tap_interval_ns: double_tap_interval.map(nanos),
@@ -2316,6 +2319,68 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
     })
 }
 
+/// `parts` in the shared schema, each format as its Unicode value; none when
+/// no format was observed.
+fn regional_wire(parts: RegionalParts) -> Option<Box<wire::Regional>> {
+    if parts == RegionalParts::default() {
+        return None;
+    }
+    let RegionalParts {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = parts;
+    Some(Box::new(wire::Regional {
+        first_weekday: first_weekday.map(|day| day.unicode_value().to_owned()),
+        hour_cycle: hour_cycle.map(|cycle| cycle.unicode_value().to_owned()),
+        measurement: measurement.map(|system| system.unicode_value().to_owned()),
+        numbering: numbering.map(|numbering| numbering.unicode_value().to_owned()),
+        region: region.map(|region| region.code().to_owned()),
+    }))
+}
+
+/// The formats `wire` names, each checked as its type checks it.
+fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> Result<RegionalParts> {
+    let Some(wire) = wire else {
+        return Ok(RegionalParts::default());
+    };
+    let wire::Regional {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = *wire;
+    Ok(RegionalParts {
+        first_weekday: first_weekday
+            .map(|value| {
+                Weekday::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("first weekday {value}")))
+            })
+            .transpose()?,
+        hour_cycle: hour_cycle
+            .map(|value| {
+                HourCycle::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("hour cycle {value}")))
+            })
+            .transpose()?,
+        measurement: measurement
+            .map(|value| {
+                MeasurementSystem::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("measurement system {value}")))
+            })
+            .transpose()?,
+        numbering: numbering
+            .map(|value| NumberingSystem::try_new(&value).map_err(invalid))
+            .transpose()?,
+        region: region
+            .map(|value| RegionOverride::try_new(&value).map_err(invalid))
+            .transpose()?,
+    })
+}
+
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
     DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
@@ -2330,6 +2395,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
         haptics,
         text_weight,
         locales,
+        regional,
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
@@ -2373,6 +2439,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
                     .collect::<Result<Arc<[Locale]>>>()
             })
             .transpose()?,
+        regional: regional_from_wire(regional)?,
         gestures: GestureParts {
             double_click_interval: gestures.double_click_interval_ns.map(duration),
             double_tap_interval: gestures.double_tap_interval_ns.map(duration),

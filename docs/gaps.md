@@ -220,7 +220,7 @@ request.
 
 > **Environments:** all · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
-- Missing: regional formats everywhere, text scale on the Web and on Linux desktops other than GNOME, accent colour, gesture timings.
+- Missing: regional formats on every host. The snapshot and `MediaQuery` carry them as the Unicode locale keys ([ADR-0278](adr/ADR-0278-regional-formats-are-the-unicode-locale-extension-keys.md)), but no host reads them yet. A date or time pattern the user typed (a custom Windows short date) is not carried, since its syntax is the host's own. Text scale on the Web and on Linux desktops other than GNOME, accent colour and gesture timings are missing too.
 - Never run: every host reads contrast and the preferred languages, but macOS and iOS are type-checked only, the Web ran on Node rather than in a browser, and Linux ran against a stand-in portal rather than a desktop session.
 - Windows text scale is applied linearly. WinUI scales larger text less by an undocumented curve, so large text grows more than in a WinUI control at the same setting.
 - Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).

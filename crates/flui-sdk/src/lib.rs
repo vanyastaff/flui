@@ -66,13 +66,19 @@ pub mod platform {
     pub use flui_platform::GesturePreferences;
     pub use flui_platform::HapticFeedback;
     pub use flui_platform::HostNotice;
+    pub use flui_platform::HourCycle;
     pub use flui_platform::InvalidLocale;
     pub use flui_platform::InvalidPreference;
+    pub use flui_platform::InvalidRegionalFormat;
     pub use flui_platform::Locale;
+    pub use flui_platform::MeasurementSystem;
     pub use flui_platform::MemoryPressureLevel;
     pub use flui_platform::MotionPreference;
     pub use flui_platform::NativeMouseGeometry;
     pub use flui_platform::NativeTouchGeometry;
+    pub use flui_platform::NumberingSystem;
+    pub use flui_platform::RegionOverride;
+    pub use flui_platform::RegionalFormats;
     pub use flui_platform::SessionEndBlock;
     pub use flui_platform::SessionEndRequest;
     pub use flui_platform::SubmitError;
@@ -81,6 +87,7 @@ pub mod platform {
     pub use flui_platform::TextWeightPreference;
     pub use flui_platform::Unsupported;
     pub use flui_platform::UnsupportedReason;
+    pub use flui_platform::Weekday;
     pub use flui_platform::WheelPreferences;
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
