@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_platform::{ClipboardRead, capability::Resolver};
+use flui_platform::{ClipboardRead, ClipboardWrite, Concealment, capability::Resolver};
 
 /// The host's plain-text clipboard, owner-local: what
 /// [`Platform::clipboard`](crate::Platform::clipboard) hands out and the
@@ -20,8 +20,18 @@ pub trait NativeClipboard {
     /// the host could not read it.
     fn read_text(&self, answer: Resolver<ClipboardRead>);
 
-    /// Replace the clipboard's text.
-    fn write_text(&self, text: String);
+    /// Replace the clipboard's text with `write`'s, kept out of the
+    /// clipboard's history and cloud sync when it is concealed as far as
+    /// [`concealment`](Self::concealment) says (ADR-0152 §6).
+    fn write(&self, write: ClipboardWrite);
+
+    /// What this host does with a concealed write.
+    fn concealment(&self) -> Concealment;
+
+    /// Replace the clipboard's text: `write(ClipboardWrite::text(text))`.
+    fn write_text(&self, text: String) {
+        self.write(ClipboardWrite::text(text));
+    }
 }
 
 /// The most bytes of text a clipboard or primary-selection read answers, on
@@ -70,8 +80,11 @@ pub(crate) trait SyncClipboard {
     /// The clipboard's text now, or why it could not be read.
     fn read_now(&self) -> ClipboardRead;
 
-    /// Replace the clipboard's text.
-    fn write_now(&self, text: String);
+    /// Replace the clipboard's text with `write`'s.
+    fn write_now(&self, write: ClipboardWrite);
+
+    /// What this host does with a concealed write.
+    fn concealment(&self) -> Concealment;
 }
 
 impl<C: SyncClipboard> NativeClipboard for C {
@@ -80,8 +93,12 @@ impl<C: SyncClipboard> NativeClipboard for C {
         let _ = answer.resolve(self.read_now());
     }
 
-    fn write_text(&self, text: String) {
-        self.write_now(text);
+    fn write(&self, write: ClipboardWrite) {
+        self.write_now(write);
+    }
+
+    fn concealment(&self) -> Concealment {
+        SyncClipboard::concealment(self)
     }
 }
 
@@ -97,8 +114,12 @@ impl<C: NativeClipboard + ?Sized> NativeClipboard for Arc<C> {
         (**self).read_text(answer);
     }
 
-    fn write_text(&self, text: String) {
-        (**self).write_text(text);
+    fn write(&self, write: ClipboardWrite) {
+        (**self).write(write);
+    }
+
+    fn concealment(&self) -> Concealment {
+        (**self).concealment()
     }
 }
 
@@ -130,8 +151,13 @@ impl SyncClipboard for MemoryClipboard {
         self.text.lock().as_ref().map_or(Ok(None), owned_text)
     }
 
-    fn write_now(&self, text: String) {
-        *self.text.lock() = Some(Arc::from(text));
+    fn write_now(&self, write: ClipboardWrite) {
+        *self.text.lock() = Some(Arc::<str>::from(write.into_text()));
+    }
+
+    /// Nothing keeps a history of the in-memory clipboard.
+    fn concealment(&self) -> Concealment {
+        Concealment::Honored
     }
 }
 
@@ -216,7 +242,7 @@ mod tests {
 
 #[cfg(test)]
 mod owned_tests {
-    use flui_platform::ClipboardError;
+    use flui_platform::{ClipboardError, ClipboardWrite};
 
     use super::{MAX_TEXT, MemoryClipboard, SyncClipboard as _};
 
@@ -225,12 +251,12 @@ mod owned_tests {
     #[test]
     fn owned_text_is_refused_past_the_limit() {
         let clipboard = MemoryClipboard::new();
-        clipboard.write_now("a".repeat(MAX_TEXT));
+        clipboard.write_now(ClipboardWrite::text("a".repeat(MAX_TEXT)));
         assert_eq!(
             clipboard.read_now().map(|text| text.map(|text| text.len())),
             Ok(Some(MAX_TEXT))
         );
-        clipboard.write_now("a".repeat(MAX_TEXT + 1));
+        clipboard.write_now(ClipboardWrite::text("a".repeat(MAX_TEXT + 1)));
         assert_eq!(clipboard.read_now(), Err(ClipboardError::TooLarge));
     }
 }

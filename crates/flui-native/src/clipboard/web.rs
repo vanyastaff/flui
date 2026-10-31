@@ -15,8 +15,11 @@
 #![expect(unsafe_code)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
+};
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
@@ -26,6 +29,8 @@ pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,
     /// and the clipboard where the Navigator Clipboard API is missing.
     fallback: Arc<Mutex<Option<Arc<str>>>>,
+    /// Whether a concealed write has warned that it was an ordinary one.
+    degraded: AtomicBool,
 }
 
 impl std::fmt::Debug for WebClipboard {
@@ -44,6 +49,7 @@ impl WebClipboard {
     pub fn new() -> Self {
         Self {
             fallback: Arc::new(Mutex::new(None)),
+            degraded: AtomicBool::new(false),
         }
     }
 }
@@ -92,13 +98,34 @@ impl NativeClipboard for WebClipboard {
         });
     }
 
-    fn write_text(&self, text: String) {
+    fn write(&self, write: ClipboardWrite) {
+        if write.is_concealed() {
+            degraded_once(&self.degraded);
+        }
+        let text = write.into_text();
         if let Some(clipboard) = system_clipboard("writeText") {
             // The promise settles later; a refused write still leaves the
             // fallback, which the next refused read answers.
             let _ = clipboard.write_text(&text);
         }
         *self.fallback.lock() = Some(Arc::from(text));
+    }
+
+    /// The Clipboard API has no way to mark an entry: a concealed write is
+    /// an ordinary one, kept by whatever clipboard history the system has.
+    fn concealment(&self) -> Concealment {
+        Concealment::Unavailable
+    }
+}
+
+/// Warn, once per clipboard and in a debug build, that a concealed write was
+/// written as an ordinary one (ADR-0152 §6).
+fn degraded_once(degraded: &AtomicBool) {
+    if cfg!(debug_assertions) && !degraded.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            "a concealed clipboard write is an ordinary one on the web: \
+             the Clipboard API cannot keep it out of the clipboard's history"
+        );
     }
 }
 

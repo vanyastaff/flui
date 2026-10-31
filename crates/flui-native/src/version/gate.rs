@@ -469,6 +469,16 @@ pub(crate) mod android {
         const SINCE: u64 = 30;
     }
 
+    /// `ClipDescription.setExtras` (API 24). Without it a concealed clipboard write carries no
+    /// sensitive-content extra and is an ordinary one.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ClipExtras;
+
+    impl Gate for ClipExtras {
+        type Version = AndroidApi;
+        const SINCE: u64 = 24;
+    }
+
     /// `Configuration.fontWeightAdjustment` (API 31). Without it the text-weight preference is
     /// reported as unavailable.
     #[derive(Debug, Clone, Copy)]
@@ -705,11 +715,11 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, BackgroundBlur, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects,
-        GestureExclusion, HapticComposition, InMemoryDex, InsetsByType, InsetsController,
-        LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
-        StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures,
-        VibrationTouchUsage,
+        AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DisplayCutout, DragSource,
+        EnvelopeEffects, GestureExclusion, HapticComposition, InMemoryDex, InsetsByType,
+        InsetsController, LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor,
+        SegmentFeedback, StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight,
+        TouchpadGestures, VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -729,6 +739,7 @@ mod tests {
         ));
         failures.extend(row::<TextWeight>("TextWeight", api(30), api(31), unknown));
         failures.extend(row::<LocaleList>("LocaleList", api(23), api(24), unknown));
+        failures.extend(row::<ClipExtras>("ClipExtras", api(23), api(24), unknown));
         failures.extend(row::<SystemContrast>(
             "SystemContrast",
             api(33),

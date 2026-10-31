@@ -10,12 +10,16 @@
 //! without a clipboard does, and
 //! [`fail_reads_with`](ScriptedClipboard::fail_reads_with) makes reads fail as
 //! a host that cannot reach its clipboard does.
+//! [`answer_concealment`](ScriptedClipboard::answer_concealment) sets what
+//! the host does with a concealed write, and
+//! [`is_concealed`](ScriptedClipboard::is_concealed) tells whether the text
+//! came from one.
 
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
-    ClipboardError, ClipboardRead, Unsupported,
+    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported,
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
 
@@ -29,6 +33,11 @@ pub struct ScriptedClipboard {
 #[derive(Default)]
 struct State {
     text: Option<Arc<str>>,
+    /// Whether `text` came from a concealed write.
+    concealed: bool,
+    /// What the host does with a concealed write; `None` is
+    /// [`Concealment::Honored`].
+    concealment: Option<Concealment>,
     failure: Option<ClipboardError>,
     reads: usize,
     hold: bool,
@@ -53,7 +62,26 @@ impl ScriptedClipboard {
 
     /// Put `text` on the clipboard, as another application copying would.
     pub fn set_text(&self, text: impl Into<String>) {
-        self.state.borrow_mut().text = Some(Arc::from(text.into()));
+        // `Into` is the caller's code: it runs before the state is borrowed.
+        let text: String = text.into();
+        let text: Arc<str> = Arc::from(text);
+        let mut state = self.state.borrow_mut();
+        state.text = Some(text);
+        state.concealed = false;
+    }
+
+    /// Whether the clipboard's text came from a concealed write
+    /// ([`ClipboardWrite::concealed`]): `false` after an ordinary write or
+    /// [`set_text`](Self::set_text).
+    #[must_use]
+    pub fn is_concealed(&self) -> bool {
+        self.state.borrow().concealed
+    }
+
+    /// Answer `concealment` to every handle that asks what this host does
+    /// with a concealed write; [`Concealment::Honored`] until set.
+    pub fn answer_concealment(&self, concealment: Concealment) {
+        self.state.borrow_mut().concealment = Some(concealment);
     }
 
     /// Keep every later read unanswered until
@@ -143,6 +171,7 @@ impl fmt::Debug for ScriptedClipboard {
         let state = self.state.borrow();
         f.debug_struct("ScriptedClipboard")
             .field("text", &state.text)
+            .field("concealed", &state.concealed)
             .field("failure", &state.failure)
             .field("reads", &state.reads)
             .field("held_reads", &state.held.len())
@@ -171,8 +200,17 @@ impl ClipboardBackend for Backend {
         let _ = answer.resolve(text);
     }
 
-    fn write_text(&self, text: String) {
-        self.state.borrow_mut().text = Some(Arc::from(text));
+    fn write(&self, write: ClipboardWrite) {
+        let mut state = self.state.borrow_mut();
+        state.concealed = write.is_concealed();
+        state.text = Some(Arc::<str>::from(write.into_text()));
+    }
+
+    fn concealment(&self) -> Concealment {
+        self.state
+            .borrow()
+            .concealment
+            .unwrap_or(Concealment::Honored)
     }
 }
 
