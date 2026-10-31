@@ -337,6 +337,22 @@ pub(crate) fn each_runtime_asks_for_its_own_read() {
     );
 }
 
+pub(crate) fn a_read_after_a_write_never_joins_the_read_before_it() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+    // The host answers at once, but the answer settles at the owner's turn:
+    // the earlier read is still in flight when the write lands.
+    let before = settle_into(clipboard.read_text());
+    clipboard.write_text("after");
+    let after = settle_into(clipboard.read_text());
+    assert_eq!(scripted.reads_asked(), 2, "the write ends the sharing");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*before.borrow(), Some(Ok(Ok(Some(answered("before"))))));
+    assert_eq!(*after.borrow(), Some(Ok(Ok(Some(answered("after"))))));
+}
+
 pub(crate) fn a_failed_read_reaches_every_reader_that_joined_it() {
     let mut host = HeadlessHost::new(window());
     let scripted = host.clipboard();

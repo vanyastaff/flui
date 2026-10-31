@@ -77,6 +77,7 @@ impl ClipboardHandle {
 
     /// Replace the clipboard's text.
     pub fn write_text(&self, text: impl Into<String>) {
+        self.reads.0.changed();
         self.backend.write_text(text.into());
     }
 

@@ -470,7 +470,10 @@ The primary selection's handle and backend take the same types.
   failure kept. A completion's closure dropped in the first step still finds its provider's
   slot alive. A slot a handle still holds ends when that handle drops; an acquisition after
   retirement gets a fresh value kept nowhere.
-- **Containment.** No borrow of the shared state is held while the backend runs. A backend that
+- **Containment.** No borrow of the shared state is held while the backend runs. Each reader's
+  delivery is contained, so a wake hook that panics leaves the readers after it answered and
+  its failure goes on after them. A write or a primary-selection claim through any handle of
+  the runtime ends the sharing: a read asked after it never joins one asked before. A backend that
   drops its resolver, or panics and drops it, abandons the read: every reader that joined it
   settles `Abandoned::ProviderDropped`. A runtime that retires before the answer drops the
   waiting closure unrun; the readers go with it, and a later read never finds the stale one,
@@ -580,11 +583,13 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   asking again),
   `each_runtime_asks_for_its_own_read` (one provider, two runtimes: a read each, and the retired
   one strands nobody),
+  `a_read_after_a_write_never_joins_the_read_before_it`,
   `a_failed_read_reaches_every_reader_that_joined_it` (a failure is no empty clipboard) and
   `an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again`, in the `capability_seam`
   table of `flui-testing`; `runtime_locals_keep_one_value_per_type_until_retirement`
   (`flui-platform`: one value per type, every slot dropped at retirement though one panics, the
-  first failure returned, nothing kept after).
+  first failure returned, nothing kept after);
+  `a_wake_that_panics_mid_fan_out_leaves_the_other_readers_answered` (`flui-interaction`).
 
 ## Pros and cons of the options
 

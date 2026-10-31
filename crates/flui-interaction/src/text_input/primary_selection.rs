@@ -232,6 +232,7 @@ impl PrimarySelectionHandle {
     /// or another claim replaces it.
     #[must_use = "dropping the claim releases the selection"]
     pub fn claim(&self, text: impl SelectionText) -> PrimaryClaim {
+        self.reads.0.changed();
         let (id, replaced) = self.backend.claim(Rc::new(text));
         let claim = PrimaryClaim {
             backend: Rc::clone(&self.backend),

@@ -4,6 +4,8 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use flui_foundation::panic::FirstPanic;
+
 use flui_platform::{
     ClipboardRead,
     capability::{Abandoned, Completion, CompletionSource, Resolver},
@@ -19,6 +21,13 @@ pub(crate) struct SharedRead {
 }
 
 impl SharedRead {
+    /// The clipboard changes under this runtime's own write or claim: a read
+    /// asked after it must not join a read asked before, whose answer may be
+    /// the old text. The read in flight keeps answering its own readers.
+    pub(crate) fn changed(&self) {
+        let ended = self.in_flight.borrow_mut().take();
+        drop(ended);
+    }
     /// A completion for one more reader. It joins the read in flight, which
     /// it shares until that read's answer is handed out; otherwise `start`
     /// asks the host, answering a resolver that settles through
@@ -77,23 +86,112 @@ impl FanOut {
 
     /// Every reader gets the same answer. An abandoned read abandons its
     /// readers: each resolver dropped here unresolved answers
-    /// [`Abandoned::ProviderDropped`].
+    /// [`Abandoned::ProviderDropped`]. Each delivery is contained (it wakes
+    /// the owner, whose hook may panic), so the readers after a failed one
+    /// still get the answer, and the first failure goes on after them.
     fn answer(&self, outcome: Result<ClipboardRead, Abandoned>) {
         let readers = self.take_readers();
-        if let Ok(read) = outcome {
-            for reader in readers {
+        let mut failure = FirstPanic::new();
+        for reader in readers {
+            match &outcome {
                 // A retired owner has nobody left to answer.
-                let _ = reader.resolve(read.clone());
-            }
+                Ok(read) => failure.contain(|| {
+                    let _ = reader.resolve(read.clone());
+                }),
+                Err(_) => failure.contain(|| drop(reader)),
+            };
         }
+        failure.resume();
     }
 }
 
 impl Drop for FanOut {
     /// The owner retired before the host answered, dropping the waiting
-    /// closure unrun: the readers go with it, and the next read starts
-    /// afresh.
+    /// closure unrun: the readers go with it, each drop contained, and the
+    /// next read starts afresh. While the thread unwinds they are leaked
+    /// rather than dropped into a second panic.
     fn drop(&mut self) {
-        drop(self.take_readers());
+        let readers = self.take_readers();
+        if std::thread::panicking() {
+            std::mem::forget(readers);
+            return;
+        }
+        let mut failure = FirstPanic::new();
+        for reader in readers {
+            failure.contain(|| drop(reader));
+        }
+        failure.resume();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use flui_platform::capability::{OwnerJob, OwnerPoster, OwnerScope, PendingCompletions};
+
+    use super::*;
+
+    /// Where a test keeps what a reader settled with.
+    type Settled = Rc<RefCell<Option<Result<ClipboardRead, Abandoned>>>>;
+
+    /// A wake hook that panics once, after queueing the job it woke for, as
+    /// a faulty owner hook does: the readers after it still get the answer.
+    #[test]
+    fn a_wake_that_panics_mid_fan_out_leaves_the_other_readers_answered() {
+        let queue: Arc<Mutex<Vec<OwnerJob>>> = Arc::default();
+        let posts = Arc::new(AtomicUsize::new(0));
+        let poster = OwnerPoster::new({
+            let (queue, posts) = (Arc::clone(&queue), Arc::clone(&posts));
+            move |job| {
+                queue.lock().expect("queue").push(job);
+                // The host's answer is the first post; the first reader's
+                // delivery is the second.
+                assert_ne!(
+                    posts.fetch_add(1, Ordering::SeqCst),
+                    1,
+                    "the wake hook fails"
+                );
+                Ok(())
+            }
+        });
+        let pending = PendingCompletions::new();
+        let completions = CompletionSource::new(poster, pending.clone());
+        let turn = || {
+            let jobs = std::mem::take(&mut *queue.lock().expect("queue"));
+            let scope = OwnerScope::new(&pending);
+            for job in jobs {
+                job.run(&scope);
+            }
+        };
+
+        let shared = SharedRead::default();
+        let host = Cell::new(None);
+        let settled: Vec<Settled> = (0..3)
+            .map(|_| {
+                let completion = shared.read(&completions, |answer| host.set(Some(answer)));
+                let sink = Rc::new(RefCell::new(None));
+                let into = Rc::clone(&sink);
+                completion.on_complete(move |outcome| {
+                    into.replace(Some(outcome));
+                });
+                sink
+            })
+            .collect();
+        let text: Arc<str> = Arc::from("shared");
+        let _ = host
+            .take()
+            .expect("one host read")
+            .resolve(Ok(Some(Arc::clone(&text))));
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(turn));
+        assert!(failed.is_err(), "the first failure goes on");
+        turn();
+        for reader in &settled {
+            assert_eq!(*reader.borrow(), Some(Ok(Ok(Some(Arc::clone(&text))))));
+        }
     }
 }

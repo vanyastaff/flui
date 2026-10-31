@@ -304,6 +304,10 @@ fn capability_seam() {
                 capability_seam::each_runtime_asks_for_its_own_read as fn(),
             ),
             (
+                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
+                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
+            ),
+            (
                 "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
                 capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
             ),
