@@ -102,7 +102,9 @@ graph LR
   (R29), `a_saving_document_holds_user_close_only` (R12, R14),
   `two_runtimes_keep_independent_documents` (R36). Остаток P5: P5b — повтор `Busy` по часам
   UI-runtime (общий механизм дедлайнов runtime, дизайн — координатору), немедленная запись на
-  `Hidden`/`Paused` и запросе закрытия; P5c — `start_over` через `Storage::copy_aside` (форма —
+  `Hidden`/`Paused` и запросе закрытия — сделано: таймер runtime (ADR-0275) и повтор в
+  `Persisted`, строки `busy_retry_follows_the_runtime_clock` (R16) и
+  `a_hidden_application_or_a_close_retries_a_busy_write_at_once`; P5c — `start_over` через `Storage::copy_aside` (форма —
   координатору); R15 `drop_before_commit_loses_only_that_edit` и R17 — с ними.
 
 ## Устаревшие задачи

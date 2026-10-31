@@ -314,6 +314,8 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlCanvasElement",
     "HtmlElement",
+    # The semantics host's range inputs
+    "HtmlInputElement",
     # Events
     "Event",
     "EventTarget",
@@ -339,6 +341,7 @@ web-sys = { version = "0.3", features = [
     # Rendering
     "CanvasRenderingContext2d",
     "DomRect",
+    "DomRectList",
     # Display
     "Screen",
     "MediaQueryList",

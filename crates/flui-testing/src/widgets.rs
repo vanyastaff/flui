@@ -550,6 +550,12 @@ impl LaidOut {
         self.host.ui_runtime().set_window_focused(focused);
     }
 
+    /// Report the window shown or hidden; see
+    /// [`HeadlessHost::set_window_visible`](crate::HeadlessHost::set_window_visible).
+    pub fn set_window_visible(&self, visible: bool) {
+        self.host.ui_runtime().set_window_visible(visible);
+    }
+
     /// Ask to close the tree's presentation for `reason`, as its platform
     /// does. The presentation's close guard is asked first: a close it
     /// refuses is recorded and nothing changes, and the pump after its last

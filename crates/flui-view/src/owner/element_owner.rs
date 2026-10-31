@@ -418,7 +418,7 @@ impl ElementOwner<'_> {
         match self.frame_wake {
             FrameWake::Now(request_frame) => self
                 .external_inbox
-                .request_frame_if_needed(newly_queued, request_frame),
+                .request_frame_contained(newly_queued, request_frame),
             FrameWake::AfterPass => self.external_inbox.owe_frame(newly_queued),
         }
     }

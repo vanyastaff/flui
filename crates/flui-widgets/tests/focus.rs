@@ -1344,3 +1344,74 @@ pub(crate) fn the_first_focus_gain_does_not_rebuild_the_app_under_a_drag() {
     }
     laid.dispatch_pointer_up(200.0, 130.0);
 }
+
+/// A frame request that panics while focus moves still lets every focus
+/// widget hear its edge: the failure is reported, not unwound into the
+/// listener, the losing widget's `on_focus_change` runs, and the owed wake
+/// is retried.
+///
+/// Red-check: let a scheduled rebuild's wake unwind into its caller (the
+/// losing widget never hears it lost focus).
+pub(crate) fn a_failing_frame_request_still_delivers_every_focus_edge() {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use crate::common::{lay_out, loose};
+    use flui_widgets::Column;
+
+    // An element keeps the frame-request hook of its mount, so the hook is
+    // installed before the widgets mount and armed once they have.
+    let armed = Arc::new(AtomicBool::new(false));
+    let woken = Arc::new(AtomicUsize::new(0));
+    let woke = Arc::clone(&woken);
+    let mut laid = lay_out(SizedBox::new(1.0, 1.0), loose(100.0));
+    let arm = Arc::clone(&armed);
+    laid.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            assert!(!arm.load(Ordering::SeqCst), "the frame request failed");
+            woke.fetch_add(1, Ordering::SeqCst);
+        });
+    });
+    let first = FocusNode::with_debug_label("first");
+    let second = FocusNode::with_debug_label("second");
+    let edges = Rc::new(RefCell::new(Vec::new()));
+    let field = |node: &Rc<FocusNode>, name: &'static str| {
+        let edges = Rc::clone(&edges);
+        Focus::new(SizedBox::new(10.0, 10.0))
+            .focus_node(Rc::clone(node))
+            .on_focus_change(move |_cx, focused| edges.borrow_mut().push((name, focused)))
+    };
+    laid.pump_widget(Column::new((
+        field(&first, "first"),
+        field(&second, "second"),
+    )));
+    laid.tick();
+    let _ = first.request_focus();
+    laid.tick();
+    edges.borrow_mut().clear();
+
+    armed.store(true, Ordering::SeqCst);
+    let woken_before = woken.load(Ordering::SeqCst);
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let _ = second.request_focus();
+    });
+    armed.store(false, Ordering::SeqCst);
+    assert!(
+        log.contains("a frame request failed"),
+        "the frame request's failure is reported: {log}"
+    );
+    let mut heard = edges.borrow().clone();
+    heard.sort_unstable();
+    assert_eq!(
+        heard,
+        [("first", false), ("second", true)],
+        "both widgets heard their edge"
+    );
+    laid.tick();
+    assert!(second.has_primary_focus());
+    assert!(
+        woken.load(Ordering::SeqCst) > woken_before,
+        "the owed wake was retried once the hook healed"
+    );
+}

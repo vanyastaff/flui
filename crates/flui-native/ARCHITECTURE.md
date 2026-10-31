@@ -1754,10 +1754,38 @@ and writes only what changed between two specs.
   inside its call, or an event fired synchronously by a change (a removed
   element's `focusout`, the host's own `focus()`), waits for the work before
   it, and no listener runs while the mirror is borrowed. The host listens on
-  itself for `click`, `focusin` and `contextmenu` of every element, so no
-  element keeps a listener. An event that finds the mirror borrowed is the
-  host's own and is dropped, and a `Focus` on the node the tree already
-  focuses is not echoed.
+  itself for `click`, `focusin`, `contextmenu`, `input` and `scroll` of every
+  element, so no element keeps a listener. An event that finds the mirror
+  borrowed is the host's own and is dropped, and a `Focus` on the node the
+  tree already focuses is not echoed.
+- **Where the browser must act, the element is the native one.** A link with
+  an address is an `<a href>`, so a screen reader reads and offers the
+  address; a `click` on it never navigates, it is the node's action. A slider
+  a user can move (a leaf taking a value or a step, its range finite) is an
+  `<input type="range">`, which the browser adjusts for a screen reader where
+  it adjusts no ARIA slider; the moved value asks for `SetValue` or a step,
+  and the input shows the node's value until the tree publishes the moved
+  one, written again whenever its range changes, which the input sanitizes it
+  against. A value or a maximum its step does not reach from the minimum gets
+  `step="any"`, as the input would snap or never reach it. A node mirrored as
+  another element later (a link given its address) gets a new element in its
+  old one's place, with its children. Both are out of the Tab order
+  (`tabindex="-1"`).
+- **A node that takes a scroll offset is a scroller.** Its element scrolls
+  (`overflow: auto`, no scrollbar to take its box, `direction: ltr` whatever
+  the page inherits) over an empty `flui-scroll-extent` as much larger than
+  its box as its published extent is long, and is scrolled to its published
+  position less its minimum, the order ADR-0273 publishes it in. Its
+  children are published where they are seen, so each is placed as far into
+  the content as it is scrolled. The browser scrolling it, for a screen
+  reader's swipe or to reveal its cursor's element, asks for
+  `SetScrollOffset` and scrolls back to the published position until the node
+  publishes the new one; a scroll to where the node already is (the host's own,
+  after a publish) asks for nothing. The host hears `scroll` in the capture
+  phase, since it does not bubble. A scroller is scrolled once the host is
+  shown: one published while the canvas, or an ancestor that leaves it no box,
+  was hidden is scrolled when it shows, which a `ResizeObserver` on the canvas
+  hears.
 - **The host is part of the canvas's focus area** (`EditorSlot::set_semantics`),
   so focus moving between the canvas, its editor and the host's elements is no
   window focus change. Keys on an element reach the window through
@@ -1772,11 +1800,16 @@ and writes only what changed between two specs.
   `ASSISTIVE_FOCUS` is `Unreported`.
 
 `a_node_is_described_as_its_element`,
-`each_update_becomes_the_dom_operations_it_needs` and
+`a_node_the_browser_must_act_on_is_its_native_element`,
+`each_update_becomes_the_dom_operations_it_needs`,
+`a_scroller_scrolling_replaces_its_children` and
 `an_update_that_cannot_stand_is_refused_and_changes_nothing` pin the mapping on
 Linux. In headless Chrome,
 `the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
-`a_click_on_an_element_reaches_the_action_listener` and
+`a_click_on_an_element_reaches_the_action_listener`,
+`a_link_is_an_anchor_whose_click_is_the_node_s_action`,
+`moving_a_slider_s_input_asks_the_node_for_its_value`,
+`scrolling_a_scroller_asks_the_node_for_its_offset` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

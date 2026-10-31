@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
 use flui_platform::StorageName;
@@ -858,4 +859,137 @@ fn a_provided_storage_receives_the_documents_writes() {
         None,
         "the host's storage is untouched"
     );
+}
+
+/// A busy store is tried again on the UI runtime's clock: 50 ms after the
+/// first refusal, not 49, the status `Saving` meanwhile; after the 800 ms
+/// retry a further refusal fails the write (R16).
+#[test]
+fn busy_retry_follows_the_runtime_clock() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Saving,
+        "a busy store is retried"
+    );
+    laid.pump_for(Duration::from_millis(49));
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump();
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+    assert_eq!(notes.status(), SaveStatus::Clean);
+
+    for _ in 0..6 {
+        storage.fail_next(StorageError::Busy);
+    }
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    for (backoff, status) in [
+        (50, SaveStatus::Saving),
+        (100, SaveStatus::Saving),
+        (200, SaveStatus::Saving),
+        (400, SaveStatus::Saving),
+        (
+            800,
+            SaveStatus::Failed(PersistError::Storage(StorageError::Busy)),
+        ),
+    ] {
+        laid.pump_for(Duration::from_millis(backoff));
+        laid.pump();
+        assert_eq!(notes.status(), status, "after the {backoff} ms retry");
+    }
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+}
+
+/// An edit made while an older edit waits out a long back-off starts its own
+/// retries: refused as busy, it is tried again 50 ms later, not when the
+/// older wait ends.
+#[test]
+fn a_later_edit_refused_as_busy_starts_its_own_back_off() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    for _ in 0..3 {
+        storage.fail_next(StorageError::Busy);
+    }
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    for backoff in [50, 100] {
+        laid.pump_for(Duration::from_millis(backoff));
+        laid.pump();
+    }
+    assert_eq!(notes.status(), SaveStatus::Saving, "waiting 200 ms");
+
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("third".into())).is_ok());
+    laid.pump();
+    laid.pump_for(Duration::from_millis(49));
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump();
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(3, "third")),
+        "retried after its own first back-off"
+    );
+    assert_eq!(notes.status(), SaveStatus::Clean);
+}
+
+/// Hiding the application while nothing is retried hurries nothing later: a
+/// write refused as busy after the application is shown again waits its
+/// first back-off.
+#[test]
+fn a_hide_while_clean_does_not_hurry_a_later_busy_retry() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    laid.set_window_visible(false);
+    laid.pump();
+    laid.set_window_visible(true);
+    laid.pump();
+
+    storage.fail_next(StorageError::Busy);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(stored(1, "first")),
+        "the earlier hide is not carried into this write"
+    );
+    laid.pump_for(Duration::from_millis(50));
+    laid.pump();
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(2, "second")));
+}
+
+/// A case of a retry hurried: its name and what hurries it.
+struct HurryCase(&'static str, fn(&LaidOut));
+
+/// A retry waiting out its back-off runs at once when the application is
+/// hidden or a close is asked for, not when the back-off ends.
+#[test]
+fn a_hidden_application_or_a_close_retries_a_busy_write_at_once() {
+    let cases: [HurryCase; 2] = [
+        HurryCase("hidden", |laid| laid.set_window_visible(false)),
+        HurryCase("closed", |laid| {
+            assert!(!laid.request_close(CloseReason::User), "the write holds it");
+        }),
+    ];
+    for HurryCase(case, hurry) in cases {
+        let storage = MemoryStorage::new();
+        let (mut laid, notes, _guard) = loaded(&storage, "first");
+        storage.fail_next(StorageError::Busy);
+        assert!(notes.set(Note("second".into())).is_ok());
+        laid.pump();
+        hurry(&laid);
+        laid.pump();
+        laid.pump();
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            Some(stored(2, "second")),
+            "{case}: written before the 50 ms back-off"
+        );
+    }
 }

@@ -215,18 +215,20 @@ fn exercise_with_secondary(
     if let Some(marker) = std::env::var_os("FLUI_MESSENGER_READY") {
         std::fs::write(marker, b"ready").expect("publish completed Messenger setup");
     }
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.shared.pop_and_advance(ReconcileOrigin::Direct);
-    }))
-    .expect_err("configured failure must propagate");
-    let expected = if completion_fails {
-        "completion failed"
-    } else if forward_fails {
-        "forward wake failed"
+    }));
+    // A failing wake is reported where it happens and stays owed; only the
+    // completion's own failure reaches the advance's caller.
+    if completion_fails {
+        let payload = outcome.expect_err("the completion failure propagates");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"completion failed"));
     } else {
-        "first fanout wake failed"
-    };
-    assert_eq!(payload.downcast_ref::<&str>(), Some(&expected));
+        assert!(
+            outcome.is_ok(),
+            "a failing wake does not unwind the advance"
+        );
+    }
     assert_eq!(completions.get(), 1);
     assert_eq!(
         forward_calls.load(Ordering::SeqCst),
