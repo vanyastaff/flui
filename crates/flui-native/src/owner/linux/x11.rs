@@ -250,6 +250,12 @@ pub(crate) trait X11Host: 'static {
 /// method but the [`DataTransferSource`]'s runs on the owner thread, and
 /// none runs user code with a lock of its own held.
 pub(crate) trait LoopDrag: DataTransferSource {
+    /// The drag source of `window`, whose sessions run on this transfer.
+    fn drag_source(
+        self: Arc<Self>,
+        window: WindowRef,
+    ) -> Arc<dyn flui_platform::drag::PlatformDragSource>;
+
     /// `target` opened: drags over it are offered to it from now on.
     fn window_opened(&self, target: InputTarget);
 
@@ -259,7 +265,8 @@ pub(crate) trait LoopDrag: DataTransferSource {
     /// An event the server sent; `true` when it was the drag's alone.
     fn event(&self, event: &Event) -> bool;
 
-    /// When the first fetch under way times out.
+    /// When the first fetch under way, or the session's wait for its
+    /// target, times out.
     fn deadline(&self) -> Option<web_time::Instant>;
 
     /// End the fetches whose time is out at `now`, or whose request was

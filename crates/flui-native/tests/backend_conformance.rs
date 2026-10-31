@@ -1302,6 +1302,18 @@ impl BackendUnderTest for X11Decoder {
         input_availability::x11(true)
     }
 
+    /// The native X11 window starts its sessions over XDND when the pointer
+    /// leaves it; `drag::x11`'s tests run real sessions on an X server.
+    fn drag_source(&mut self) -> Option<Arc<dyn PlatformDragSource>> {
+        Some(Arc::new(ProfileDragSource(
+            input_availability::DESKTOP_DRAG_START,
+        )))
+    }
+
+    fn drag_start(&self) -> OsDragStart {
+        input_availability::DESKTOP_DRAG_START
+    }
+
     fn clock(&self) -> ClockProfile {
         ClockProfile::coarse(Duration::from_millis(1))
             .wrapping_after(Duration::from_millis(1 << 32))

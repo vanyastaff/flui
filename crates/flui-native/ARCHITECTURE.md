@@ -3614,8 +3614,8 @@ fullscreen are unavailable on this device and minimizing is not observed; a
 window manager that does not list a state in `_NET_SUPPORTED` leaves that mode
 unavailable; the root's `_NET_SUPPORTED` changing revises every window's
 capabilities, so a command admitted before is superseded. The material and the
-frame-rate hint are unavailable on X11; text input and the drag source wait
-for the host's data-transfer parts, and the cursor is the input's (below).
+frame-rate hint are unavailable on X11; text input waits
+for the host's input method, and the cursor is the input's (below).
 Commands go to the server (title, place, size, `WM_NORMAL_HINTS`,
 `_MOTIF_WM_HINTS`, map and the ICCCM withdraw) or to the window manager (the
 EWMH `_NET_WM_STATE`, `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` messages); a
@@ -3746,8 +3746,24 @@ loop hands over the answer, `INCR` a chunk at a time. At most four run at once
 and more wait their turn, starting as a fetch ends or its offer is retired;
 each is held to its limit before a byte is read and to five seconds between
 answers. Nothing is dispatched or completed under the transfer's lock, so a
-handler may fetch or conclude while it hears the drop. The drag source is not
-written yet.
+handler may fetch or conclude while it hears the drop.
+
+A window is a source too: its `drag_source` starts the runtime's OS session
+(`drag::x11::source`) when the drag leaves it with a button held, so the
+press's implicit grab keeps the pointer's XInput 2 events coming to the window
+wherever it goes, and the session takes them before the input does. The
+window owns `XdndSelection` and lists the session's types in `XdndTypeList`
+(text as `UTF8_STRING` and `text/plain`, every other format as its media
+type, the private identity included). Each movement finds the `XdndAware`
+window under the pointer, FLUI's own among them, entering and leaving targets
+as it crosses them; one position waits for its status at a time, the newest
+held meanwhile. The release drops on a target that accepted and leaves one
+that refused, Escape leaves and cancels, and a drop ends at `XdndFinished`, or
+cancelled after five seconds without one. A target's conversion is served
+from the session's provider on the owner thread, with no cell borrowed, in one
+property: a payload past one request is refused, since the source writes no
+`INCR` yet. The session lives in an owner-thread cell, and its provider and
+end hook run outside it.
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
@@ -3755,8 +3771,12 @@ Tests of the drag: `drag::x11::tests` holds the model's tables
 on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
 `a_drag_that_leaves_retires_its_offer`,
-`a_retired_offer_frees_its_fetches_for_the_requests_waiting` and
-`an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
+`a_retired_offer_frees_its_fetches_for_the_requests_waiting`,
+`an_incr_answer_is_read_in_chunks_and_held_to_its_limit` and
+`an_atom_the_server_cannot_name_is_not_kept`; a session from the window to
+another connection's window: `a_session_drops_on_a_target_that_accepts`,
+`a_session_released_over_a_refusing_target_is_cancelled` and
+`a_session_with_no_button_held_does_not_start`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

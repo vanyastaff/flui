@@ -1,4 +1,5 @@
-//! XDND drops on the native X11 host's windows (XDND version 5, ADR-0038).
+//! XDND on the native X11 host's windows, as targets and as sources (XDND
+//! version 5, ADR-0038, ADR-0211).
 //!
 //! [`X11Drag`] is the platform's one [`DataTransferSource`] and the loop's
 //! `LoopDrag`: the loop hands it every event before the input hears it, and
@@ -30,6 +31,9 @@
 //!   which the loop wakes for, rung when a request from another thread
 //!   starts a fetch.
 //!
+//! A window is a source too: its drag source runs the runtime's OS session
+//! over XDND from the window ([`source`]).
+//!
 //! No method dispatches with the transfer's state locked, and no completer
 //! is completed under it: a window's handler, which may ask for the payload
 //! or conclude the drop at once, and a request's waker run with nothing of
@@ -44,8 +48,13 @@
 #[cfg(test)]
 mod tests;
 
+mod source;
+
+pub(crate) use source::X11DragSource;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
@@ -55,6 +64,7 @@ use flui_platform::data_transfer::{
     RepresentationIndex, TransferActions, TransferCompleter, TransferError, TransferLimits,
     TransferPayload, TransferRequest,
 };
+use flui_platform::drag::PlatformDragSource;
 use flui_platform::{DragDropEvent, PlatformInput};
 use parking_lot::Mutex;
 use web_time::Instant;
@@ -69,6 +79,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::drag::offers::OfferTable;
 use crate::owner::linux::x11::{InputTarget, LoopDrag, WindowRef, X11Connection};
+use crate::owner::slot::OwnerCell;
 use model::{Kind, Message, MessageAtoms};
 
 /// How long a fetch waits for the source between answers.
@@ -353,6 +364,135 @@ pub(crate) mod model {
         offered
     }
 
+    /// `XdndEnter`'s data from `source`, which speaks [`VERSION`] and offers
+    /// `types`: the first three in the message, all of them in
+    /// `XdndTypeList` when there are more.
+    pub(crate) fn enter(source: Window, types: &[Atom]) -> [u32; 5] {
+        let listed = types.len() > 3;
+        let mut inline = [NONE; 3];
+        for (slot, atom) in inline.iter_mut().zip(types) {
+            *slot = *atom;
+        }
+        [
+            source,
+            (VERSION << 24) | u32::from(listed),
+            inline[0],
+            inline[1],
+            inline[2],
+        ]
+    }
+
+    /// `XdndPosition`'s data: the pointer at `root` on the root window at
+    /// `time`, proposing `action`.
+    pub(crate) fn position(
+        source: Window,
+        root: (i16, i16),
+        time: Timestamp,
+        action: Atom,
+    ) -> [u32; 5] {
+        let [x_high, x_low] = root.0.to_be_bytes();
+        let [y_high, y_low] = root.1.to_be_bytes();
+        [
+            source,
+            0,
+            u32::from_be_bytes([x_high, x_low, y_high, y_low]),
+            time,
+            action,
+        ]
+    }
+
+    /// `XdndLeave`'s data.
+    pub(crate) fn leave(source: Window) -> [u32; 5] {
+        [source, 0, 0, 0, 0]
+    }
+
+    /// `XdndDrop`'s data: the drop at `time`, which the target converts
+    /// `XdndSelection` at.
+    pub(crate) fn drop_at(source: Window, time: Timestamp) -> [u32; 5] {
+        [source, 0, time, 0, 0]
+    }
+
+    /// The message atoms a source reads.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ReplyAtoms {
+        pub(crate) status: Atom,
+        pub(crate) finished: Atom,
+    }
+
+    /// A message a target sends its source.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Reply {
+        /// `target` accepts the drag with `action`, or refuses it (`None`).
+        Status {
+            target: Window,
+            action: Option<Atom>,
+        },
+        /// `target` is done with the drop. A version 5 target says whether
+        /// it took it (`Some`, with its action) or not (`None`); an older
+        /// one says nothing, which reads as taken with no action named
+        /// (`Some(NONE)`).
+        Finished {
+            target: Window,
+            action: Option<Atom>,
+        },
+    }
+
+    impl Reply {
+        /// The reply a client message of `kind` carries from a target that
+        /// speaks `version`; `None` for any other message.
+        pub(crate) fn read(
+            kind: Atom,
+            data: [u32; 5],
+            version: u32,
+            atoms: &ReplyAtoms,
+        ) -> Option<Self> {
+            let target = data[0];
+            if kind == atoms.status {
+                let accepts = data[1] & 1 != 0;
+                Some(Self::Status {
+                    target,
+                    action: accepts.then_some(data[4]),
+                })
+            } else if kind == atoms.finished {
+                let action = if version < 5 {
+                    Some(NONE)
+                } else {
+                    (data[1] & 1 != 0).then_some(data[2])
+                };
+                Some(Self::Finished { target, action })
+            } else {
+                None
+            }
+        }
+    }
+
+    /// The type names a representation of `format` is offered under, the
+    /// most precise first: text in UTF-8 under the names every toolkit
+    /// reads, every other format under its media type.
+    pub(crate) fn names_of(format: &TransferFormat) -> Vec<String> {
+        match format {
+            TransferFormat::Text => vec![
+                "UTF8_STRING".to_owned(),
+                "text/plain;charset=utf-8".to_owned(),
+                "text/plain".to_owned(),
+            ],
+            TransferFormat::Html => vec!["text/html".to_owned()],
+            TransferFormat::UriList => vec!["text/uri-list".to_owned()],
+            TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
+                vec![mime.as_str().to_owned()]
+            }
+        }
+    }
+
+    /// The bytes `payload` is written as: text and HTML in UTF-8, any other
+    /// payload as it is.
+    pub(crate) fn bytes_of(payload: TransferPayload) -> Vec<u8> {
+        match payload {
+            TransferPayload::Text(text) | TransferPayload::Html(text) => text.into_bytes(),
+            TransferPayload::Custom { bytes, .. } => bytes.to_vec(),
+        }
+    }
+
     /// The error a payload of `len` bytes past `limit` is refused with.
     pub(crate) fn too_large(len: usize, limit: u64) -> Option<TransferError> {
         let actual = u64::try_from(len).unwrap_or(u64::MAX);
@@ -374,11 +514,13 @@ struct Atoms {
     actions: model::ActionAtoms,
     /// The property a fetch's requestor window is converted into.
     property: xproto::Atom,
+    /// `TARGETS`, which a target may convert the selection to first.
+    targets: xproto::Atom,
 }
 
 impl Atoms {
     fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 16] = [
+        const NAMES: [&[u8]; 17] = [
             b"XdndAware",
             b"XdndEnter",
             b"XdndPosition",
@@ -395,6 +537,7 @@ impl Atoms {
             b"XdndActionAsk",
             b"INCR",
             b"FLUI_XDND",
+            b"TARGETS",
         ];
         let failed = |error: &dyn std::fmt::Display| crate::PlatformError::Init {
             message: format!("cannot intern the XDND atoms: {error}"),
@@ -426,6 +569,7 @@ impl Atoms {
             ask,
             incr,
             property,
+            targets,
         ] = atoms;
         Ok(Self {
             aware,
@@ -448,6 +592,7 @@ impl Atoms {
                 ask,
             },
             property,
+            targets,
         })
     }
 }
@@ -709,7 +854,8 @@ impl State {
     }
 }
 
-/// The X11 host's drag and drop: its windows as XDND targets.
+/// The X11 host's drag and drop: its windows as XDND targets, and as the
+/// sources of the sessions they start.
 pub(crate) struct X11Drag {
     connection: Arc<X11Connection>,
     atoms: Atoms,
@@ -717,6 +863,10 @@ pub(crate) struct X11Drag {
     /// from another thread started.
     wake: Box<dyn Fn() + Send + Sync>,
     state: Mutex<State>,
+    /// The session a window started, on the thread that made the transfer.
+    session: OwnerCell<Option<source::Session>>,
+    /// The server time of the last pointer or key event the loop heard.
+    last_time: AtomicU32,
 }
 
 impl std::fmt::Debug for X11Drag {
@@ -741,6 +891,8 @@ impl X11Drag {
             atoms: Atoms::intern(connection)?,
             wake,
             state: Mutex::new(State::default()),
+            session: OwnerCell::new(),
+            last_time: AtomicU32::new(0),
         }))
     }
 
@@ -1286,6 +1438,10 @@ impl X11Drag {
 }
 
 impl LoopDrag for X11Drag {
+    fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource> {
+        Arc::new(X11DragSource::new(self, window))
+    }
+
     fn window_opened(&self, target: InputTarget) {
         let xid = target.window.xid;
         if let Err(error) = self.connection.xcb().change_property32(
@@ -1303,6 +1459,7 @@ impl LoopDrag for X11Drag {
     }
 
     fn window_closed(&self, window: WindowRef) {
+        self.session_window_closed(window.xid);
         let mut after = After::default();
         let removed = {
             let mut state = self.state.lock();
@@ -1330,6 +1487,9 @@ impl LoopDrag for X11Drag {
     }
 
     fn event(&self, event: &Event) -> bool {
+        if self.session_event(event) {
+            return true;
+        }
         match event {
             Event::ClientMessage(message) if message.format == 32 => {
                 let Some(read) = Message::read(
@@ -1374,15 +1534,18 @@ impl LoopDrag for X11Drag {
     }
 
     fn deadline(&self) -> Option<Instant> {
-        self.state
+        let fetches = self
+            .state
             .lock()
             .fetches
             .iter()
             .map(|fetch| fetch.deadline)
-            .min()
+            .min();
+        fetches.into_iter().chain(self.session_deadline()).min()
     }
 
     fn expire(&self, now: Instant) {
+        self.session_expire(now);
         let mut after = After::default();
         {
             let mut state = self.state.lock();
