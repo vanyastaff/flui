@@ -3213,7 +3213,7 @@ fn painted_rect_colors(laid: &crate::common::LaidOut) -> Vec<flui_painting::styl
             DrawOp::Rect { paint, .. } => Some(paint.color),
             _ => None,
         })
-        .collect()
+        .collect::<Vec<flui_painting::styling::Color>>()
 }
 
 /// A field highlights its selection with the nearest `DefaultSelectionStyle`:
