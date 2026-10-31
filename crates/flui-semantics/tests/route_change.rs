@@ -154,7 +154,9 @@ impl Routes {
 /// Each change of the innermost route is told once, with its name and kind:
 /// not the first route, nor a republish of the same one; a push, two pushes
 /// in one flush (the innermost only), a pop back, a replacement, a route
-/// nothing names, and a modal dialog named by its title.
+/// nothing names, a modal dialog named by its title, and a published node
+/// that starts scoping a route; not a route under a node with no identity,
+/// and not a dialog title that is not published.
 #[test]
 fn each_change_of_the_innermost_route_is_told_once() {
     let mut routes = Routes::new(true);
@@ -223,13 +225,62 @@ fn each_change_of_the_innermost_route_is_told_once() {
         "a modal dialog is a route, named by its title"
     );
 
+    // A node the adapter holds that starts scoping a route changes no payload
+    // the adapter receives, and is told all the same.
+    routes.add(Some(1), 10, |c| c.set_label("Search"));
+    routes.owner.flush();
+    assert_eq!(routes.told(), [], "a node that scopes nothing is no route");
+    let search = routes.id_of(10);
+    routes
+        .owner
+        .get_mut(search)
+        .expect("the fixture has that node")
+        .config_mut()
+        .set_scopes_route(true);
+    routes.owner.mark_dirty(search);
+    routes.owner.flush();
+    let search = routes.published_id(10);
+    assert_eq!(routes.told(), [(search, None, RouteChangeKind::Pushed)]);
+
+    // A route under a node with no identity is not published, nor is it told.
+    let hidden = routes.owner.insert(SemanticsNode::new());
+    routes.owner.add_child(routes.id_of(1), hidden);
+    routes.ids.push((11, hidden));
+    routes.add(Some(11), 12, |c| {
+        c.set_scopes_route(true);
+        c.set_names_route(true);
+        c.set_label("Hidden");
+    });
+    routes.owner.flush();
+    assert_eq!(routes.told(), [], "an unpublished route is not told");
+
+    // A dialog's title that is not published does not name it.
+    let stale = SemanticsAnchor::new();
+    let mut unattached = SemanticsNode::new().with_source_render_id(RenderId::new(14));
+    unattached.config_mut().set_label("Stale title");
+    unattached.config_mut().add_anchor(stale.clone());
+    routes.owner.insert(unattached);
+    routes.add(Some(1), 13, |c| {
+        c.set_role(SemanticsRole::Dialog);
+        c.set_modal(true);
+        c.add_relation(SemanticsRelation::LabelledBy, stale);
+    });
+    routes.owner.flush();
+    let untitled = routes.published_id(13);
+    assert_eq!(
+        routes.told(),
+        [(untitled, None, RouteChangeKind::Pushed)],
+        "an unattached title names nothing"
+    );
+
     routes.owner.schedule_full_publish();
     routes.owner.flush();
     assert_eq!(routes.told(), [], "a republish shows the same route");
 }
 
 /// Without a sink, a named route is announced politely in the update that
-/// shows it, and a route nothing names says nothing.
+/// shows it, a route nothing names says nothing, and a route whose update
+/// failed and that is gone by the retry is never spoken.
 #[test]
 fn without_a_sink_a_named_route_is_announced() {
     let mut routes = Routes::new(false);
@@ -256,9 +307,29 @@ fn without_a_sink_a_named_route_is_announced() {
             .all(|(_, node)| node.value() != Some("Settings\u{200B}"))),
         "an unnamed route repeats no announcement"
     );
+
+    drop(updates);
+    // A route that fails to show and is gone by the retry is never spoken.
+    routes.failing.store(true, Ordering::SeqCst);
+    routes.page(5, Some("Profile"));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| routes.owner.flush()));
+    assert!(failed.is_err(), "the delivery failed");
+    routes.failing.store(false, Ordering::SeqCst);
+    let before = routes.updates.lock().len();
+    routes.drop_node(5);
+    routes.owner.flush();
+    let updates = routes.updates.lock();
+    assert!(
+        updates[before..].iter().all(|update| update
+            .nodes
+            .iter()
+            .all(|(_, node)| !node.value().is_some_and(|value| value.contains("Profile")))),
+        "the retry shows the route the tree shows, which is not Profile"
+    );
 }
 
-/// A sink that panics is contained, nothing is announced in its place, and
+/// A sink that panics, with a payload whose destructor panics too, is
+/// contained, nothing is announced in its place, and
 /// the next change still reaches it; a delivery that fails raises its change
 /// on the retry, once.
 #[test]
@@ -270,7 +341,11 @@ fn a_failed_sink_or_delivery_loses_no_change_and_speaks_once() {
         .owner
         .set_route_change_sink(Some(Arc::new(move |change: RouteChange| {
             log.lock().push(change.name().map(str::to_owned));
-            assert!(log.lock().len() > 1, "the adapter's notice fails");
+            let calls = log.lock().len();
+            if calls == 1 {
+                // A payload whose destructor fails too: containment keeps it.
+                std::panic::panic_any(PanicsOnDrop);
+            }
         })));
     routes.page(2, Some("Home"));
     routes.owner.flush();
@@ -296,4 +371,13 @@ fn a_failed_sink_or_delivery_loses_no_change_and_speaks_once() {
         *calls.lock(),
         [Some("Settings".to_owned()), Some("Account".to_owned())]
     );
+}
+
+/// A panic payload whose destructor panics.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("the payload's destructor fails");
+    }
 }

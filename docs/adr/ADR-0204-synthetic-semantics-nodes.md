@@ -96,10 +96,13 @@ an index that is never reused).
    `UIAccessibilityScreenChangedNotification` with no element, Android `TYPE_WINDOW_STATE_CHANGED`
    with the name as its text), the composition root installs a sink that calls
    `PlatformAccessibility::route_changed` after the update showing the route is delivered; a
-   panic in it is contained and nothing is spoken in its place. Where it is `Announced` (AT-SPI, UI Automation, NSAccessibility and the
-   Web have no such notice), the name is queued on the polite announcer (§4) in the same update,
-   and a route nothing names says nothing. The owner does not move focus into the route: that is
-   the focus system's. An undelivered update leaves the route change to its retry.
+   panic in it is contained and nothing is spoken in its place. Where it is `Announced` (AT-SPI,
+   UI Automation, NSAccessibility and the Web have no such notice), the polite announcer (§4)
+   speaks the name in the update that shows the route, and in that update only; a route nothing
+   names says nothing. The owner does not move focus into the route: that is the focus system's.
+   An undelivered update leaves the route change to its retry, which tells the route the tree
+   then shows. Only published nodes count: a route under a node with no identity is not told, and
+   an unpublished dialog title names nothing.
 
 ## Consequences
 

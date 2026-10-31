@@ -125,12 +125,14 @@ fn is_route(config: &SemanticsConfiguration) -> bool {
 }
 
 /// The child indices from `root` down to `sid`, or `None` when no chain of
-/// parents reaches the root.
+/// parents reaches the root through addressable nodes only: an unaddressable
+/// node is not published, and neither is anything under it.
 fn rooted_path(tree: &SemanticsTree, root: SemanticsId, sid: SemanticsId) -> Option<Vec<usize>> {
     let mut path = Vec::new();
     let mut current = sid;
     // A cycle, an assembly defect, never reaches the root.
     for _ in 0..=tree.len() {
+        tree.get(current)?.accessibility_id()?;
         if current == root {
             path.reverse();
             return Some(path);
@@ -162,7 +164,11 @@ fn route_name(tree: &SemanticsTree, route: SemanticsId) -> Option<String> {
         if !visited.insert(sid) {
             continue;
         }
-        let Some(node) = tree.get(sid) else {
+        // An unaddressable node is not published, nor anything under it.
+        let Some(node) = tree
+            .get(sid)
+            .filter(|node| node.accessibility_id().is_some())
+        else {
             continue;
         };
         if node.config().names_route()
@@ -188,15 +194,20 @@ fn route_name(tree: &SemanticsTree, route: SemanticsId) -> Option<String> {
         if anchors.is_empty() {
             return None;
         }
+        // Only a published node names the dialog, as the relation the adapter
+        // receives resolves: an unattached one keeps its label to itself.
         let names: Vec<String> = tree
-            .iter()
-            .filter(|(_, node)| {
+            .rooted_nodes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|sid| tree.get(sid))
+            .filter(|node| {
                 node.config()
                     .anchors()
                     .iter()
                     .any(|anchor| anchors.contains(&anchor))
             })
-            .filter_map(|(_, node)| label(node.config()))
+            .filter_map(|node| label(node.config()))
             .collect();
         (!names.is_empty()).then(|| names.join(" "))
     })
