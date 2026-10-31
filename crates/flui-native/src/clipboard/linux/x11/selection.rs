@@ -216,7 +216,7 @@ impl Owned {
     fn new(write: ClipboardWrite, time: xproto::Timestamp) -> Self {
         Self {
             concealed: write.is_concealed(),
-            text: write.into_text().into(),
+            text: Arc::<str>::from(write.into_text()),
             time,
             latin1_len: OnceCell::new(),
         }

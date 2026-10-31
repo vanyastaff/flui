@@ -61,7 +61,7 @@ impl ClipboardWrite {
     #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            text: Into::<String>::into(text),
             concealed: false,
         }
     }

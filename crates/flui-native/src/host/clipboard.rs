@@ -152,7 +152,7 @@ impl SyncClipboard for MemoryClipboard {
     }
 
     fn write_now(&self, write: ClipboardWrite) {
-        *self.text.lock() = Some(Arc::from(write.into_text()));
+        *self.text.lock() = Some(Arc::<str>::from(write.into_text()));
     }
 
     /// Nothing keeps a history of the in-memory clipboard.

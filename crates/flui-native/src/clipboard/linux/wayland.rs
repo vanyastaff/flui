@@ -859,7 +859,7 @@ mod tests {
             assert_eq!(offers.contains(&CONCEALED_HINT), concealed, "{concealed}");
             let data = SourceData {
                 shared: Weak::new(),
-                text: Arc::from("hunter2"),
+                text: Arc::<str>::from("hunter2"),
                 concealed,
                 encoded: OwnerCell::new(),
             };

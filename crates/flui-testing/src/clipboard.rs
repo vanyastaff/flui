@@ -63,7 +63,8 @@ impl ScriptedClipboard {
     /// Put `text` on the clipboard, as another application copying would.
     pub fn set_text(&self, text: impl Into<String>) {
         // `Into` is the caller's code: it runs before the state is borrowed.
-        let text = Arc::from(text.into());
+        let text: String = text.into();
+        let text: Arc<str> = Arc::from(text);
         let mut state = self.state.borrow_mut();
         state.text = Some(text);
         state.concealed = false;
@@ -202,7 +203,7 @@ impl ClipboardBackend for Backend {
     fn write(&self, write: ClipboardWrite) {
         let mut state = self.state.borrow_mut();
         state.concealed = write.is_concealed();
-        state.text = Some(Arc::from(write.into_text()));
+        state.text = Some(Arc::<str>::from(write.into_text()));
     }
 
     fn concealment(&self) -> Concealment {
