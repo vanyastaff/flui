@@ -14,7 +14,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
 use flui_foundation::geometry::Offset;
-use flui_foundation::notifier::ChangeNotifier;
+use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
     GestureEndReason, GestureRecognizer, LongPressGestureRecognizer, PointerKindSet,
@@ -23,7 +23,7 @@ use flui_painting::typography::{TextDirection, TextPosition};
 use flui_platform::TargetPlatform;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
-use flui_rendering::pipeline::PipelineCell;
+use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
@@ -170,6 +170,9 @@ pub(super) struct FieldHandles {
     pressed_word: RefCell<Option<Range<usize>>>,
     /// The field's long-press recognizer, which [`Self::abandon`] cancels.
     long_press: RefCell<Weak<LongPressGestureRecognizer>>,
+    /// Rebuild shown handles when the ends they follow change after a
+    /// layout, so a handle sized from its line follows a new line height.
+    watches: RefCell<Vec<LeaderWatch>>,
     warned: Cell<bool>,
 }
 
@@ -196,6 +199,7 @@ impl FieldHandles {
             vsync: RefCell::new(None),
             pressed_word: RefCell::new(None),
             long_press: RefCell::new(Weak::new()),
+            watches: RefCell::new(Vec::new()),
             warned: Cell::new(false),
         })
     }
@@ -204,7 +208,29 @@ impl FieldHandles {
     /// hides a caret handle.
     pub(super) fn mount(self: &Rc<Self>, parts: HandleParts) {
         let post_frame = parts.post_frame.clone();
+        let pipeline = parts.pipeline.clone();
         *self.parts.borrow_mut() = Some(parts);
+        if let (Some(pipeline), Some(post_frame)) = (&pipeline, &post_frame) {
+            let watches = self
+                .links
+                .map(|link| {
+                    let watch = pipeline.watch_leader(link, post_frame.clone());
+                    let handles = Rc::downgrade(self);
+                    watch.add_listener(Rc::new(move || {
+                        let Some(handles) = handles.upgrade() else {
+                            return;
+                        };
+                        if handles.shown.get().is_some() {
+                            let mut failure = FirstPanic::new();
+                            handles.refresh(&mut failure);
+                            failure.resume();
+                        }
+                    }));
+                    watch
+                })
+                .to_vec();
+            *self.watches.borrow_mut() = watches;
+        }
         let handles = Rc::downgrade(self);
         let subscription =
             self.timer
@@ -406,7 +432,21 @@ impl FieldHandles {
     /// The controller changed: shown handles stay only for a change they
     /// made themselves.
     pub(super) fn controller_changed(&self, failure: &mut FirstPanic) {
-        if self.moving.get() || self.shown.get().is_none() {
+        if self.moving.get() {
+            return;
+        }
+        // An edit during a long press, whose handles show only once it
+        // lifts, ends the press: the word it holds is the old text's. The
+        // word goes first, so the cancel finds nothing to show handles for.
+        if self.shown.get().is_none() {
+            if self.pressed_word.borrow_mut().take().is_some() {
+                let recognizer = self.long_press.borrow().upgrade();
+                if let Some(recognizer) = recognizer {
+                    failure.contain(|| {
+                        let _ = recognizer.cancel();
+                    });
+                }
+            }
             return;
         }
         let current = self.controller_state();
@@ -814,10 +854,14 @@ fn handle(
                     if let Some(handles) = end.upgrade() {
                         // A release ends where the finger lifted, which no
                         // update may have reported yet.
+                        // The drag ends though that last move's listeners
+                        // panic; the first failure resumes after.
+                        let mut failure = FirstPanic::new();
                         if details.reason == GestureEndReason::Completed {
-                            handles.dragged(side, details.global_position);
+                            failure.contain(|| handles.dragged(side, details.global_position));
                         }
-                        handles.drag_ended(side);
+                        failure.contain(|| handles.drag_ended(side));
+                        failure.resume();
                     }
                 }),
         )

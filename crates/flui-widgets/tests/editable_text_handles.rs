@@ -232,6 +232,8 @@ pub(crate) fn a_tap_shows_a_caret_handle_that_a_drag_moves() {
     let to = from + Offset::new(start_of("alpha beta ") - caret, 0.0);
     scene.touch_drag(from, to);
     assert_eq!(scene.controller.caret_byte_offset(), 11);
+    // The timer's run starts on the frame after it was started.
+    scene.settle();
     assert_eq!(
         scene.handles(),
         1,
@@ -496,4 +498,140 @@ pub(crate) fn the_focus_leaving_before_a_tap_lifts_shows_no_handles() {
     scene.settle();
     assert!(!scene.field_focus.has_focus());
     assert_eq!(scene.handles(), 0);
+}
+
+/// A handle drag whose release lands past its last move ends though the
+/// controller's listener panics on that last change: the timed caret handle
+/// goes once its time is up, rather than staying held by a finished drag.
+///
+/// Red-check: let the last move's panic skip the drag's end (the handle
+/// stays past its time).
+pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
+    use flui_foundation::Listenable;
+    use flui_platform::pointer::PointerMove;
+
+    let mut scene = Scene::over(CaretHandle::on_tap().hide_after(Duration::from_secs(1)));
+    let caret = start_of("alpha ");
+    scene.tap(scene.along(caret));
+    assert_eq!(scene.handles(), 1);
+
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let fired = Rc::new(std::cell::Cell::new(false));
+    let watched = scene.controller.clone();
+    let listener = scene.controller.add_listener(Rc::new({
+        let armed = Rc::clone(&armed);
+        let fired = Rc::clone(&fired);
+        move || {
+            if armed.get() && watched.caret_byte_offset() == 11 {
+                fired.set(true);
+                panic!("a listener fails on the last change");
+            }
+        }
+    }));
+    let from = scene.handle_at(caret);
+    let shift = |prefix: &str| from + Offset::new(start_of(prefix) - caret, 0.0);
+    let info = PointerInfo::new(
+        PointerId::try_from(5_u64).expect("a nonzero id"),
+        PointerKind::Touch,
+    );
+    let held = PointerButtons::only(PointerButton::PRIMARY);
+    let sample = |millis: u64, at: Offset<f64>| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        )
+    };
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(0, from),
+        )));
+    for (millis, prefix) in [(16, "alpha bet"), (32, "alpha beta")] {
+        scene
+            .laid
+            .dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+                info,
+                held,
+                sample(millis, shift(prefix)),
+            )));
+    }
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene
+            .laid
+            .dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                held,
+                sample(48, shift("alpha beta ")),
+            )));
+    }));
+    // Whether the panic reaches here or the input path contains it, the
+    // listener failed on the release's change.
+    drop(released);
+    assert!(fired.get(), "the release made the last change");
+    armed.set(false);
+    scene.controller.remove_listener(listener);
+    assert_eq!(scene.controller.caret_byte_offset(), 11);
+    // The timer's run starts on the frame after it was started.
+    scene.settle();
+    scene.laid.pump_for(Duration::from_millis(1200));
+    scene.settle();
+    assert_eq!(scene.handles(), 0, "the ended drag lets its time run out");
+}
+
+/// An edit made while a long press holds its word ends the press: lifting
+/// after moving neither selects in the new text from the old word nor
+/// shows handles.
+///
+/// Red-check: keep the pressed word across the edit (the move selects
+/// from it and the release shows handles).
+pub(crate) fn an_edit_during_a_long_press_ends_it() {
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    let press = TouchScript::new("long press across an edit")
+        .down(1, scene.along(start_of("alpha be")))
+        .wait(Duration::from_millis(1000))
+        .frame()
+        .move_to(1, scene.along(start_of("alpha beta ga")))
+        .wait(Duration::from_millis(50))
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let controller = scene.controller.clone();
+    let after_edit = Rc::new(RefCell::new(None));
+    let noted = Rc::clone(&after_edit);
+    scene.laid.replay_with(&press, |_laid, step| {
+        if step == 1 {
+            assert_eq!(controller.selection(), 6..10, "the press selected beta");
+            controller.set_text("one two three");
+            *noted.borrow_mut() = Some(controller.selection());
+        }
+    });
+    scene.settle();
+    assert_eq!(scene.controller.text(), "one two three");
+    assert_eq!(Some(scene.selection()), *after_edit.borrow());
+    assert_eq!(scene.handles(), 0);
+}
+
+/// Shown handles follow a new line height once the field lays out again:
+/// the handle a larger font gives is built for its taller line.
+///
+/// Red-check: never rebuild the handles after a layout (they keep the old
+/// line height).
+pub(crate) fn shown_handles_follow_a_new_line_height() {
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    scene.long_press(scene.along(start_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    let before = scene.marked.line_height();
+    scene.rebuild(|field| {
+        field
+            .caret_handle(CaretHandle::NEVER)
+            .text_style(TextStyle::default().with_font_size(32.0))
+    });
+    scene.settle();
+    assert_eq!(scene.handles(), 2);
+    let after = scene.marked.line_height();
+    assert!(after > before * 1.5, "{before} then {after}");
 }
