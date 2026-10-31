@@ -674,6 +674,10 @@ of `navigator`.
 `SwipeActions` drag their content with `AnchoredDrag` (`scroll`), and a swipe
 row composes `ContextMenuArea` for its theme-free menu.
 
+`reorderable` shares the `swipe` layer: a reorderable row composes
+`ContextMenuArea` for its moves, `Draggable` and `DropTarget` (`interaction`)
+for its drag and `ListView` (`scroll`) for its rows.
+
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
@@ -922,6 +926,43 @@ stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`
 `grid_tiles_slide_between_cells`,
 `a_staggered_list_mounts_its_items_one_after_another` and
 `a_panicking_item_drop_leaves_the_list_working` pin these through mounted trees.
+
+### A reorderable row is a drag session over its own list's rows
+
+`ReorderableList` moves nothing itself. A row's move is a drag-and-drop session
+that stays in the window (`DragReach::Window`), carrying the row's list and its
+model key. Every row is a `DropTarget` that accepts only drags of its own list,
+so the row under the pointer is where a drop lands. The drop reports one
+`Reorder` with `to` counted after the item leaves `from`, and the app moves the
+item and rebuilds. Rows are keyed by the model key, so the element, the state
+and the focus follow the item.
+
+The handle drags on the list's axis (`MultiDragAxis`), which makes it the
+innermost same-axis member over the list's scroll, so it wins the contact
+(ADR-0208 §2). The drag then follows the pointer freely. Its whole box takes
+the press. On touch and pen a long press on the row drags it too; the row's
+menu hold hands the contact to the drag, and anything deeper that wants the
+long press (a `SelectionArea`) wins it. The default handle sits at the reading
+start, because keyboard focus reveals the row's menu control at the trailing
+edge. A drag shows the row's label, a plate of the row's size when it has
+none, or what `feedback` builds, never the row's content built again: that
+would mount a second copy of what the row owns alone.
+
+The moves are commands on the row (ADR-0216 §2): a context menu that the
+handle's tap and every menu trigger open, or visible controls when the list
+asks for them. The row's own `Shortcuts` bind Alt with the arrows, Home and
+End. Every move, dropped or commanded, is announced with the row's name and new
+position. The list has roving focus (`ListView::focusable`), whose row marker
+pins the focused row, so a row moved far down a lazy list keeps its focus.
+Rows `a_handle_drag_reports_one_move_counted_after_removal`,
+`a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle`,
+`a_drag_that_does_not_drop_moves_nothing`,
+`the_preview_follows_the_drag_over_the_rows`,
+`the_move_commands_move_a_row_and_announce_it`,
+`a_dragged_row_scrolled_out_of_the_band_still_drops`,
+`a_long_press_on_selectable_text_selects_and_the_handle_still_drags`,
+`moving_a_row_to_the_end_of_a_long_list_keeps_its_focus` and the matrix row
+`reorderable_list` pin these.
 
 ### Programmatic scroll replacement preserves the published velocity
 

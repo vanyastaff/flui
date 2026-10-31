@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -24,6 +25,7 @@ use std::rc::Rc;
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -116,6 +118,7 @@ impl<Op> HostQueue<Op> {
     #[cfg(any(
         target_os = "android",
         target_os = "macos",
+        wayland_host,
         target_arch = "wasm32",
         test
     ))]
@@ -130,6 +133,7 @@ impl<Op> HostQueue<Op> {
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -146,6 +150,7 @@ pub(crate) enum MirrorHostOp {
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
