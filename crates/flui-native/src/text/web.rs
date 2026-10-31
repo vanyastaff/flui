@@ -66,6 +66,105 @@ mod ime {
         }
     }
 
+    const LINE_FEED: u16 = 0x0A;
+    const CARRIAGE_RETURN: u16 = 0x0D;
+
+    /// What a field's element shows of a store's text, and where each of
+    /// its offsets is in the store. The browser sanitizes the value a script
+    /// gives a field (HTML's value sanitization): a single-line input drops
+    /// line feeds and carriage returns, and a textarea shows a line feed for
+    /// a lone carriage return and drops the one before a line feed. The
+    /// store keeps its text: an edit of the shown value is the edit of the
+    /// store's code units it covers.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub(crate) struct FieldValue {
+        shown: Vec<u16>,
+        /// The store offset of each shown code unit.
+        at: Vec<usize>,
+        /// The store's length.
+        len: usize,
+    }
+
+    impl FieldValue {
+        /// What a `single_line` input, or else a textarea, shows of `store`.
+        #[must_use]
+        pub(crate) fn of(store: &[u16], single_line: bool) -> Self {
+            let mut shown = Vec::with_capacity(store.len());
+            let mut at = Vec::with_capacity(store.len());
+            for (index, &unit) in store.iter().enumerate() {
+                let unit = match unit {
+                    LINE_FEED | CARRIAGE_RETURN if single_line => continue,
+                    CARRIAGE_RETURN if store.get(index + 1) == Some(&LINE_FEED) => continue,
+                    CARRIAGE_RETURN => LINE_FEED,
+                    unit => unit,
+                };
+                shown.push(unit);
+                at.push(index);
+            }
+            Self {
+                shown,
+                at,
+                len: store.len(),
+            }
+        }
+
+        /// The element's value, in UTF-16 code units.
+        #[must_use]
+        pub(crate) fn shown(&self) -> &[u16] {
+            &self.shown
+        }
+
+        /// The store range the shown range between `start` and `end`
+        /// covers, ordered and clamped to the shown text: it starts past
+        /// the units the field drops before `start` and ends before those
+        /// it drops after `end`, so an edit next to a dropped unit keeps
+        /// it. A collapsed range is the caret past the dropped units.
+        #[must_use]
+        pub(crate) fn store_range(&self, start: usize, end: usize) -> (usize, usize) {
+            let shown = self.shown.len();
+            let (start, end) = (start.min(end).min(shown), start.max(end).min(shown));
+            let from = self.at.get(start).copied().unwrap_or(self.len);
+            let to = end
+                .checked_sub(1)
+                .and_then(|before| self.at.get(before))
+                .map_or(0, |&at| at + 1);
+            (from, to.max(from))
+        }
+
+        /// The shown text's edit of `start..old_end` into `inserted`, as an
+        /// edit of the store: the store range it replaces
+        /// ([`Self::store_range`]), after which `self` shows the edited
+        /// store. The inserted units are the browser's value, which it
+        /// shows as they are.
+        pub(crate) fn replace(
+            &mut self,
+            start: usize,
+            old_end: usize,
+            inserted: &[u16],
+        ) -> (usize, usize) {
+            let (from, to) = self.store_range(start, old_end);
+            let shown = self.shown.len();
+            let (start, old_end) = (start.min(old_end).min(shown), start.max(old_end).min(shown));
+            let grown = inserted.len();
+            let removed = to - from;
+            self.shown.splice(start..old_end, inserted.iter().copied());
+            let after = self.at.split_off(old_end);
+            self.at.truncate(start);
+            self.at.extend(from..from + grown);
+            self.at
+                .extend(after.into_iter().map(|at| at - removed + grown));
+            self.len = self.len - removed + grown;
+            (from, to)
+        }
+
+        /// The shown offset of the store's `offset`: the units the field
+        /// drops before it are not counted.
+        #[must_use]
+        pub(crate) fn shown_offset(&self, offset: usize) -> usize {
+            self.at.partition_point(|&at| at < offset)
+        }
+    }
+
     #[cfg(test)]
     mod tests;
 }
@@ -116,7 +215,7 @@ mod input {
     };
     use wasm_bindgen::{JsCast, prelude::*};
 
-    use super::ime::{autocomplete, enter_key_hint, input_mode};
+    use super::ime::{FieldValue, autocomplete, enter_key_hint, input_mode};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
@@ -192,13 +291,14 @@ mod input {
     enum Surface {
         /// An `EditContext` on the canvas.
         Context(EditContext),
-        /// An element the browser edits, with the text it last held: the
-        /// hidden textarea the input keeps beside the canvas (`hidden`), or
-        /// the semantics host's field, which the host keeps.
+        /// An element the browser edits, with what it last showed of the
+        /// store's text: the hidden textarea the input keeps beside the
+        /// canvas (`hidden`), or the semantics host's field, which the host
+        /// keeps.
         Editor {
             element: EditorElement,
             hidden: bool,
-            mirror: RefCell<Vec<u16>>,
+            mirror: RefCell<FieldValue>,
         },
     }
 
@@ -235,43 +335,67 @@ mod input {
             }
         }
 
-        fn set_value(&self, value: &str) {
+        /// Show the store's `text`, as the browser's value sanitization lets
+        /// the element hold it, and return what it shows.
+        fn show(&self, text: &str) -> FieldValue {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            let shown = FieldValue::of(&units, matches!(self, Self::Line(_)));
+            let value = String::from_utf16_lossy(shown.shown());
             match self {
-                Self::Area(area) => area.set_value(value),
-                Self::Line(line) => line.set_value(value),
+                Self::Area(area) => area.set_value(&value),
+                Self::Line(line) => line.set_value(&value),
+            }
+            shown
+        }
+
+        /// The element's selection in the store's text it shows as `shown`,
+        /// its direction kept; the start of the text when it reports none.
+        fn selection(&self, shown: &FieldValue) -> Selection {
+            let (start, end, direction) = match self {
+                Self::Area(area) => (
+                    area.selection_start(),
+                    area.selection_end(),
+                    area.selection_direction(),
+                ),
+                Self::Line(line) => (
+                    line.selection_start(),
+                    line.selection_end(),
+                    line.selection_direction(),
+                ),
+            };
+            let offset = |offset: Result<Option<u32>, JsValue>| {
+                usize::try_from(offset.ok().flatten().unwrap_or(0)).unwrap_or(usize::MAX)
+            };
+            let (start, end) = shown.store_range(offset(start), offset(end));
+            let (start, end) = (Utf16Offset::new(start), Utf16Offset::new(end));
+            if direction.ok().flatten().as_deref() == Some("backward") {
+                Selection {
+                    anchor: end,
+                    active: start,
+                }
+            } else {
+                Selection {
+                    anchor: start,
+                    active: end,
+                }
             }
         }
 
-        /// The selection's start and end; the start of the text when the
-        /// element reports none.
-        fn selection(&self) -> (u32, u32) {
-            let (start, end) = match self {
-                Self::Area(area) => (area.selection_start(), area.selection_end()),
-                Self::Line(line) => (line.selection_start(), line.selection_end()),
+        /// Select the store's `selection` in the element showing `shown`,
+        /// its direction kept.
+        fn select(&self, shown: &FieldValue, selection: Selection) {
+            let selected = selection.range();
+            let start = shown_u32(shown, selected.start());
+            let end = shown_u32(shown, selected.end());
+            let direction = if selection.active < selection.anchor {
+                "backward"
+            } else {
+                "forward"
             };
-            (
-                start.ok().flatten().unwrap_or(0),
-                end.ok().flatten().unwrap_or(0),
-            )
-        }
-
-        fn select(&self, start: u32, end: u32) {
             let _ = match self {
-                Self::Area(area) => area.set_selection_range(start, end),
-                Self::Line(line) => line.set_selection_range(start, end),
+                Self::Area(area) => area.set_selection_range_with_direction(start, end, direction),
+                Self::Line(line) => line.set_selection_range_with_direction(start, end, direction),
             };
-        }
-
-        /// Whether the element's value holds `text` as written. A browser
-        /// sanitizes what a script gives a field (HTML's value sanitization):
-        /// a single-line input drops line breaks, a textarea turns carriage
-        /// returns into line feeds, and an edit read back from such a value
-        /// would delete what it dropped from the store.
-        fn holds(&self, text: &str) -> bool {
-            match self {
-                Self::Area(_) => !text.contains('\r'),
-                Self::Line(_) => !text.contains(['\n', '\r']),
-            }
         }
 
         fn is(&self, element: &web_sys::HtmlElement) -> bool {
@@ -331,6 +455,11 @@ mod input {
 
     fn len16(text: &str) -> usize {
         text.encode_utf16().count()
+    }
+
+    /// The offset in what `shown` shows of the store's `offset`.
+    fn shown_u32(shown: &FieldValue, offset: Utf16Offset) -> u32 {
+        u32::try_from(shown.shown_offset(offset.get())).unwrap_or(u32::MAX)
     }
 
     fn as_u32(offset: Utf16Offset) -> u32 {
@@ -411,8 +540,8 @@ mod input {
                 } => Some(element),
                 Surface::Context(_) | Surface::Editor { .. } => None,
             };
-            let text = snapshot(&*store).map(|(text, _)| text).unwrap_or_default();
-            let moved = match (served, self.field_for(&text)) {
+            let named = self.field.named();
+            let moved = match (served, named.as_ref().and_then(EditorElement::of)) {
                 (Some(served), Some(named)) => !served.is(named.html()),
                 (None, None) => false,
                 _ => true,
@@ -586,16 +715,6 @@ mod input {
             }
         }
 
-        /// The semantics host's field `text` is served through: the one it
-        /// names, while its value can hold `text` ([`EditorElement::holds`]).
-        fn field_for(&self, text: &str) -> Option<EditorElement> {
-            self.field
-                .named()
-                .as_ref()
-                .and_then(EditorElement::of)
-                .filter(|field| field.holds(text))
-        }
-
         /// Whether the page's focus is on `element`.
         fn page_focus_is(&self, element: &web_sys::Node) -> bool {
             self.canvas
@@ -605,20 +724,12 @@ mod input {
         }
 
         /// Give `store` a fresh surface, holding its text and selection: the
-        /// semantics host's field while it names one that can hold the text,
-        /// else an `EditContext` on the canvas, else a hidden textarea beside
-        /// it. A named field that cannot hold the text gives the canvas its
-        /// focus, so what is typed reaches the store.
+        /// semantics host's field while it names one, else an `EditContext` on
+        /// the canvas, else a hidden textarea beside it.
         fn attach(&self, store: Rc<dyn TextStore>) {
             let (text, selection) = snapshot(&*store)
                 .unwrap_or_else(|| (String::new(), Selection::collapsed(Utf16Offset::ZERO)));
-            let field = self.field_for(&text);
-            if field.is_none()
-                && let Some(named) = self.field.named()
-                && self.page_focus_is(named.as_ref())
-            {
-                let _ = self.canvas.focus();
-            }
+            let field = self.field.named().as_ref().and_then(EditorElement::of);
             let attached = match field {
                 Some(field) => self.attach_editor(&store, &text, selection, field, false),
                 None if self.edit_context => self.attach_context(&store, &text, selection),
@@ -822,9 +933,8 @@ mod input {
             hidden: bool,
         ) -> Result<Attached, JsValue> {
             set_editor_hints(element.html(), &store.status(), !hidden)?;
-            element.set_value(text);
-            let selected = selection.range();
-            element.select(as_u32(selected.start()), as_u32(selected.end()));
+            let shown = element.show(text);
+            element.select(&shown, selection);
             let target: &web_sys::EventTarget = element.html().as_ref();
             let mut listeners = Vec::new();
             let listen = |target: &web_sys::EventTarget,
@@ -931,7 +1041,7 @@ mod input {
                 surface: Rc::new(Surface::Editor {
                     element,
                     hidden,
-                    mirror: RefCell::new(text.encode_utf16().collect()),
+                    mirror: RefCell::new(shown),
                 }),
                 _listeners: listeners,
             })
@@ -956,29 +1066,30 @@ mod input {
                 return;
             };
             let now: Vec<u16> = element.value().encode_utf16().collect();
-            let change = diff(&mirror.borrow(), &now);
-            mirror.borrow_mut().clone_from(&now);
-            let selection = element.selection();
+            let change = diff(mirror.borrow().shown(), &now);
+            let change = change.map(|change| {
+                let inserted = &now[change.start..change.new_end];
+                let (from, to) =
+                    mirror
+                        .borrow_mut()
+                        .replace(change.start, change.old_end, inserted);
+                (from, to, String::from_utf16_lossy(inserted), inserted.len())
+            });
+            let selection = element.selection(&mirror.borrow());
             self.edit(move |session| {
-                if let Some(change) = change {
+                if let Some((from, to, inserted, units)) = &change {
                     let replaced = clamped(
-                        Utf16Range::try_new(
-                            Utf16Offset::new(change.start),
-                            Utf16Offset::new(change.old_end),
-                        )
-                        .expect("BUG: a diff is ordered"),
+                        Utf16Range::try_new(Utf16Offset::new(*from), Utf16Offset::new(*to))
+                            .expect("BUG: a store range is ordered"),
                         session.document_len(),
                     );
-                    let inserted = String::from_utf16_lossy(&now[change.start..change.new_end]);
-                    if session.replace(replaced, &inserted).is_err() {
+                    if session.replace(replaced, inserted).is_err() {
                         return false;
                     }
                     let composition = composing.then(|| Composition {
                         range: Utf16Range::try_new(
                             replaced.start(),
-                            Utf16Offset::new(
-                                replaced.start().get() + (change.new_end - change.start),
-                            ),
+                            Utf16Offset::new(replaced.start().get() + units),
                         )
                         .expect("BUG: an inserted range is ordered"),
                         hides_caret: false,
@@ -987,10 +1098,10 @@ mod input {
                 } else if !composing {
                     let _ = session.set_composition(None);
                 }
-                let selected = clamped(range(selection.0, selection.1), session.document_len());
+                let len = session.document_len();
                 let _ = session.set_selection(Selection {
-                    anchor: selected.start(),
-                    active: selected.end(),
+                    anchor: selection.anchor.min(len),
+                    active: selection.active.min(len),
                 });
                 true
             });
@@ -1020,19 +1131,12 @@ mod input {
                     let _ =
                         context.update_selection(as_u32(selected.start()), as_u32(selected.end()));
                 }
-                // A field that cannot hold the new text hands the store to the
-                // canvas.
-                Surface::Editor {
-                    element,
-                    hidden: false,
-                    ..
-                } if !element.holds(&text) => self.schedule_resync(store),
                 Surface::Editor {
                     element, mirror, ..
                 } => {
-                    element.set_value(&text);
-                    *mirror.borrow_mut() = text.encode_utf16().collect();
-                    element.select(as_u32(selected.start()), as_u32(selected.end()));
+                    let shown = element.show(&text);
+                    element.select(&shown, selection);
+                    *mirror.borrow_mut() = shown;
                 }
             }
         }
@@ -1050,9 +1154,9 @@ mod input {
                     let _ =
                         context.update_selection(as_u32(selected.start()), as_u32(selected.end()));
                 }
-                Surface::Editor { element, .. } => {
-                    element.select(as_u32(selected.start()), as_u32(selected.end()));
-                }
+                Surface::Editor {
+                    element, mirror, ..
+                } => element.select(&mirror.borrow(), selection),
             }
             self.push_bounds();
         }

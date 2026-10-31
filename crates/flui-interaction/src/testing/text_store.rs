@@ -183,6 +183,25 @@ impl InMemoryTextStore {
         self.report(Notice::Selection);
     }
 
+    /// A selection the application makes, its direction kept; the observer
+    /// hears of it at once, or, inside a frame transaction, once the gate
+    /// opens.
+    ///
+    /// # Panics
+    ///
+    /// When `selection` names an offset outside the text, or inside a
+    /// scalar: the calling test's bug.
+    pub fn app_select(&self, selection: Selection) {
+        {
+            let mut doc = self.doc.borrow_mut();
+            doc.check(selection.anchor)
+                .and_then(|()| doc.check(selection.active))
+                .expect("BUG: app_select was given an offset outside the text");
+            doc.selection = selection;
+        }
+        self.report(Notice::Selection);
+    }
+
     /// How many read-write sessions changed the committed text (the text
     /// without its composition): the notifications a field sends its owner,
     /// at most one per session, each after the session's lock is released.

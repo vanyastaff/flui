@@ -1813,9 +1813,11 @@ and writes only what changed between two specs.
   element keeps no listener of the text input's. A hidden editor that takes
   the store over takes the canvas's focus only, never another element's of the
   host; the canvas forwards its focus to the host's field only while the host
-  names it, and a field the store moves to takes the canvas's focus. A text
-  the field cannot hold as written (a line break in a single-line input, which
-  the browser drops) is served on the canvas, which takes the field's focus.
+  names it, and a field the store moves to takes the canvas's focus. A field
+  shows the store's text as the browser's value sanitization lets it (a
+  single-line input drops line breaks) and maps its offsets to the store's
+  (`FieldValue`), so an edit next to a unit it cannot show keeps it; its
+  selection keeps its direction.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
@@ -1824,8 +1826,10 @@ and writes only what changed between two specs.
 `a_node_the_browser_must_act_on_is_its_native_element`,
 `a_text_field_is_a_native_field_of_its_kind`,
 `each_update_becomes_the_dom_operations_it_needs`,
-`a_scroller_scrolling_replaces_its_children` and
-`an_update_that_cannot_stand_is_refused_and_changes_nothing` pin the mapping on
+`a_scroller_scrolling_replaces_its_children`,
+`an_update_that_cannot_stand_is_refused_and_changes_nothing`,
+`a_field_shows_the_store_s_text_as_the_browser_holds_it` and
+`an_edit_of_the_shown_text_is_an_edit_of_the_store` pin the mapping on
 Linux. In headless Chrome,
 `the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
 `a_click_on_an_element_reaches_the_action_listener`,
@@ -1837,7 +1841,8 @@ Linux. In headless Chrome,
 `a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor`,
 `the_canvas_keeps_the_focus_a_field_left`,
 `a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
-`a_text_the_field_cannot_hold_is_served_on_the_canvas` and
+`a_field_keeps_the_line_breaks_it_cannot_show`,
+`a_field_s_selection_keeps_its_direction` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

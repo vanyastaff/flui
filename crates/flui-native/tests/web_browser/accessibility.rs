@@ -133,7 +133,8 @@ export function fieldState(id) {
     const field = byId(id);
     return JSON.stringify(field ? {
         tag: field.tagName.toLowerCase(), value: field.value, start: field.selectionStart,
-        end: field.selectionEnd, focused: document.activeElement === field,
+        end: field.selectionEnd, direction: field.selectionDirection,
+        focused: document.activeElement === field,
         autocomplete: field.getAttribute("autocomplete"), inputmode: field.getAttribute("inputmode"),
     } : null);
 }
@@ -147,6 +148,12 @@ export function typeIntoField(id, value, caret, composing) {
     field.setSelectionRange(caret, caret);
     field.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: composing,
         inputType: composing ? "insertCompositionText" : "insertText" }));
+}
+// The user selects in a field, from `start` to `end` in `direction`.
+export function selectField(id, start, end, direction) {
+    const field = byId(id);
+    field.setSelectionRange(start, end, direction);
+    field.dispatchEvent(new Event("select", { bubbles: true }));
 }
 export function fieldComposition(id, type) { byId(id).dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
 "#)]
@@ -210,6 +217,8 @@ extern "C" {
     fn type_into_field(id: Option<&str>, value: &str, caret: u32, composing: bool);
     #[wasm_bindgen(js_name = fieldComposition)]
     fn field_composition(id: &str, kind: &str);
+    #[wasm_bindgen(js_name = selectField)]
+    fn select_field(id: &str, start: u32, end: u32, direction: &str);
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -877,6 +886,7 @@ struct FieldState {
     value: String,
     start: u32,
     end: u32,
+    direction: String,
     focused: bool,
     autocomplete: Option<String>,
     inputmode: Option<String>,
@@ -1073,48 +1083,75 @@ async fn a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus() {
     canvas.window.close_now();
 }
 
-/// A store whose text a field's element cannot hold as written (a line
-/// break in a single-line input, which the browser drops) is served on the
-/// canvas instead, which takes the page's focus: by its `EditContext` or,
-/// without one, by the hidden editor. The field's value never edits the
-/// store, whether it named the store from the start or the application put
-/// the line break in while the field served it.
+/// A single-line field shows the store's text without the line breaks the
+/// browser drops from its value, and still serves the store: a selection or
+/// an edit there keeps them, whether the store held them from the start or
+/// the application put one in while the field served it.
 #[wasm_bindgen_test]
-async fn a_text_the_field_cannot_hold_is_served_on_the_canvas() {
-    for edit_context in [true, false] {
-        let hidden = (!edit_context).then(super::EditContextHidden::hide);
-        for start in ["a\nb", "ab"] {
-            let store = flui_testing::text_store_kit::InMemoryTextStore::new(start);
-            let (canvas, _accessibility) = served_form(&store);
-            if start == "ab" {
-                assert!(field("name").expect("the field").focused, "served there");
-                store.app_replace(
-                    flui_platform::text_store::Utf16Range::try_new(
-                        flui_platform::text_store::Utf16Offset::new(1),
-                        flui_platform::text_store::Utf16Offset::new(1),
-                    )
-                    .expect("a range"),
-                    "\n",
-                );
-                super::wait(0).await;
-            }
-            let why = format!("from {start:?}, with EditContext {edit_context}");
-            assert!(!field("name").expect("the field").focused, "{why}");
-            if edit_context {
-                assert_eq!(focused(), "canvas", "{why}");
-                assert_eq!(super::edit_context_text().as_deref(), Some("a\nb"), "{why}");
-            } else {
-                let editor = super::editor().expect("the hidden editor");
-                assert!(editor.focused, "{why}");
-                assert_eq!(editor.value, "a\nb", "{why}");
-            }
-            type_into_field(Some("name"), "ab", 2, false);
-            assert_eq!(store.text(), "a\nb", "{why}");
-            canvas.window.close_now();
-            super::wait(0).await;
+async fn a_field_keeps_the_line_breaks_it_cannot_show() {
+    for start in ["a\nb", "ab"] {
+        let store = flui_testing::text_store_kit::InMemoryTextStore::new(start);
+        let (canvas, _accessibility) = served_form(&store);
+        if start == "ab" {
+            store.app_replace(
+                flui_platform::text_store::Utf16Range::try_new(
+                    flui_platform::text_store::Utf16Offset::new(1),
+                    flui_platform::text_store::Utf16Offset::new(1),
+                )
+                .expect("a range"),
+                "\n",
+            );
         }
-        drop(hidden);
+        let state = field("name").expect("the field");
+        assert_eq!(
+            (state.value.as_str(), state.focused),
+            ("ab", true),
+            "{start:?}"
+        );
+        assert_eq!(super::edit_context_text(), None, "served by the field");
+        select_field("name", 1, 1, "none");
+        assert_eq!(store.text(), "a\nb", "a selection keeps it, from {start:?}");
+        assert_eq!(store.selection().range().start().get(), 2, "past it");
+        type_into_field(Some("name"), "abc", 3, false);
+        assert_eq!(store.text(), "a\nbc", "an edit keeps it, from {start:?}");
+        canvas.window.close_now();
+        super::wait(0).await;
     }
+}
+
+/// A backward selection in a field is the store's backward selection, its
+/// active end at the start, and the field shows the store's selection with
+/// its direction.
+#[wasm_bindgen_test]
+async fn a_field_s_selection_keeps_its_direction() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("abcd");
+    let (canvas, _accessibility) = served_form(&store);
+    select_field("name", 1, 3, "backward");
+    let selection = store.selection();
+    assert_eq!(
+        (selection.anchor.get(), selection.active.get()),
+        (3, 1),
+        "the active end is the start"
+    );
+    store.app_select(flui_platform::text_store::Selection {
+        anchor: flui_platform::text_store::Utf16Offset::new(4),
+        active: flui_platform::text_store::Utf16Offset::new(2),
+    });
+    let state = field("name").expect("the field");
+    assert_eq!(
+        (state.start, state.end, state.direction.as_str()),
+        (2, 4, "backward"),
+        "the application's selection"
+    );
+    // The browser fires the field's `select` event later.
+    super::wait(0).await;
+    let selection = store.selection();
+    assert_eq!(
+        (selection.anchor.get(), selection.active.get()),
+        (4, 2),
+        "the field's select event reads it back as it is"
+    );
+    canvas.window.close_now();
 }
 
 /// The store leaves the field's element when the tree's focus leaves the
