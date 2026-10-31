@@ -42,6 +42,7 @@ use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
 use crate::clipboard::linux::text::TextForm;
+use crate::host::host_text;
 use crate::owner::linux::wayland::WaylandState;
 
 /// What the application offers as its selection.
@@ -352,7 +353,7 @@ impl super::SeatClipboard {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
-            Read::Ask(text) => drop(answer.resolve(Ok(ask(text).map(Arc::<str>::from)))),
+            Read::Ask(text) => drop(answer.resolve(ask(text).map_or(Ok(None), host_text))),
             Read::Pipe(reader, form) => {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-primary".to_owned())
