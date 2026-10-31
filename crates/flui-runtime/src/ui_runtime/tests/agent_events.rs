@@ -38,7 +38,7 @@ fn subscribe(
     agent: &SemanticsAgent,
     kinds: &[EventKind],
 ) -> Result<EventStream, AgentError> {
-    let filters = kinds.iter().copied().map(EventFilter::new).collect();
+    let filters: Vec<EventFilter> = kinds.iter().copied().map(EventFilter::new).collect();
     let mut reply = agent.subscribe(filters).expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     reply.try_take().expect("the owner answered at the drain")
@@ -397,5 +397,45 @@ fn a_subscription_is_answered_before_the_platform_wake_runs() {
             .expect("the owner answered before the wake")
             .is_ok(),
         "the subscription is registered and answered"
+    );
+}
+
+#[test]
+fn a_wake_that_panics_while_a_frame_is_reported_does_not_replace_the_frames_failure() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&panic_on_wake);
+    let ui_runtime = new_runtime(Arc::new(move || {
+        assert!(!gate.load(Ordering::Acquire), "wake probe");
+    }))
+    .expect("a runtime");
+    let _presses = counter(&ui_runtime, None);
+    let agent = ui_runtime
+        .semantics_agent(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut sink = ScriptedSink::always_presents();
+    frame(&ui_runtime, &mut sink);
+    // A wait that outlives the frame: evaluating it asks the platform for another one.
+    let mut params = WaitParams::new(window(&ui_runtime), Condition::Frames(5));
+    params.timeout_ms = Some(60_000);
+    let _parked = agent.wait(params).expect("the inbox has room");
+    let _report = ui_runtime.drain_commands();
+    tap(&ui_runtime, &agent);
+    ui_runtime
+        .scheduler()
+        .add_post_frame_callback(Box::new(|_| panic!("the frame's own failure")));
+    panic_on_wake.store(true, Ordering::Release);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&ui_runtime, &mut sink);
+    }))
+    .expect_err("the callback's panic leaves the frame");
+    panic_on_wake.store(false, Ordering::Release);
+    assert_eq!(
+        unwound.downcast_ref::<&str>(),
+        Some(&"the frame's own failure"),
+        "the wake's panic did not replace it"
     );
 }

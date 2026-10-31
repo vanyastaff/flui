@@ -1,5 +1,6 @@
 //! Frame production: draw, paint, commit, render and frame telemetry.
 
+use super::input::preserve_first_input_panic;
 use super::{EpochDisposition, FramePaintOutcome, MAX_NOT_SHOWN_RETRIES, UiRuntime};
 use crate::epoch::FrameCommitState;
 use crate::frame_failure::{FrameFailureKind, SegmentPhase};
@@ -408,18 +409,29 @@ impl UiRuntime {
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
         // left, the events it produced are emitted, and the waits an agent parked see the window as
         // the frame left it, events included.
-        if driven.is_ok() || frames_seen() != seen_before {
-            for presentation in self.presentations.iter() {
-                Self::complete_agent_reads(presentation);
-            }
-            self.publish_agent_events();
-            self.evaluate_agent_waits(true);
-        }
-        let result = match driven {
-            Ok(result) => result
-                .expect("BUG: the runtime's live frame owner must admit its frame transaction"),
-            Err(payload) => resume_unwind(payload),
+        let (result, mut first_panic) = match driven {
+            Ok(result) => (Some(result), None),
+            Err(payload) => (None, Some(payload)),
         };
+        if result.is_some() || frames_seen() != seen_before {
+            // Contained: the platform's wake is user code, and the drive's own failure, when
+            // there is one, is the one that continues.
+            let reported = catch_unwind(AssertUnwindSafe(|| {
+                for presentation in self.presentations.iter() {
+                    Self::complete_agent_reads(presentation);
+                }
+                self.publish_agent_events();
+                self.evaluate_agent_waits(true);
+            }))
+            .err();
+            preserve_first_input_panic(&mut first_panic, reported, "agent frame report");
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+        let result = result
+            .expect("BUG: a drive that did not unwind returned")
+            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         self.run_commit_anchor();
         result
     }
