@@ -793,3 +793,51 @@ fn a_batch_sent_before_focus_moved_never_reaches_the_next_field() {
     assert_eq!(next.text(), "", "the batch was the first field's");
     assert_eq!(next.composition(), None);
 }
+
+#[test]
+fn a_completion_resets_what_the_input_method_sent_toward_it() {
+    let store = InMemoryTextStore::new("");
+    let (client, wire) = serving(&store);
+    client.preedit(&*wire, Some("k".into()), 1, 1);
+    client.done(&*wire, wire.commits());
+    client.preedit(&*wire, Some("ka".into()), 2, 2);
+    let serial = wire.commits();
+    assert_eq!(
+        client.complete_composition(&as_store(&store)),
+        Ok(CompositionEnd::Committed)
+    );
+    client.done(&*wire, serial);
+    assert_eq!(store.text(), "k", "the ended preedit is not composed again");
+    assert_eq!(store.composition(), None);
+}
+
+#[test]
+fn a_focus_a_panicking_status_query_accepted_never_overtakes_a_newer_one() {
+    let queued = InMemoryTextStore::new("");
+    let newer = InMemoryTextStore::new("");
+    let client = TextInputClient::new();
+    let wire = Rc::new(Wire::default());
+    let field = Rc::new(MovesFocusOnStatus {
+        inner: InMemoryTextStore::new(""),
+        on_status: RefCell::new(Some(Box::new({
+            let client = Rc::clone(&client);
+            let queued = as_store(&queued);
+            move || {
+                client.focus_store(Some(queued));
+                panic!("the field's status query fails");
+            }
+        }))),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    let entered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
+    }));
+    assert!(entered.is_err(), "the status query panicked");
+
+    client.focus_store(Some(as_store(&newer)));
+    let focused = client.focused().expect("a field has focus");
+    assert!(
+        std::ptr::addr_eq(Rc::as_ptr(&focused), Rc::as_ptr(&newer)),
+        "the newer focus request is the one kept"
+    );
+}

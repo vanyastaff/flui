@@ -857,11 +857,17 @@ impl TextInputClient {
             client.drain();
             if let Some(wire) = client.wire_of(session) {
                 client.content.set(Some(content));
+                // The input method is reset: what it sent before, and the
+                // `done` that closes it, belong to the composition just ended.
+                *client.pending.borrow_mut() = Pending::default();
                 wire.enable();
                 wire.set_content_type(content);
                 send_state(&*wire, edit, ChangeCause::Other);
             }
         });
+        // The input method composed the preedit being ended: a batch it sent
+        // toward it never restarts it after the reset.
+        *self.pending.borrow_mut() = Pending::default();
         let outcome = {
             let _entered = self.queue.enter();
             store.request_lock(grant, LockTiming::Async)
@@ -908,6 +914,9 @@ impl TextInputClient {
 impl TextStoreHost for TextInputClient {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         if let Some(op) = self.queue.defer(MirrorHostOp::Focus(store)) {
+            // A store call that unwound skipped its drain: what it accepted
+            // runs first, so this newer request is the one that stays.
+            self.drain();
             self.run(op);
             self.drain();
         }
@@ -923,6 +932,8 @@ impl TextStoreHost for TextInputClient {
             )
             .into());
         }
+        // Requests a store call accepted before it unwound run first.
+        self.drain();
         let focused = self.queue.focus_after_queue(|| self.focused());
         if !focused.is_some_and(|focused| Rc::ptr_eq(&focused, store)) {
             return Err(TextStoreHostError::NotFocused);
