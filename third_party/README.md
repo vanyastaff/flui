@@ -111,3 +111,52 @@ the resource name. The text for those upstream pull requests is below; neither h
 > This sets `AccessibilityNodeInfo.setViewIdResourceName` from `Node::author_id` in
 > `populate_node_info`, when the node has one. Screen readers do not announce the resource name,
 > so nothing a user hears changes.
+
+## accesskit_windows 0.35.1
+
+**Source:** crates.io `accesskit_windows` 0.35.1, AccessKit commit
+`ce8164ba92995cfa86005b6259115e08c8244253` (`adapters/windows`), with the licence files of that
+commit.
+
+**Why:** Narrator and NVDA scroll a `Scrollable` to a position and read where it is (gap 36 in
+`docs/gaps.md`). FLUI publishes the position from the top or left edge and takes
+`SetScrollOffset` (ADR-0273), which the macOS, Unix and Web hosts read. The published Windows
+adapter implements no UI Automation `ScrollPattern`, so a client scrolls only through the
+position slider's `RangeValue` and reads no position.
+
+**Change** (`accesskit_windows.patch`, the whole difference from the published crate):
+
+- `IScrollProvider` on a node that publishes finite scroll extents on either axis. An axis
+  scrolls when its maximum is past its minimum. Its `ScrollPercent` is the position along the
+  extents, and `UIA_ScrollPatternNoScroll` when the axis doesn't scroll or has no position. Its
+  `ViewSize` is the node's extent over that extent plus the scroll range. The six properties
+  raise their change events, as every pattern's do;
+- `Scroll` asks `ScrollUp`/`ScrollDown`/`ScrollLeft`/`ScrollRight` with `ScrollUnit::Item` for
+  a small step and `ScrollUnit::Page` for a large one. Both axes are checked before either is
+  asked, and an axis that doesn't scroll, or whose action the node doesn't take, refuses;
+- `SetScrollPercent` asks `SetScrollOffset` with the position the percentages name. An axis given
+  `UIA_ScrollPatternNoScroll` keeps its position. A percentage outside 0 to 100 is
+  `E_INVALIDARG`;
+- `tests::scroll::scroll_pattern`, run through the in-process UI Automation client as the
+  crate's other tests are.
+
+**Drop it when** an `accesskit_windows` release implements `ScrollPattern`. The text for that
+upstream pull request is below; it has not been sent.
+
+### Upstream pull request (not sent)
+
+> **windows: implement the UI Automation scroll pattern**
+>
+> A UI Automation client scrolls a container by position and reads where it is through
+> `ScrollPattern`: Narrator's scan mode and NVDA both use it, and so do UI test frameworks that
+> scroll an item into reach. AccessKit nodes already carry `scroll_x`/`scroll_y` with their
+> extents and take `ScrollUp`/`ScrollDown`/`ScrollLeft`/`ScrollRight` and `SetScrollOffset`,
+> and the macOS and Unix adapters expose them, but the Windows adapter implements only
+> `ScrollItemPattern`.
+>
+> This adds `IScrollProvider` on a node that publishes finite extents on either axis. The
+> percentages and view sizes come from the position, the extents and the node's bounds. `Scroll`
+> maps small and large steps to `ScrollUnit::Item` and `ScrollUnit::Page`, and
+> `SetScrollPercent` asks `SetScrollOffset`, keeping an axis given `UIA_ScrollPatternNoScroll`
+> where it is. An axis that does not scroll returns `UIA_E_INVALIDOPERATION`, and a percentage
+> outside 0 to 100 returns `E_INVALIDARG`, as the pattern's documentation asks.
