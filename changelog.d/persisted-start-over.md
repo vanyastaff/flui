@@ -11,4 +11,5 @@
 ### Security
 
 - On Unix, `FileStore` creates every stored value and every copy aside readable and writable by
-  its owner only (`0600`), whatever the umask.
+  its owner only (`0600`), and every directory it creates for them owner-only (`0700`), whatever
+  the umask.

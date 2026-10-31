@@ -461,25 +461,42 @@ fn file_store_contract() {
     run_table("file_store_contract", &cases);
 }
 
-/// A stored value and a copy of it are readable and writable by their owner
-/// only, whatever the umask leaves to others.
+/// A stored value, a copy of it and the directories the store creates for
+/// them are reachable by their owner only, whatever the umask leaves to
+/// others.
 #[cfg(unix)]
 fn stored_values_and_their_copies_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
 
+    let mode_of = |path: &Path| {
+        std::fs::metadata(path)
+            .expect("the entry exists")
+            .permissions()
+            .mode()
+            & 0o777
+    };
     let dir = tempfile::tempdir().expect("temp dir");
     let dirs = separate_roots(dir.path());
     let store = FileStore::new(dirs.clone());
     store
         .write(&NOTES, b"private", WriteMode::Replace)
         .expect("the value is stored");
+    store
+        .write(&SESSION, b"private", WriteMode::Replace)
+        .expect("the machine-local value is stored");
     let copied = store.copy_aside(&NOTES).expect("the value is copied");
     for file in ["notes", copied.kept_as.as_str()] {
-        let mode = std::fs::metadata(dirs.roaming.join(file))
-            .expect("the file exists")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600, "{file}");
+        assert_eq!(mode_of(&dirs.roaming.join(file)), 0o600, "{file}");
+    }
+    let machine_local = dirs.local.join(".machine-local");
+    assert_eq!(mode_of(&machine_local.join("notes")), 0o600);
+    for created in [
+        dir.path().join("roaming"),
+        dirs.roaming.clone(),
+        dirs.local,
+        machine_local,
+    ] {
+        assert_eq!(mode_of(&created), 0o700, "{}", created.display());
     }
 }
 

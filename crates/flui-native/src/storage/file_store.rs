@@ -166,7 +166,7 @@ impl FileStore {
     ) -> Result<StoredVersion, StorageError> {
         let root = self.root_of(name);
         let target = root.join(name.as_str());
-        fs::create_dir_all(root).map_err(|error| storage_error(&error))?;
+        create_owner_only_dirs(root).map_err(|error| storage_error(&error))?;
 
         // Held until this function returns: past the rename.
         let _lock = match mode {
@@ -408,6 +408,17 @@ fn create_owner_only(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     options.open(path)
+}
+
+/// Create `root` and every missing directory above it; on Unix each one it
+/// creates is reachable by its owner only, whatever the umask. Directories
+/// that exist keep their permissions.
+fn create_owner_only_dirs(root: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(root)
 }
 
 /// Make the rename itself durable where the file system needs the
