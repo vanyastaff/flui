@@ -293,6 +293,7 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
 // ========================================================================
 mod agent_act_read;
 mod agent_events;
+mod agent_inspect;
 mod agent_locate;
 mod agent_semantics;
 mod agent_stability;

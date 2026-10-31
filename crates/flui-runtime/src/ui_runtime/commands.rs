@@ -155,6 +155,17 @@ pub enum UiCommand {
         /// Where the stream goes.
         reply: super::agent::ReplySender<super::agent_events::EventStream>,
     },
+    /// Snapshot one of the addressed presentation's trees and answer on `reply`.
+    SemanticsAgentInspect {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// Which tree.
+        target: flui_view::dev_agent::InspectTarget,
+        /// The subtree, depth, node limit and detail level.
+        params: Box<flui_protocol::InspectParams>,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::InspectReading>,
+    },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
     SemanticsLocate {
@@ -282,6 +293,15 @@ impl std::fmt::Debug for UiCommand {
                 .debug_struct("UiCommand::SemanticsAgentSubscribe")
                 .field("presentation_id", presentation_id)
                 .field("filters", &filters.len())
+                .finish_non_exhaustive(),
+            UiCommand::SemanticsAgentInspect {
+                presentation_id,
+                target,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentInspect")
+                .field("presentation_id", presentation_id)
+                .field("target", target)
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -964,6 +984,20 @@ impl UiRuntime {
                     } else {
                         report.dropped_stale += 1;
                     }
+                }
+                UiCommand::SemanticsAgentInspect {
+                    presentation_id,
+                    target,
+                    params,
+                    reply,
+                } => {
+                    let result = self.serve_agent_inspect(presentation_id, target, &params);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result);
                 }
                 UiCommand::SemanticsLocate {
                     presentation_id,
