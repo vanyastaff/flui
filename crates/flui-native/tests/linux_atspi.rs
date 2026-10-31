@@ -87,7 +87,7 @@ mod cases {
                     Ok(())
                 })
             })
-            .collect();
+            .collect::<Vec<libtest_mimic::Trial>>();
         let conclusion = libtest_mimic::run(&arguments, trials);
         // `exit` runs no destructor: the buses and the X server stop here.
         drop(session);
@@ -593,7 +593,7 @@ mod cases {
                 .expect("the actions")
                 .into_iter()
                 .map(|action| action.name)
-                .collect()
+                .collect::<Vec<String>>()
         } else {
             Vec::new()
         };
