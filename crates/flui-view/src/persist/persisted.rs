@@ -105,6 +105,9 @@ struct DocumentState<D> {
     generation: u64,
     /// The value the last applied load produced, and every value set since.
     loaded: Option<Loaded<D>>,
+    /// The registry's last confirmed write when the last applied load
+    /// settled: a later one means another document of this name wrote.
+    committed_at_load: Option<(Revision, StoredVersion)>,
     /// The latest bytes handed to the registry.
     published: Option<Published>,
     /// The first failure since the last write that succeeded; later ones
@@ -297,6 +300,7 @@ impl<D: Document> Persisted<D> {
                     generation: 0,
                     loaded: None,
                     published: None,
+                    committed_at_load: None,
                     failure: None,
                     hold: None,
                     watch: None,
@@ -593,6 +597,7 @@ impl<D: Document> OpenDocument<D> {
                 let value = Rc::clone(&loaded.value);
                 let replaced = if latest {
                     state.status = SaveStatus::Clean;
+                    state.committed_at_load = self.committed_write();
                     state.loaded.replace(loaded)
                 } else {
                     Some(loaded)
@@ -618,9 +623,19 @@ impl<D: Document> OpenDocument<D> {
             }
         };
         drop(state);
-        // A replaced value's drop is application code: no borrow is held.
-        drop(replaced);
-        self.announce();
+        // Announced before the replaced value's drop, which is application
+        // code run with no borrow held: a drop that panics leaves the settled
+        // load told. That panic is raised over one of the announcement's.
+        let announced = catch_unwind(AssertUnwindSafe(|| self.announce()));
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
+            if let Err(announcement) = announced {
+                retain_opaque_payload(announcement);
+            }
+            resume_unwind(payload);
+        }
+        if let Err(payload) = announced {
+            resume_unwind(payload);
+        }
         result
     }
 
@@ -927,6 +942,12 @@ impl<D: Document> OpenDocument<D> {
         self.announce();
     }
 
+    /// The registry's last confirmed write of this value, by any document.
+    fn committed_write(&self) -> Option<(Revision, StoredVersion)> {
+        let (_, publisher) = self.registry.as_ref()?;
+        publisher.committed()
+    }
+
     /// The latest revision the storage confirmed, if any.
     fn committed(&self) -> Option<Revision> {
         let (_, publisher) = self.registry.as_ref()?;
@@ -944,14 +965,12 @@ impl<D: Document> OpenDocument<D> {
         };
         // `Clean` is the value's, shared with every document of its name in
         // the runtime: the bytes on disk are this document's only when it
-        // wrote last, or, with nothing written since its load, when the
-        // stored version is still the one it loaded.
+        // wrote last, or, when it wrote nothing since its load, while no
+        // document of its name wrote after that load.
         let on_disk = if state.published.is_some() {
             publisher.committed_here() == Some(loaded.revision)
         } else {
-            publisher
-                .committed()
-                .is_none_or(|(_, version)| version == loaded.base)
+            publisher.committed() == state.committed_at_load
         };
         on_disk.then_some(loaded.revision)
     }

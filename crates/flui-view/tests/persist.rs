@@ -1714,6 +1714,59 @@ fn revision_names_only_a_value_on_disk() {
     let reloaded = drive(&mut laid, notes.load());
     assert!(reloaded.is_ok(), "the kept edit loads: {reloaded:?}");
     assert_eq!(notes.revision(), kept, "and a load reads it back");
+
+    // A file another process wrote after this runtime's own write is still
+    // named once it is reloaded.
+    assert!(notes.set(Note("local".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    storage.put(&Note::NAME, stored(9, "outside"));
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the outside file loads: {reloaded:?}");
+    assert_eq!(
+        notes.revision().map(Revision::get),
+        Some(9),
+        "a value read from disk names its revision"
+    );
+}
+
+/// A reload whose replaced value panics in its drop still tells the
+/// listeners what the load left.
+#[test]
+fn a_reload_whose_replaced_value_panics_in_drop_is_told() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, stored(1, "one"));
+    let (mut laid, notes) = mount(&storage);
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    laid.pump();
+    let heard = listen(&notes);
+    laid.pump();
+    laid.pump();
+    heard.borrow_mut().clear();
+
+    storage.put(&Note::NAME, b"no header".to_vec());
+    let armed = Rc::new(Cell::new(true));
+    let fire = Rc::clone(&armed);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(!fire.replace(false), "the replaced value's drop panics");
+        }));
+    });
+    let reload = catch_unwind(AssertUnwindSafe(|| drive(&mut laid, notes.load())));
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    assert!(reload.is_err(), "the drop's panic reaches the caller");
+    assert!(!armed.get(), "the replaced value was dropped");
+
+    laid.pump();
+    laid.pump();
+    assert!(
+        matches!(
+            heard.borrow().last(),
+            Some(SaveStatus::NotLoaded(Some(PersistError::Corrupt { .. })))
+        ),
+        "the failed reload is told: {:?}",
+        heard.borrow()
+    );
 }
 
 /// A revision serializes as its number and reads back as the same revision,
