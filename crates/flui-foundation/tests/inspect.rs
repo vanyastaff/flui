@@ -982,27 +982,27 @@ fn the_diff_tells_kinds_apart_by_their_type_arguments() {
     );
 }
 
-/// A number the protocol cannot carry is published as an absent value, so no object can put
-/// infinity or NaN on the wire by holding one.
+/// A description keeps infinity and NaN as the values they are: an unbounded maximum reads as
+/// infinity, not as an absent field, and a NaN stays visible as the bug it usually is.
 ///
-/// Fails when `Fields` hands the sink the raw float.
+/// Fails when `Fields` replaces a non-finite number with an absent value.
 #[test]
-fn a_non_finite_number_is_described_as_absent() {
+fn a_non_finite_number_is_described_as_itself() {
     for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         let padding = whole(&sample(bad));
         let padding = padding
             .find_by_kind("RenderPadding")
             .unique()
             .expect("the padding");
-        assert!(padding.get::<f64>("left").is_err(), "{bad} is published");
         let left = padding
             .fields
             .iter()
             .find(|field| field.name == "left")
-            .expect("the field is still listed");
+            .expect("the field is listed");
         assert!(
-            matches!(left.value, OwnedValue::None),
-            "{bad} reads as absent"
+            matches!(left.value, OwnedValue::Float(v) if v.to_bits() == bad.to_bits()),
+            "{bad} reads as {:?}",
+            left.value
         );
     }
     let finite = whole(&sample(8.0));

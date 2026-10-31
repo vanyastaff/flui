@@ -129,31 +129,19 @@ impl InspectTree for RenderInspect<'_> {
         match node {
             RenderNode::Box(entry) => {
                 if let Some(constraints) = entry.state().constraints() {
-                    // An unbounded bound is absent, not infinite: a published size is finite.
-                    out.field(
-                        "constraints_min_width",
-                        &Some(constraints.min_width).filter(|w| w.is_finite()),
-                    )
-                    .unit(Unit::LogicalPx)
-                    .level(Level::Detail);
-                    out.field(
-                        "constraints_min_height",
-                        &Some(constraints.min_height).filter(|h| h.is_finite()),
-                    )
-                    .unit(Unit::LogicalPx)
-                    .level(Level::Detail);
-                    out.field(
-                        "constraints_max_width",
-                        &Some(constraints.max_width).filter(|w| w.is_finite()),
-                    )
-                    .unit(Unit::LogicalPx)
-                    .level(Level::Detail);
-                    out.field(
-                        "constraints_max_height",
-                        &Some(constraints.max_height).filter(|h| h.is_finite()),
-                    )
-                    .unit(Unit::LogicalPx)
-                    .level(Level::Detail);
+                    // An unbounded maximum is infinity, which is what it is.
+                    out.field("constraints_min_width", &constraints.min_width)
+                        .unit(Unit::LogicalPx)
+                        .level(Level::Detail);
+                    out.field("constraints_min_height", &constraints.min_height)
+                        .unit(Unit::LogicalPx)
+                        .level(Level::Detail);
+                    out.field("constraints_max_width", &constraints.max_width)
+                        .unit(Unit::LogicalPx)
+                        .level(Level::Detail);
+                    out.field("constraints_max_height", &constraints.max_height)
+                        .unit(Unit::LogicalPx)
+                        .level(Level::Detail);
                 }
                 if let Some(size) = entry.state().geometry() {
                     out.field("size", &size).unit(Unit::LogicalPx);

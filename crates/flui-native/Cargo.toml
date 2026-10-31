@@ -702,6 +702,9 @@ zbus = { workspace = true, features = ["service"] }
 atspi = { version = "0.29", default-features = false, features = ["proxies", "zbus"] }
 async-io = "2.6"
 futures-lite = "2.6"
+# The input method `wayland_text_input` plays on sway: `zwp_input_method_v2`,
+# which no other crate of the tree speaks.
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 
 # Main-thread winit ownership plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
@@ -754,6 +757,12 @@ required-features = ["wayland"]
 [[test]]
 name = "wayland_primary_selection"
 path = "tests/wayland_primary_selection.rs"
+harness = false
+required-features = ["wayland"]
+
+[[test]]
+name = "wayland_text_input"
+path = "tests/wayland_text_input.rs"
 harness = false
 required-features = ["wayland"]
 

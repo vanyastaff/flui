@@ -54,6 +54,55 @@ vocabulary! {
     }
 }
 
+vocabulary! {
+    /// A float JSON cannot write as a number.
+    ///
+    /// `Float` carries every finite value as a JSON number. Infinity is how a bound says
+    /// "unbounded" (an unconstrained maximum) and NaN is nearly always a bug, so neither is left
+    /// out or written as `null`: they travel as `{"type": "non_finite", "value": "pos_inf"}`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum NonFinite {
+        /// Positive infinity.
+        PosInf => "pos_inf",
+        /// Negative infinity.
+        NegInf => "neg_inf",
+        /// Not a number.
+        NaN => "nan",
+    }
+}
+
+impl NonFinite {
+    /// The kind of `value`, or `None` for a finite one.
+    #[must_use]
+    pub fn of(value: f64) -> Option<Self> {
+        if value.is_nan() {
+            Some(Self::NaN)
+        } else if value == f64::INFINITY {
+            Some(Self::PosInf)
+        } else if value == f64::NEG_INFINITY {
+            Some(Self::NegInf)
+        } else {
+            None
+        }
+    }
+
+    /// The float this kind stands for.
+    #[must_use]
+    pub const fn value(self) -> f64 {
+        match self {
+            Self::PosInf => f64::INFINITY,
+            Self::NegInf => f64::NEG_INFINITY,
+            Self::NaN => f64::NAN,
+        }
+    }
+}
+
 /// One field's value: `{"type": "size", "value": {"width": 360, "height": 48}}`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(
@@ -70,8 +119,10 @@ pub enum InspectValue {
     Int(i64),
     /// An unsigned integer.
     Uint(u64),
-    /// A float.
+    /// A finite float.
     Float(f64),
+    /// A float that is infinite or not a number: no bound, or a bug worth seeing.
+    NonFinite(NonFinite),
     /// Text.
     Str(String),
     /// A fieldless enum variant.
