@@ -72,6 +72,21 @@ pub(crate) fn numbering_of_digits(digits: &str) -> Option<NumberingSystem> {
     NumberingSystem::try_new(name).ok()
 }
 
+/// The numbering system `LOCALE_IDIGITSUBSTITUTION` asks for: `1` always
+/// ASCII digits (`latn`), `2` always the locale's native digits, which
+/// `native_digits` lists. `0`, digits chosen by context, names none.
+#[cfg(any(windows, test))]
+pub(crate) fn windows_numbering(
+    substitution: &str,
+    native_digits: impl FnOnce() -> Option<String>,
+) -> Option<NumberingSystem> {
+    match substitution.trim() {
+        "1" => NumberingSystem::try_new("latn").ok(),
+        "2" => numbering_of_digits(&native_digits()?),
+        _ => None,
+    }
+}
+
 /// The region whose formats apply when it is not the region of the first
 /// preferred language, as the formats locale names it. Without a region, or
 /// when it is the language's own, there is no override.
@@ -99,8 +114,8 @@ pub(crate) fn gnome_clock_format(value: &str) -> Option<HourCycle> {
 /// The formats a POSIX environment sets apart from the messages locale, `var`
 /// answering one environment variable. `LC_TIME` names the region whose dates
 /// and times apply, and `LC_MEASUREMENT` the units, each overridden by
-/// `LC_ALL` and standing in for `LANG`. A category whose region is the first
-/// preferred language's reports nothing: the language already implies it.
+/// `LC_ALL` and standing in for `LANG`. A value the first preferred language,
+/// or the region override, already implies reports nothing.
 #[cfg(any(linux_host, test))]
 pub(crate) fn from_posix_environment(
     var: impl Fn(&str) -> Option<String>,
@@ -113,14 +128,19 @@ pub(crate) fn from_posix_environment(
             .and_then(|value| posix_region(&value))
     };
     let mut formats = RegionalFormats::default();
-    if let Some(region) = region_override(category("LC_TIME").as_deref(), first_language) {
+    let time = category("LC_TIME");
+    if let Some(region) = region_override(time.as_deref(), first_language) {
         formats = formats.with_region(region);
     }
-    let measurement = category("LC_MEASUREMENT");
-    if measurement.as_deref() != first_language.and_then(Locale::country)
-        && let Some(region) = measurement
+    // A formatter takes the units from the region override when there is one
+    // (UTS #35 `rg`), so the units are compared with that region's.
+    let formats_region = time
+        .as_deref()
+        .or_else(|| first_language.and_then(Locale::country));
+    if let Some(units) = category("LC_MEASUREMENT").map(|region| measurement_of_region(&region))
+        && formats_region.map(measurement_of_region) != Some(units)
     {
-        formats = formats.with_measurement(measurement_of_region(&region));
+        formats = formats.with_measurement(units);
     }
     formats
 }
@@ -187,6 +207,14 @@ mod tests {
         assert_eq!(name("०१२३४५६७८९").as_deref(), Some("deva"));
         assert_eq!(name("0123456789"), None);
         assert_eq!(name(""), None);
+        let substituted = |mode: &str, digits: &'static str| {
+            windows_numbering(mode, || Some(digits.to_owned()))
+                .map(|system| system.unicode_value().to_owned())
+        };
+        assert_eq!(substituted("1", "٠١٢٣٤٥٦٧٨٩").as_deref(), Some("latn"));
+        assert_eq!(substituted("2", "٠١٢٣٤٥٦٧٨٩").as_deref(), Some("arab"));
+        assert_eq!(substituted("0", "٠١٢٣٤٥٦٧٨٩"), None);
+        assert_eq!(substituted("2", "0123456789"), None);
     }
 
     fn a_region_overrides_only_another_languages_region() {
@@ -238,7 +266,17 @@ mod tests {
             split.region().map(|region| region.unicode_value()),
             Some("dezzzz".to_owned())
         );
-        assert_eq!(split.measurement(), Some(MeasurementSystem::Metric));
+        // British and German units are both metric, which the override implies.
+        assert_eq!(split.measurement(), None);
+        let us_units = posix(
+            &[("LANG", "en_US.UTF-8"), ("LC_TIME", "de_DE.UTF-8")],
+            Some(&en_us),
+        );
+        assert_eq!(
+            us_units.measurement(),
+            Some(MeasurementSystem::UsCustomary),
+            "LANG's US units survive a German formats region"
+        );
         let all = posix(
             &[
                 ("LANG", "de_DE.UTF-8"),
@@ -251,7 +289,7 @@ mod tests {
             all.region().map(|region| region.unicode_value()),
             Some("uszzzz".to_owned())
         );
-        assert_eq!(all.measurement(), Some(MeasurementSystem::UsCustomary));
+        assert_eq!(all.measurement(), None, "the US override implies US units");
         for unusable in [
             &[("LC_TIME", "C")][..],
             &[("LC_TIME", "POSIX")][..],

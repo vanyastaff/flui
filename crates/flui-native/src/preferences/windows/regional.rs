@@ -15,10 +15,6 @@ use crate::preferences::regional;
 /// characters.
 const VALUE_UNITS: usize = 128;
 
-/// `LOCALE_IDIGITSUBSTITUTION`'s value when the locale's native digits are
-/// always used.
-const NATIVE_DIGITS: &str = "2";
-
 /// What the user set in Region settings. A value the system does not answer
 /// is no observation of that field, never a failed sample.
 pub(super) fn sample(first_language: Option<&Locale>) -> RegionalFormats {
@@ -41,10 +37,9 @@ pub(super) fn sample(first_language: Option<&Locale>) -> RegionalFormats {
     {
         formats = formats.with_measurement(measurement);
     }
-    if info(LOCALE_IDIGITSUBSTITUTION).as_deref() == Some(NATIVE_DIGITS)
-        && let Some(numbering) = info(LOCALE_SNATIVEDIGITS)
-            .as_deref()
-            .and_then(regional::numbering_of_digits)
+    if let Some(numbering) = info(LOCALE_IDIGITSUBSTITUTION)
+        .as_deref()
+        .and_then(|mode| regional::windows_numbering(mode, || info(LOCALE_SNATIVEDIGITS)))
     {
         formats = formats.with_numbering(numbering);
     }

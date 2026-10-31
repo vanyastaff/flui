@@ -92,10 +92,10 @@ formatter is given `formats.apply_to(&locale)`.
 
 | Host | First weekday | Hour cycle | Measurement | Numbering, region | Change signal |
 |------|---------------|------------|-------------|-------------------|---------------|
-| Windows | `LOCALE_IFIRSTDAYOFWEEK` | the hour letter of `LOCALE_STIMEFORMAT` | `LOCALE_IMEASURE` | `LOCALE_SNATIVEDIGITS` under native digit substitution, the formats locale's `LOCALE_SISO3166CTRYNAME` | `WM_SETTINGCHANGE` |
+| Windows | `LOCALE_IFIRSTDAYOFWEEK` | the hour letter of `LOCALE_STIMEFORMAT` | `LOCALE_IMEASURE` | `latn` when `LOCALE_IDIGITSUBSTITUTION` is never native, `LOCALE_SNATIVEDIGITS` when always native, the formats locale's `LOCALE_SISO3166CTRYNAME` | `WM_SETTINGCHANGE` |
 | macOS, iOS | `NSCalendar.currentCalendar.firstWeekday` | `j` skeleton of `dateFormatFromTemplate` | `NSLocaleMeasurementSystem` | `NSLocale` numbering, region | `NSCurrentLocaleDidChangeNotification` |
 | Android | `Calendar.getFirstDayOfWeek` | `DateFormat.is24HourFormat` | `LocaleData` | the locale's `-u-` keywords from API 34 | `ACTION_LOCALE_CHANGED`, a `TIME_12_24` observer |
-| Linux | through the region override | GNOME's `clock-format` through the portal | `LC_MEASUREMENT`'s region | the region of `LC_TIME` | portal `SettingChanged`; the environment is read once |
+| Linux | through the region override | GNOME's `clock-format` through the portal | `LC_MEASUREMENT`'s region, when its units differ from the formats region's | the region of `LC_TIME` | portal `SettingChanged`; the environment is read once |
 | Web | `Intl.Locale.getWeekInfo` where present | `resolvedOptions().hourCycle` | none | none | `languagechange` |
 
 Each host parses its strings and flags in a pure `pub(crate)` function, tested on Linux. On
