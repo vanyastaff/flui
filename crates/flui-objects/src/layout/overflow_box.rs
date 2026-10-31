@@ -201,14 +201,13 @@ impl flui_foundation::inspect::Inspect for RenderConstrainedOverflowBox {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        // An override of infinity means "unbounded" (let the child overflow); it is absent from
-        // the description, not published as infinity: a published number is finite.
-        let finite = |bound: Option<f64>| bound.filter(|v| v.is_finite());
+        // An override of infinity means "unbounded" (let the child overflow); no override is
+        // absent. The two differ, so both are described as they are.
         let unit = flui_foundation::inspect::Unit::LogicalPx;
-        out.field("min_width", &finite(self.min_width)).unit(unit);
-        out.field("max_width", &finite(self.max_width)).unit(unit);
-        out.field("min_height", &finite(self.min_height)).unit(unit);
-        out.field("max_height", &finite(self.max_height)).unit(unit);
+        out.field("min_width", &self.min_width).unit(unit);
+        out.field("max_width", &self.max_width).unit(unit);
+        out.field("min_height", &self.min_height).unit(unit);
+        out.field("max_height", &self.max_height).unit(unit);
         out.field("fit", &self.fit);
     }
 }

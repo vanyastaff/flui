@@ -667,3 +667,42 @@ fn the_first_panic_after_a_shown_scene_is_the_one_that_resumes() {
         "the reply's panic came first and is the one resumed: {message}"
     );
 }
+
+#[test]
+fn an_unbounded_or_invalid_number_is_a_typed_value_that_survives_json() {
+    use crate::ui_runtime::agent_inspect::value_to_wire;
+    use flui_foundation::geometry::Size;
+    use flui_foundation::inspect::OwnedValue;
+    use flui_protocol::{InspectValue, NonFinite};
+
+    let wire = |value: OwnedValue| {
+        let wire = value_to_wire(&value);
+        let json = serde_json::to_string(&wire).expect("the value serializes");
+        let back: InspectValue = serde_json::from_str(&json).expect("the value deserializes");
+        assert_eq!(back, wire, "{json}");
+        (wire, json)
+    };
+
+    let (infinite, json) = wire(OwnedValue::Float(f64::INFINITY));
+    assert_eq!(infinite, InspectValue::NonFinite(NonFinite::PosInf));
+    assert_eq!(json, r#"{"type":"non_finite","value":"pos_inf"}"#);
+    assert_eq!(
+        wire(OwnedValue::Float(f64::NEG_INFINITY)).0,
+        InspectValue::NonFinite(NonFinite::NegInf)
+    );
+    assert_eq!(
+        wire(OwnedValue::Float(f64::NAN)).0,
+        InspectValue::NonFinite(NonFinite::NaN)
+    );
+    assert_eq!(wire(OwnedValue::Float(1.5)).0, InspectValue::Float(1.5));
+
+    // A composite with a component JSON cannot write is its text, never `null` or a gap.
+    let (size, json) = wire(OwnedValue::Size(Size::new(f64::INFINITY, 4.0)));
+    assert!(
+        matches!(&size, InspectValue::Debug(text) if text.contains("inf")),
+        "{json}"
+    );
+    assert!(!json.contains("null"), "{json}");
+    let (finite, _) = wire(OwnedValue::Size(Size::new(3.0, 4.0)));
+    assert!(matches!(finite, InspectValue::Size { .. }));
+}

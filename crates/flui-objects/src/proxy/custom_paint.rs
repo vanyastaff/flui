@@ -270,19 +270,12 @@ impl flui_foundation::inspect::Inspect for RenderCustomPaint {
             .default(&false);
         out.field("has_foreground_painter", &self.foreground_painter.is_some())
             .default(&false);
-        // An infinite extent means "as much as the parent allows"; it is absent from the
-        // description, not published as infinity: a published number is finite.
+        // An infinite extent means "as much as the parent allows".
         let size = self.preferred_size;
-        out.field(
-            "preferred_width",
-            &Some(size.width).filter(|w| w.is_finite()),
-        )
-        .unit(Unit::LogicalPx);
-        out.field(
-            "preferred_height",
-            &Some(size.height).filter(|h| h.is_finite()),
-        )
-        .unit(Unit::LogicalPx);
+        out.field("preferred_width", &size.width)
+            .unit(Unit::LogicalPx);
+        out.field("preferred_height", &size.height)
+            .unit(Unit::LogicalPx);
         // `CustomPainter: Debug` is already a supertrait bound (every
         // implementer must derive/implement it), so this reuses an
         // already-required impl rather than adding a new trait method —
