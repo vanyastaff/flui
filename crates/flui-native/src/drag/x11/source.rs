@@ -6,13 +6,17 @@
 //! `XdndSelection` and lists its types in `XdndTypeList`. Each movement finds
 //! the `XdndAware` window under the pointer, FLUI's own included, entering
 //! and leaving targets as the pointer crosses them. A position goes out once
-//! the last one is answered, the newest held meanwhile. The release drops on
-//! a target that accepted and leaves one that did not. Escape leaves and
-//! cancels. A drop ends at the target's `XdndFinished`, or as cancelled when
-//! none comes within [`FINISH_TIMEOUT`].
+//! the last one is answered, the newest held meanwhile; a release while one
+//! waits sends the held one first. The release of the drag's own button drops
+//! on a target that accepted with an action the runtime allows and leaves one
+//! that did not. Escape leaves and cancels. A drop ends at the target's
+//! `XdndFinished` with an allowed action, or as cancelled when none comes
+//! within [`FINISH_TIMEOUT`]. Another client taking `XdndSelection` ends the
+//! session as cancelled.
 //!
 //! The session's pointer events are its alone while it runs, as an OS
-//! session's are on every desktop: the window's input never sees them.
+//! session's are on every desktop: the window's input never sees them, and
+//! ends the press the session took at the loop's next turn.
 //!
 //! The session lives in an owner-thread cell. Its provider and end hook are
 //! the runtime's code: each is taken out of the cell before it runs, so
@@ -60,6 +64,15 @@ pub(super) struct Session {
     types: Vec<(xproto::Atom, RepresentationIndex)>,
     /// The action proposed to every target.
     action: xproto::Atom,
+    /// The actions the runtime allows: a target's answer outside them is
+    /// a refusal.
+    allowed: TransferActions,
+    /// The button the drag holds, whose release ends it; another button's,
+    /// a wheel notch's among them, does not.
+    button: u32,
+    /// Whether the window still owns `XdndSelection`; another client may
+    /// take it.
+    owns: bool,
     /// `None` while it serves a request.
     provider: Option<OsDragProvider>,
     /// `None` once the session ended.
@@ -115,11 +128,12 @@ impl X11Drag {
             .session
             .with(|session| session.is_some())
             .ok_or_else(|| refused(UnsupportedReason::Unavailable))?;
-        if busy || !self.button_held() {
-            // One session at a time; and a session no button holds would
-            // never hear its release.
-            return Err(refused(UnsupportedReason::Unavailable));
-        }
+        // One session at a time; and a session no button holds would never
+        // hear its release.
+        let button = (!busy)
+            .then(|| self.button_held())
+            .flatten()
+            .ok_or_else(|| refused(UnsupportedReason::Unavailable))?;
         let OsDragRequest {
             representations,
             allowed,
@@ -165,6 +179,9 @@ impl X11Drag {
             window,
             types,
             action,
+            allowed,
+            button,
+            owns: true,
             provider: Some(provider),
             on_end: Some(on_end),
             escape: self.escape_keys(),
@@ -172,23 +189,37 @@ impl X11Drag {
             phase: Phase::Dragging,
         };
         self.session.with(|slot| *slot = Some(session));
+        // The press the window's input holds gets no release now: the loop
+        // has the input end it, as the compositor's leave does on Wayland.
+        self.taken.with(|taken| taken.push(window));
         self.flush();
         Ok(())
     }
 
-    /// Whether a pointer button is down now.
-    fn button_held(&self) -> bool {
-        let buttons = KeyButMask::BUTTON1
-            | KeyButMask::BUTTON2
-            | KeyButMask::BUTTON3
-            | KeyButMask::BUTTON4
-            | KeyButMask::BUTTON5;
-        self.connection
+    /// The button held down now, the lowest of the three a drag can hold;
+    /// buttons 4 and 5 are a wheel's notches.
+    fn button_held(&self) -> Option<u32> {
+        let mask = self
+            .connection
             .xcb()
             .query_pointer(self.connection.root())
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some_and(|pointer| pointer.mask.intersects(buttons))
+            .ok()?
+            .reply()
+            .ok()?
+            .mask;
+        [
+            (KeyButMask::BUTTON1, 1),
+            (KeyButMask::BUTTON2, 2),
+            (KeyButMask::BUTTON3, 3),
+        ]
+        .into_iter()
+        .find(|(held, _)| mask.contains(*held))
+        .map(|(_, button)| button)
+    }
+
+    /// The windows whose press a session took since the last call.
+    pub(super) fn taken_pointers(&self) -> Vec<xproto::Window> {
+        self.taken.with(std::mem::take).unwrap_or_default()
     }
 
     /// The atom named `name`.
@@ -232,9 +263,13 @@ impl X11Drag {
             // The time a session takes the selection at, as ICCCM asks.
             self.saw(time);
         }
-        let Some(window) = self
+        let Some((window, button)) = self
             .session
-            .with(|session| session.as_ref().map(|session| session.window))
+            .with(|session| {
+                session
+                    .as_ref()
+                    .map(|session| (session.window, session.button))
+            })
             .flatten()
         else {
             return false;
@@ -246,7 +281,10 @@ impl X11Drag {
             }
             Event::XinputButtonPress(press) if press.event == window => true,
             Event::XinputButtonRelease(release) if release.event == window => {
-                self.released(release.time);
+                // Another button, or a wheel's notch, goes by.
+                if release.detail == button {
+                    self.released(release.time);
+                }
                 true
             }
             Event::XinputKeyPress(key) if key.event == window => {
@@ -291,8 +329,50 @@ impl X11Drag {
                 self.serve(request);
                 true
             }
+            Event::SelectionClear(clear)
+                if clear.owner == window && clear.selection == self.atoms.selection =>
+            {
+                self.selection_cleared();
+                true
+            }
             _ => false,
         }
+    }
+
+    /// The window was told it lost `XdndSelection`. A clear the session's own
+    /// release of an earlier ownership left is stale: the server's owner says
+    /// which it is. Lost, the session can serve nothing more: it leaves its
+    /// target and ends, letting go of no selection, which is another's now.
+    fn selection_cleared(&self) {
+        let Some(owner) = self
+            .connection
+            .xcb()
+            .get_selection_owner(self.atoms.selection)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.owner)
+        else {
+            return;
+        };
+        let Some(mut session) = self.take_session() else {
+            return;
+        };
+        let then = if owner == session.window {
+            Then::Nothing
+        } else {
+            session.owns = false;
+            // A target that took the drop has had its leave.
+            let dropped = matches!(session.phase, Phase::Dropped { .. });
+            if let Some(over) = session.over.take().filter(|_| !dropped) {
+                self.send(
+                    over.target,
+                    self.atoms.messages.leave,
+                    model::leave(session.window),
+                );
+            }
+            self.end(&mut session, OsDragEnd::Cancelled)
+        };
+        self.finish_step(session, then);
     }
 
     /// The pointer is at `root`.
@@ -374,8 +454,15 @@ impl X11Drag {
     /// Drop on a target that accepted at the release, at `time`, or leave
     /// it.
     fn decide(&self, session: &mut Session, time: xproto::Timestamp) -> Then {
+        // A target accepting with an action the runtime did not allow
+        // refuses. A private action, which FLUI has no name for, is left to
+        // the finish, whose action must be allowed.
+        let allowed = |atom: xproto::Atom| {
+            let actions = self.atoms.actions.actions_of(atom);
+            actions.is_empty() || !(actions & session.allowed).is_empty()
+        };
         match session.over.as_ref() {
-            Some(over) if over.accepted.is_some() => {
+            Some(over) if over.accepted.is_some_and(allowed) => {
                 self.send(
                     over.target,
                     self.atoms.messages.drop,
@@ -429,7 +516,20 @@ impl X11Drag {
                             }
                         }
                         Phase::Released { time, .. } => {
-                            then = self.decide(&mut session, time);
+                            // The pointer moved after the position this
+                            // answers: the drop waits for the answer to the
+                            // last one, where the button was let go.
+                            if let Some((root, moved)) = over.held.take() {
+                                over.asked = true;
+                                self.send(
+                                    target,
+                                    self.atoms.messages.position,
+                                    model::position(source, root, moved, action),
+                                );
+                                self.flush();
+                            } else {
+                                then = self.decide(&mut session, time);
+                            }
                         }
                         Phase::Dropped { .. } => {}
                     }
@@ -455,7 +555,10 @@ impl X11Drag {
                             } else {
                                 Some(named)
                             };
+                            // An action the runtime did not allow is the
+                            // target's to claim, not the drop's outcome.
                             resolved
+                                .map(|actions| actions & session.allowed)
                                 .filter(|actions| !actions.is_empty())
                                 .map_or(OsDragEnd::Cancelled, OsDragEnd::Dropped)
                         }
@@ -539,17 +642,21 @@ impl X11Drag {
         self.finish_step(session, then);
     }
 
-    /// End `session` with `outcome`: it lets go of `XdndSelection` and its
-    /// type list, and its hook is to hear `outcome`.
+    /// End `session` with `outcome`: it lets go of `XdndSelection`, while it
+    /// still owns it, and of its type list, and its hook is to hear
+    /// `outcome`.
     fn end(&self, session: &mut Session, outcome: OsDragEnd) -> Then {
         let xcb = self.connection.xcb();
-        let released = xcb
-            .set_selection_owner(NONE, self.atoms.selection, self.time())
-            .map(drop)
-            .and_then(|()| {
-                xcb.delete_property(session.window, self.atoms.type_list)
-                    .map(drop)
-            });
+        let released = if session.owns {
+            xcb.set_selection_owner(NONE, self.atoms.selection, self.time())
+                .map(drop)
+        } else {
+            Ok(())
+        }
+        .and_then(|()| {
+            xcb.delete_property(session.window, self.atoms.type_list)
+                .map(drop)
+        });
         if let Err(error) = released {
             tracing::debug!(%error, "cannot let go of a drag's selection");
         }
@@ -567,8 +674,9 @@ impl X11Drag {
             self.put_session(session);
         } else {
             // The provider and the rest are the runtime's: dropped with no
-            // cell borrowed.
-            drop(session);
+            // cell borrowed, and contained, so a capture's failing
+            // destructor leaves the hook its outcome (ADR-0127 §2).
+            contain_owner_callback(|| drop(session));
         }
         if let Then::End(on_end, outcome) = then {
             contain_owner_callback(|| on_end(outcome));
@@ -673,7 +781,9 @@ impl X11Drag {
                 _ => Some(provider),
             })
             .flatten();
-        drop(provider);
+        if let Some(provider) = provider {
+            contain_owner_callback(|| drop(provider));
+        }
         match served? {
             Ok(payload) => Some(model::bytes_of(payload)),
             Err(error) => {

@@ -865,6 +865,9 @@ pub(crate) struct X11Drag {
     state: Mutex<State>,
     /// The session a window started, on the thread that made the transfer.
     session: OwnerCell<Option<source::Session>>,
+    /// The windows whose press a session took, for the loop to have their
+    /// input end it.
+    taken: OwnerCell<Vec<xproto::Window>>,
     /// The server time of the last pointer or key event the loop heard.
     last_time: AtomicU32,
 }
@@ -892,6 +895,7 @@ impl X11Drag {
             wake,
             state: Mutex::new(State::default()),
             session: OwnerCell::new(),
+            taken: OwnerCell::new(),
             last_time: AtomicU32::new(0),
         }))
     }
@@ -1542,6 +1546,10 @@ impl LoopDrag for X11Drag {
             .map(|fetch| fetch.deadline)
             .min();
         fetches.into_iter().chain(self.session_deadline()).min()
+    }
+
+    fn pointers_taken(&self) -> Vec<xproto::Window> {
+        self.taken_pointers()
     }
 
     fn expire(&self, now: Instant) {

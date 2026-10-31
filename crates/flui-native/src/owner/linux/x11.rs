@@ -265,6 +265,10 @@ pub(crate) trait LoopDrag: DataTransferSource {
     /// An event the server sent; `true` when it was the drag's alone.
     fn event(&self, event: &Event) -> bool;
 
+    /// The windows whose press a session took since the last call, which
+    /// the loop has the input end: no release reaches them.
+    fn pointers_taken(&self) -> Vec<xproto::Window>;
+
     /// When the first fetch under way, or the session's wait for its
     /// target, times out.
     fn deadline(&self) -> Option<web_time::Instant>;
@@ -295,6 +299,10 @@ pub(crate) trait LoopInput: Send + Sync {
     /// An event the server sent; `true` when it was input's alone, `false`
     /// when the windows hear it too (a focus change the input also follows).
     fn event(&self, event: &Event) -> bool;
+
+    /// An OS drag session took the pointer from `window` mid-press: its
+    /// contacts end with their capture lost, since no release will reach them.
+    fn pointer_taken(&self, window: xproto::Window);
 
     /// Show `cursor` over `window`.
     ///
@@ -578,6 +586,11 @@ impl X11Loop {
     /// Hand every event the server sent, and those a turn's requests left
     /// queued, to the windows, until none is queued.
     fn dispatch_events(&self, turns: &mut Turns) -> Result<(), PlatformError> {
+        // A session started since the last turn took its window's press:
+        // the input ends it before the events after it, the session's now.
+        for window in self.drag.pointers_taken() {
+            self.input.pointer_taken(window);
+        }
         loop {
             let event = match turns.queued.pop_front() {
                 Some(event) => event,

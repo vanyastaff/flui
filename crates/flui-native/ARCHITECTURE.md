@@ -3752,18 +3752,29 @@ A window is a source too: its `drag_source` starts the runtime's OS session
 (`drag::x11::source`) when the drag leaves it with a button held, so the
 press's implicit grab keeps the pointer's XInput 2 events coming to the window
 wherever it goes, and the session takes them before the input does. The
-window owns `XdndSelection` and lists the session's types in `XdndTypeList`
-(text as `UTF8_STRING` and `text/plain`, every other format as its media
-type, the private identity included). Each movement finds the `XdndAware`
-window under the pointer, FLUI's own among them, entering and leaving targets
-as it crosses them; one position waits for its status at a time, the newest
-held meanwhile. The release drops on a target that accepted and leaves one
-that refused, Escape leaves and cancels, and a drop ends at `XdndFinished`, or
-cancelled after five seconds without one. A target's conversion is served
-from the session's provider on the owner thread, with no cell borrowed, in one
-property: a payload past one request is refused, since the source writes no
-`INCR` yet. The session lives in an owner-thread cell, and its provider and
-end hook run outside it.
+press is the session's from then on: at the loop's next turn the window's
+input ends its contacts as `CaptureLost` (`LoopDrag::pointers_taken`,
+`LoopInput::pointer_taken`), as a Wayland compositor's leave does, so the next
+click starts afresh. The window owns `XdndSelection` and lists the session's
+types in `XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other
+format as its media type, the private identity included). Each movement finds
+the `XdndAware` window under the pointer, FLUI's own among them, entering and
+leaving targets as it crosses them; one position waits for its status at a
+time, the newest held meanwhile, and a release while one waits sends the held
+one and waits for its answer, so the drop is decided where the button was let
+go. Only the release of the button the drag holds ends it, never a wheel's
+notch or another button. The release drops on a target that accepted with an
+action the runtime allows and leaves one that refused, Escape leaves and
+cancels, and a drop ends at `XdndFinished` with the target's action if the
+runtime allows it, cancelled otherwise or after five seconds without one. A
+session whose `XdndSelection` another client takes ends cancelled and lets go
+of nothing, a stale clear from its own earlier release told apart by the
+server's current owner. A target's conversion is served from the session's
+provider on the owner thread, with no cell borrowed, in one property: a
+payload past one request is refused, since the source writes no `INCR` yet.
+The session lives in an owner-thread cell; its provider and end hook run
+outside it, and the provider is dropped contained, so the hook hears the end
+though a capture fails (ADR-0127 §2).
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
@@ -3775,8 +3786,14 @@ on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `an_incr_answer_is_read_in_chunks_and_held_to_its_limit` and
 `an_atom_the_server_cannot_name_is_not_kept`; a session from the window to
 another connection's window: `a_session_drops_on_a_target_that_accepts`,
-`a_session_released_over_a_refusing_target_is_cancelled` and
-`a_session_with_no_button_held_does_not_start`.
+`a_session_released_over_a_refusing_target_is_cancelled`,
+`a_session_with_no_button_held_does_not_start`,
+`a_session_takes_its_windows_press`,
+`a_session_drops_at_its_own_buttons_release`,
+`a_release_waits_for_the_answer_where_it_let_go`,
+`a_finish_with_an_action_not_allowed_is_cancelled`,
+`a_session_whose_selection_is_taken_ends_and_keeps_off_it` and
+`an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

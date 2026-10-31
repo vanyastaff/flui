@@ -2065,6 +2065,25 @@ mod live {
             drop(removed);
         }
 
+        fn pointer_taken(&self, window: xproto::Window) {
+            let time = EventTime::from_nanos(event_timestamp_ns());
+            let deliveries = self
+                .with_state(|state| {
+                    let Some(target) = state.windows.get(&window) else {
+                        return Vec::new();
+                    };
+                    let delivery = Arc::clone(&target.delivery);
+                    state
+                        .pointers
+                        .cancel_surface(surface_of(target.window), NativeCancel::CaptureLost, time)
+                        .into_iter()
+                        .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            deliver(deliveries);
+        }
+
         fn event(&self, event: &Event) -> bool {
             let deliveries = match event {
                 Event::XinputKeyPress(key) => self.key_event(key, KeyState::Down),
