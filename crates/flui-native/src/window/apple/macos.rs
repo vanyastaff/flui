@@ -45,7 +45,7 @@ use std::sync::{
 use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{MainThreadMarker, MainThreadOnly, msg_send};
 use objc2::{class, sel};
 use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -281,7 +281,7 @@ impl MacOSWindow {
         std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
     }
 
-    /// Create a new macOS window
+    /// Create a new macOS window, on the main thread `mtm` proves this is.
     ///
     /// `options.position` and `options.normal_geometry` are read as global
     /// logical pixels from the primary screen's top-left corner; a display
@@ -292,25 +292,14 @@ impl MacOSWindow {
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
     pub(crate) fn try_new(
+        mtm: MainThreadMarker,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        // A window's owner lane is the AppKit main queue — the one lane all
-        // other process AppKit traffic already serializes on (see
-        // `owner::apple::macos::owner_lane`) — and the window is made on the
-        // main thread, which that queue runs on.
-        Self::new_inner(
-            options,
-            handler,
-            windows_map,
-            windows,
-            view_hooks,
-            crate::owner::apple::macos::owner_queue(),
-            true,
-        )
+        Self::new_inner(mtm, options, handler, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -396,17 +385,23 @@ impl MacOSWindow {
     }
 
     fn new_inner(
+        _main: MainThreadMarker,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
-        owner: &'static dispatch::Queue,
-        owner_is_main: bool,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        // SAFETY: must run on the owner thread (enforced by the platform's
-        // event-loop ownership); all messaged objects are alive: the freshly allocated
-        // NSWindow is checked for NIL before further use.
+        // A window's owner lane is the AppKit main queue — the one lane all
+        // other process AppKit traffic already serializes on (see
+        // `owner::apple::macos::owner_lane`) — which runs on the main thread
+        // the window is made on.
+        let owner = crate::owner::apple::macos::owner_queue();
+        let owner_is_main = true;
+        // SAFETY: AppKit makes and configures an NSWindow only on the main
+        // thread, which the `MainThreadMarker` this takes proves this is; all
+        // messaged objects are alive: the freshly allocated NSWindow is
+        // checked for NIL before further use.
         unsafe {
             // Convert logical size to NSRect
             let frame = NSRect::new(
@@ -1136,7 +1131,11 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
+        // The loop holds the main-thread-only `NSApplication`, so it exists
+        // only on the main thread, and its marker is the proof the window's
+        // AppKit calls need.
         let window = MacOSWindow::try_new(
+            owner.app.mtm(),
             options,
             handler,
             Arc::clone(&owner.windows),
