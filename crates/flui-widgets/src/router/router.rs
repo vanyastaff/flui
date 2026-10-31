@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::notifier::ChangeNotifier;
+use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
@@ -367,6 +367,14 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     fn dispose(&mut self) {
         self.shared.mounted.set(false);
         self.shared.navigator.remove_observer(&self.observer);
+        // An unmounted router tells nobody again. Its queued delivery and its
+        // listeners go now, not with the shared state: a listener that holds
+        // a handle would keep that state, and so itself, alive. The delivery
+        // goes first, so a listener capture's `Drop` that panics leaves
+        // nothing queued.
+        let delivery = self.shared.announcer.delivery.borrow_mut().take();
+        drop(delivery);
+        Listenable::remove_all_listeners(&self.shared.announcer.notifier);
     }
 }
 
@@ -527,6 +535,7 @@ impl<R: Routable> RouterShared<R> {
 
     /// Drop the page `id` names, if it is one of this router's.
     fn forget(self: &Rc<Self>, id: RouteId) {
+        let _told = self.announce_on_exit();
         let retired = {
             let mut stack = self.stack.borrow_mut();
             stack
@@ -535,7 +544,6 @@ impl<R: Routable> RouterShared<R> {
                 .map(|index| stack.remove(index))
         };
         drop(RouterRetiredValues(retired.into_iter().collect()));
-        self.announce();
     }
 
     /// The ids of the pages on the stack, bottom to top.
@@ -546,12 +554,30 @@ impl<R: Routable> RouterShared<R> {
     /// Queue a delivery to the listeners if the stack is no longer the one
     /// they were told of and none is queued. Runs no listener: they run in
     /// the delivery, on a later turn of the runtime's tasks.
+    ///
+    /// It never panics, so it may run while a panic unwinds: a state it
+    /// cannot read now is mid-edit, and that edit announces when it ends.
     pub(super) fn announce(self: &Rc<Self>) {
         let announcer = &self.announcer;
-        if announcer.queued.get() || *announcer.told.borrow() == self.page_ids() {
+        if announcer.queued.get() {
             return;
         }
-        let Some(driver) = announcer.driver.borrow().clone() else {
+        let (Ok(told), Ok(stack)) = (announcer.told.try_borrow(), self.stack.try_borrow()) else {
+            return;
+        };
+        if told.iter().copied().eq(stack.iter().map(|entry| entry.id)) {
+            return;
+        }
+        drop((told, stack));
+        let Some(driver) = announcer
+            .driver
+            .try_borrow()
+            .ok()
+            .and_then(|driver| driver.clone())
+        else {
+            return;
+        };
+        let Ok(mut delivery) = announcer.delivery.try_borrow_mut() else {
             return;
         };
         announcer.queued.set(true);
@@ -559,8 +585,26 @@ impl<R: Routable> RouterShared<R> {
         let token = driver.spawn_local(Box::pin(async move { deliver(&shared) }));
         // The task it replaces has run, or is the delivery running now,
         // whose cancellation is honoured once its poll returns.
-        let finished = announcer.delivery.borrow_mut().replace(token);
+        let finished = delivery.replace(token);
+        drop(delivery);
         drop(finished);
+    }
+
+    /// A guard that [announces](Self::announce) the stack when it drops,
+    /// whether the edit it covers returns or unwinds: an edit that commits
+    /// and then runs user code that panics (an observer, a retired route's
+    /// `Drop`) is still told.
+    pub(super) fn announce_on_exit(self: &Rc<Self>) -> AnnounceOnExit<'_, R> {
+        AnnounceOnExit(self)
+    }
+}
+
+/// See [`RouterShared::announce_on_exit`].
+pub(super) struct AnnounceOnExit<'a, R: Routable>(&'a Rc<RouterShared<R>>);
+
+impl<R: Routable> Drop for AnnounceOnExit<'_, R> {
+    fn drop(&mut self) {
+        self.0.announce();
     }
 }
 

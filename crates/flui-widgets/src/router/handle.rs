@@ -26,7 +26,9 @@ use crate::navigator::RouteId;
 /// the UI runtime's tasks, before any transition ends and never from inside
 /// the navigation, and once for all the edits since they were last told; a
 /// popup is not a change, and neither is a stack that stands. A listener may
-/// navigate: that is told in the next delivery.
+/// navigate: that is told in the next delivery. A committed edit is told even
+/// when user code it runs after the commit panics. The router drops its
+/// listeners when it unmounts, so one may hold a handle to its router.
 pub struct RouterHandle<R: Routable> {
     shared: Rc<RouterShared<R>>,
 }
@@ -86,6 +88,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn push(&self, route: R) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         let page = self.shared.page_route(&route);
         self.shared.navigator.push_page(page, |id| {
             self.shared
@@ -93,7 +96,6 @@ impl<R: Routable> RouterHandle<R> {
                 .borrow_mut()
                 .push(RouterEntry::new(id, route));
         });
-        self.shared.announce();
         Ok(())
     }
 
@@ -105,6 +107,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn replace(&self, route: R) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
         let page = self.shared.page_route(&route);
@@ -121,7 +124,6 @@ impl<R: Routable> RouterHandle<R> {
                 RouterRetiredValues(retired.into_iter().collect())
             });
         drop(retired);
-        self.shared.announce();
         Ok(())
     }
 
@@ -160,6 +162,7 @@ impl<R: Routable> RouterHandle<R> {
     /// once the router has unmounted.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
         self.mounted()?;
+        let _told = self.shared.announce_on_exit();
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
         let mut target = RouterRetiredValues(R::back_stack(&RoutePath::parse(location)?)?);
@@ -195,7 +198,6 @@ impl<R: Routable> RouterHandle<R> {
                 let keep = self.shared.stack.borrow()[shared_len - 1].id;
                 self.shared.navigator.pop_until(|id| id == keep);
             }
-            self.shared.announce();
             return Ok(());
         }
 
@@ -229,7 +231,6 @@ impl<R: Routable> RouterHandle<R> {
                 RouterRetiredValues(retired)
             });
         drop(retired);
-        self.shared.announce();
         Ok(())
     }
 

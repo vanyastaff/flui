@@ -400,6 +400,7 @@ pub(crate) fn router_go_recomputes_its_prefix_after_popup_observer_navigation() 
 fn observer_panic_recovery(edit: fn(&RouterHandle<AppRoute>), expected: AppRoute) {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
+    let heard = listen(&router);
     let navigator = home.navigator();
     let home_id = navigator.current().expect("initial page");
     let during = router.clone();
@@ -415,6 +416,12 @@ fn observer_panic_recovery(edit: fn(&RouterHandle<AppRoute>), expected: AppRoute
         Some("observer failure")
     );
     assert_eq!(router.current(), expected);
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [vec![AppRoute::Home, expected]],
+        "the committed edit is told although an observer panicked"
+    );
     assert!(router.can_pop());
     assert_eq!(router.pop(), Ok(true), "the next operation remains usable");
     settle(&mut laid);
@@ -1895,6 +1902,24 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
         covered,
         Some(last_entering + 1),
         "the lower page is added, covering Home, in the frame the top's entrance settles"
+    );
+}
+
+/// A listener that holds its router's handle keeps nothing alive once the
+/// router unmounts: the router lets go of its listeners then.
+pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
+    let (laid, home) = two_screen_app();
+    let router = home.handle();
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = router.clone();
+    router.add_listener(Rc::new(move || {
+        let _held = (&alive, reader.stack());
+    }));
+    drop((router, home, laid));
+    assert!(
+        kept.upgrade().is_none(),
+        "the listener and the router state it holds are dropped"
     );
 }
 

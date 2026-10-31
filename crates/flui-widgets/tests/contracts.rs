@@ -982,6 +982,7 @@ fn router_and_widgets_app() {
             ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
             ("router::stack_listeners_hear_each_committed_change_once", crate::router::stack_listeners_hear_each_committed_change_once),
             ("router::a_stack_listener_may_navigate", crate::router::a_stack_listener_may_navigate),
+            ("router::an_unmounted_router_lets_go_of_its_listeners", crate::router::an_unmounted_router_lets_go_of_its_listeners),
             ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
             ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
             ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
