@@ -41,7 +41,7 @@ use std::{
 };
 
 use flui_foundation::RenderId;
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::Matrix4;
 use flui_layer::LayerTree;
 use flui_semantics::SemanticsOwner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -243,20 +243,20 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// from an earlier one is not read as a layer of the next.
     scenes_painted: u64,
 
-    /// Composite-resolved offsets for `Layer::Follower` render nodes,
+    /// Composite-resolved transforms for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
     /// `last_layer_tree`. Populated post-paint
     /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
-    /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
+    /// follower correlation via the SAME `flui_layer::resolve_follower_transform`
     /// the GPU path (flui-engine's `render_layer_recursive`) resolves
-    /// against. Present ⟹ the follower is visible this frame at the
-    /// translated offset; absent ⟹ either not a follower, or a hidden one
+    /// against. Present ⟹ the follower is visible this frame under the
+    /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
     /// hit-test walk (`accessors.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
     /// not its plain tree-relative position — cached from the last
     /// composite, one frame stale by design.
-    last_follower_offsets: FxHashMap<RenderId, Offset>,
+    last_follower_transforms: FxHashMap<RenderId, Matrix4>,
 
     /// Painted output kept per repaint boundary, reused when that boundary is
     /// clean on a later frame.
@@ -291,12 +291,13 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
-    /// `show_when_unlinked == false`) — the follower hit-test side table's companion to
-    /// `last_follower_offsets`. The hit-test walk must distinguish "not a
+    /// `show_when_unlinked == false`, a leader clipped out under
+    /// `LeaderClip::Hide`, or a degenerate chain) — the follower hit-test side table's companion to
+    /// `last_follower_transforms`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
-    /// `resolve_follower_offset -> None -> don't descend` on the render
-    /// path); `last_follower_offsets`'s absence alone conflates both
+    /// `resolve_follower_transform -> None -> don't descend` on the render
+    /// path); `last_follower_transforms`'s absence alone conflates both
     /// cases, so this set carries follower identity independent of
     /// resolution outcome.
     last_hidden_follower_ids: FxHashSet<RenderId>,
@@ -373,7 +374,10 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
                 &self.scheduler.debug_doing_semantics(),
             )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
-            .field("follower_offset_count", &self.last_follower_offsets.len())
+            .field(
+                "follower_transform_count",
+                &self.last_follower_transforms.len(),
+            )
             .field(
                 "hidden_follower_count",
                 &self.last_hidden_follower_ids.len(),
@@ -415,7 +419,7 @@ where
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
-        last_follower_offsets: from.last_follower_offsets,
+        last_follower_transforms: from.last_follower_transforms,
         retained_boundaries: from.retained_boundaries,
         retained_pixel_ratio: from.retained_pixel_ratio,
         root_content: from.root_content,

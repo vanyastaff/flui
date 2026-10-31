@@ -81,7 +81,7 @@ assert!(root.is_some());
 For tooltips, dropdowns, and overlays that follow other content:
 
 ```rust
-use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, resolve_follower_offset};
+use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, resolve_follower_transform};
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::Alignment;
 
@@ -104,13 +104,15 @@ let follower = FollowerLayer::new(link)
     .with_size(Size::new(60.0, 20.0));
 let follower_id = tree.push_child(root, Layer::from(follower));
 
-let resolved = resolve_follower_offset(&tree, follower_id);
-assert_eq!(resolved, Some(Offset::new(60.0, 45.0)));
+let resolved = resolve_follower_transform(&tree, follower_id).expect("linked");
+assert_eq!(resolved.transform_point(0.0, 0.0), (60.0, 45.0));
 ```
 
 The tree indexes every leader by link as it is pushed; at render time
-`resolve_follower_offset` walks both ancestor chains to their common ancestor and returns the
-offset the renderer applies at the follower's tree position.
+`resolve_follower_transform` walks both ancestor chains to their common ancestor and returns the
+transform the renderer applies at the follower's tree position, the leader's scale and
+rotation included. `FollowerLayer::with_leader_clip(LeaderClip::Hide)` hides a follower while its
+leader's anchor is clipped out (a selection handle whose end scrolled away).
 
 ## Features
 

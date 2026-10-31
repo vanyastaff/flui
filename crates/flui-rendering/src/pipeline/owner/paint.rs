@@ -6,8 +6,8 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     AnnotatedRegionLayer, BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer,
-    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
+    ClipSuperellipseLayer, ContentToken, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
+    OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -315,31 +315,38 @@ impl PipelineOwner<PaintPhase> {
                     }
 
                     // Follower hit-testing: resolve each paint-phase-correlated
-                    // follower's composite-resolved offset against the SAME
+                    // follower's composite-resolved transform against the SAME
                     // fully-built layer_tree the GPU path (flui-engine's
                     // `render_layer_recursive`) resolves against, reusing the
-                    // identical `resolve_follower_offset` — one algorithm, two
+                    // identical `resolve_follower_transform` — one algorithm, two
                     // consumers (pixels + hit-test), not two copies of the
                     // logic. The tree carries the leader index itself.
-                    let mut follower_offsets = FxHashMap::default();
+                    let mut follower_transforms = FxHashMap::default();
                     let mut hidden_follower_ids = FxHashSet::default();
-                    for (render_id, follower_layer_id) in follower_correlations {
+                    for (render_id, follower_layer_id, origin) in follower_correlations {
                         debug_assert!(
                             layer_tree
                                 .get_layer(follower_layer_id)
                                 .is_some_and(|layer| layer.as_follower().is_some()),
                             "BUG: a follower correlation must name a Layer::Follower node"
                         );
-                        match flui_layer::resolve_follower_offset(&layer_tree, follower_layer_id) {
-                            Some(offset) => {
-                                follower_offsets.insert(render_id, offset);
+                        match flui_layer::resolve_follower_transform(&layer_tree, follower_layer_id)
+                        {
+                            Some(transform) => {
+                                // The subtree is recorded with its accumulated origin
+                                // baked in and the engine applies `transform` outside
+                                // it, while the hit-test walk and input regions have
+                                // already subtracted that origin: conjugating by it gives
+                                // them the mapping paint applies.
+                                follower_transforms
+                                    .insert(render_id, conjugate(transform, -origin));
                             }
                             None => {
                                 hidden_follower_ids.insert(render_id);
                             }
                         }
                     }
-                    self.last_follower_offsets = follower_offsets;
+                    self.last_follower_transforms = follower_transforms;
                     self.last_hidden_follower_ids = hidden_follower_ids;
 
                     // A u64 of frames outlasts any process; reusing the last number instead
@@ -780,10 +787,10 @@ impl PipelineOwner<PaintPhase> {
                     // Layer::Follower — `node_id` is already in scope from
                     // this fragment-op replay loop, and `push_layer` hands
                     // back the freshly-minted LayerId.
-                    let is_follower = matches!(*scope, FragmentScope::Follower { .. });
+                    let is_follower = matches!(*scope, FragmentScope::Follower(_));
                     let layer_id = composer.push_layer(scope_layer(*scope, origin));
                     if is_follower {
-                        composer.record_follower_correlation(node_id, layer_id);
+                        composer.record_follower_correlation(node_id, layer_id, origin);
                     }
                 }
                 FragmentOp::PushTransform(matrix) => {
@@ -1345,14 +1352,14 @@ struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
-    /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
+    /// `(RenderId, LayerId, origin)` correlation for each `Layer::Follower` pushed
     /// this paint pass (flui-rendering ARCHITECTURE.md, follower hit-testing) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
     /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
     /// to followers for now. `run_paint` resolves each entry post-paint via
-    /// `flui_layer::resolve_follower_offset` into `PipelineOwner
-    /// ::last_follower_offsets` / `::last_hidden_follower_ids`.
-    follower_correlations: Vec<(RenderId, LayerId)>,
+    /// `flui_layer::resolve_follower_transform` into `PipelineOwner
+    /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
+    follower_correlations: Vec<(RenderId, LayerId, Offset)>,
     /// Retention decisions taken during the walk, applied by `run_paint` once
     /// the walk's `&self` borrow ends.
     ///
@@ -1540,9 +1547,14 @@ impl FragmentComposer {
 
     /// Records a `(RenderId, LayerId)` correlation for a pushed
     /// `Layer::Follower` node (flui-rendering ARCHITECTURE.md, follower hit-testing).
-    fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
+    fn record_follower_correlation(
+        &mut self,
+        render_id: RenderId,
+        follower_layer_id: LayerId,
+        origin: Offset,
+    ) {
         self.follower_correlations
-            .push((render_id, follower_layer_id));
+            .push((render_id, follower_layer_id, origin));
     }
 
     /// Flatten everything painted under `root` into a reusable
@@ -1657,7 +1669,7 @@ impl FragmentComposer {
         mut self,
     ) -> (
         LayerTree,
-        Vec<(RenderId, LayerId)>,
+        Vec<(RenderId, LayerId, Offset)>,
         Vec<(RenderId, Option<RetainedSubtree>)>,
         Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
         Vec<RenderId>,
@@ -1757,28 +1769,11 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         FragmentScope::Leader { link, size } => {
             Layer::Leader(LeaderLayer::with_offset(link, size, origin))
         }
-        // `Layer::Follower` carries no resolved position at all — the
-        // linked/unlinked offsets are inputs to a LATER resolution pass, never
-        // stored as the final on-screen transform. `target_offset` is
-        // recorded as-authored (not origin-shifted): resolving it against
-        // the leader's position is deliberately deferred past this pass
-        // (design research plan — a `flui-engine`/`flui-layer`
-        // follow-up, not performed here).
-        FragmentScope::Follower {
-            link,
-            size,
-            target_offset,
-            show_when_unlinked,
-            leader_anchor,
-            follower_anchor,
-        } => Layer::Follower(
-            FollowerLayer::new(link)
-                .with_size(size)
-                .with_target_offset(target_offset)
-                .with_show_when_unlinked(show_when_unlinked)
-                .with_leader_anchor(leader_anchor)
-                .with_follower_anchor(follower_anchor),
-        ),
+        // `Layer::Follower` carries no resolved transform at all — its
+        // anchors and offsets are inputs to the composite-time
+        // `flui_layer::resolve_follower_transform`. `target_offset` is
+        // recorded as-authored (not origin-shifted), like `size`.
+        FragmentScope::Follower(follower) => Layer::Follower(follower),
     }
 }
 
