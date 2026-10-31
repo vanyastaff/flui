@@ -71,6 +71,17 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
     }
 }
 
+/// The most bytes of text a read answers, as on X11 and Wayland.
+const MAX_TEXT: usize = 64 * 1024 * 1024;
+
+/// How many UTF-8 bytes `wide` decodes to, each unpaired surrogate as
+/// U+FFFD, as `String::from_utf16_lossy` writes it.
+fn decoded_len(wide: &[u16]) -> usize {
+    char::decode_utf16(wide.iter().copied())
+        .map(|unit| unit.map_or(char::REPLACEMENT_CHARACTER.len_utf8(), char::len_utf8))
+        .sum()
+}
+
 impl SyncClipboard for WindowsClipboard {
     fn read_now(&self) -> ClipboardRead {
         let Some(_session) = ClipboardSession::open() else {
@@ -154,6 +165,13 @@ impl SyncClipboard for WindowsClipboard {
             }
 
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
+            // The text is measured before anything is allocated for it: past
+            // the limit nothing is decoded.
+            if decoded_len(wide_slice) > MAX_TEXT {
+                let _ = GlobalUnlock(hglobal);
+                tracing::warn!("a clipboard read past {MAX_TEXT} bytes was refused");
+                return Err(ClipboardError::TooLarge);
+            }
             let rust_string = String::from_utf16_lossy(wide_slice);
 
             // Unlock global memory
@@ -427,6 +445,20 @@ impl Drop for ClipboardSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The measure matches what the lossy decode writes, surrogate pairs and
+    /// an unpaired surrogate included.
+    #[test]
+    fn decoded_len_matches_the_lossy_decode() {
+        for text in [
+            &[0x61, 0x44a, 0x20ac][..],
+            &[0xd83d, 0xde00],
+            &[0xd800, 0x61],
+            &[],
+        ] {
+            assert_eq!(decoded_len(text), String::from_utf16_lossy(text).len());
+        }
+    }
 
     /// Opens a session, retrying while another process briefly holds the
     /// clipboard (clipboard history, a remote-desktop client).
