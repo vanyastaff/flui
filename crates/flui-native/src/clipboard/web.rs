@@ -53,12 +53,14 @@ impl WebClipboard {
 /// undefined, and calling into it would throw before any promise exists.
 fn system_clipboard(method: &str) -> Option<web_sys::Clipboard> {
     let navigator = web_sys::window()?.navigator();
-    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).ok()?;
+    let clipboard =
+        js_sys::Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("clipboard")).ok()?;
     if clipboard.is_undefined() || clipboard.is_null() {
         return None;
     }
     // Firefox long had the object without `readText`.
-    let callable = js_sys::Reflect::get(&clipboard, &method.into()).ok()?;
+    let callable =
+        js_sys::Reflect::get(&clipboard, &wasm_bindgen::JsValue::from_str(method)).ok()?;
     if !callable.is_function() {
         return None;
     }
@@ -109,7 +111,7 @@ fn fallback_read(fallback: &Mutex<Option<Arc<str>>>, error: ClipboardError) -> C
 /// Why the browser refused a read: a `NotAllowedError` is the user's or the
 /// page's permission (no gesture, a denied prompt, a document without focus).
 fn refusal_error(refusal: &wasm_bindgen::JsValue) -> ClipboardError {
-    let name = js_sys::Reflect::get(refusal, &"name".into())
+    let name = js_sys::Reflect::get(refusal, &wasm_bindgen::JsValue::from_str("name"))
         .ok()
         .and_then(|name| name.as_string());
     refusal_from_name(name.as_deref())
