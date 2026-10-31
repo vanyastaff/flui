@@ -35,10 +35,10 @@ use flui::platform::StorageName;
 use flui::prelude::*;
 use flui::view::View;
 use flui::view::element::ElementKind;
-use flui::view::persist::{DecodeError, Document, Persisted, Revision};
+use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
 use flui::widgets::{
-    BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable, WidgetStateProperty,
-    column,
+    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
+    WidgetStateProperty, column,
 };
 use serde::{Deserialize, Serialize};
 
@@ -629,7 +629,39 @@ struct RootState {
     documents: Option<Documents>,
     attempt: Signal<u32>,
     first_attempt: u32,
+    /// Set by Start over: the next load starts from the initial notes, which
+    /// the data document is storing over the unreadable ones.
+    fresh: Rc<Cell<bool>>,
     _kept: Option<Rc<dyn Any>>,
+}
+
+/// Why the notes did not load.
+#[derive(Clone, Debug)]
+enum LoadFailure {
+    /// The stored notes cannot be read back: Start over keeps them aside and
+    /// begins again.
+    Unreadable(String),
+    /// Anything else, which Retry may get past.
+    Other(String),
+}
+
+impl From<PersistError> for LoadFailure {
+    fn from(error: PersistError) -> Self {
+        match error {
+            PersistError::Corrupt { .. } | PersistError::Decode(_) => {
+                Self::Unreadable(error.to_string())
+            }
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for LoadFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreadable(message) | Self::Other(message) => f.write_str(message),
+        }
+    }
 }
 
 /// The two stored documents.
@@ -650,6 +682,7 @@ impl StatefulView for Root {
             documents: None,
             attempt: Signal::default(),
             first_attempt: self.first_attempt,
+            fresh: Rc::new(Cell::new(false)),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
@@ -675,16 +708,31 @@ impl ViewState<Root> for RootState {
         let load = documents.clone();
         let faults = view.faults;
         let planter = view.planter.clone();
+        let fresh = Rc::clone(&self.fresh);
+        let starting_over = Rc::clone(&self.fresh);
         let ready = FutureBuilder::keyed(
             Some(current),
             Rc::new(move || {
                 let gate = loader(current);
                 let Documents { data, session } = load.clone();
+                let fresh = Rc::clone(&fresh);
                 Box::pin(async move {
-                    gate.await?;
+                    gate.await.map_err(LoadFailure::Other)?;
                     // The session is read only over loaded data: a failed
                     // data load leaves it unread and unwritten.
-                    let saved = data.load().await.map_err(|error| error.to_string())?;
+                    let saved = if fresh.replace(false) {
+                        Rc::new(Saved::initial())
+                    } else {
+                        match data.load().await {
+                            Ok(saved) => saved,
+                            // Without storage the notes live in memory; the
+                            // banner says so.
+                            Err(_) if matches!(data.status(), SaveStatus::Unavailable) => {
+                                Rc::new(Saved::initial())
+                            }
+                            Err(error) => return Err(LoadFailure::from(error)),
+                        }
+                    };
                     // A session that cannot be read loses the place, never the
                     // data: an unreadable one is kept aside and started over.
                     let place = match session.load().await {
@@ -695,20 +743,36 @@ impl ViewState<Root> for RootState {
                         }
                     };
                     Ok((saved, place))
-                }) as BoxedResultFuture<Read, String>
+                }) as BoxedResultFuture<Read, LoadFailure>
             }),
             Rc::new(move |_cx, snapshot| {
                 if snapshot.connection_state() != ConnectionState::Done {
-                    return Text::new("Loading notes").boxed();
+                    // Reload replaces the load under way: its future is
+                    // dropped, so nothing it read is applied.
+                    let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
+                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                    });
+                    return Column::new(column![Text::new("Loading notes"), reload]).boxed();
                 }
                 if let Some(error) = snapshot.error() {
-                    return Column::new(column![
-                        Text::new(format!("Load failed: {error}")),
-                        TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
+                    let retry = TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
+                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                    });
+                    let message = Text::new(format!("Load failed: {error}"));
+                    if !matches!(error, LoadFailure::Unreadable(_)) {
+                        return Column::new(column![message, retry]).boxed();
+                    }
+                    let data = documents.data.clone();
+                    let starting_over = Rc::clone(&starting_over);
+                    let start_over =
+                        TextButton::new(Text::new("Start over")).on_pressed(move |cx| {
+                            // The unreadable notes are kept aside, then the
+                            // initial ones are stored and shown.
+                            data.start_over();
+                            starting_over.set(true);
                             attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
-                        }),
-                    ])
-                    .boxed();
+                        });
+                    return Column::new(column![message, retry, start_over]).boxed();
                 }
                 let read = snapshot
                     .data()
@@ -893,6 +957,7 @@ impl ViewState<Screen> for ScreenState {
         SafeArea::new().child(Column::new(column![
             Row::new(header(&view.route, &router)),
             Text::new(shared.status.get(cx)),
+            storage_banner(&shared.data),
             Expanded::new(content),
         ]))
     }
@@ -1190,4 +1255,31 @@ fn editor(
 fn settings(cx: &dyn BuildContext, shared: &Shared) -> BoxedView {
     let compact = if shared.compact.get(cx) { "on" } else { "off" };
     Text::new(format!("Compact rows are {compact}")).boxed()
+}
+
+/// What the notes' storage cannot do now, if anything: no storage at all, a
+/// file this build must not write, or a save that failed, with Retry.
+fn storage_banner(data: &Persisted<Saved>) -> BoxedView {
+    let watched = data.clone();
+    let listenable: Rc<dyn Listenable> = Rc::new(data.clone());
+    AnimatedBuilder::new(listenable, move || match watched.status() {
+        SaveStatus::Unavailable => {
+            Text::new("Storage is unavailable: the notes are kept in memory only").boxed()
+        }
+        SaveStatus::ReadOnly(_) => {
+            Text::new("Read only: changes to the notes are not saved").boxed()
+        }
+        SaveStatus::Failed(error) => {
+            let data = watched.clone();
+            Row::new(vec![
+                Text::new(format!("Saving failed: {error}")).boxed(),
+                TextButton::new(Text::new("Retry saving"))
+                    .on_pressed(move |_cx| data.retry())
+                    .boxed(),
+            ])
+            .boxed()
+        }
+        _ => SizedBox::shrink().boxed(),
+    })
+    .boxed()
 }
