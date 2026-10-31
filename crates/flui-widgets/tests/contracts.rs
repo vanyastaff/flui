@@ -634,6 +634,7 @@ fn selection_area_handles() {
             ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
             ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
             ("selection_area_handles::a_controller_selection_hides_the_handles", crate::selection_area_handles::a_controller_selection_hides_the_handles),
+            ("selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles", crate::selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles),
         ],
     );
 }

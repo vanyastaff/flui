@@ -382,6 +382,39 @@ pub(crate) fn a_controller_selection_hides_the_handles() {
     );
 }
 
+/// A listener that answers a long press by selecting another range through
+/// a controller leaves no handles: the word they were for is gone.
+pub(crate) fn a_listener_selecting_elsewhere_leaves_no_handles() {
+    let controller = SelectionController::new();
+    let heard: Heard = Rc::default();
+    let (recorded, redirect) = (Rc::clone(&heard), controller.clone());
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .controller(controller.clone())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            if change.cause == SelectionChangeCause::User(SelectionInput::Touch) {
+                let text = redirect.texts()[0].clone();
+                redirect
+                    .select(DocumentSelection::new(
+                        DocumentPosition::new(text.clone(), 0),
+                        DocumentPosition::new(text, 5),
+                    ))
+                    .expect("a range of the text");
+            }
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(
+        (scene.selected().as_deref(), scene.handles()),
+        (Some("alpha"), 0)
+    );
+}
+
 /// The handles are the area's own, else the nearest default's, else dots;
 /// without an overlay there are none, and the long press still selects.
 ///

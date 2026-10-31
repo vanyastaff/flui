@@ -268,17 +268,17 @@ impl SelectionModel {
         };
         let (start, end) = self.unit_at(&ordered, &hit.at, Unit::Word);
         let caret = CaretMemory::after_hit(&end, &hit);
+        let word = DocumentSelection::new(start, end);
+        let committed = self.registry.snap(&word);
         // A listener that panics still leaves the word selected, so its
         // handles are shown before the first failure is resumed.
         let mut failure = FirstPanic::new();
-        self.select_contained(
-            Some(DocumentSelection::new(start, end)),
-            caret,
-            SelectionInput::Touch,
-            &mut failure,
-        );
-        // A listener that moved the focus away has taken the handles with it.
-        if self.selection.borrow().is_some() && self.focus.has_primary_focus() {
+        self.select_contained(Some(word), caret, SelectionInput::Touch, &mut failure);
+        // A listener that moved the focus away has taken the handles with it,
+        // and one that selected something else has replaced the word they
+        // were for.
+        let still_the_word = committed.is_some() && *self.selection.borrow() == committed;
+        if still_the_word && self.focus.has_primary_focus() {
             self.show_handles(&mut failure);
         }
         failure.resume();
