@@ -29,6 +29,7 @@ mod cases {
 
     use flui_native::Platform as _;
     use flui_native::testing::clipboard::a_concealed_write_stays_out_of_history;
+    use flui_platform::ClipboardWrite;
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use super::wayland_clients::{Client, STEP};
@@ -63,12 +64,12 @@ mod cases {
         client.read(|answer| client.platform.clipboard().read_text(answer))
     }
 
-    /// One client writes twice under one input and reads its latest text
-    /// back; a second, whose window takes the keyboard, reads that text from
-    /// the first through the compositor and writes its own; once the
-    /// second's window closes and the keyboard is back, the first reads the
-    /// second's text, then writes concealed under that new input and reads
-    /// it back.
+    /// One client writes twice under one input, then concealed under it,
+    /// and reads its latest text back; a second, whose window takes the
+    /// keyboard, reads that text from the first through the compositor and
+    /// writes its own; once the second's window closes and the keyboard is
+    /// back, the first reads the second's text, then writes concealed under
+    /// that new input and reads it back.
     fn the_selection_crosses_between_clients(session: &Session) {
         // Weston's X11 backend gives its seat's keyboard to a client while its
         // output window has the X focus, which the harness's X connection
@@ -83,7 +84,7 @@ mod cases {
             "a client reads back what it owns"
         );
         // A second write with no input between is under the same serial:
-        // the compositor takes no second selection under it, so the source
+        // Weston up to 14 takes no second selection under it, so the source
         // already set answers the new text.
         write(&first, "written again by the first");
         assert_eq!(
@@ -91,6 +92,18 @@ mod cases {
             Some("written again by the first"),
             "a client reads back its latest write"
         );
+        // A concealed write under that serial offers another set of types,
+        // which takes a new source. Weston up to 14 keeps the source it
+        // holds, which answers the concealed text from now on, and the first
+        // client must follow which source the compositor kept: the one it
+        // dropped is never cancelled, and owning it would keep the first
+        // reading its own text after the second client copies.
+        first
+            .platform
+            .clipboard()
+            .write(ClipboardWrite::text("concealed by the first").concealed());
+        first.turn();
+        assert_eq!(read(&first).as_deref(), Some("concealed by the first"));
 
         let (said, heard) = mpsc::channel();
         let (stop, stopped) = mpsc::channel::<()>();
@@ -122,7 +135,7 @@ mod cases {
         };
         assert_eq!(
             report.as_deref(),
-            Some("written again by the first"),
+            Some("concealed by the first"),
             "the second client reads the first's text through the compositor"
         );
         first.until("the keyboard to come back", || first.window.state().focused);

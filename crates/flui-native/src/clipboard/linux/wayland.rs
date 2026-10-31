@@ -25,14 +25,19 @@
 //!   only from a client the user is working in, and only that seat's earlier
 //!   selection is replaced: another seat keeps its own. A write under the
 //!   serial the seat's selection was set under changes what that source
-//!   answers instead of setting a second one, which Weston would drop: the
-//!   next paste reads the new text, and a clipboard manager that copied the
-//!   selection as it was set keeps the copy it took. Each `send` is
-//!   written by a thread of its own, at most [`MAX_WRITERS`] at once, from
-//!   the text encoded once per form; `cancelled` (another client took the
-//!   selection) ends that seat's ownership. With no user input yet the text
-//!   is held here only, and a read answers it until another client's
-//!   selection arrives.
+//!   answers instead of setting a second one, which Weston up to 14 drops:
+//!   the next paste reads the new text, and a clipboard manager that copied
+//!   the selection as it was set keeps the copy it took. A write whose
+//!   concealment differs offers other types, which only a new source can:
+//!   it is set over the current one, which answers the new write too until
+//!   a sync tells which of the two the compositor holds (a `cancelled` to
+//!   the old one first means the new one). A concealed write that a
+//!   compositor keeps the old source for goes without the hint, with a
+//!   warning. Each `send` is written by a thread of its own, at most
+//!   [`MAX_WRITERS`] at once, from the text encoded once per form;
+//!   `cancelled` (another client took the selection) ends that seat's
+//!   ownership. With no user input yet the text is held here only, and a
+//!   read answers it until another client's selection arrives.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
@@ -42,6 +47,7 @@ use std::time::Duration;
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
 };
+use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
@@ -127,13 +133,29 @@ struct Owned {
     text: Arc<str>,
     source: Option<WlDataSource>,
     serial: Option<u32>,
+    /// The source `source` was set over under the same serial, answering
+    /// the same write, until the compositor says which of the two it holds:
+    /// `cancelled` here means it took `source`, a sync answered first means
+    /// it kept this one (see [`SelectionCheck`]).
+    superseded: Option<WlDataSource>,
 }
 
 impl Owned {
     fn release(self) {
-        if let Some(source) = self.source {
+        for source in [self.source, self.superseded].into_iter().flatten() {
             source.destroy();
         }
+    }
+
+    /// Answer with `text` from now on, through every source this selection
+    /// holds.
+    fn replace(&mut self, text: Arc<str>, concealed: bool) {
+        for source in [&self.source, &self.superseded].into_iter().flatten() {
+            if let Some(data) = source.data::<SourceData>() {
+                data.replace(Arc::clone(&text), concealed);
+            }
+        }
+        self.text = text;
     }
 }
 
@@ -266,6 +288,22 @@ impl WaylandClipboard for SeatClipboard {
         }
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    fn selection_offers_hint(&self) -> Option<bool> {
+        let seat = self.shared.last_input.latest().map(|input| input.seat);
+        self.shared
+            .state
+            .with(|state| {
+                let device = state
+                    .devices
+                    .iter()
+                    .find(|device| Some(&device.seat) == seat.as_ref())?;
+                let data = device.selection.as_ref()?.data::<OfferData>()?;
+                data.hint.with(|hint| *hint)
+            })
+            .flatten()
+    }
+
     fn has_primary_selection(&self) -> bool {
         self.shared
             .primary
@@ -380,38 +418,60 @@ impl NativeClipboard for SeatClipboard {
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
-            // A write under the serial the seat's selection was set under
-            // replaces what that source answers with: a compositor takes no
-            // second selection under one serial (Weston keeps the first and
-            // reports nothing), and destroying the first would leave the
-            // seat with no selection, or with a clipboard manager's copy of
-            // the old text.
-            if let Some(input) = &last
-                && let Some(owned) = state.owned.get_mut(&input.seat)
-                && let Some(source) = &owned.source
-                && owned.serial == Some(input.serial)
-                && let Some(data) = source.data::<SourceData>()
-            {
-                data.replace(Arc::clone(&text), concealed);
-                owned.text = text;
-                return None;
-            }
-            let source = last.and_then(|input| {
-                let (_, manager) = state.manager.as_ref()?;
-                let queue = state.queue.as_ref()?;
-                let device = state
-                    .devices
-                    .iter()
-                    .find(|device| device.seat == input.seat)?;
+            let State {
+                manager,
+                queue,
+                devices,
+                owned,
+            } = state;
+            let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
+                let device = devices.iter().find(|device| device.seat == *seat)?;
+                device.device.set_selection(Some(source), serial);
+                Some(())
+            };
+            let create = |text: &Arc<str>| {
+                let (_, manager) = manager.as_ref()?;
                 let source = manager.create_data_source(
-                    queue,
-                    SourceData::new(Arc::downgrade(&self.shared), Arc::clone(&text), concealed),
+                    queue.as_ref()?,
+                    SourceData::new(Arc::downgrade(&self.shared), Arc::clone(text), concealed),
                 );
                 for mime in offered(concealed) {
                     source.offer(mime.to_owned());
                 }
-                device.device.set_selection(Some(&source), input.serial);
-                Some((input.seat, source, input.serial))
+                Some(source)
+            };
+            // A write under the serial the seat's selection was set under
+            // (see the module docs).
+            if let Some(input) = &last
+                && let Some(held) = owned.get_mut(&input.seat)
+                && held.serial == Some(input.serial)
+                && let Some(current) = held.source.clone()
+            {
+                let offers_hint = current
+                    .data::<SourceData>()
+                    .is_some_and(|data| data.offers_hint);
+                held.replace(Arc::clone(&text), concealed);
+                // The offered types change with concealment, and only a new
+                // source changes them. The current one keeps answering the
+                // new write in case the compositor keeps it; a check already
+                // pending keeps the two it weighs.
+                if offers_hint != concealed
+                    && held.superseded.is_none()
+                    && let Some(source) = create(&text)
+                    && set(&source, &input.seat, input.serial).is_some()
+                {
+                    held.superseded = held.source.replace(source);
+                    SelectionCheck::send(&current, Arc::downgrade(&self.shared), queue.as_ref());
+                }
+                return None;
+            }
+            let source = last.as_ref().and_then(|input| {
+                let source = create(&text)?;
+                if set(&source, &input.seat, input.serial).is_none() {
+                    source.destroy();
+                    return None;
+                }
+                Some((input.seat.clone(), source, input.serial))
             });
             if source.is_none() {
                 tracing::debug!(
@@ -424,18 +484,50 @@ impl NativeClipboard for SeatClipboard {
             };
             // Only this seat's earlier selection is replaced: another seat
             // keeps the source it reads.
-            state.owned.set(
+            owned.set(
                 seat,
                 Owned {
                     text,
                     source,
                     serial,
+                    superseded: None,
                 },
             )
         });
         if let Some(previous) = previous.flatten() {
             previous.release();
         }
+    }
+}
+
+/// A sync sent after a source was set over another under the same serial:
+/// the compositor answers it after the `cancelled` it sends the superseded
+/// source if it took the new one, so a source still superseded when it
+/// answers is the one the compositor kept (Weston up to 13 takes no second
+/// selection under one serial).
+pub(crate) struct SelectionCheck {
+    shared: Weak<Shared>,
+    superseded: WlDataSource,
+}
+
+impl SelectionCheck {
+    /// Ask the compositor, through `superseded`'s connection, to answer once
+    /// it has handled the requests sent before.
+    fn send(
+        superseded: &WlDataSource,
+        shared: Weak<Shared>,
+        queue: Option<&QueueHandle<WaylandState>>,
+    ) {
+        let (Some(queue), Some(backend)) = (queue, superseded.backend().upgrade()) else {
+            return;
+        };
+        Connection::from_backend(backend).display().sync(
+            queue,
+            Self {
+                shared,
+                superseded: superseded.clone(),
+            },
+        );
     }
 }
 
@@ -454,6 +546,8 @@ pub(crate) struct OfferData {
     /// under: at most one entry per [`TextForm`], however often the owner
     /// repeats an `offer` event.
     forms: OwnerCell<Vec<(TextForm, String)>>,
+    /// Whether the offer names [`CONCEALED_HINT`].
+    hint: OwnerCell<bool>,
 }
 
 impl OfferData {
@@ -461,12 +555,18 @@ impl OfferData {
     fn new() -> Self {
         Self {
             forms: OwnerCell::new(),
+            hint: OwnerCell::new(),
         }
     }
 
     /// Record an `offer` event: a text form not offered before, under the
-    /// MIME type named. Other types and repeats keep nothing.
+    /// MIME type named, or the concealment hint. Other types and repeats
+    /// keep nothing.
     fn offer(&self, mime_type: String) {
+        if mime_type == CONCEALED_HINT {
+            self.hint.with(|hint| *hint = true);
+            return;
+        }
         let Some(form) = TextForm::named(&mime_type) else {
             return;
         };
@@ -543,6 +643,12 @@ impl SourceData {
                 encoded: Vec::new(),
             };
         });
+    }
+
+    /// Whether the write the source answers is concealed while it offers no
+    /// hint: a clipboard manager sees it as an ordinary one.
+    fn conceals_unmarked(&self) -> bool {
+        !self.offers_hint && self.content.with(|content| content.concealed) == Some(true)
     }
 
     /// What a `send` of `mime` answers: the text in that form, the hint's
@@ -688,11 +794,24 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
             wl_data_source::Event::Cancelled => {
                 if let Some(shared) = data.shared.upgrade() {
                     shared.state.with(|state| {
+                        // A superseded source cancelled: the compositor took
+                        // the one set over it, which goes on.
+                        if let Some(held) = state
+                            .owned
+                            .find_mut(|owned| owned.superseded.as_ref() == Some(source))
+                        {
+                            held.superseded = None;
+                            return;
+                        }
                         // Only this source's seat lost its selection; it is
-                        // destroyed below, not by the entry's release.
-                        state
+                        // destroyed below, not by the entry's release, and a
+                        // source it superseded goes with it.
+                        let lost = state
                             .owned
                             .remove(|owned| owned.source.as_ref() == Some(source));
+                        if let Some(superseded) = lost.and_then(|lost| lost.superseded) {
+                            superseded.destroy();
+                        }
                     });
                 }
                 // After the clipboard's release the source is still the
@@ -700,6 +819,49 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                 source.destroy();
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlCallback, SelectionCheck> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        check: &SelectionCheck,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wl_callback::Event::Done { .. } = event else {
+            return;
+        };
+        let Some(shared) = check.shared.upgrade() else {
+            return;
+        };
+        // Still superseded once the compositor has handled the `set_selection`:
+        // it kept this source and dropped the one set over it, which no event
+        // reports. The kept source answers the latest write already.
+        let unmarked = shared.state.with(|state| {
+            let held = state
+                .owned
+                .find_mut(|owned| owned.superseded.as_ref() == Some(&check.superseded))?;
+            let kept = held.superseded.take()?;
+            // The kept source offers the types of the write it was set for.
+            let unmarked = kept
+                .data::<SourceData>()
+                .is_some_and(SourceData::conceals_unmarked);
+            if let Some(dropped) = held.source.replace(kept) {
+                dropped.destroy();
+            }
+            Some(unmarked)
+        });
+        // The subscriber runs with the clipboard's state let go.
+        if unmarked.flatten() == Some(true) {
+            tracing::warn!(
+                target: "flui.clipboard.wayland",
+                "the compositor kept the selection set earlier under this input: the concealed \
+                 write it now answers is offered without the password-manager hint"
+            );
         }
     }
 }
@@ -952,6 +1114,11 @@ mod tests {
             assert_eq!(
                 data.answer(CONCEALED_HINT).as_deref(),
                 (offered_hint && concealed).then_some(CONCEALED_HINT_VALUE),
+                "{row}"
+            );
+            assert_eq!(
+                data.conceals_unmarked(),
+                !offered_hint && concealed,
                 "{row}"
             );
         }

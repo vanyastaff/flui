@@ -61,6 +61,14 @@ impl<S: PartialEq, T> Owners<S, T> {
             .map(|(_, item)| item)
     }
 
+    /// The first selection `matches` names, in place.
+    pub(crate) fn find_mut(&mut self, matches: impl Fn(&T) -> bool) -> Option<&mut T> {
+        self.entries
+            .iter_mut()
+            .map(|(_, item)| item)
+            .find(|item| matches(item))
+    }
+
     /// Removes the first selection `matches` names: the one whose source the
     /// compositor cancelled.
     pub(crate) fn remove(&mut self, matches: impl Fn(&T) -> bool) -> Option<T> {
