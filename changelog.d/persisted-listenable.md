@@ -21,4 +21,5 @@
   an edit's save is watched again by the next edit, and an interrupted `start_over` is left failed
   with `StorageError::Cancelled`, so `retry` starts over. A save watch ended by such a panic no
   longer keeps later writes from being watched, and a delivery such a panic ends leaves the next
-  one to come. A reload whose replaced value panics in its drop is still told.
+  one to come. A reload whose replaced value panics in its drop is still told, and a replaced
+  value whose drop panics while the frame hook panics no longer aborts the process.

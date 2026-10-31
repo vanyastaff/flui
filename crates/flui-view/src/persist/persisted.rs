@@ -106,7 +106,8 @@ struct DocumentState<D> {
     /// The value the last applied load produced, and every value set since.
     loaded: Option<Loaded<D>>,
     /// The registry's last confirmed write when the last applied load
-    /// settled: a later one means another document of this name wrote.
+    /// issued its read: a later one means another document of this name
+    /// wrote.
     committed_at_load: Option<(Revision, StoredVersion)>,
     /// The latest bytes handed to the registry.
     published: Option<Published>,
@@ -336,7 +337,11 @@ impl<D: Document> Persisted<D> {
         document.refresh();
         let start = document.start_load();
         async move {
-            let (generation, read) = start?;
+            let LoadStart {
+                generation,
+                baseline,
+                read,
+            } = start?;
             let (outcome, read) = match read.await {
                 Ok(stored) => {
                     let version = stored.version;
@@ -344,7 +349,7 @@ impl<D: Document> Persisted<D> {
                 }
                 Err(error) => (Err(PersistError::Storage(error)), None),
             };
-            document.settle(generation, outcome, read)
+            document.settle(generation, baseline, outcome, read)
         }
     }
 
@@ -411,11 +416,9 @@ impl<D: Document> Persisted<D> {
             replaced
         };
         publisher.publish(bytes, mode, revision);
-        document.refresh();
-        // The replaced value's drop is application code: it runs with no
-        // borrow held and after this edit is published, so an edit it makes
-        // is published after this one and wins.
-        drop(replaced);
+        // The replaced value is dropped after this edit is published, so an
+        // edit its drop makes is published after this one and wins.
+        then_retire(|| document.refresh(), replaced);
         Ok(revision)
     }
 
@@ -555,8 +558,16 @@ impl<D: Document> Listenable for Persisted<D> {
     }
 }
 
-/// A load in flight: its generation and the storage read.
-type LoadStart = (u64, StorageFuture<Stored>);
+/// A load in flight.
+struct LoadStart {
+    /// The generation that makes it the latest load.
+    generation: u64,
+    /// The registry's last confirmed write when the read was issued: a later
+    /// one means the bytes read may no longer be stored.
+    baseline: Option<(Revision, StoredVersion)>,
+    /// The storage read.
+    read: StorageFuture<Stored>,
+}
 
 impl<D: Document> OpenDocument<D> {
     /// Begin a load: refuse it over unsaved edits or without storage,
@@ -573,7 +584,14 @@ impl<D: Document> OpenDocument<D> {
         state.generation = state.generation.wrapping_add(1);
         let generation = state.generation;
         drop(state);
-        Ok((generation, storage.read(&D::NAME, D::MAX_BYTES)))
+        // Taken before the read is issued, so a write confirmed after it is
+        // never taken for one the bytes read include.
+        let baseline = self.committed_write();
+        Ok(LoadStart {
+            generation,
+            baseline,
+            read: storage.read(&D::NAME, D::MAX_BYTES),
+        })
     }
 
     /// Apply a finished load if it is still the latest, and hand its
@@ -581,6 +599,7 @@ impl<D: Document> OpenDocument<D> {
     fn settle(
         self: &Rc<Self>,
         generation: u64,
+        baseline: Option<(Revision, StoredVersion)>,
         outcome: Result<Loaded<D>, PersistError>,
         read: Option<StoredVersion>,
     ) -> Result<Rc<D>, PersistError> {
@@ -597,7 +616,7 @@ impl<D: Document> OpenDocument<D> {
                 let value = Rc::clone(&loaded.value);
                 let replaced = if latest {
                     state.status = SaveStatus::Clean;
-                    state.committed_at_load = self.committed_write();
+                    state.committed_at_load = baseline;
                     state.loaded.replace(loaded)
                 } else {
                     Some(loaded)
@@ -623,19 +642,9 @@ impl<D: Document> OpenDocument<D> {
             }
         };
         drop(state);
-        // Announced before the replaced value's drop, which is application
-        // code run with no borrow held: a drop that panics leaves the settled
-        // load told. That panic is raised over one of the announcement's.
-        let announced = catch_unwind(AssertUnwindSafe(|| self.announce()));
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
-            if let Err(announcement) = announced {
-                retain_opaque_payload(announcement);
-            }
-            resume_unwind(payload);
-        }
-        if let Err(payload) = announced {
-            resume_unwind(payload);
-        }
+        // Announced before the replaced value's drop: a drop that panics
+        // leaves the settled load told.
+        then_retire(|| self.announce(), replaced);
         result
     }
 
@@ -777,10 +786,8 @@ impl<D: Document> OpenDocument<D> {
             })
         };
         publisher.publish(bytes, mode, revision);
-        self.refresh();
-        // A replaced value's drop is application code: it runs with no
-        // borrow held and after the initial value is published.
-        drop(replaced);
+        // A replaced value is dropped after the initial value is published.
+        then_retire(|| self.refresh(), replaced);
     }
 
     /// End a busy store's retries: the next refusal starts from the first
@@ -1018,6 +1025,24 @@ impl<D: Document> OpenDocument<D> {
         // whose cancellation is honoured once its poll returns.
         let finished = announcer.delivery.borrow_mut().replace(token);
         drop(finished);
+    }
+}
+
+/// Run `step`, then drop `replaced`, a value the step's edit replaced, whose
+/// drop is application code: it runs with no borrow held and after the step,
+/// even when the step panics, so a panic in either never drops the other
+/// while unwinding. The drop's panic is raised over the step's, which is
+/// kept.
+fn then_retire<T>(step: impl FnOnce(), replaced: T) {
+    let stepped = catch_unwind(AssertUnwindSafe(step));
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
+        if let Err(first) = stepped {
+            retain_opaque_payload(first);
+        }
+        resume_unwind(payload);
+    }
+    if let Err(payload) = stepped {
+        resume_unwind(payload);
     }
 }
 

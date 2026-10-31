@@ -1645,6 +1645,59 @@ fn a_revision_is_named_only_by_the_document_that_stored_it() {
         "the second document's bytes were never stored"
     );
     assert_eq!(first.revision(), kept.ok(), "the first document's were");
+
+    // A load whose read was issued before another document's write settles
+    // after it: the bytes it read may no longer be stored.
+    let reload = second.load();
+    assert!(first.set(Note("written after the read".into())).is_ok());
+    laid.pump();
+    assert!(drive(&mut laid, reload).is_ok());
+    assert_eq!(
+        second.revision(),
+        None,
+        "a value read before another document's write does not name a revision"
+    );
+}
+
+/// A set whose replaced value panics in its drop while the frame hook its
+/// announcement wakes panics too is contained: the drop's panic reaches the
+/// caller, and the edit is stored and told.
+#[test]
+fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let heard = listen(&notes);
+    laid.pump();
+    laid.pump();
+    heard.borrow_mut().clear();
+
+    let armed = Rc::new(Cell::new(true));
+    let fire = Rc::clone(&armed);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(!fire.replace(false), "the replaced value's drop panics");
+        }));
+    });
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let edit = catch_unwind(AssertUnwindSafe(|| notes.set(Note("edited".into()))));
+    driver.set_request_frame(|| {});
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    let failure = edit.expect_err("a panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("the replaced value's drop panics"),
+        "the drop's panic is raised, the hook's kept"
+    );
+
+    assert!(notes.set(Note("edited again".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(heard.borrow().last(), Some(&SaveStatus::Clean));
 }
 
 /// Mount [`TwoOpeners`] over `storage` and load both documents.

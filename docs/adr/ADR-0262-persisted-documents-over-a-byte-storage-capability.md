@@ -193,11 +193,11 @@ the document, so one that holds a clone of it keeps both alive for good; it hold
 file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
 confirms it, `None` before a load and while a write is in flight or failed. With two documents of
 one name in a runtime it is named only by the one whose bytes the storage kept: the one that wrote
-last, or one that wrote nothing while no document of its name wrote after its load. What the
-application records against it (a session's draft taken against a version of the data) therefore
-names bytes on disk: an edit lost before its write commits never matches what a later load reads
-back. With the `serde` feature a `Revision` serializes as its number for that record; `get()` is for
-display and diagnostics.
+last, or one that wrote nothing while no document of its name wrote after its load issued its read.
+What the application records against it (a session's draft taken against a version of the data)
+therefore names bytes on disk: an edit lost before its write commits never matches what a later
+load reads back. With the `serde` feature a `Revision` serializes as its number for that record;
+`get()` is for display and diagnostics.
 
 ### §4. A codec panic fails one save and keeps the document
 
@@ -276,7 +276,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `a_frame_hook_panic_while_queueing_leaves_later_changes_told`,
   `a_commit_by_another_document_of_its_name_is_told`,
   `a_revision_is_named_only_by_the_document_that_stored_it`,
-  `a_reload_whose_replaced_value_panics_in_drop_is_told`.
+  `a_reload_whose_replaced_value_panics_in_drop_is_told`,
+  `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
