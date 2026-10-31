@@ -73,10 +73,10 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let refused =
         |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
-    let dirs = storage_dir(config)
+    let store = storage_dir(config)
         .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
         .and_then(|dir| {
-            with_owner_platform(|owner| owner.shared().data_dirs(&dir))
+            with_owner_platform(|owner| owner.shared().data_store(&dir))
                 .flatten()
                 .ok_or_else(|| {
                     tracing::warn!(
@@ -88,7 +88,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
         });
     // Always installed, a refusal included: a run without storage must not
     // inherit the previous run's on this thread.
-    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(store));
     // The run's receivers replace the last run's, for the same reason.
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());

@@ -3,7 +3,7 @@
 
 use flui_platform::AppDataDir;
 
-use super::DataDirs;
+use super::DataStore;
 
 /// The current user's data directories ([`data_dirs`](super::data_dirs)):
 /// where every host but Android keeps an application's data.
@@ -11,7 +11,7 @@ use super::DataDirs;
 pub struct UserDataDirs;
 
 impl<O> crate::host::Storage<O> for UserDataDirs {
-    fn data_dirs(_: &O, app: &AppDataDir) -> Option<DataDirs> {
-        super::data_dirs(app)
+    fn data_store(_: &O, app: &AppDataDir) -> Option<DataStore> {
+        super::data_dirs(app).map(DataStore::on_disk)
     }
 }

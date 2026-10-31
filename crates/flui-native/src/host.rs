@@ -74,7 +74,7 @@ use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
-use crate::storage::DataDirs;
+use crate::storage::DataStore;
 use crate::task::Task;
 use crate::text::TextInput;
 
@@ -408,8 +408,8 @@ pub trait Lifecycle<O> {
 
 /// The storage position.
 pub trait Storage<O> {
-    /// [`Platform::data_dirs`].
-    fn data_dirs(owner: &O, app: &AppDataDir) -> Option<DataDirs>;
+    /// [`Platform::data_store`].
+    fn data_store(owner: &O, app: &AppDataDir) -> Option<DataStore>;
 }
 
 /// The positions [`Absent`] is named with.
@@ -661,7 +661,7 @@ impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
 }
 
 impl<O> Storage<O> for Absent<position::Storage> {
-    fn data_dirs(_: &O, _: &AppDataDir) -> Option<DataDirs> {
+    fn data_store(_: &O, _: &AppDataDir) -> Option<DataStore> {
         None
     }
 }

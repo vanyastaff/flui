@@ -254,6 +254,14 @@ pub(crate) struct HeadlessState {
     /// that waits for a block, until
     /// [`HeadlessPlatform::with_session_end_support`](crate::HeadlessPlatform::with_session_end_support).
     pub(crate) session_end_support: flui_platform::SessionEndSupport,
+    /// The disk root a test gave this platform
+    /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)):
+    /// each application keeps its values under `<root>/roaming/<app>` and
+    /// `<root>/local/<app>`. `None`, the default: they stay in `memory`.
+    pub(crate) data_root: Option<std::path::PathBuf>,
+    /// The values every application on this platform keeps without a root,
+    /// for as long as the platform lives; never the user's data directories.
+    pub(crate) memory: crate::storage::MemoryStore,
     /// What `Platform::preferences` reports: unknown until
     /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
     pub(crate) preferences: flui_platform::SystemPreferences,
@@ -341,6 +349,8 @@ impl HeadlessLoop {
             displays: H::displays(),
             session_end_releases: 0,
             session_end_support: flui_platform::SessionEndSupport::Hold,
+            data_root: None,
+            memory: crate::storage::MemoryStore::new(),
             preferences: flui_platform::SystemPreferences::default(),
             preference_failure: None,
             display_failure: None,
