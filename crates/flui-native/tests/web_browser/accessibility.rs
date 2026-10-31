@@ -1041,6 +1041,82 @@ async fn the_canvas_keeps_the_focus_a_field_left() {
     }
 }
 
+/// Where the browser has no `EditContext`, the tree's focus moving from a
+/// node served on the canvas to a text field moves the page's focus from the
+/// hidden editor to the field, and what is typed there edits the store.
+#[wasm_bindgen_test]
+async fn a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus() {
+    let _hidden = super::EditContextHidden::hide();
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    accessibility.publish(form("ab", ROOT));
+    canvas.host.focus_store(Some(super::as_store(&store)));
+    assert!(
+        super::editor().is_some_and(|editor| editor.focused),
+        "served by the focused hidden editor"
+    );
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    assert!(super::editor().is_none(), "the hidden editor is gone");
+    assert!(
+        field("name").expect("the field").focused,
+        "the field has the focus"
+    );
+    type_into_field(Some("name"), "abc", 3, false);
+    assert_eq!(store.text(), "abc");
+    canvas.window.close_now();
+}
+
+/// A store whose text a field's element cannot hold as written (a line
+/// break in a single-line input, which the browser drops) is served on the
+/// canvas instead, which takes the page's focus: by its `EditContext` or,
+/// without one, by the hidden editor. The field's value never edits the
+/// store, whether it named the store from the start or the application put
+/// the line break in while the field served it.
+#[wasm_bindgen_test]
+async fn a_text_the_field_cannot_hold_is_served_on_the_canvas() {
+    for edit_context in [true, false] {
+        let hidden = (!edit_context).then(super::EditContextHidden::hide);
+        for start in ["a\nb", "ab"] {
+            let store = flui_testing::text_store_kit::InMemoryTextStore::new(start);
+            let (canvas, _accessibility) = served_form(&store);
+            if start == "ab" {
+                assert!(field("name").expect("the field").focused, "served there");
+                store.app_replace(
+                    flui_platform::text_store::Utf16Range::try_new(
+                        flui_platform::text_store::Utf16Offset::new(1),
+                        flui_platform::text_store::Utf16Offset::new(1),
+                    )
+                    .expect("a range"),
+                    "\n",
+                );
+                super::wait(0).await;
+            }
+            let why = format!("from {start:?}, with EditContext {edit_context}");
+            assert!(!field("name").expect("the field").focused, "{why}");
+            if edit_context {
+                assert_eq!(focused(), "canvas", "{why}");
+                assert_eq!(super::edit_context_text().as_deref(), Some("a\nb"), "{why}");
+            } else {
+                let editor = super::editor().expect("the hidden editor");
+                assert!(editor.focused, "{why}");
+                assert_eq!(editor.value, "a\nb", "{why}");
+            }
+            type_into_field(Some("name"), "ab", 2, false);
+            assert_eq!(store.text(), "a\nb", "{why}");
+            canvas.window.close_now();
+            super::wait(0).await;
+        }
+        drop(hidden);
+    }
+}
+
 /// The store leaves the field's element when the tree's focus leaves the
 /// field, the field is removed or the window closes: it is served on the
 /// canvas again, the element loses its hints, and what is typed into the

@@ -1813,7 +1813,9 @@ and writes only what changed between two specs.
   element keeps no listener of the text input's. A hidden editor that takes
   the store over takes the canvas's focus only, never another element's of the
   host; the canvas forwards its focus to the host's field only while the host
-  names it.
+  names it, and a field the store moves to takes the canvas's focus. A text
+  the field cannot hold as written (a line break in a single-line input, which
+  the browser drops) is served on the canvas, which takes the field's focus.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
@@ -1833,7 +1835,9 @@ Linux. In headless Chrome,
 `a_focused_text_field_is_edited_through_its_element`,
 `the_store_goes_back_to_the_canvas_when_the_field_goes`,
 `a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor`,
-`the_canvas_keeps_the_focus_a_field_left` and
+`the_canvas_keeps_the_focus_a_field_left`,
+`a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
+`a_text_the_field_cannot_hold_is_served_on_the_canvas` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

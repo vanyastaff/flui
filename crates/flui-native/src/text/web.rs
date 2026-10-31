@@ -262,6 +262,18 @@ mod input {
             };
         }
 
+        /// Whether the element's value holds `text` as written. A browser
+        /// sanitizes what a script gives a field (HTML's value sanitization):
+        /// a single-line input drops line breaks, a textarea turns carriage
+        /// returns into line feeds, and an edit read back from such a value
+        /// would delete what it dropped from the store.
+        fn holds(&self, text: &str) -> bool {
+            match self {
+                Self::Area(_) => !text.contains('\r'),
+                Self::Line(_) => !text.contains(['\n', '\r']),
+            }
+        }
+
         fn is(&self, element: &web_sys::HtmlElement) -> bool {
             self.html().is_same_node(Some(element.as_ref()))
         }
@@ -391,7 +403,6 @@ mod input {
             let Some((store, surface)) = found else {
                 return;
             };
-            let named = self.field.named();
             let served = match &*surface {
                 Surface::Editor {
                     element,
@@ -400,7 +411,8 @@ mod input {
                 } => Some(element),
                 Surface::Context(_) | Surface::Editor { .. } => None,
             };
-            let moved = match (served, named.as_ref().and_then(EditorElement::of)) {
+            let text = snapshot(&*store).map(|(text, _)| text).unwrap_or_default();
+            let moved = match (served, self.field_for(&text)) {
                 (Some(served), Some(named)) => !served.is(named.html()),
                 (None, None) => false,
                 _ => true,
@@ -574,13 +586,39 @@ mod input {
             }
         }
 
+        /// The semantics host's field `text` is served through: the one it
+        /// names, while its value can hold `text` ([`EditorElement::holds`]).
+        fn field_for(&self, text: &str) -> Option<EditorElement> {
+            self.field
+                .named()
+                .as_ref()
+                .and_then(EditorElement::of)
+                .filter(|field| field.holds(text))
+        }
+
+        /// Whether the page's focus is on `element`.
+        fn page_focus_is(&self, element: &web_sys::Node) -> bool {
+            self.canvas
+                .owner_document()
+                .and_then(|document| document.active_element())
+                .is_some_and(|active| active.is_same_node(Some(element)))
+        }
+
         /// Give `store` a fresh surface, holding its text and selection: the
-        /// semantics host's field while it names one, else an `EditContext` on
-        /// the canvas, else a hidden textarea beside it.
+        /// semantics host's field while it names one that can hold the text,
+        /// else an `EditContext` on the canvas, else a hidden textarea beside
+        /// it. A named field that cannot hold the text gives the canvas its
+        /// focus, so what is typed reaches the store.
         fn attach(&self, store: Rc<dyn TextStore>) {
             let (text, selection) = snapshot(&*store)
                 .unwrap_or_else(|| (String::new(), Selection::collapsed(Utf16Offset::ZERO)));
-            let field = self.field.named().as_ref().and_then(EditorElement::of);
+            let field = self.field_for(&text);
+            if field.is_none()
+                && let Some(named) = self.field.named()
+                && self.page_focus_is(named.as_ref())
+            {
+                let _ = self.canvas.focus();
+            }
             let attached = match field {
                 Some(field) => self.attach_editor(&store, &text, selection, field, false),
                 None if self.edit_context => self.attach_context(&store, &text, selection),
@@ -878,19 +916,15 @@ mod input {
                     .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
                 parent.insert_before(element.html(), self.canvas.next_sibling().as_ref())?;
                 self.editor.set(Some(element.html()));
-                // The editor takes the canvas's focus, never the focus of
-                // another element of the semantics host (a slider the tree's
-                // focus moved to keeps its keys).
-                let on_canvas = self
-                    .canvas
-                    .owner_document()
-                    .and_then(|document| document.active_element())
-                    .is_some_and(|active| active.is_same_node(Some(self.canvas.as_ref())));
-                if on_canvas {
-                    let _ = element.html().focus();
-                }
             } else {
                 self.field.serve(Some(element.html()));
+            }
+            // The editor takes the canvas's focus (the hidden editor's, or
+            // the canvas's while the store moved off it), never the focus of
+            // another element of the semantics host (a slider the tree's
+            // focus moved to keeps its keys).
+            if self.page_focus_is(self.canvas.as_ref()) {
+                let _ = element.html().focus();
             }
             Ok(Attached {
                 store: Rc::clone(store),
@@ -986,6 +1020,13 @@ mod input {
                     let _ =
                         context.update_selection(as_u32(selected.start()), as_u32(selected.end()));
                 }
+                // A field that cannot hold the new text hands the store to the
+                // canvas.
+                Surface::Editor {
+                    element,
+                    hidden: false,
+                    ..
+                } if !element.holds(&text) => self.schedule_resync(store),
                 Surface::Editor {
                     element, mirror, ..
                 } => {
