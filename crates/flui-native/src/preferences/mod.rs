@@ -7,7 +7,9 @@
 //! - `read`: the admission of a bounded native read, which the Android and
 //!   AppKit sources take before they ask the system again;
 //! - `locales`: the preferred languages from the forms the systems spell them
-//!   in.
+//!   in;
+//! - `regional`: the regional formats (ADR-0278) from the values the hosts
+//!   report them as.
 //!
 //! Each platform file is its host's source: `windows` (WinRT and Win32
 //! settings, told of changes by the owner's broadcast receiver), `apple`
@@ -29,6 +31,8 @@
 pub(crate) mod locales;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod read;
+#[cfg(any(windows, linux_host, test))]
+pub(crate) mod regional;
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;

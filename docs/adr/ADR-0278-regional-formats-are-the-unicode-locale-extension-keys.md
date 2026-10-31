@@ -1,6 +1,6 @@
 # ADR-0278: The user's regional formats are the Unicode locale extension keys, carried beside the locale
 
-- **Status:** Accepted (2026-10-31). Not implemented: no host reads the formats yet (§3).
+- **Status:** Accepted (2026-10-31). Implemented on Windows and Linux; the Apple, Android and Web reads are not (§3).
 - **Date:** 2026-10-31
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md)
   (system preferences are a host observation the runtime accepts as one snapshot),
@@ -92,14 +92,18 @@ formatter is given `formats.apply_to(&locale)`.
 
 | Host | First weekday | Hour cycle | Measurement | Numbering, region | Change signal |
 |------|---------------|------------|-------------|-------------------|---------------|
-| Windows | `LOCALE_IFIRSTDAYOFWEEK` | `H` in `LOCALE_STIMEFORMAT` | `LOCALE_IMEASURE` | digit substitution, user GeoID | `WM_SETTINGCHANGE` `"intl"` |
+| Windows | `LOCALE_IFIRSTDAYOFWEEK` | the hour letter of `LOCALE_STIMEFORMAT` | `LOCALE_IMEASURE` | `latn` when `LOCALE_IDIGITSUBSTITUTION` is never native, `LOCALE_SNATIVEDIGITS` when always native, the formats locale's `LOCALE_SISO3166CTRYNAME` | `WM_SETTINGCHANGE` |
 | macOS, iOS | `NSCalendar.currentCalendar.firstWeekday` | `j` skeleton of `dateFormatFromTemplate` | `NSLocaleMeasurementSystem` | `NSLocale` numbering, region | `NSCurrentLocaleDidChangeNotification` |
 | Android | `Calendar.getFirstDayOfWeek` | `DateFormat.is24HourFormat` | `LocaleData` | the locale's `-u-` keywords from API 34 | `ACTION_LOCALE_CHANGED`, a `TIME_12_24` observer |
-| Linux | `nl_langinfo` of `LC_TIME` | the portal's `clock-format` | `LC_MEASUREMENT` | none | portal `SettingChanged` |
+| Linux | through the region override | GNOME's `clock-format` through the portal | `LC_MEASUREMENT`'s region, when its units differ from the formats region's | the region of `LC_TIME` | portal `SettingChanged`; the environment is read once |
 | Web | `Intl.Locale.getWeekInfo` where present | `resolvedOptions().hourCycle` | none | none | `languagechange` |
 
-Each host parses its strings and flags in a pure `pub(crate)` function, tested on Linux. Not
-implemented: every row of this table.
+Each host parses its strings and flags in a pure `pub(crate)` function, tested on Linux. On
+Linux, `nl_langinfo` answers only for the locale `setlocale` made current, which is state of the
+whole process, so the region of `LC_TIME` is carried as the region override and a formatter
+takes the week and the clock from it; GNOME's clock format is the user's own setting on top. A
+field a host does not answer stays empty. Implemented: the Windows and Linux rows. Not
+implemented: the Apple, Android and Web rows.
 
 ### Consequences
 
@@ -129,6 +133,11 @@ implemented: every row of this table.
   `preference_rows_keep_their_json_spelling` (flui-testing), and
   `platform_recordings_replay_on_the_headless_host` (flui-native), carry the formats through
   both recordings.
+- `regional_reads_contract` (flui-native, `preferences::regional`) reads Windows' first-day,
+  measurement and native-digit codes, the hour letter of a time pattern outside its literals,
+  GNOME's clock format and the POSIX category locales, and gives a region override only for
+  another language's region. The native reads themselves are type-checked on Windows; a run on
+  a Windows machine and on a Linux desktop with a split `LC_TIME` is in the inventory.
 
 ## Pros and cons of the options
 
