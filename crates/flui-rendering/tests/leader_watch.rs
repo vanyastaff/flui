@@ -193,3 +193,20 @@ fn a_panicking_listener_keeps_the_next_delivery() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.complete()));
     assert_eq!((heard.get(), height(&watch)), (2, Some(30.0)));
 }
+
+/// A watch made after its leader painted starts from the committed geometry,
+/// though no later frame paints.
+///
+/// Red-check: start every watch at `None` (it stays `None` while the scene
+/// holds).
+#[test]
+fn a_late_watch_starts_from_the_committed_leader() {
+    let scene = Scene::new(20.0);
+    scene.paint();
+    scene.complete();
+    let watch = scene.watch(scene.link);
+    let heard = counted(&watch);
+    scene.paint();
+    scene.complete();
+    assert_eq!((heard.get(), height(&watch)), (0, Some(20.0)));
+}
