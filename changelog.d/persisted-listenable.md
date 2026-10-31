@@ -7,7 +7,8 @@
   may call any method of the document.
 - `Persisted::revision` is the revision of the value in memory while it is the stored one: the
   file's after a load, a set value's once the storage confirms it, `None` otherwise, so it always
-  names bytes on disk. `Revision::NONE` is the revision of a document that was never stored.
+  names bytes on disk, also when another document of its name in the runtime wrote last.
+  `Revision::NONE` is the revision of a document that was never stored.
 - `Persisted::downgrade` gives a `WeakPersisted<D>`, which does not keep the document alive, for
   the document's own listeners to hold; `WeakPersisted::upgrade` gives the document back while a
   clone still holds it.
@@ -19,4 +20,5 @@
 - A `Persisted` document whose frame hook panics while it queues work is left retryable, not stuck:
   an edit's save is watched again by the next edit, and an interrupted `start_over` is left failed
   with `StorageError::Cancelled`, so `retry` starts over. A save watch ended by such a panic no
-  longer keeps later writes from being watched.
+  longer keeps later writes from being watched, and a delivery such a panic ends leaves the next
+  one to come.

@@ -936,10 +936,24 @@ impl<D: Document> OpenDocument<D> {
     /// The revision of the value in memory, if it is the stored one.
     fn revision(&self) -> Option<Revision> {
         let state = self.state.borrow();
-        match (&state.status, &state.loaded) {
-            (SaveStatus::Clean, Some(loaded)) => Some(loaded.revision),
-            _ => None,
-        }
+        let (SaveStatus::Clean, Some(loaded)) = (&state.status, &state.loaded) else {
+            return None;
+        };
+        let Some((_, publisher)) = &self.registry else {
+            return Some(loaded.revision);
+        };
+        // `Clean` is the value's, shared with every document of its name in
+        // the runtime: the bytes on disk are this document's only when it
+        // wrote last, or, with nothing written since its load, when the
+        // stored version is still the one it loaded.
+        let on_disk = if state.published.is_some() {
+            publisher.committed_here() == Some(loaded.revision)
+        } else {
+            publisher
+                .committed()
+                .is_none_or(|(_, version)| version == loaded.base)
+        };
+        on_disk.then_some(loaded.revision)
     }
 
     /// What the listeners are told about, as it stands.
@@ -995,9 +1009,13 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
         return;
     };
     // Brought in line with the registry while still queued, so the refresh
-    // queues nothing more.
-    open.refresh();
+    // queues nothing more. A refresh that panics (a frame hook it wakes)
+    // ends this delivery, and the next announcement queues another.
     let announcer = &open.announcer;
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| open.refresh())) {
+        announcer.queued.set(false);
+        resume_unwind(payload);
+    }
     announcer.queued.set(false);
     let now = open.reported();
     let changed = {

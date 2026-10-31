@@ -1560,6 +1560,33 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
         "the next write is watched again: {:?}",
         heard.borrow()
     );
+
+    // A delivery queued by a load runs while the hook still panics: its
+    // refresh starts the watch an edit's panic left unstarted, and panics.
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    let barrier = storage.hold_commits();
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let edit = catch_unwind(AssertUnwindSafe(|| notes.set(Note("unwatched".into()))));
+    assert!(edit.is_err(), "the watch's spawn panics");
+    let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
+    driver.set_request_frame(|| {});
+    drop(delivery);
+    let heard = listen(&notes);
+    assert!(notes.set(Note("watched".into())).is_ok());
+    barrier.commit();
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        heard.borrow().last(),
+        Some(&SaveStatus::Clean),
+        "a delivery its refresh's panic ended leaves the next one to come: {:?}",
+        heard.borrow()
+    );
 }
 
 /// A document's listeners hear a commit by another document of its name in
@@ -1567,6 +1594,61 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
 #[test]
 fn a_commit_by_another_document_of_its_name_is_told() {
     let storage = MemoryStorage::new();
+    let (mut laid, outer, inner) = mount_two(&storage);
+    let heard = listen(&outer);
+
+    assert!(inner.set(Note("from inner".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [SaveStatus::Clean],
+        "the other document's commit is told"
+    );
+    assert_eq!(outer.committed(), inner.committed());
+    assert_eq!(
+        outer.revision(),
+        None,
+        "the outer document's value is no longer the one on disk"
+    );
+}
+
+/// With two documents of one name, a revision is named only by the document
+/// whose bytes the storage kept.
+#[test]
+fn a_revision_is_named_only_by_the_document_that_stored_it() {
+    let storage = MemoryStorage::new();
+    let (mut laid, first, second) = mount_two(&storage);
+
+    let barrier = storage.hold_commits();
+    assert!(first.set(Note("first, held".into())).is_ok());
+    laid.pump();
+    let replaced = second.set(Note("second, replaced".into()));
+    assert!(replaced.is_ok());
+    let kept = first.set(Note("first again".into()));
+    barrier.commit();
+    for _ in 0..4 {
+        laid.pump();
+    }
+    assert_eq!(second.status(), SaveStatus::Clean, "the value is stored");
+    assert_eq!(
+        storage
+            .contents(&Note::NAME)
+            .map(|bytes| bytes.ends_with(b"first again")),
+        Some(true),
+        "the first document wrote last"
+    );
+    assert_eq!(
+        second.revision(),
+        None,
+        "the second document's bytes were never stored"
+    );
+    assert_eq!(first.revision(), kept.ok(), "the first document's were");
+}
+
+/// Mount [`TwoOpeners`] over `storage` and load both documents.
+fn mount_two(storage: &MemoryStorage) -> (LaidOut, Persisted<Note>, Persisted<Note>) {
     let (outer, inner) = (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None)));
     let mut laid = lay_out_with_storage(
         TwoOpeners {
@@ -1574,7 +1656,7 @@ fn a_commit_by_another_document_of_its_name_is_told() {
             inner: Rc::clone(&inner),
         },
         tight(10.0, 10.0),
-        storage,
+        storage.clone(),
     );
     let outer = outer
         .borrow_mut()
@@ -1588,18 +1670,7 @@ fn a_commit_by_another_document_of_its_name_is_told() {
     assert!(drive(&mut laid, outer.load()).is_ok());
     assert!(drive(&mut laid, inner.load()).is_ok());
     laid.pump();
-    let heard = listen(&outer);
-
-    assert!(inner.set(Note("from inner".into())).is_ok());
-    laid.pump();
-    laid.pump();
-    laid.pump();
-    assert_eq!(
-        *heard.borrow(),
-        [SaveStatus::Clean],
-        "the other document's commit is told"
-    );
-    assert_eq!(outer.committed(), inner.committed());
+    (laid, outer, inner)
 }
 
 #[test]

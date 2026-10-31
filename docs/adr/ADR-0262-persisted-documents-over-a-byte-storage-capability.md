@@ -191,7 +191,9 @@ the document, so one that holds a clone of it keeps both alive for good; it hold
 
 `revision()` is the revision of the value in memory only while that value is the stored one: the
 file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
-confirms it, `None` before a load and while a write is in flight or failed. What the application
+confirms it, `None` before a load and while a write is in flight or failed. With two documents of
+one name in a runtime it is named only by the one whose bytes the storage kept: the one that wrote
+last, or one that wrote nothing whose loaded version is still stored. What the application
 records against it (a session's draft taken against a version of the data) therefore names bytes on
 disk: an edit lost before its write commits never matches what a later load reads back. With the
 `serde` feature a `Revision` serializes as its number for that record; `get()` is for display and
@@ -272,7 +274,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `revision_names_only_a_value_on_disk`, `a_listener_holding_a_weak_handle_lets_the_document_go`,
   `a_revision_round_trips_as_its_number` (with `serde`),
   `a_frame_hook_panic_while_queueing_leaves_later_changes_told`,
-  `a_commit_by_another_document_of_its_name_is_told`.
+  `a_commit_by_another_document_of_its_name_is_told`,
+  `a_revision_is_named_only_by_the_document_that_stored_it`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
