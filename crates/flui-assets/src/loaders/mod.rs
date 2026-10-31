@@ -6,7 +6,6 @@
 //! # Available Loaders
 //!
 //! - [`BytesFileLoader`] - Optimized loader for raw bytes from files
-//! - `NetworkLoader` - HTTP/HTTPS loading (requires `network` feature)
 //!
 //! # Examples
 //!
@@ -25,9 +24,5 @@
 //! ```
 //!
 pub mod file;
-#[cfg(feature = "network")]
-pub mod network;
 
 pub use file::BytesFileLoader;
-#[cfg(feature = "network")]
-pub use network::NetworkLoader;

@@ -101,7 +101,7 @@ allow = [
 # Allowed for one crate only, not added to `allow`:
 # - webpki-root-certs is Mozilla's root certificate store as data, under
 #   CDLA-Permissive-2.0, a permissive license written for data rather than
-#   code. It comes in through flui-assets' `network` feature (reqwest →
+#   code. It comes in through flui-app's `http` feature (reqwest →
 #   rustls-platform-verifier).
 exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
 

@@ -190,11 +190,11 @@ pub use icon::{
 };
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
-#[cfg(feature = "network-images")]
+#[cfg(feature = "asset-images")]
 pub use image::NetworkImage;
 pub use image::{
     DecodeJob, DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider,
-    ImageProviderError, ImageState, MemoryImage, Texture, TextureState,
+    ImageProviderError, ImageServices, ImageState, MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,

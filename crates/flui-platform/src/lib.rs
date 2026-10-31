@@ -124,6 +124,7 @@ mod frame_request;
 mod haptic_feedback;
 pub mod haptics;
 mod host_notice;
+pub mod http;
 mod ime;
 mod input;
 pub mod input_capabilities;

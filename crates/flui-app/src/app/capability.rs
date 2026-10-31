@@ -118,6 +118,10 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     registrar.provide::<BackgroundCapability>(HostBackground {
         slot: Rc::clone(&slots.execution),
     });
+    #[cfg(feature = "http")]
+    registrar.provide::<flui_platform::http::HttpCapability>(super::http_host::HostHttp::new(
+        Rc::clone(&slots.execution),
+    ));
     registrar.provide::<StorageCapability>(HostStorageProvider {
         slot: slots.storage.clone(),
     });

@@ -1,101 +1,42 @@
-//! `NetworkImage` end-to-end tests (`network-images` feature): a hermetic
-//! local HTTP server, no external network.
-//!
-//! Mirrors the hermetic-server pattern already established in
-//! `flui-assets`' own `NetworkLoader` test
-//! (`crates/flui-assets/src/loaders/network.rs`,
-//! `load_url_round_trips_bytes_from_a_hermetic_local_server`): a
-//! single-request, single-response HTTP/1.1 responder bound to an ephemeral
-//! loopback port, serving real PNG fixture bytes as the response body.
-#![cfg(feature = "network-images")]
+//! `NetworkImage` end-to-end tests (`asset-images` feature), fetched with a
+//! scripted HTTP client: no test reaches the network.
+#![cfg(feature = "asset-images")]
 
 #[path = "common/cases.rs"]
 mod cases;
 
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_assets::AssetRegistry;
-use flui_widgets::{Image, ImageProvider, NetworkImage};
+use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedHttp, ScriptedResponse};
+use flui_widgets::{Image, ImageProvider, ImageServices, NetworkImage};
 
 const DECODE_BUDGET: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+const URL: &str = "https://example.test/fixture.png";
 
-/// Absolute path to the committed 5x3 RGBA fixture PNG (shared with the
-/// synchronous `Image::file` test in `tests/image.rs`).
+/// The committed 5x3 RGBA fixture PNG (shared with the synchronous
+/// `Image::file` test in `tests/image.rs`).
 fn fixture_bytes() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png");
-    std::fs::read(path).expect("the committed fixture PNG must be readable")
+    include_bytes!("fixtures/tiny.png").to_vec()
 }
 
-/// Accepts exactly one connection, discards the request, writes `body` as a
-/// `200 OK` `image/png` response, then the listener thread exits. No mocking
-/// library, no external network — a real socket on an ephemeral loopback
-/// port.
-fn spawn_single_response_server(body: Vec<u8>) -> SocketAddr {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").expect("binding an ephemeral port must succeed");
-    let addr = listener
-        .local_addr()
-        .expect("a bound listener must report its local address");
-
-    std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
-        let mut buf = [0u8; 1024];
-        let _ = stream.read(&mut buf);
-
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.write_all(&body);
-        let _ = stream.flush();
-    });
-
-    addr
-}
-
-/// `Image::network` against a hermetic local server, on the background lanes
-/// a native host has by default: the request runs on the tokio IO lane and
-/// the decoded image lands in the registry. The headless host's own lanes
-/// run IO on the test thread, outside tokio, where a network load is a typed
-/// error instead (`docs/gaps.md`).
+/// `Image::network` on the headless host: the widget acquires the host's
+/// HTTP client, the request goes out from the deterministic lanes, which run
+/// no async runtime, and the decoded image lands in the registry.
 ///
-/// Red-check: run the load where it is polled instead of on the lanes (the
-/// owner thread has no reactor, and the image never decodes).
+/// Red-check: leave `HttpCapability` out of what `Image` acquires (the load
+/// answers `HttpUnavailable` and the image never decodes).
 #[test]
-fn network_image_loads_on_a_native_hosts_default_lanes() {
-    use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
-    use flui_platform::executor::Executor;
-    use flui_runtime::capability::CapabilityRegistry;
-    use flui_runtime::execution::ExecutionServices;
-    use flui_testing::{HeadlessHost, HeadlessWindow};
-    use flui_view::background::{Background, BackgroundCapability};
-
-    let addr = spawn_single_response_server(fixture_bytes());
+fn network_image_loads_with_the_hosts_http_client() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.http()
+        .respond(URL, ScriptedResponse::ok(fixture_bytes()));
     let registry = Arc::new(AssetRegistry::default());
-    let url = format!("http://{addr}/fixture.png");
-    let services = Arc::new(ExecutionServices::with_defaults());
-    let mut registrar = CapabilityRegistrar::new();
-    registrar.provide::<BackgroundCapability>(move |cx: &ProviderContext<'_>| {
-        Ok(Background::new(
-            Arc::clone(&services) as Arc<dyn Executor>,
-            cx.completions().clone(),
-        ))
-    });
-    let capabilities = CapabilityRegistry::builder()
-        .overrides(registrar)
-        .build()
-        .expect("one provider");
-    let mut host = HeadlessHost::with_capabilities(HeadlessWindow::new(100, 100), capabilities);
-    host.attach(&Image::network(Arc::clone(&registry), url.clone()))
+    host.attach(&Image::network(Arc::clone(&registry), URL))
         .expect("root attaches");
-    let source = flui_assets::ImageSource::Network(url.into());
+    let source = flui_assets::ImageSource::Network(URL.into());
     let deadline = Instant::now() + DECODE_BUDGET;
     while registry.cached_image(&source).is_none() {
         assert!(
@@ -107,6 +48,7 @@ fn network_image_loads_on_a_native_hosts_default_lanes() {
     }
     let image = registry.cached_image(&source).expect("the image is kept");
     assert_eq!((image.width(), image.height()), (5, 3));
+    assert_eq!(host.http().requests_to(URL), 1);
 }
 
 #[test]
@@ -128,75 +70,37 @@ fn pending_responses() {
     registry_responses(true);
 }
 
+/// Two registries fetch the same URL with clients that answer different
+/// images: a registry that served another's response would show the other
+/// image and send no request of its own.
 fn registry_responses(concurrent: bool) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("test runtime starts");
-    let listener = TcpListener::bind("127.0.0.1:0").expect("test listener binds");
-    listener
-        .set_nonblocking(true)
-        .expect("listener is nonblocking");
-    let url = format!(
-        "http://{}/identity.png",
-        listener.local_addr().expect("bound address")
+    let url = URL;
+    let first_http = ScriptedHttp::new();
+    first_http.respond(url, ScriptedResponse::ok(fixture_bytes()));
+    let second_http = ScriptedHttp::new();
+    second_http.respond(
+        url,
+        ScriptedResponse::ok(include_bytes!("fixtures/tiny_4x2.png").to_vec()),
     );
-    let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + DECODE_BUDGET;
-        for body in [
-            include_bytes!("fixtures/tiny.png").as_slice(),
-            include_bytes!("fixtures/tiny_4x2.png").as_slice(),
-        ] {
-            let mut stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "both registries must fetch");
-                        std::thread::sleep(POLL_INTERVAL);
-                    }
-                    Err(error) => panic!("accept failed: {error}"),
-                }
-            };
-            stream
-                .set_nonblocking(false)
-                .expect("accepted socket is blocking");
-            stream
-                .set_read_timeout(Some(DECODE_BUDGET))
-                .expect("read deadline");
-            stream
-                .set_write_timeout(Some(DECODE_BUDGET))
-                .expect("write deadline");
-            let mut header = Vec::new();
-            while !header.ends_with(b"\r\n\r\n") {
-                let mut byte = [0];
-                stream
-                    .read_exact(&mut byte)
-                    .expect("request header arrives");
-                header.push(byte[0]);
-                assert!(header.len() <= 16 * 1024, "bounded request header");
-            }
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .expect("response header writes");
-            stream.write_all(body).expect("PNG writes");
-        }
-    });
+    let first_services = ImageServices::new().with_http(first_http.handle());
+    let second_services = ImageServices::new().with_http(second_http.handle());
     let first_registry = Arc::new(AssetRegistry::default());
     let second_registry = Arc::new(AssetRegistry::default());
     let owner = Arc::downgrade(&first_registry);
-    let first = NetworkImage::new(Arc::clone(&first_registry), &url);
-    let second = NetworkImage::new(second_registry, &url);
+    let first = NetworkImage::new(Arc::clone(&first_registry), url);
+    let second = NetworkImage::new(second_registry, url);
     let retained_key = first.cache_key().expect("network provider has a key");
     let mut dimensions = runtime.block_on(async {
         let load = async {
             let (a, b) = if concurrent {
                 let (a, same_owner, b) = tokio::join!(
-                    first.resolve_async(None),
-                    first.clone().resolve_async(None),
-                    second.resolve_async(None)
+                    first.resolve_async(&first_services),
+                    first.clone().resolve_async(&first_services),
+                    second.resolve_async(&second_services)
                 );
                 let original = a.as_ref().expect("first image decodes");
                 let shared = same_owner.expect("same-owner image decodes");
@@ -207,12 +111,12 @@ fn registry_responses(concurrent: bool) {
                 );
                 (a, b)
             } else {
-                let a = first.resolve_async(None).await;
+                let a = first.resolve_async(&first_services).await;
                 assert!(
                     second.resolve().is_err(),
                     "another registry must not inherit the first registry's cached response"
                 );
-                let b = second.resolve_async(None).await;
+                let b = second.resolve_async(&second_services).await;
                 (a, b)
             };
             [a, b].map(|image| {
@@ -239,7 +143,8 @@ fn registry_responses(concurrent: bool) {
         first_dimensions,
         "another registry must not overwrite the first registry's cached response"
     );
-    server.join().expect("both HTTP requests served");
+    assert_eq!(first_http.requests_to(url), 1, "one request per registry");
+    assert_eq!(second_http.requests_to(url), 1, "one request per registry");
     drop(first);
     drop(first_registry);
     assert!(

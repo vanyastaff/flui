@@ -628,12 +628,14 @@ impl std::fmt::Debug for HeadlessDevAgent {
 pub use flui_view::__runtime::SESSION_END_BUDGET;
 
 /// The capabilities a headless host provides when it is given no registry:
-/// the clipboard and the primary selection, each scripted by the test.
+/// the clipboard, the primary selection and HTTP, each scripted by the test,
+/// so no test reaches the network.
 #[derive(Default)]
 struct ScriptedBuiltIns {
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
     background: HeadlessBackground,
+    http: crate::ScriptedHttp,
 }
 
 impl ScriptedBuiltIns {
@@ -642,6 +644,7 @@ impl ScriptedBuiltIns {
         self.clipboard.register(&mut registrar);
         self.primary_selection.register(&mut registrar);
         self.background.register(&mut registrar);
+        self.http.register(&mut registrar);
         registrar
     }
 }
@@ -1257,6 +1260,14 @@ impl HeadlessHost {
     #[must_use]
     pub fn clipboard(&self) -> crate::ScriptedClipboard {
         self.scripted.clipboard.clone()
+    }
+
+    /// The HTTP client the UI runtime hands its widgets: every request
+    /// answers what the test scripted for its URL, and no request reaches the
+    /// network.
+    #[must_use]
+    pub fn http(&self) -> crate::ScriptedHttp {
+        self.scripted.http.clone()
     }
 
     /// The primary selection the UI runtime hands its widgets.
