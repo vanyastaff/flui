@@ -4,8 +4,8 @@
 //! with tight cross-axis constraints derived from the sliver constraint space,
 //! then the child's main-axis size becomes the sliver scroll extent.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
+use flui_foundation::inspect::{Fields, Inspect};
 use flui_rendering::constraints::AxisDirection::{
     BottomToTop, LeftToRight, RightToLeft, TopToBottom,
 };
@@ -43,8 +43,15 @@ impl Default for RenderSliverToBoxAdapter {
 }
 
 // Geometry-only adapter: no configurable fields to surface. The committed
-// sliver geometry is layered onto the diagnostics node by the tree walk.
-impl Diagnosticable for RenderSliverToBoxAdapter {}
+// sliver geometry is layered onto the node by the tree walk.
+impl Inspect for RenderSliverToBoxAdapter {
+    fn kind(&self) -> &'static str {
+        "RenderSliverToBoxAdapter"
+    }
+
+    fn inspect(&self, _out: &mut Fields<'_>) {}
+}
+
 impl RenderSliver for RenderSliverToBoxAdapter {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;

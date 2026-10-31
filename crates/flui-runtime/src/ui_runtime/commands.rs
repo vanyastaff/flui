@@ -155,6 +155,17 @@ pub enum UiCommand {
         /// Where the stream goes.
         reply: super::agent::ReplySender<super::agent_events::EventStream>,
     },
+    /// Snapshot one of the addressed presentation's trees and answer on `reply`.
+    SemanticsAgentInspect {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// Which tree.
+        target: flui_view::dev_agent::InspectTarget,
+        /// The subtree, depth, node limit and detail level.
+        params: Box<flui_protocol::InspectParams>,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::InspectReading>,
+    },
     /// Resolve a locator over the addressed presentation's committed tree
     /// and answer on `reply`.
     SemanticsLocate {
@@ -282,6 +293,15 @@ impl std::fmt::Debug for UiCommand {
                 .debug_struct("UiCommand::SemanticsAgentSubscribe")
                 .field("presentation_id", presentation_id)
                 .field("filters", &filters.len())
+                .finish_non_exhaustive(),
+            UiCommand::SemanticsAgentInspect {
+                presentation_id,
+                target,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentInspect")
+                .field("presentation_id", presentation_id)
+                .field("target", target)
                 .finish_non_exhaustive(),
             // The locator's text stays out: it may be a label the app shows.
             UiCommand::SemanticsLocate {
@@ -663,12 +683,12 @@ impl UiRuntime {
     fn fail_agent_job<T>(
         &self,
         reply: &super::agent::ReplySender<T>,
-        element: flui_protocol::ElementId,
+        element: Option<flui_protocol::ElementId>,
         failure: super::AgentError,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {
         let answered = catch_unwind(AssertUnwindSafe(|| {
-            super::agent::send_reply(reply, Some(element), Err(failure));
+            super::agent::send_reply(reply, element, Err(failure));
         }))
         .err();
         let mut first_panic = Some(payload);
@@ -891,7 +911,7 @@ impl UiRuntime {
                             } else {
                                 super::AgentError::ResolvePanicked { element }
                             };
-                            self.fail_agent_job(&reply, element, failure, payload);
+                            self.fail_agent_job(&reply, Some(element), failure, payload);
                         }
                     }
                 }
@@ -938,7 +958,7 @@ impl UiRuntime {
                             } else {
                                 super::AgentError::ResolvePanicked { element }
                             };
-                            self.fail_agent_job(&reply, element, failure, payload);
+                            self.fail_agent_job(&reply, Some(element), failure, payload);
                         }
                     }
                 }
@@ -964,6 +984,43 @@ impl UiRuntime {
                     } else {
                         report.dropped_stale += 1;
                     }
+                }
+                UiCommand::SemanticsAgentInspect {
+                    presentation_id,
+                    target,
+                    params,
+                    reply,
+                } => {
+                    if matches!(target, flui_view::dev_agent::InspectTarget::Layers) {
+                        if self.park_agent_layer_read(presentation_id, &params, reply) {
+                            report.invoked += 1;
+                        } else {
+                            report.dropped_stale += 1;
+                        }
+                        continue;
+                    }
+                    // A render object's `debug_name` or an `inspect` override is app code: a
+                    // panic in it answers the request, then continues on the owner thread.
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        self.serve_agent_inspect(presentation_id, target, &params)
+                    }));
+                    let result = match served {
+                        Ok(result) => result,
+                        Err(payload) => {
+                            self.fail_agent_job(
+                                &reply,
+                                None,
+                                super::AgentError::InspectPanicked,
+                                payload,
+                            );
+                        }
+                    };
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result);
                 }
                 UiCommand::SemanticsLocate {
                     presentation_id,
@@ -1010,7 +1067,7 @@ impl UiRuntime {
                         } else {
                             super::AgentError::ResolvePanicked { element }
                         };
-                        self.fail_agent_job(&reply, element, failure, payload);
+                        self.fail_agent_job(&reply, Some(element), failure, payload);
                     }
                     let result = result.expect("BUG: no panic leaves the served result");
                     if result == Err(super::AgentError::PresentationGone) {

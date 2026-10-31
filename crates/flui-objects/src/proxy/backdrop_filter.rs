@@ -161,11 +161,18 @@ impl RenderBackdropFilter {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderBackdropFilter {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("filter", &self.filter);
-        builder.add_enum("blend_mode", self.blend_mode);
-        builder.add_flag("enabled", self.enabled, "enabled");
+impl flui_foundation::inspect::Inspect for RenderBackdropFilter {
+    fn kind(&self) -> &'static str {
+        "RenderBackdropFilter"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        use flui_foundation::inspect::Value;
+        // `ImageFilter` is a composite of blur, matrix and compose variants with no typed value;
+        // it is described by its `Debug`.
+        out.value("filter", Value::Debug(&self.filter));
+        out.field("blend_mode", &self.blend_mode);
+        out.field("enabled", &self.enabled).default(&true);
     }
 }
 

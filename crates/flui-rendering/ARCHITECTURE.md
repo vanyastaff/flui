@@ -42,7 +42,7 @@ and temporary ancestor descriptions, and survives a graft-to-rebuild fallback.
 This prevents an overwritten receiver or omitted contributor from destroying
 captures before the complete pass verdict. Healthy temporary pins retire after
 publication and phase completion; no second geometry/topology cache is created.
-`harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+`harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
 checks forced merge, overwritten receiver callbacks, single and competing
 destructor risks, unchanged publication and retry.
 
@@ -1071,7 +1071,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Alternatives considered:**
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
-- Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
+- Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Inspect> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
 - Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored. Filed as future work.
 
@@ -1507,14 +1507,12 @@ recursive Box and recursive Sliver boundaries without disabling leak checking.
 Recursive rows register actual children and then lay out a healthy replacement
 after the failed subtree retires.
 
-`layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
-a hostile destructor, competing field destructors, and a panicking subscriber
-alone or competing with the source aggregate. Each row then lays out a healthy
-replacement. Nonleaf rows attach actual children and use the public recursive
-layout driver. Sliver failures reach their Box host through the declared zero
-stand-in and degraded-geometry contract; replacement slivers provide their
-actual geometry. Bounded child processes isolate an old-source aggregate abort
-from the parent test runner.
+`layout_failures_are_reported_and_recovered_from` exercises an ordinary
+payload and a panicking subscriber on the leaf, Box and Sliver boundaries.
+Each row then lays out a healthy replacement. Nonleaf rows attach actual
+children and use the public recursive layout driver. Sliver failures reach their
+Box host through the declared zero stand-in and degraded-geometry contract;
+replacement slivers provide their actual geometry.
 
 ### Finite grid windows saturate index arithmetic before item bounds
 

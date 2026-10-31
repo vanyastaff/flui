@@ -108,6 +108,7 @@ const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
 mod agent_events;
+mod agent_inspect;
 mod agent_stability;
 mod agent_wait;
 mod attach;
@@ -126,6 +127,7 @@ pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_events::EventHub;
 pub use agent_events::EventStream;
+pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each, first_panic_of};
 pub(crate) use agent_stability::AgentStability;
 pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
@@ -547,7 +549,7 @@ impl Drop for UiRuntime {
         }
         if let Some(payload) = first {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

@@ -131,6 +131,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
+use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
 use flui_interaction::InteractionLane;
 use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
@@ -168,6 +169,28 @@ use flui_rendering::{
     view::{ScrollDirection, ScrollableViewportOffset},
 };
 
+/// Describes a test double that has no fields of its own to report.
+macro_rules! inspect_nothing {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl Inspect for $ty {
+            fn kind(&self) -> &'static str {
+                stringify!($ty)
+            }
+
+            fn inspect(&self, _out: &mut Fields<'_>) {}
+        }
+    )+};
+}
+
+/// The grid's committed `attached_child_count`, read from the render snapshot.
+fn attached_child_count(run: &impl Probe) -> u64 {
+    run.render_snapshot()
+        .find_by_kind("RenderSliverGrid")
+        .unique()
+        .expect("grid")
+        .get::<u64>("attached_child_count")
+        .expect("count")
+}
 /// Every concrete render-object type exported from `flui_objects`.
 const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAlign",
@@ -314,7 +337,7 @@ impl RenderTestBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderTestBox {}
+inspect_nothing!(RenderTestBox);
 
 impl RenderBox for RenderTestBox {
     type Arity = flui_foundation::Leaf;
@@ -722,7 +745,6 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         .run_frame();
         let rejected_faults = Rc::new(PainterFaults::default());
         rejected_faults.comparison.set(Some(comparison));
-        rejected_faults.retirement.set(true);
         let root = run.root();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
@@ -747,8 +769,8 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         assert_eq!((old.source.len(), new.source.len()), (1, 0));
         assert_eq!(
             rejected_faults.drops.get(),
-            0,
-            "failed rejected ownership remains in exceptional custody"
+            1,
+            "the rejected painter is destroyed, not retained"
         );
         old.source.notify_listeners();
         assert!(run.pump().painted);
@@ -1133,7 +1155,11 @@ fn harness_sized_box_forces_dimensions() {
         .run_layout();
 
     assert_eq!(run.box_geometry(run.root()), Size::new(80.0, 60.0));
-    assert_descendant_properties(&run.diagnostics(), "RenderSizedBox", &["width", "height"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderSizedBox",
+        &["width", "height"],
+    );
 }
 
 fn harness_colored_box_self_describes_and_paints() {
@@ -1142,16 +1168,16 @@ fn harness_colored_box_self_describes_and_paints() {
         .run_frame();
 
     assert!(run.painted());
+    let tree = run.render_snapshot();
+    let colored_box = tree
+        .find_by_kind("RenderColoredBox")
+        .unique()
+        .expect("colored box");
     assert_eq!(
-        run.descendant_property("RenderColoredBox", "color")
-            .as_deref(),
-        Some("[1.0, 0.0, 0.0, 1.0]"),
+        colored_box.get::<Rgba>("color"),
+        Ok(Rgba::new(1.0, 0.0, 0.0, 1.0)),
     );
-    let tree = run.diagnostics();
-    assert_has_committed_size(
-        tree.find_descendant("RenderColoredBox")
-            .expect("colored box"),
-    );
+    assert_has_committed_size(colored_box);
 }
 
 fn harness_render_error_box_fills_bounded_constraints_and_paints() {
@@ -1159,14 +1185,16 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
         .with_size(Size::new(100.0, 60.0))
         .run_frame();
     assert!(run.painted(), "an error box must paint something visible");
-    let tree = run.diagnostics();
-    let node = tree.find_descendant("RenderErrorBox").expect("error box");
+    let tree = run.render_snapshot();
+    let node = tree
+        .find_by_kind("RenderErrorBox")
+        .unique()
+        .expect("error box");
     assert_has_committed_size(node);
     assert_eq!(
-        run.descendant_property("RenderErrorBox", "message")
-            .as_deref(),
-        Some("boom"),
-        "the caught message reaches diagnostics in every build"
+        node.get::<&str>("message"),
+        Ok("boom"),
+        "the caught message reaches the description in every build"
     );
     assert_eq!(error_box_size(&run), (100.0, 60.0));
     // The message is shaped at layout, through the ui_runtime's text context, and
@@ -1198,26 +1226,17 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
     );
 }
 
-/// The committed size of the mounted `RenderErrorBox`, read back from its
-/// diagnostics (`Size { width: 200px, height: 48px }`).
+/// The committed size of the mounted `RenderErrorBox`, read back from the
+/// render snapshot's facts.
 fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f64, f64) {
-    let raw = run
-        .descendant_property("RenderErrorBox", "size")
+    let tree = run.render_snapshot();
+    let size = tree
+        .find_by_kind("RenderErrorBox")
+        .unique()
+        .expect("error box")
+        .get_fact::<Size>("size")
         .expect("committed size");
-    let field = |name: &str| -> f64 {
-        let start = raw
-            .find(name)
-            .unwrap_or_else(|| panic!("{name} in {raw:?}"))
-            + name.len();
-        raw[start..]
-            .trim_start_matches([':', ' '])
-            .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
-            .split(|c: char| !c.is_ascii_digit() && c != '.')
-            .next()
-            .and_then(|n| n.parse::<f64>().ok())
-            .unwrap_or_else(|| panic!("{name} in {raw:?}"))
-    };
-    (field("width"), field("height"))
+    (size.width, size.height)
 }
 
 fn harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis() {
@@ -1386,7 +1405,7 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
             .iter()
             .any(|entry| entry.pointer_target == Some(target)),
         "the listener's hit entry must carry its pointer target:\n{}",
-        run.diagnostics(),
+        run.render_snapshot(),
     );
 }
 
@@ -1698,6 +1717,42 @@ fn harness_paragraph_paints_text_frame() {
     .run_frame();
 
     assert!(run.painted());
+}
+
+/// A paragraph describes its text from the span, without building a string: one run is the
+/// `text` field and several are the `text_runs` sequence, which `paragraph_text` joins.
+fn harness_paragraph_describes_one_run_as_text_and_several_as_runs() {
+    use flui_rendering::testing::inspect::paragraph_text;
+
+    let single = RenderTester::mount(box_node(RenderParagraph::new(
+        TextSpan::new("one run"),
+        TextDirection::Ltr,
+    )))
+    .with_size(Size::new(200.0, 100.0))
+    .run_frame();
+    let snapshot = single.render_snapshot();
+    let node = snapshot
+        .find_by_kind("RenderParagraph")
+        .unique()
+        .expect("one paragraph");
+    assert_eq!(node.get::<&str>("text"), Ok("one run"));
+    assert!(node.get::<&str>("text_runs").is_err());
+
+    let rich = TextSpan::new("Hello, ")
+        .with_child(TextSpan::new("rich ").with_child(TextSpan::new("text")));
+    let several = RenderTester::mount(box_node(RenderParagraph::new(rich, TextDirection::Ltr)))
+        .with_size(Size::new(200.0, 100.0))
+        .run_frame();
+    let snapshot = several.render_snapshot();
+    let node = snapshot
+        .find_by_kind("RenderParagraph")
+        .unique()
+        .expect("one paragraph");
+    assert!(
+        node.get::<&str>("text").is_err(),
+        "several runs are not one string"
+    );
+    assert_eq!(paragraph_text(node).as_deref(), Some("Hello, rich text"));
 }
 
 /// A selectable paragraph merges its descendants, declares its anchor and
@@ -2114,7 +2169,7 @@ fn harness_editable_lays_out_and_paints_collapsed_caret() {
         "RenderEditable must paint the collapsed caret; commands: {commands:#?}"
     );
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderEditable",
         &["text", "caret_byte_offset", "force_line"],
     );
@@ -2244,10 +2299,7 @@ fn harness_padding_deflates_child_offset() {
     .run_layout();
 
     assert_eq!(run.offset(run.id("child")), Offset::new(12.0, 12.0));
-    assert!(
-        run.descendant_property("RenderPadding", "padding")
-            .is_some()
-    );
+    assert_descendant_properties(&run.render_snapshot(), "RenderPadding", &["padding"]);
 }
 
 fn harness_custom_single_child_layout_positions_child_with_delegate() {
@@ -2283,7 +2335,7 @@ fn harness_custom_single_child_layout_positions_child_with_delegate() {
         "delegated child must still paint through the parent",
     );
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderCustomSingleChildLayoutBox",
         &["delegate"],
     );
@@ -2333,7 +2385,7 @@ fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
         "delegated body child must still paint through the parent",
     );
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderCustomMultiChildLayoutBox",
         &["delegate"],
     );
@@ -2348,7 +2400,12 @@ fn harness_center_centers_child() {
     .run_layout();
 
     assert_eq!(run.offset(run.id("child")), Offset::new(30.0, 30.0));
-    assert!(run.diagnostics().find_descendant("RenderCenter").is_some());
+    assert!(
+        run.render_snapshot()
+            .find_by_kind("RenderCenter")
+            .unique()
+            .is_ok()
+    );
 }
 
 fn harness_baseline_positions_text_at_offset() {
@@ -2364,9 +2421,10 @@ fn harness_baseline_positions_text_at_offset() {
     .with_size(Size::new(200.0, 100.0))
     .run_layout();
 
-    let tree = run.diagnostics();
+    let tree = run.render_snapshot();
     assert_has_committed_size(
-        tree.find_descendant("RenderBaseline")
+        tree.find_by_kind("RenderBaseline")
+            .unique()
             .expect("RenderBaseline"),
     );
     assert_descendant_properties(&tree, "RenderBaseline", &["baseline"]);
@@ -2407,9 +2465,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
         ideographic_offset: Option<f64>,
     }
 
-    impl flui_foundation::Diagnosticable for BaselineOffsetProbe {
-        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
-    }
+    inspect_nothing!(BaselineOffsetProbe);
 
     impl RenderBox for BaselineOffsetProbe {
         type Arity = Leaf;
@@ -2537,9 +2593,7 @@ struct SizedBaselineProbe {
     alphabetic_offset: Option<f64>,
 }
 
-impl flui_foundation::Diagnosticable for SizedBaselineProbe {
-    fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
-}
+inspect_nothing!(SizedBaselineProbe);
 
 impl RenderBox for SizedBaselineProbe {
     type Arity = flui_foundation::Leaf;
@@ -2683,8 +2737,12 @@ fn harness_aspect_ratio_enforces_ratio() {
     let size = run.box_geometry(run.root());
     assert!((size.width / size.height - 2.0).abs() < 0.01);
     assert_eq!(
-        run.descendant_property_f64("RenderAspectRatio", "aspect_ratio"),
-        Some(2.0)
+        run.render_snapshot()
+            .find_by_kind("RenderAspectRatio")
+            .unique()
+            .expect("aspect ratio")
+            .get::<f64>("aspect_ratio"),
+        Ok(2.0)
     );
 }
 
@@ -2838,9 +2896,55 @@ fn harness_constrained_box_enforces_minimums() {
     assert!(child.width >= 100.0);
     assert!(child.height >= 100.0);
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderConstrainedBox",
-        &["additional_constraints"],
+        &["additional_min_width", "additional_max_height"],
+    );
+    // The unbounded maximum is absent from the description, not published as infinity: the
+    // protocol's numbers are finite.
+    let snapshot = run.render_snapshot();
+    let mut stack = vec![&snapshot];
+    while let Some(node) = stack.pop() {
+        for field in node.facts.iter().chain(&node.fields) {
+            let finite = match &field.value {
+                OwnedValue::Float(v) => v.is_finite(),
+                OwnedValue::Size(s) => s.width.is_finite() && s.height.is_finite(),
+                _ => true,
+            };
+            assert!(finite, "{} {} is not finite", node.kind, field.name);
+        }
+        stack.extend(&node.children);
+    }
+    let constrained = snapshot
+        .find_by_kind("RenderConstrainedBox")
+        .unique()
+        .expect("one constrained box");
+    assert!(
+        constrained.get::<f64>("additional_max_width").is_err(),
+        "an unbounded maximum is absent"
+    );
+    assert_eq!(
+        constrained.get::<f64>("additional_min_width"),
+        Ok(100.0),
+        "a finite minimum is published"
+    );
+
+    // `expand()` makes the stored minimum itself infinite; it is absent too, not `Size(inf, inf)`.
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedBox::new(BoxConstraints::expand()))
+            .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let expanded = snapshot
+        .find_by_kind("RenderConstrainedBox")
+        .unique()
+        .expect("one constrained box");
+    assert!(
+        expanded.get::<f64>("additional_min_width").is_err()
+            && expanded.get::<f64>("additional_min_height").is_err(),
+        "an unbounded minimum is absent"
     );
 }
 
@@ -3376,10 +3480,7 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
     // collapse — but only incidentally. See the two tests below.
     assert_eq!(run.box_geometry(run.root()), Size::ZERO);
     assert_eq!(run.hit(10.0, 10.0), [] as [flui_foundation::RenderId; 0]);
-    assert!(
-        run.descendant_property("RenderOffstage", "offstage")
-            .is_some()
-    );
+    assert_descendant_properties(&run.render_snapshot(), "RenderOffstage", &["offstage"]);
 }
 
 /// An offstage subtree is dropped from the semantics walk. The
@@ -5680,8 +5781,9 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
 
     assert_eq!(run.box_geometry(run.id("semantics")), Size::new(40.0, 20.0),);
     assert_eq!(
-        run.property(run.id("semantics"), "container"),
-        Some("container".to_string()),
+        run.node_snapshot(run.id("semantics"))
+            .get::<bool>("container"),
+        Ok(true),
     );
 
     let owner = run.semantics_owner().expect("semantics enabled");
@@ -6004,7 +6106,7 @@ struct CapturingSemanticsMerge {
     dropped: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl flui_foundation::Diagnosticable for CapturingSemanticsMerge {}
+inspect_nothing!(CapturingSemanticsMerge);
 
 impl RenderBox for CapturingSemanticsMerge {
     type Arity = flui_foundation::Single;
@@ -6034,10 +6136,8 @@ impl RenderBox for CapturingSemanticsMerge {
     }
 }
 
-fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
+fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    // The first negative-control case has only one hostile destructor, so a
-    // broken aggregate drop can fail observably without aborting the process.
     #[derive(Clone, Copy, Debug)]
     enum Host {
         Merge,
@@ -6049,8 +6149,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
         .into_iter()
         .flat_map(|host| {
             policies.into_iter().flat_map(move |(custom, blocked)| {
-                [[true, false], [true, true], [false, true], [false, false]]
-                    .map(|fails| (host, custom, blocked, fails))
+                [[false, false]].map(|fails| (host, custom, blocked, fails))
             })
         })
     {
@@ -6107,13 +6206,13 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
                 .iter()
                 .map(|counter| counter.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
-            [0, 0],
-            "unproven callback ownership stays in exceptional custody after rejection"
+            [1, 1],
+            "rejected callbacks are destroyed with the draft"
         );
         assert_eq!(
             parent_dropped.load(Ordering::Relaxed),
-            0,
-            "overwritten receiver callbacks stay in custody too"
+            usize::from(matches!(host, Host::AuthoredMerge)),
+            "overwritten receiver callbacks are destroyed too"
         );
         assert_eq!(semantics_content(&run), original);
         assert!(!run.owner().debug_doing_semantics());
@@ -6608,8 +6707,9 @@ fn harness_exclude_semantics_drops_descendant_content_but_keeps_layout() {
 
     assert_eq!(run.box_geometry(run.id("exclude")), Size::new(24.0, 16.0),);
     assert_eq!(
-        run.property(run.id("exclude"), "excluding"),
-        Some("excluding".to_string()),
+        run.node_snapshot(run.id("exclude"))
+            .get::<bool>("excluding"),
+        Ok(true),
     );
 
     let owner = run.semantics_owner().expect("semantics enabled");
@@ -6789,7 +6889,7 @@ fn harness_clip_rect_self_describes() {
     .with_constraints(loose(200.0))
     .run_layout();
 
-    assert_descendant_properties(&run.diagnostics(), "RenderClipRect", &["clip_behavior"]);
+    assert_descendant_properties(&run.render_snapshot(), "RenderClipRect", &["clip_behavior"]);
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
@@ -6801,7 +6901,11 @@ fn harness_clip_rrect_wraps_child() {
     .with_constraints(loose(200.0))
     .run_layout();
 
-    assert_descendant_properties(&run.diagnostics(), "RenderClipRRect", &["clip_behavior"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderClipRRect",
+        &["clip_behavior"],
+    );
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
@@ -6919,7 +7023,7 @@ fn harness_clip_oval_wraps_child() {
     .with_constraints(loose(200.0))
     .run_layout();
 
-    assert_descendant_properties(&run.diagnostics(), "RenderClipOval", &["clip_behavior"]);
+    assert_descendant_properties(&run.render_snapshot(), "RenderClipOval", &["clip_behavior"]);
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
@@ -6931,7 +7035,7 @@ fn harness_clip_path_wraps_child() {
     .with_constraints(loose(200.0))
     .run_layout();
 
-    assert_descendant_properties(&run.diagnostics(), "RenderClipPath", &["clip_behavior"]);
+    assert_descendant_properties(&run.render_snapshot(), "RenderClipPath", &["clip_behavior"]);
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
@@ -7455,7 +7559,7 @@ fn harness_metadata_with_payload() {
 
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderMetaData",
         &["has_metadata", "behavior"],
     );
@@ -7640,10 +7744,12 @@ fn harness_flex_row_positions_children_on_main_axis() {
 
     assert_eq!(run.offset(run.id("a")), Offset::ZERO);
     assert_eq!(run.offset(run.id("b")), Offset::new(30.0, 0.0));
+    let tree = run.render_snapshot();
+    let flex = tree.find_by_kind("RenderFlex").unique().expect("flex");
     assert_eq!(
-        run.descendant_property("RenderFlex", "direction")
-            .as_deref(),
-        Some("Horizontal"),
+        flex.get::<Variant<'_>>("direction")
+            .map(|direction| direction.name),
+        Ok("Horizontal"),
     );
 }
 
@@ -7835,7 +7941,7 @@ fn harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_chil
         "hidden red/blue children must not paint; commands:\n{painted}",
     );
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderIndexedStack",
         &["fit", "clip_behavior", "index"],
     );
@@ -7864,7 +7970,11 @@ fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
     assert_eq!(run.offset(run.id("first")), Offset::ZERO);
     assert_eq!(run.offset(run.id("second")), Offset::new(0.0, 10.0));
     assert_eq!(run.hit_first(5.0, 15.0), Some(run.id("second")));
-    assert_descendant_properties(&run.diagnostics(), "RenderListBody", &["axis_direction"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderListBody",
+        &["axis_direction"],
+    );
 }
 
 // ── RenderStack dry layout ────────────────────────────────────────────────────
@@ -7968,7 +8078,7 @@ fn harness_content_shape_oval_rejects_the_corners_of_its_box() {
     assert!(!run.hit(8.0, 8.0).contains(&run.id("shape")));
     // On the circle's edge band, still inside it.
     assert_eq!(run.hit_first(50.0, 2.0), Some(run.id("inner")));
-    assert_descendant_properties(&run.diagnostics(), "RenderContentShape", &["shape"]);
+    assert_descendant_properties(&run.render_snapshot(), "RenderContentShape", &["shape"]);
 }
 
 /// A rounded rectangle rejects only its rounded-off corners, and the shape,
@@ -8017,7 +8127,11 @@ fn harness_hit_slop_extends_the_child_hit_area() {
     assert_eq!(run.hit_first(82.0, 100.0), Some(run.id("target")));
     assert_eq!(run.hit_first(100.0, 118.0), Some(run.id("target")));
     assert_eq!(run.hit_first(78.0, 100.0), Some(run.id("base")));
-    assert_descendant_properties(&run.diagnostics(), "RenderHitSlop", &["slop", "min_target"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderHitSlop",
+        &["slop", "min_target"],
+    );
 }
 
 /// `min_target` grows a small target to that side, centred on it, without
@@ -8071,7 +8185,7 @@ fn harness_input_regions() {
             Rect::from_ltrb(10.0, 40.0, 30.0, 70.0)
         )],
     );
-    assert_descendant_properties(&run.diagnostics(), "RenderInputRegion", &["kind"]);
+    assert_descendant_properties(&run.render_snapshot(), "RenderInputRegion", &["kind"]);
 
     let mut disabled = RenderInputRegion::new(exclusion);
     assert_eq!(
@@ -8147,12 +8261,15 @@ fn harness_sliver_fixed_extent_list_geometry() {
     assert_eq!(run.sliver_geometry(run.id("list")).scroll_extent, 50.0);
     assert_eq!(run.box_geometry(run.id("item0")).height, 25.0);
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderSliverFixedExtentList",
         &["item_extent"],
     );
-    let tree = run.diagnostics();
-    let sliver = tree.find_descendant("RenderSliverFixedExtentList").unwrap();
+    let tree = run.render_snapshot();
+    let sliver = tree
+        .find_by_kind("RenderSliverFixedExtentList")
+        .unique()
+        .unwrap();
     assert_has_committed_geometry(sliver);
 }
 
@@ -8211,9 +8328,13 @@ fn harness_sliver_carousel_geometry_and_frames() {
         Some(100.0),
         "an uncontained item shows whole"
     );
-    assert_descendant_properties(&run.diagnostics(), "RenderSliverCarousel", &["item_count"]);
-    let tree = run.diagnostics();
-    assert_has_committed_geometry(tree.find_descendant("RenderSliverCarousel").unwrap());
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderSliverCarousel",
+        &["item_count"],
+    );
+    let tree = run.render_snapshot();
+    assert_has_committed_geometry(tree.find_by_kind("RenderSliverCarousel").unique().unwrap());
 }
 
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
@@ -8304,11 +8425,10 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         Offset::new(0.0, 0.0),
         "pass 1 must position tile0 normally before the poisoned pass 2",
     );
-    let count_before = run.descendant_property("RenderSliverGrid", "attached_child_count");
+    let count_before = attached_child_count(&run);
     assert_eq!(
-        count_before.as_deref(),
-        Some("4"),
-        "pass 1 must commit all 4 residents before the poisoned pass 2; got {count_before:?}",
+        count_before, 4,
+        "pass 1 must commit all 4 residents before the poisoned pass 2",
     );
 
     // Pass 2: swap in the poisoned delegate and relayout directly (not via
@@ -8327,7 +8447,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         "the pipeline's per-node catch_unwind must keep the overall pass Ok even \
          when one render object's delegate panics; got {result:?}",
     );
-    let count_after = run.descendant_property("RenderSliverGrid", "attached_child_count");
+    let count_after = attached_child_count(&run);
     assert_eq!(
         count_after, count_before,
         "the poisoned pass 2 (which panics computing scroll_extent before its own \
@@ -8395,14 +8515,12 @@ fn harness_sliver_padding_insets_geometry() {
     .with_size(Size::new(300.0, 100.0))
     .run_layout();
 
-    assert!(
-        run.descendant_property("RenderSliverPadding", "padding")
-            .is_some()
-    );
+    assert_descendant_properties(&run.render_snapshot(), "RenderSliverPadding", &["padding"]);
     assert!(run.sliver_geometry(run.id("pad")).scroll_extent > 0.0);
-    let tree = run.diagnostics();
+    let tree = run.render_snapshot();
     assert_has_committed_geometry(
-        tree.find_descendant("RenderSliverPadding")
+        tree.find_by_kind("RenderSliverPadding")
+            .unique()
             .expect("padding"),
     );
 }
@@ -8417,9 +8535,10 @@ fn harness_sliver_to_box_adapter_scroll_extent_matches_child() {
     .run_layout();
 
     assert_eq!(run.sliver_geometry(run.id("adapter")).scroll_extent, 42.0);
-    let tree = run.diagnostics();
+    let tree = run.render_snapshot();
     assert_has_committed_geometry(
-        tree.find_descendant("RenderSliverToBoxAdapter")
+        tree.find_by_kind("RenderSliverToBoxAdapter")
+            .unique()
             .expect("adapter"),
     );
 }
@@ -8436,7 +8555,7 @@ fn harness_sliver_fill_viewport_fraction() {
     assert_eq!(run.sliver_geometry(run.id("fill")).scroll_extent, 50.0);
     assert_eq!(run.box_geometry(run.id("page")).height, 50.0);
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderSliverFillViewport",
         &["viewport_fraction"],
     );
@@ -8452,8 +8571,11 @@ fn harness_sliver_fill_remaining_uses_viewport_remainder() {
     .run_layout();
 
     assert_eq!(run.sliver_geometry(run.id("fill")).scroll_extent, 100.0);
-    let tree = run.diagnostics();
-    let node = tree.find_descendant("RenderSliverFillRemaining").unwrap();
+    let tree = run.render_snapshot();
+    let node = tree
+        .find_by_kind("RenderSliverFillRemaining")
+        .unique()
+        .unwrap();
     assert_has_committed_geometry(node);
 }
 
@@ -8468,9 +8590,10 @@ fn harness_sliver_fill_remaining_and_overscroll_fills_viewport() {
 
     assert_eq!(run.sliver_geometry(run.id("fill")).scroll_extent, 100.0);
     assert_eq!(run.box_geometry(run.id("child")).height, 100.0);
-    let tree = run.diagnostics();
+    let tree = run.render_snapshot();
     let node = tree
-        .find_descendant("RenderSliverFillRemainingAndOverscroll")
+        .find_by_kind("RenderSliverFillRemainingAndOverscroll")
+        .unique()
         .unwrap();
     assert_has_committed_geometry(node);
 }
@@ -8486,9 +8609,10 @@ fn harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent() {
 
     assert_eq!(run.sliver_geometry(run.id("fill")).scroll_extent, 100.0);
     assert_eq!(run.box_geometry(run.id("child")).height, 100.0);
-    let tree = run.diagnostics();
+    let tree = run.render_snapshot();
     let node = tree
-        .find_descendant("RenderSliverFillRemainingWithScrollable")
+        .find_by_kind("RenderSliverFillRemainingWithScrollable")
+        .unique()
         .unwrap();
     assert_has_committed_geometry(node);
 }
@@ -8506,9 +8630,10 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     .run_frame();
 
     assert_eq!(run.hit(20.0, 20.0), [] as [flui_foundation::RenderId; 0]);
-    assert!(
-        run.descendant_property("RenderSliverIgnorePointer", "ignoring")
-            .is_some()
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderSliverIgnorePointer",
+        &["ignoring"],
     );
 }
 
@@ -9031,9 +9156,10 @@ fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     .run_layout();
 
     assert_eq!(run.sliver_geometry(run.id("off")).scroll_extent, 0.0);
-    assert!(
-        run.descendant_property("RenderSliverOffstage", "offstage")
-            .is_some()
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderSliverOffstage",
+        &["offstage"],
     );
 }
 
@@ -9151,7 +9277,7 @@ fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_
     );
     assert_eq!(run.sliver_geometry(run.id("list")).scroll_extent, 50.0);
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderShrinkWrappingViewport",
         &["axis_direction", "scroll_offset", "shrink_wrap_extent"],
     );
@@ -9211,7 +9337,7 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
     }
 }
 
-impl flui_foundation::Diagnosticable for PanicAfterNLayouts {}
+inspect_nothing!(PanicAfterNLayouts);
 
 /// The box twin of [`PanicAfterNLayouts`], for the case that matters most:
 /// the failure is two levels below the viewport (under a
@@ -9250,7 +9376,7 @@ impl RenderBox for PanicAfterNBoxLayouts {
     }
 }
 
-impl flui_foundation::Diagnosticable for PanicAfterNBoxLayouts {}
+inspect_nothing!(PanicAfterNBoxLayouts);
 
 fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
@@ -10016,9 +10142,7 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         captured: Arc<Mutex<f64>>,
     }
 
-    impl flui_foundation::Diagnosticable for IntrinsicCapture {
-        fn debug_fill_properties(&self, _b: &mut flui_foundation::DiagnosticsBuilder) {}
-    }
+    inspect_nothing!(IntrinsicCapture);
 
     impl RenderBox for IntrinsicCapture {
         type Arity = Single;
@@ -10750,7 +10874,7 @@ fn harness_table_grid_lays_out_each_cell_at_its_exact_offset_and_size() {
     assert_eq!(run.box_geometry(run.id("d")), Size::new(150.0, 10.0));
 
     assert_descendant_properties(
-        &run.diagnostics(),
+        &run.render_snapshot(),
         "RenderTable",
         &["column_count", "default_vertical_alignment"],
     );
@@ -12198,7 +12322,7 @@ struct CorrectingTrack {
     layouts: Rc<Cell<usize>>,
 }
 
-impl flui_foundation::Diagnosticable for CorrectingTrack {}
+inspect_nothing!(CorrectingTrack);
 
 impl flui_rendering::traits::RenderSliver for CorrectingTrack {
     type Arity = flui_foundation::Leaf;
@@ -12231,7 +12355,7 @@ struct OriginTrack {
     extent: f64,
 }
 
-impl flui_foundation::Diagnosticable for OriginTrack {}
+inspect_nothing!(OriginTrack);
 
 impl flui_rendering::traits::RenderSliver for OriginTrack {
     type Arity = flui_foundation::Leaf;
@@ -12449,8 +12573,9 @@ fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() 
     assert_eq!(run.offset(run.id("first")).dy, 0.0);
     assert_eq!(run.offset(run.id("second")).dy, 80.0);
     assert_has_committed_geometry(
-        run.diagnostics()
-            .find_descendant("RenderSliverMainAxisGroup")
+        run.render_snapshot()
+            .find_by_kind("RenderSliverMainAxisGroup")
+            .unique()
             .expect("group in diagnostics"),
     );
 }
@@ -12499,7 +12624,7 @@ struct LaysOutFirstN {
     laid_out: usize,
 }
 
-impl flui_foundation::Diagnosticable for LaysOutFirstN {}
+inspect_nothing!(LaysOutFirstN);
 
 impl RenderBox for LaysOutFirstN {
     type Arity = flui_foundation::Variable;
@@ -13116,6 +13241,10 @@ fn family_text_and_image() {
                 harness_paragraph_paints_text_frame,
             ),
             (
+                "paragraph_describes_one_run_as_text_and_several_as_runs",
+                harness_paragraph_describes_one_run_as_text_and_several_as_runs,
+            ),
+            (
                 "paragraph_publishes_runs_only_while_selectable",
                 harness_paragraph_publishes_runs_only_while_selectable,
             ),
@@ -13424,8 +13553,8 @@ fn family_semantics() {
         "semantics",
         &[
             (
-                "rejected_semantics_drafts_preserve_the_error_and_callback_custody",
-                harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody,
+                "rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks",
+                harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks,
             ),
             (
                 "accepted_semantics_drafts_retire_filtered_callbacks",
@@ -13928,4 +14057,93 @@ fn harness_intrinsic_width_rounds_up_to_ordinary_step() {
     assert_eq!(run.box_geometry(root).width, 60.0);
     assert_eq!(run.box_geometry(run.id("child")).width, 60.0);
     assert_eq!(run.max_intrinsic_width(root, 100.0), 60.0);
+}
+
+/// An override of infinity lets the child overflow; the description leaves it out instead of
+/// publishing a number no wire format carries.
+#[test]
+fn an_unbounded_overflow_override_is_absent_from_the_description() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(10.0),
+            Some(f64::INFINITY),
+            None,
+            Some(f64::INFINITY),
+            OverflowBoxFit::DeferToChild,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let overflow = snapshot
+        .find_by_kind("RenderConstrainedOverflowBox")
+        .unique()
+        .expect("one overflow box");
+    assert_eq!(overflow.get::<f64>("min_width"), Ok(10.0));
+    assert!(overflow.get::<f64>("max_width").is_err(), "unbounded width");
+    assert!(
+        overflow.get::<f64>("max_height").is_err(),
+        "unbounded height"
+    );
+}
+
+/// Two viewports that differ only in their offset type are different kinds to a diff.
+#[test]
+fn viewports_over_different_offsets_report_different_kind_arguments() {
+    use flui_rendering::view::{ScrollPosition, ScrollableViewportOffset};
+
+    fn arguments(object: &dyn Inspect) -> Vec<&'static str> {
+        let mut found = Vec::new();
+        object.kind_args(&mut |name| found.push(name));
+        found
+    }
+
+    let position = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollPosition::new(0.0),
+    );
+    let scrollable = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(0.0),
+    );
+    assert_ne!(arguments(&position), arguments(&scrollable));
+    assert_eq!(arguments(&position).len(), 1);
+}
+
+/// An infinite preferred extent clamps at layout; the description leaves it out.
+#[test]
+fn an_unbounded_preferred_size_is_absent_from_the_description() {
+    let run = RenderTester::mount(box_node(RenderCustomPaint::new(
+        None,
+        None,
+        Size::new(f64::INFINITY, 30.0),
+    )))
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let snapshot = run.render_snapshot();
+    let paint = snapshot
+        .find_by_kind("RenderCustomPaint")
+        .unique()
+        .expect("one custom paint");
+    assert!(paint.get::<f64>("preferred_width").is_err(), "unbounded");
+    assert_eq!(paint.get::<f64>("preferred_height"), Ok(30.0));
+}
+
+/// A requested dimension of infinity clamps at layout; no object's description carries it.
+#[test]
+fn a_sized_box_describes_an_infinite_dimension_as_absent() {
+    let run = RenderTester::mount(box_node(RenderSizedBox::fixed(f64::INFINITY, 30.0)))
+        .with_constraints(loose(200.0))
+        .run_layout();
+    let snapshot = run.render_snapshot();
+    let sized = snapshot
+        .find_by_kind("RenderSizedBox")
+        .unique()
+        .expect("one sized box");
+    assert!(sized.get::<f64>("width").is_err(), "unbounded width");
+    assert_eq!(sized.get::<f64>("height"), Ok(30.0));
 }

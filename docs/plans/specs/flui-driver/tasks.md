@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events are in review; the inspect jobs follow). FD28, FD29 and FD30 can start now.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 is in review). FD29 and FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -399,6 +399,19 @@ graph LR
     `EventStream` / `AgentEvents` with `try_next`, `recv_timeout` and `is_finished`. Left for
     FD6: `input` events (the journal). Left for the announcement fan-out: `announcement` events.
     `frame.time_us` is not filled.
+- **Evidence, inspect (2026-10-31):**
+  - `flui-foundation`'s `inspect::a_node_reference_prints_and_parses_as_one_text`.
+  - `flui-runtime`'s `ui_runtime::tests::agent_inspect`: `each_tree_answers_with_its_own_handles`,
+    `a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window`,
+    `a_reference_to_another_window_is_unknown_and_never_read_here`,
+    `a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone`,
+    `the_limits_cut_the_tree_and_say_so`, `a_deeper_level_adds_fields`,
+    `the_layers_are_read_from_the_next_scene_the_window_shows`,
+    `a_window_parks_a_bounded_number_of_layer_reads`,
+    `a_window_that_closed_answers_gone`.
+  - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
+    `inspect.layers` parks on the window and is answered from the next scene it shows; the wire
+    ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
 
@@ -819,6 +832,19 @@ graph LR
   - no test parses a rendered property;
   - any regenerated snapshots are explained in the PR;
   - `cargo xtask check-changed` is green across the dependents.
+- **Evidence:**
+  - Render objects, layers, `DisplayList`, `GpuFrameProfile` and the view render adapters implement `Inspect`;
+    `RenderObject` requires it. `rg Diagnosticable` finds only archival docs and ADR text.
+  - The tree walk takes a render node's kind from the object's own `Inspect::kind`, so generic objects
+    (`RenderClip<S>`) keep their name.
+  - `Value::Debug` fell from about 97 describing sites to 22 in 13 files; `cargo xtask inspect-debug`
+    holds each remaining count with its reason (composites such as `BoxDecoration`, `TextStyle`,
+    `ImageFilter`, user delegates and painters).
+  - `DebugPaintConfig` was deleted rather than moved: nothing used it.
+  - Consumers read typed fields; the facade exports `flui::Inspect` and `render_snapshot`. Explained field
+    changes: `selection` and `composing_range` are start/end pairs, `selection_handles` is
+    `start_handle`/`end_handle`, `constraints` is `constraints_min_width`/`constraints_min_height` with `constraints_max_width`/`constraints_max_height` (each absent when unbounded), string-valued flags
+    are bools or `Option`s.
 
 ### FD29. Tracing conventions and one span stream
 

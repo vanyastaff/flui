@@ -1,8 +1,8 @@
 //! RenderTexture — draws an external texture into its whole box.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Rect, Size};
+use flui_foundation::inspect::{Fields, Inspect};
 use flui_painting::paint::{FilterQuality, TextureId};
 use flui_rendering::{
     RenderUpdateImpact,
@@ -87,10 +87,14 @@ impl RenderTexture {
     }
 }
 
-impl Diagnosticable for RenderTexture {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add("texture", format!("{:?}", self.texture));
-        properties.add("revision", self.revision.to_string());
+impl Inspect for RenderTexture {
+    fn kind(&self) -> &'static str {
+        "RenderTexture"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("texture", &self.texture.get());
+        out.field("revision", &self.revision);
     }
 }
 

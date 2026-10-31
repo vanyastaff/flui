@@ -1,4 +1,4 @@
-//! Recovery owns opaque payloads before invoking factories and diagnostics.
+//! Recovery drops opaque payloads once it has recorded them, before invoking factories and diagnostics.
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, IntoView, LifecycleHook, RebuildReason,
     RecoveredAt, StatefulView, StatelessView, View, ViewExt, ViewState,
@@ -8,17 +8,16 @@ use std::{
     cell::Cell,
     rc::Rc,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-struct Bomb(Arc<AtomicUsize>);
-impl Drop for Bomb {
+struct DropCounted(Arc<AtomicUsize>);
+impl Drop for DropCounted {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("opaque build payload destroyed");
     }
 }
 
@@ -34,10 +33,7 @@ impl StatelessView for BuildSubject {
         self.calls.set(self.calls.get() + 1);
         if self.fail.get() {
             if self.aggregate {
-                std::panic::panic_any((
-                    Bomb(Arc::clone(&self.drops)),
-                    Bomb(Arc::clone(&self.drops)),
-                ));
+                std::panic::panic_any(DropCounted(Arc::clone(&self.drops)));
             }
             panic!("original build failure");
         }
@@ -113,53 +109,11 @@ impl<S: tracing::Subscriber> Layer<S> for FailedTelemetry {
             && event.metadata().target() == "flui_view::owner::element_owner"
         {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            std::panic::panic_any((Bomb(Arc::clone(&self.drops)), Bomb(Arc::clone(&self.drops))));
+            std::panic::panic_any(DropCounted(Arc::clone(&self.drops)));
         }
     }
 }
 
-// Each row has its own process; only the configured fn-pointer factory needs a slot.
-static CAPTURE_DROPS: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
-struct UnwindBomb(Arc<AtomicUsize>);
-impl Drop for UnwindBomb {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            panic!("recovery view destroyed during a reporting unwind");
-        }
-    }
-}
-#[derive(Clone)]
-struct CapturedErrorLeaf {
-    _envelope: Arc<(UnwindBomb, UnwindBomb)>,
-}
-impl flui_view::RenderView for CapturedErrorLeaf {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
-    type RenderObject = flui_objects::RenderSizedBox;
-    fn create_render_object(&self, _: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        flui_objects::RenderSizedBox::shrink()
-    }
-    fn update_render_object(
-        &self,
-        _: &flui_view::RenderObjectContext<'_>,
-        _: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-}
-impl View for CapturedErrorLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
-    }
-}
-fn captured_error_leaf(_: &flui_view::FrameworkError) -> Box<dyn View> {
-    let drops = CAPTURE_DROPS
-        .get()
-        .expect("child initialized factory captures");
-    Box::new(CapturedErrorLeaf {
-        _envelope: Arc::new((UnwindBomb(Arc::clone(drops)), UnwindBomb(Arc::clone(drops)))),
-    })
-}
 fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
     panic!("recovery factory failed")
 }
@@ -167,17 +121,10 @@ fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
 fn run_child(kind: &str) {
     let aggregate = kind.contains("payload") || kind == "factory";
     let telemetry = kind.contains("report") || kind == "staged";
-    let captured = kind == "captured_report";
     let original_drops = Arc::new(AtomicUsize::new(0));
     let report_drops = Arc::new(AtomicUsize::new(0));
-    let capture_drops = Arc::new(AtomicUsize::new(0));
     let report_calls = Arc::new(AtomicUsize::new(0));
-    let factory: Option<flui_view::ErrorViewBuilder> = if captured {
-        CAPTURE_DROPS
-            .set(Arc::clone(&capture_drops))
-            .expect("fresh child factory slot");
-        Some(captured_error_leaf)
-    } else if kind == "factory" {
+    let factory: Option<flui_view::ErrorViewBuilder> = if kind == "factory" {
         Some(failing_factory)
     } else {
         None
@@ -234,7 +181,7 @@ fn run_child(kind: &str) {
         );
     } else {
         result.expect("build failure is recovered despite diagnostic failure");
-        assert_recovery(&tree, &mut owner, root, &host, captured);
+        assert_recovery(&tree, &mut owner, root, &host);
     }
     if telemetry {
         assert!(
@@ -242,13 +189,23 @@ fn run_child(kind: &str) {
             "real recovery event reached subscriber"
         );
     }
-    assert_eq!(original_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(report_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        original_drops.load(Ordering::SeqCst),
+        usize::from(aggregate)
+    );
+    assert_eq!(
+        report_drops.load(Ordering::SeqCst),
+        report_calls.load(Ordering::SeqCst)
+    );
     assert_next_builds(&mut tree, &mut owner, root, &fail, &calls);
-    assert_eq!(original_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(report_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        original_drops.load(Ordering::SeqCst),
+        usize::from(aggregate)
+    );
+    assert_eq!(
+        report_drops.load(Ordering::SeqCst),
+        report_calls.load(Ordering::SeqCst)
+    );
 }
 
 fn assert_next_builds(
@@ -290,7 +247,6 @@ fn assert_recovery(
     owner: &mut BuildOwner,
     root: flui_foundation::ElementId,
     host: &Host,
-    captured: bool,
 ) {
     let recovered = owner.take_recovered_panics();
     assert_eq!(
@@ -310,11 +266,7 @@ fn assert_recovery(
             .expect("actual recovery child")
             .element()
             .view_type_id(),
-        if captured {
-            TypeId::of::<CapturedErrorLeaf>()
-        } else {
-            TypeId::of::<ErrorView>()
-        }
+        TypeId::of::<ErrorView>()
     );
     if host.init {
         assert_eq!(panic.hook, LifecycleHook::InitState);
@@ -374,21 +326,18 @@ fn child(kind: &str) {
 pub(crate) fn dispatch_child(kind: &str) {
     assert!(matches!(
         kind,
-        "payload" | "report" | "payload_report" | "captured_report" | "factory" | "staged"
+        "payload" | "report" | "payload_report" | "factory" | "staged"
     ));
     run_child(kind);
 }
-pub(crate) fn aggregate_build_payload_is_retained_before_recovery() {
+pub(crate) fn aggregate_build_payload_is_dropped_before_recovery() {
     child("payload");
 }
 pub(crate) fn recovery_reporting_preserves_original_attribution() {
     child("report");
 }
-pub(crate) fn original_and_reporting_payloads_do_not_compete_at_retirement() {
+pub(crate) fn original_and_reporting_payloads_are_dropped_independently() {
     child("payload_report");
-}
-pub(crate) fn recovery_view_survives_reporting_with_opaque_captures() {
-    child("captured_report");
 }
 pub(crate) fn recovery_factory_failure_keeps_its_authority_after_opaque_build_failure() {
     child("factory");

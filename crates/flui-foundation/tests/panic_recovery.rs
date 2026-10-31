@@ -76,28 +76,13 @@ impl Drop for HostileDrop {
     }
 }
 
-fn opaque_receipt_drop_preserves_custody() {
-    let drops = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&drops);
-    let mut recovery = PanicRecovery::new();
-    recovery
-        .scope()
-        .run_classified(FailureClass::Delivery, |_| {
-            std::panic::panic_any(HostileDrop(payload_drops));
-        });
-    let failure = recovery.into_failure().expect("opaque failure receipt");
-    drop(failure);
-    assert_eq!(
-        drops.load(Ordering::Relaxed),
-        0,
-        "opaque payload is retained"
-    );
-    let mut next = PanicRecovery::new();
-    assert!(next.scope().run_classified(FailureClass::Delivery, |_| {}));
-    assert!(
-        next.into_failure().is_none(),
-        "the next operation remains usable"
-    );
+/// An opaque panic payload that counts its destruction.
+struct Counted(Arc<AtomicUsize>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn unproved_retirement_does_not_inherit_a_delivery_claim() {
@@ -317,7 +302,7 @@ fn a_later_opaque_receipt_keeps_the_first_cause_and_adds_its_blocker() {
     let captured = Arc::clone(&drops);
     let mut source = PanicRecovery::new();
     source.scope().run_classified(FailureClass::Unknown, |_| {
-        std::panic::panic_any(HostileDrop(captured));
+        std::panic::panic_any(Counted(captured));
     });
     let receipt = source.into_failure().expect("opaque relay receipt");
     let mut receiver = PanicRecovery::new();
@@ -335,18 +320,18 @@ fn a_later_opaque_receipt_keeps_the_first_cause_and_adds_its_blocker() {
     drop(original);
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        0,
-        "opaque ownership is retained"
+        1,
+        "the later opaque payload is dropped, not retained"
     );
 }
 
-fn an_inherited_opaque_receipt_finishes_without_user_destruction() {
+fn an_inherited_opaque_receipt_finishes_without_a_new_unwind() {
     let drops = Arc::new(AtomicUsize::new(0));
     let captured = Arc::clone(&drops);
     let mut source = PanicRecovery::new();
     source.inherit_failure();
     source.scope().run_classified(FailureClass::Unknown, |_| {
-        std::panic::panic_any(HostileDrop(captured));
+        std::panic::panic_any(Counted(captured));
     });
     let receipt = source.into_failure().expect("inherited opaque receipt");
     let mut receiver = PanicRecovery::new();
@@ -357,11 +342,86 @@ fn an_inherited_opaque_receipt_finishes_without_user_destruction() {
     );
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        0,
-        "opaque ownership is retained"
+        1,
+        "the inherited opaque payload is dropped, not retained"
     );
 }
 
+struct CountedRetirement(Arc<AtomicUsize>);
+
+impl Drop for CountedRetirement {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// ADR-0281 §3: after a caught failure a retired value is destroyed, not
+/// leaked, and a destructor that panics there competes without replacing
+/// the first failure.
+fn a_value_retired_after_a_caught_failure_is_destroyed_under_containment() {
+    let healthy = Arc::new(AtomicUsize::new(0));
+    let hostile = Arc::new(AtomicUsize::new(0));
+    let mut recovery = PanicRecovery::new();
+    recovery.run(|| panic!("first failure"));
+    assert!(recovery.has_failure());
+    recovery.retire(CountedRetirement(Arc::clone(&healthy)));
+    assert_eq!(
+        healthy.load(Ordering::Relaxed),
+        1,
+        "a value retired after a caught failure is dropped"
+    );
+    recovery.retire(HostileDrop(Arc::clone(&hostile)));
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        1,
+        "its destructor ran under containment"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+        .expect_err("the first failure resumes");
+    assert_eq!(
+        resumed.downcast_ref::<&str>(),
+        Some(&"first failure"),
+        "the competing destructor panic does not replace the first failure"
+    );
+}
+
+/// ADR-0281 §3: a later callback's payload whose destructor panics is
+/// discarded under containment, so the next callback still runs and the
+/// first failure is the one resumed.
+fn a_later_payload_with_a_panicking_destructor_is_contained() {
+    let hostile = Arc::new(AtomicUsize::new(0));
+    let ran = Arc::new(AtomicUsize::new(0));
+    let mut recovery = PanicRecovery::new();
+    recovery.run(|| panic!("first failure"));
+    let payload = HostileDrop(Arc::clone(&hostile));
+    recovery.run(move || std::panic::panic_any(payload));
+    recovery.run(|| {
+        ran.fetch_add(1, Ordering::Relaxed);
+    });
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        1,
+        "the payload was destroyed"
+    );
+    assert_eq!(ran.load(Ordering::Relaxed), 1, "the next callback ran");
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+        .expect_err("the first failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
+
+    let folded = Arc::new(AtomicUsize::new(0));
+    let mut first = flui_foundation::panic::FirstPanic::default();
+    first.contain(|| panic!("first failure"));
+    let payload = HostileDrop(Arc::clone(&folded));
+    first.contain(move || std::panic::panic_any(payload));
+    assert_eq!(
+        folded.load(Ordering::Relaxed),
+        1,
+        "fold destroyed the later payload"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.resume()))
+        .expect_err("the first failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
+}
 #[test]
 fn recovery_preserves_provenance_and_owned_failure() {
     crate::run_table(&[
@@ -374,8 +434,12 @@ fn recovery_preserves_provenance_and_owned_failure() {
             computation_remains_authoritative_before_delivery,
         ),
         (
-            "opaque receipt custody",
-            opaque_receipt_drop_preserves_custody,
+            "retirement after a caught failure",
+            a_value_retired_after_a_caught_failure_is_destroyed_under_containment,
+        ),
+        (
+            "later payload with a panicking destructor",
+            a_later_payload_with_a_panicking_destructor_is_contained,
         ),
         (
             "unproved retirement",
@@ -423,7 +487,7 @@ fn recovery_preserves_provenance_and_owned_failure() {
         ),
         (
             "inherited opaque receipt",
-            an_inherited_opaque_receipt_finishes_without_user_destruction,
+            an_inherited_opaque_receipt_finishes_without_a_new_unwind,
         ),
     ]);
 }

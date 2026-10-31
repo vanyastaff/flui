@@ -19,6 +19,10 @@
   share its answer, so a failed host read is no empty clipboard and a burst of pastes holds one
   copy of the text. The read in flight is per UI runtime, kept in
   `ProviderContext::runtime_local`, the one place for a provider's per-runtime state.
+- **Amended:** 2026-10-31 — §6: a write is a `ClipboardWrite`, which a password manager marks
+  `concealed` to keep it out of the clipboard's history and cloud sync, and every backend answers
+  what it does with one as a `Concealment`, so an application can tell a system that honours the
+  mark from one where only some clipboard managers read it and one with no way to mark it.
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -490,6 +494,72 @@ The primary selection's handle and backend take the same types.
 - **Cost.** An answer takes one more owner job than before: the host's answer settles the shared
   read, which then resolves each reader.
 
+### 6. A write says whether it is concealed
+
+Amendment of 2026-10-31. A write was a `String`: a password manager that copied a secret put it
+in Windows' clipboard history and cloud clipboard, in macOS's and KDE's clipboard managers and on
+the user's other Apple devices, with no way to ask otherwise. A write now names what it asks:
+
+```rust
+#[non_exhaustive]
+pub struct ClipboardWrite { /* text, concealed */ }
+
+impl ClipboardWrite {
+    pub fn text(text: impl Into<String>) -> Self;
+    pub fn concealed(self) -> Self;
+    pub fn as_text(&self) -> &str;
+    pub fn is_concealed(&self) -> bool;
+    pub fn into_text(self) -> String;
+}
+
+#[non_exhaustive]
+pub enum Concealment { Honored, HintOnly, Unavailable }
+
+impl ClipboardHandle {
+    pub fn write(&self, write: ClipboardWrite);
+    pub fn write_text(&self, text: impl Into<String>); // write(ClipboardWrite::text(text))
+    pub fn concealment(&self) -> Concealment;
+}
+pub trait ClipboardBackend {
+    fn write(&self, write: ClipboardWrite);
+    fn concealment(&self) -> Concealment;
+    /* read_text */
+}
+```
+
+`flui_native::NativeClipboard` takes the same `write` and `concealment`, with `write_text` as its
+shorthand.
+
+- **A struct, not a flag.** A builder grows (an expiry, a second form of the text) without
+  another method on every backend, and `write_text` stays the short form for an ordinary copy.
+  Its `Debug` shows the length and the mark, never the text.
+- **What each host does.**
+
+  | Host | A concealed write | `concealment()` |
+  |------|-------------------|-----------------|
+  | Win32 | `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard`, each the DWORD 0, beside the text | `Honored` |
+  | AppKit | `org.nspasteboard.ConcealedType` and `org.nspasteboard.TransientType`, and `prepareForNewContentsWithOptions(CurrentHostOnly)`, which keeps it off the universal clipboard | `Honored` |
+  | UIKit | `setItems:options:` with `UIPasteboardOptionLocalOnly`; iOS keeps no history | `Honored` |
+  | `arboard` (winit) | its `exclude_from_history`: Win32's formats, the nspasteboard.org concealed type, KDE's hint | `Honored` on Windows, `HintOnly` elsewhere |
+  | X11, Wayland | the target or MIME type `x-kde-passwordManagerHint`, answered `secret` | `HintOnly` |
+  | Android | `ClipDescription.EXTRA_IS_SENSITIVE` in the clip's extras (API 24 and later) | `HintOnly`, `Unavailable` below API 24 |
+  | Web | an ordinary `writeText`: the Clipboard API has no mark; a debug build warns once per clipboard | `Unavailable` |
+  | Headless, in memory | the text; nothing keeps a history | `Honored` |
+
+- **Honored, HintOnly, Unavailable.** `Honored` is the system keeping the entry out of its own
+  history and sync. `HintOnly` is a mark only what reads it honours: a clipboard manager on
+  Linux, the copy preview and keyboards on Android. `Unavailable` is a host with no mark, where a
+  concealed write is an ordinary one. The answer is a property of the backend, constant for its
+  life, so an application asks before it offers to copy a secret, not after.
+- **A mark that fails drops the write.** On Win32 and AppKit the markers are set before the text,
+  in one clipboard session; a marker the system refuses leaves the clipboard empty rather than
+  hand the secret to the history. On Android a clip that could not be marked is not set.
+- **Gap 26 is a scenario.** `flui_native::testing::clipboard::a_concealed_write_stays_out_of_history`
+  is the one scenario every host's clipboard runs: the concealed write pastes back whole, and the
+  host's answer is not `Unavailable`. A host that answers `Unavailable` fails it as gap 26, which
+  its test names with `expect_fail(CONCEALED_WRITES, …)` rather than skipping it; that call fails
+  once the host conceals, so the fix closes the gap and the call together.
+
 ### As built
 
 The clipboard landing spells the shape of §3 as follows; the properties of §2 hold as written.
@@ -592,6 +662,16 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   (`flui-platform`: one value per type, every slot dropped at retirement though one panics, the
   first failure returned, nothing kept after);
   `a_wake_that_panics_mid_fan_out_leaves_the_other_readers_answered` (`flui-interaction`).
+- §6: `a_concealed_write_reaches_the_host_marked` (the `capability_seam` table of
+  `flui-testing`: the mark reaches the backend, an ordinary write clears it, the handle answers
+  the backend's `Concealment`); the scenario on each host:
+  `a_concealed_write_stays_out_of_the_headless_history`,
+  `a_concealed_write_offers_the_password_manager_hint` (X11 under Xvfb: `TARGETS` offers the hint
+  and it converts to `secret`, an ordinary write offers neither),
+  `the_selection_crosses_between_clients` (Wayland, with `a_concealed_source_offers_and_answers_the_hint`
+  for the offer and its answer), `a_concealed_write_is_an_ordinary_one_on_the_web`
+  (the expected failure), and `a_concealed_write_stays_out_of_the_windows_history` and
+  `a_concealed_write_stays_out_of_the_macos_history`, run on those hosts.
 
 ## Pros and cons of the options
 

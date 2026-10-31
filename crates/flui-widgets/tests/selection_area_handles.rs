@@ -205,6 +205,16 @@ impl Scene {
     }
 }
 
+/// Whether `paragraph` reports a link for both selection handles, read from its typed
+/// `start_handle` / `end_handle` fields.
+fn publishes_both_handles(laid: &LaidOut, paragraph: flui_foundation::RenderId) -> bool {
+    let node = laid.render_node(paragraph);
+    ["start_handle", "end_handle"].into_iter().all(|name| {
+        node.field(name)
+            .is_some_and(|field| field.value != flui_foundation::inspect::OwnedValue::None)
+    })
+}
+
 /// The laid-out width of `words` in the default style, the x of the caret
 /// after them in [`WORDS`].
 fn width_of(words: &str) -> f64 {
@@ -242,11 +252,10 @@ pub(crate) fn a_long_press_selects_a_word_and_shows_a_handle_under_each_end() {
         assert_eq!(info.text_direction, TextDirection::Ltr);
         assert!((info.line_height - line).abs() < 0.5, "{info:?} on {line}");
     }
-    let published = scene
-        .laid
-        .render_property(scene.paragraph(), "selection_handles")
-        .expect("the paragraph reports its handles");
-    assert!(!published.contains("None"), "{published}");
+    assert!(
+        publishes_both_handles(&scene.laid, scene.paragraph()),
+        "the paragraph reports its handles"
+    );
 }
 
 /// Dragging a handle moves its end and leaves the other; an end never
@@ -932,9 +941,10 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     assert_eq!(scene.handles(), 0);
 }
 
-/// Frame requests that fail both as the focus leaves the area (taking its
-/// handles away) and as the area then asks to rebuild are reported, not
-/// raised into the code that moved the focus, and the handles still go.
+/// Every frame request failing as the focus leaves the area (the focus
+/// nodes' own, the area's as it takes its handles away, and its rebuild) is
+/// reported, not raised into the code that moved the focus, and the handles
+/// still go.
 ///
 /// Red-check: let a failing frame request unwind into its caller (the
 /// focus move raises the failure).
@@ -950,11 +960,9 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
-            // The focus nodes' own rebuild requests come first and pass; the
-            // area's, as it hears the focus leave, fail.
             if arm.load(Ordering::SeqCst) {
                 let request = count.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(request <= 2, "frame request {request} failed");
+                panic!("frame request {request} failed");
             }
         });
     });
@@ -1172,11 +1180,10 @@ pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
     scene.settle();
     assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
     assert_eq!(scene.handles(), 2);
-    let ends = scene
-        .laid
-        .render_property(scene.paragraph(), "selection_handles")
-        .expect("the paragraph reports its handles");
-    assert!(!ends.contains("None"), "{ends}");
+    assert!(
+        publishes_both_handles(&scene.laid, scene.paragraph()),
+        "the paragraph reports its handles"
+    );
 }
 
 /// A listener that moves the focus away during a long press's extension

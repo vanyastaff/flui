@@ -1,12 +1,12 @@
 # flui_foundation documentation
 
-## Testing / diagnostics
+## Testing / inspection
 
 | Document | Topic |
 |----------|-------|
-| **[TESTING.md](./TESTING.md)** | `DiagnosticsNode` query API and `DiagnosticsBuilder` helpers for harness assertions |
+| **[TESTING.md](./TESTING.md)** | `Inspect`, `SnapshotNode` query API and `#[derive(Inspect)]` for harness assertions |
 
 ## Related
 
-- [flui-rendering/docs/TESTING.md](../../flui-rendering/docs/TESTING.md) — render harness using diagnostics
+- [flui-rendering/docs/TESTING.md](../../flui-rendering/docs/TESTING.md) — render harness using typed snapshots
 - [docs/testing.md](../../../docs/testing.md) — workspace testing guide

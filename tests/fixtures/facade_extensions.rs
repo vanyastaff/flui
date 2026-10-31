@@ -189,8 +189,9 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     ));
 }
 
-#[derive(Debug, flui::Diagnosticable)]
+#[derive(Debug, flui::Inspect)]
 struct SolidLeaf {
+    #[inspect(skip)]
     paints: Arc<AtomicUsize>,
 }
 
@@ -256,7 +257,7 @@ fn custom_render_view_mounts_lays_out_and_paints() {
     assert_eq!(paints.load(Ordering::SeqCst), 1);
 }
 
-#[derive(Debug, flui::Diagnosticable)]
+#[derive(Debug, flui::Inspect)]
 struct TransparentProxy {
     has_child: bool,
 }

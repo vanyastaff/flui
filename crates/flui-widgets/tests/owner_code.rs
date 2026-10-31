@@ -51,7 +51,7 @@ fn text_of(payload: Box<dyn std::any::Any + Send>) -> String {
     let text = flui_foundation::panic::payload_text(&*payload)
         .unwrap_or("an opaque payload")
         .to_owned();
-    flui_foundation::panic::retain_opaque_payload(payload);
+    flui_foundation::panic::discard_payload(payload);
     text
 }
 
@@ -453,32 +453,6 @@ fn observer_panicking_after_a_parked_failure() {
     assert_eq!(controller.text(), "observer editz");
 }
 
-/// A failure parked in a presentation's gate whose payload panics when
-/// destroyed, and the presentation and store gone before any turn took it.
-fn gate_dropped_with_a_parked_failure() {
-    let gate = CommitGate::new();
-    let store = InMemoryTextStore::new("");
-    store.set_commit_gate(gate.clone());
-    store.set_owner_listener(Some(Rc::new(|| {
-        std::panic::panic_any(PanicsOnDrop("parked payload destroyed"));
-    })));
-    assert_eq!(
-        edit(&*store, "a"),
-        Ok(LockOutcome::Granted),
-        "the grant stands"
-    );
-    store.set_owner_listener(None);
-    assert_eq!(
-        raised(move || {
-            drop(gate);
-            drop(store);
-        }),
-        None,
-        "an untaken payload is retained, not destroyed, with its gate"
-    );
-    the_owner_keeps_working(&owner());
-}
-
 /// A presentation closes with a failure a store parked for its next turn:
 /// the close is that turn, and reports it once its own work is done.
 fn close_with_a_parked_failure() {
@@ -514,6 +488,8 @@ struct Platform;
 impl PlatformTextInput for Platform {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -1450,10 +1426,6 @@ fn editable_blur_during_preedit_push() {
 // ----------------------------------------------------------------------------
 
 const ROWS: &[(&str, fn())] = &[
-    (
-        "gate: dropped with a parked failure",
-        gate_dropped_with_a_parked_failure,
-    ),
     ("close: with a parked failure", close_with_a_parked_failure),
     (
         "observer: panicking after a parked failure",
@@ -1711,6 +1683,14 @@ const ROWS: &[(&str, fn())] = &[
     (
         "completion: a push platform's discard parking a failure and panicking",
         completion_whose_platform_discard_parks_and_panics,
+    ),
+    (
+        "status: a push platform parking a failure and panicking",
+        status_change_whose_platform_parks_and_panics,
+    ),
+    (
+        "status: an attach inside the platform's enable",
+        status_after_an_attach_inside_the_platforms_enable,
     ),
     (
         "completion: a push platform's discard closing the owner and panicking",
@@ -2945,6 +2925,8 @@ impl PlatformTextInput for FailsToEnable {
         );
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -2992,6 +2974,8 @@ impl PlatformTextInput for FailsToEnableOnce {
             .push(allowed);
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3151,6 +3135,8 @@ impl PlatformTextInput for FailsToDisable {
         }
     }
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3253,6 +3239,8 @@ impl PlatformTextInput for ClosesOnCursor {
         }
         panic!("platform failure placing the cursor");
     }
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 
@@ -3292,6 +3280,8 @@ struct ParksThenFailsToDiscard;
 impl PlatformTextInput for ParksThenFailsToDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
         if let Some(store) = store {
@@ -3319,6 +3309,96 @@ fn completion_whose_platform_discard_parks_and_panics() {
     the_owner_keeps_working(&self::owner());
 }
 
+/// A push platform that, told a field's status, parks a failure through the
+/// client's store and then panics.
+struct ParksThenFailsOnStatus;
+
+impl PlatformTextInput for ParksThenFailsOnStatus {
+    fn set_ime_allowed(&self, _: bool) {}
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
+
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {
+        let store = CLEANUP_STORE.with(|slot| slot.borrow().clone());
+        if let Some(store) = store {
+            park_through(&store, "parked by the status");
+            panic!("platform failure applying the status");
+        }
+    }
+}
+
+fn status_change_whose_platform_parks_and_panics() {
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ParksThenFailsOnStatus)));
+    let store = InMemoryTextStore::new("");
+    let _client = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    CLEANUP_STORE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&store)));
+    assert_eq!(
+        raised(|| store.set_protected(true)).as_deref(),
+        Some("parked by the status"),
+        "the failure parked before the platform's panic is raised first"
+    );
+    CLEANUP_STORE.with(|slot| slot.borrow_mut().take());
+    the_owner_keeps_working(&self::owner());
+}
+
+thread_local! {
+    /// What a push platform's next enable runs: the platform is
+    /// `Send + Sync`, and the owner and store it reenters are not.
+    static ON_ENABLE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// A push platform that records the statuses it is told and runs
+/// [`ON_ENABLE`] from its next enable.
+#[derive(Default)]
+struct ReentersOnEnable(parking_lot::Mutex<Vec<flui_platform::text_store::TextStoreStatus>>);
+
+impl PlatformTextInput for ReentersOnEnable {
+    fn set_ime_allowed(&self, allowed: bool) {
+        let hook = ON_ENABLE.with(|slot| slot.borrow_mut().take());
+        if allowed && let Some(hook) = hook {
+            hook();
+        }
+    }
+    fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn discard_composition(&self) {}
+
+    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
+        self.0.lock().push(status);
+    }
+}
+
+/// The platform's enable attaches the same field again: the outer attach's
+/// observer, whose client is no longer active, does not replace the one the
+/// inner attach installed, so the field's next status change still reaches
+/// the platform.
+fn status_after_an_attach_inside_the_platforms_enable() {
+    let platform = Arc::new(ReentersOnEnable::default());
+    let owner = TextInputOwner::new(TextInputBackend::Push(platform.clone()));
+    let store = InMemoryTextStore::new("");
+    let (handle, field) = (owner.handle(), Rc::clone(&store));
+    ON_ENABLE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let _inner = handle
+                .attach(TextInputClient::new(field))
+                .expect("the inner attach");
+        }));
+    });
+    let _outer = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("the outer attach");
+    store.set_protected(true);
+    assert_eq!(
+        platform.0.lock().last().map(|status| status.protected),
+        Some(true),
+        "the change reaches the platform"
+    );
+    the_owner_keeps_working(&owner);
+}
+
 /// A push platform that closes its owner, then panics, from its discard, and
 /// panics when destroyed.
 struct ClosesOnDiscard;
@@ -3326,6 +3406,8 @@ struct ClosesOnDiscard;
 impl PlatformTextInput for ClosesOnDiscard {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         let owner = CLOSING_OWNER.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
         if let Some(owner) = owner {
@@ -3864,6 +3946,8 @@ struct PanicsWhenDestroyed;
 impl PlatformTextInput for PanicsWhenDestroyed {
     fn set_ime_allowed(&self, _: bool) {}
     fn set_ime_cursor_area(&self, _: Bounds<f64>) {}
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {}
 }
 

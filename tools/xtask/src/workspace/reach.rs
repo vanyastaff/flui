@@ -370,7 +370,9 @@ fn check(
         if !package.member {
             return None;
         }
-        by_name.get(package.name.as_str())?.tier.as_deref()
+        let member = by_name.get(package.name.as_str())?;
+        let tier = member.tier.as_deref()?;
+        Some(rules.set_name(tier, member.tier_kind.as_deref()))
     };
     let extras: BTreeMap<&str, Vec<Pattern>> = members
         .iter()
@@ -682,6 +684,7 @@ fn self_test_fixture() -> Fixture {
             &json!({ "reach-exceptions": [{ "to": "wgpu", "grant": "ADR-0081", "reason": "self-test" }] }),
         )
         .member("pkg1", "pkg", &json!(null))
+        .member("cap1", "pkg", &json!({ "tier-kind": "capability", "order": 2 }))
         .external("winit")
         .external("tokio")
         .external("wgpu")
@@ -703,6 +706,7 @@ fn self_test_fixture() -> Fixture {
         .dep("flui", "r-layer", Dep::normal())
         .dep("flui", "r-engine", Dep::normal())
         .dep("flui", "pkg1", Dep::normal())
+        .dep("flui", "cap1", Dep::normal())
         // planted: K -> winit
         .dep("k-plain", "winit", Dep::normal())
         // planted: K -> winit behind a feature only the facade's `harness`
@@ -730,10 +734,19 @@ fn self_test_fixture() -> Fixture {
         // planted: pkg -> a windows crate; silent: pkg -> generic FFI
         .dep("pkg1", "windows-core", Dep::normal())
         .dep("pkg1", "windows-sys", Dep::normal())
+        // silent: a capability crate reaches an OS crate its tier forbids;
+        // planted: it reaches winit, which its kind still forbids
+        .dep("cap1", "windows-core", Dep::normal())
+        .dep("cap1", "winit", Dep::normal())
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 11] = [
+const EXPECTED: [(&str, &str, &str); 12] = [
+    (
+        "cap1",
+        "winit",
+        "reaches under `flui --no-default-features`",
+    ),
     (
         "k-direct",
         "flui-native",

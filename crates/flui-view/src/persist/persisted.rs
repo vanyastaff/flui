@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::panic::payload_text;
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,
@@ -65,11 +65,12 @@ const BUSY_BACKOFF: [Duration; 5] = [
 /// or [`committed`](Self::committed) changes, so a widget can rebuild with
 /// them. They are told on a later turn of the UI runtime's tasks, never from
 /// inside a call on the document, and once for all the changes since the
-/// last time they were told; a change undone before then tells nobody. A
-/// listener may call any method of the document. The listeners belong to the
-/// state that opened the document: they are dropped when it unmounts, so one
-/// may hold a clone of the document, and a listener added after that is not
-/// kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
+/// last time they were told, also when the state is back on what they were
+/// told by then: a reader may have seen it in between. A call that changes
+/// nothing tells nobody. A listener may call any method of the document. The
+/// listeners belong to the state that opened the document: they are dropped
+/// when it unmounts, so one may hold a clone of the document, and a listener
+/// added after that is not kept. A [`WeakPersisted`] from [`downgrade`](Self::downgrade) reads the
 /// document without keeping it alive.
 pub struct Persisted<D: Document> {
     document: Rc<OpenDocument<D>>,
@@ -191,6 +192,10 @@ struct Announcer {
     told: RefCell<Reported>,
     /// Whether a delivery is queued and has not started yet.
     queued: Cell<bool>,
+    /// Whether the state moved off what the listeners were told since the
+    /// last delivery, even if it is back there now: a reader may have seen
+    /// the state in between, so the delivery tells them.
+    moved: Cell<bool>,
     /// The latest delivery's task.
     delivery: RefCell<Option<TaskToken>>,
     /// Set when the state that opened the document unmounts: nobody is
@@ -312,6 +317,7 @@ impl<D: Document> Persisted<D> {
                 notifier: ChangeNotifier::new(),
                 told: RefCell::new((status.clone(), committed, None)),
                 queued: Cell::new(false),
+                moved: Cell::new(false),
                 delivery: RefCell::new(None),
                 closed: Cell::new(false),
             },
@@ -412,7 +418,7 @@ impl<D: Document> Persisted<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 let error = PersistError::Panicked {
                     during: CodecStep::Encode,
                     message,
@@ -749,10 +755,10 @@ impl<D: Document> OpenDocument<D> {
                             self.fail(PersistError::Storage(StorageError::Cancelled));
                         }));
                         if let Err(again) = failed {
-                            retain_opaque_payload(again);
+                            flui_foundation::panic::discard_payload(again);
                         }
                         if std::thread::panicking() {
-                            retain_opaque_payload(payload);
+                            flui_foundation::panic::discard_payload(payload);
                             return;
                         }
                         resume_unwind(payload);
@@ -787,7 +793,7 @@ impl<D: Document> OpenDocument<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // The failure is recorded before the value's drop, which is
                 // application code and may panic in turn.
                 self.fail(PersistError::Panicked {
@@ -974,7 +980,7 @@ impl<D: Document> OpenDocument<D> {
                 Err(payload) => {
                     self.state.borrow_mut().watching = false;
                     if std::thread::panicking() {
-                        retain_opaque_payload(payload);
+                        flui_foundation::panic::discard_payload(payload);
                         return;
                     }
                     resume_unwind(payload);
@@ -1024,18 +1030,25 @@ impl<D: Document> OpenDocument<D> {
     }
 
     /// Queue a delivery to the listeners if what they were told no longer
-    /// stands and none is queued. Runs no listener: they run in the
-    /// delivery, on a later turn of the runtime's tasks.
+    /// stands, noting the move for a delivery already queued. Runs no
+    /// listener: they run in the delivery, on a later turn of the runtime's
+    /// tasks.
     fn announce(self: &Rc<Self>) {
         let announcer = &self.announcer;
         let Some(driver) = &self.driver else {
             return;
         };
-        if announcer.queued.get() || announcer.closed.get() {
+        if announcer.closed.get() {
             return;
         }
         let now = self.reported();
         if *announcer.told.borrow() == now {
+            return;
+        }
+        // Kept also while a delivery is queued: the state may be back on
+        // what was told by the time it runs.
+        announcer.moved.set(true);
+        if announcer.queued.get() {
             return;
         }
         let document = Rc::downgrade(self);
@@ -1049,7 +1062,7 @@ impl<D: Document> OpenDocument<D> {
             Ok(token) => token,
             Err(payload) => {
                 if std::thread::panicking() {
-                    retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     return;
                 }
                 resume_unwind(payload);
@@ -1072,7 +1085,7 @@ fn then_retire<T>(step: impl FnOnce(), replaced: T) {
     let stepped = catch_unwind(AssertUnwindSafe(step));
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
         if let Err(first) = stepped {
-            retain_opaque_payload(first);
+            flui_foundation::panic::discard_payload(first);
         }
         resume_unwind(payload);
     }
@@ -1099,7 +1112,7 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     let now = open.reported();
     let changed = {
         let mut told = announcer.told.borrow_mut();
-        let changed = *told != now;
+        let changed = announcer.moved.replace(false) || *told != now;
         *told = now;
         changed
     };
@@ -1312,7 +1325,7 @@ fn contained_initial<D: Document>() -> Result<D, PersistError> {
         let message = payload_text(&*payload)
             .unwrap_or("a panic without a message")
             .to_owned();
-        retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         PersistError::Panicked {
             during: CodecStep::Initial,
             message,
@@ -1347,7 +1360,7 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
             let message = payload_text(&*payload)
                 .unwrap_or("a panic without a message")
                 .to_owned();
-            retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             return Err(PersistError::Panicked {
                 during: CodecStep::Decode,
                 message,

@@ -11,6 +11,15 @@
 #[cfg(x11_host)]
 use std::borrow::Cow;
 
+/// The type a concealed write is offered under besides its text, on Wayland
+/// and X11 alike: KDE's password-manager hint, which Klipper, GNOME's
+/// clipboard extensions and other clipboard managers read to keep the entry
+/// out of their history (ADR-0152 §6).
+pub(crate) const CONCEALED_HINT: &str = "x-kde-passwordManagerHint";
+
+/// What [`CONCEALED_HINT`] answers.
+pub(crate) const CONCEALED_HINT_VALUE: &[u8] = b"secret";
+
 /// A form of text a selection is offered in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextForm {

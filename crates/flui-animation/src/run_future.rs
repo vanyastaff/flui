@@ -107,7 +107,7 @@ fn poll_resolution(
 }
 
 /// Keep chronological failure priority even when reporting it runs foreign
-/// tracing subscribers. Opaque secondary payloads cannot safely be destroyed.
+/// tracing subscribers. A later payload is dropped (ADR-0281).
 fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPayload) {
     let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let text =
@@ -124,32 +124,26 @@ fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPaylo
     if first.is_none() {
         *first = Some(payload);
     } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     if let Err(secondary) = reported {
-        flui_foundation::panic::retain_opaque_payload(secondary);
+        flui_foundation::panic::discard_payload(secondary);
     }
 }
 
-/// Call `invoke` on a continuation or waker, then retire it, each step inside
-/// its own `catch_unwind`. After any failure, or under `retain_after_failure`,
-/// the value is retained rather than dropped: its destructor is user code that
-/// must not run on a failed path.
+/// Call `invoke` on a continuation or waker, then drop it, each step inside its
+/// own `catch_unwind`. The first failure is recorded; a destructor that panics
+/// after an earlier failure is a competing failure and is dropped (ADR-0281).
 fn invoke_contained<T>(
     mut value: T,
     invoke: impl FnOnce(&mut T),
     first: &mut Option<PanicPayload>,
-    retain_after_failure: bool,
 ) {
     let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut value)));
     if let Err(payload) = called {
-        std::mem::forget(value);
         record_delivery_failure(first, payload);
-    } else if retain_after_failure || first.is_some() || std::thread::panicking() {
-        std::mem::forget(value);
-    } else if let Err(payload) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value)))
-    {
+    }
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
         record_delivery_failure(first, payload);
     }
 }
@@ -157,7 +151,7 @@ fn invoke_contained<T>(
 fn finish_delivery(first: Option<PanicPayload>) {
     if let Some(payload) = first {
         if std::thread::panicking() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             std::panic::resume_unwind(payload);
         }
@@ -170,16 +164,15 @@ fn deliver_now(
     outcome: Result<(), RunCanceled>,
     continuations: Vec<Continuation>,
     waiters: Slab<std::task::Waker>,
-    retain_after_failure: bool,
 ) {
     let mut first = None;
     for continuation in continuations {
         let call = |continuation: &mut Continuation| continuation(outcome);
-        invoke_contained(continuation, call, &mut first, retain_after_failure);
+        invoke_contained(continuation, call, &mut first);
     }
     for (_, waker) in waiters {
         let wake = |waker: &mut std::task::Waker| waker.wake_by_ref();
-        invoke_contained(waker, wake, &mut first, retain_after_failure);
+        invoke_contained(waker, wake, &mut first);
     }
     finish_delivery(first);
 }
@@ -272,7 +265,7 @@ impl AnimationRunFuture {
         drop(state);
         let mut first = None;
         let outcome = resolved.as_output();
-        invoke_contained(f, |f| f(outcome), &mut first, false);
+        invoke_contained(f, |f| f(outcome), &mut first);
         finish_delivery(first);
     }
 }
@@ -313,11 +306,7 @@ impl Drop for AnimationRunFuture {
                 None
             }
         };
-        if std::thread::panicking() {
-            std::mem::forget(retired);
-        } else {
-            drop(retired);
-        }
+        drop(retired);
     }
 }
 
@@ -389,7 +378,7 @@ impl RunCompleter {
 impl Drop for RunCompleter {
     fn drop(&mut self) {
         if let Some((continuations, waiters)) = self.publish(Resolved::Canceled) {
-            deliver_now(Err(RunCanceled), continuations, waiters, false);
+            deliver_now(Err(RunCanceled), continuations, waiters);
         }
     }
 }
@@ -448,37 +437,23 @@ impl RunDelivery {
     /// replacing that unwind. A second call, or a `Drop` after this one, is
     /// a no-op.
     pub(crate) fn deliver(mut self) {
-        self.run(false);
+        self.run();
     }
 
-    /// Deliver accepted continuations and wake waiters while an enclosing
-    /// recovery boundary already owns a failure. Retain callback captures and
-    /// owning wakers even when their invocation succeeds (ADR-0127): catching
-    /// the enclosing failure made `thread::panicking()` false, but retiring an
-    /// opaque aggregate could still abort before that boundary regains control.
-    ///
-    /// The outcome and invocation order are unchanged. Any delivery failure is
-    /// raised after the tail; the enclosing boundary must preserve its earlier
-    /// failure. Use [`deliver`](Self::deliver) for normal delivery so healthy
-    /// captures retire normally.
-    pub(crate) fn deliver_after_failure(mut self) {
-        self.run(true);
-    }
-
-    fn run(&mut self, retain_after_failure: bool) {
+    fn run(&mut self) {
         if self.delivered {
             return;
         }
         self.delivered = true;
         let continuations = std::mem::take(&mut self.continuations);
         let waiters = std::mem::take(&mut self.waiters);
-        deliver_now(self.outcome, continuations, waiters, retain_after_failure);
+        deliver_now(self.outcome, continuations, waiters);
     }
 }
 
 impl Drop for RunDelivery {
     fn drop(&mut self) {
-        self.run(false);
+        self.run();
     }
 }
 

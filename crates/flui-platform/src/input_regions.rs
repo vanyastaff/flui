@@ -12,6 +12,7 @@ use flui_foundation::geometry::{DevicePixelRatio, DeviceRect, Rect, device_rect_
 /// What the OS should do with an input region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum InputRegionKind {
     /// The OS does not start its own edge gestures (Android back and home swipes, iOS
     /// screen-edge gestures) inside the region, so the application's gesture there wins.

@@ -593,6 +593,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::Brightness;",
         "pub use flui_platform::ClipboardError;",
         "pub use flui_platform::ClipboardRead;",
+        "pub use flui_platform::ClipboardWrite;",
+        "pub use flui_platform::Concealment;",
         "pub use flui_platform::DurationScale;",
         "pub use flui_platform::EventTime;",
         "pub use flui_platform::GesturePreferences;",

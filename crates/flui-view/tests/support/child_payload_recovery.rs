@@ -1,4 +1,4 @@
-//! Real dense child recovery retains opaque failure ownership before cleanup.
+//! Real dense child recovery drops its opaque failure payload once it is recorded.
 use super::dense_reconcile_containment::{DenseHealthyLeaf, DenseRow};
 use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
@@ -19,15 +19,14 @@ use std::{
 };
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-struct Bomb(Arc<AtomicUsize>);
-impl Drop for Bomb {
+struct DropCounted(Arc<AtomicUsize>);
+impl Drop for DropCounted {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("opaque child payload destroyed");
     }
 }
 fn fail(drops: &Arc<AtomicUsize>) -> ! {
-    std::panic::panic_any((Bomb(Arc::clone(drops)), Bomb(Arc::clone(drops))));
+    std::panic::panic_any(DropCounted(Arc::clone(drops)));
 }
 
 #[derive(Clone, Copy)]
@@ -147,8 +146,12 @@ pub(crate) fn dispatch_child(kind: &str) {
     let result = tracing::subscriber::with_default(subscriber, || {
         catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)))
     });
-    assert_eq!(original_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(report_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        original_drops.load(Ordering::SeqCst),
+        usize::from(!factory),
+        "the recorded payload is dropped; a failing factory still retains it"
+    );
+    assert_eq!(report_drops.load(Ordering::SeqCst), usize::from(telemetry));
     if factory {
         let payload = result.expect_err("factory failure remains authoritative");
         assert_eq!(
@@ -213,7 +216,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         TypeId::of::<Subject>()
     );
     assert!(owner.take_recovered_panics().is_empty());
-    assert_eq!(original_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(original_drops.load(Ordering::SeqCst), usize::from(!factory));
 }
 
 pub(super) fn run_child(variable: &str, kind: &str) {
@@ -270,13 +273,13 @@ pub(super) fn run_child(variable: &str, kind: &str) {
 fn run(kind: &str) {
     run_child("FLUI_CHILD_PAYLOAD_RECOVERY_CHILD", kind);
 }
-pub(crate) fn create_payload_is_retained_before_child_recovery() {
+pub(crate) fn create_payload_is_dropped_before_child_recovery() {
     run("create");
 }
-pub(crate) fn mounted_payload_is_retained_before_child_cleanup() {
+pub(crate) fn mounted_payload_is_dropped_before_child_cleanup() {
     run("render_mount");
 }
-pub(crate) fn update_payload_is_retained_before_child_cleanup() {
+pub(crate) fn update_payload_is_dropped_before_child_cleanup() {
     run("update");
 }
 pub(crate) fn create_payload_cannot_compete_with_factory_failure() {
@@ -288,12 +291,12 @@ pub(crate) fn mounted_payload_cannot_compete_with_factory_failure() {
 pub(crate) fn update_payload_cannot_compete_with_factory_failure() {
     run("update_factory");
 }
-pub(crate) fn create_and_reporting_payloads_are_retained_independently() {
+pub(crate) fn create_and_reporting_payloads_are_dropped_independently() {
     run("create_report");
 }
-pub(crate) fn mounted_and_reporting_payloads_are_retained_independently() {
+pub(crate) fn mounted_and_reporting_payloads_are_dropped_independently() {
     run("render_mount_report");
 }
-pub(crate) fn update_and_reporting_payloads_are_retained_independently() {
+pub(crate) fn update_and_reporting_payloads_are_dropped_independently() {
     run("update_report");
 }

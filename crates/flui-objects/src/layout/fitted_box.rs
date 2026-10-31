@@ -339,14 +339,16 @@ impl Default for RenderFittedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFittedBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("fit", self.fit);
-        builder.add(
-            "alignment",
-            format!("({}, {})", self.alignment.x, self.alignment.y),
-        );
-        builder.add_enum("clip_behavior", self.clip_behavior);
+impl flui_foundation::inspect::Inspect for RenderFittedBox {
+    fn kind(&self) -> &'static str {
+        "RenderFittedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("fit", &self.fit);
+        out.field("alignment", &self.alignment)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("clip_behavior", &self.clip_behavior);
     }
 }
 

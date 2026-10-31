@@ -2200,7 +2200,10 @@ fn platform_replacement_contains_reentrant_retirement() {
         ) {
             drop(answer);
         }
-        fn write_text(&self, _: String) {}
+        fn write(&self, _: flui_platform::ClipboardWrite) {}
+        fn concealment(&self) -> flui_platform::Concealment {
+            flui_platform::Concealment::Honored
+        }
     }
     impl Drop for RetiredProducer {
         fn drop(&mut self) {

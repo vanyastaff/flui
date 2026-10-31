@@ -76,10 +76,22 @@ impl RenderAnimatedDecoratedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedDecoratedBox {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("decoration", self.decoration());
-        properties.add_default_enum("position", self.position, DecorationPosition::Background);
+impl flui_foundation::inspect::Inspect for RenderAnimatedDecoratedBox {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedDecoratedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // `BoxDecoration` has no typed mapping; it is described by its `Debug`.
+        // The sample is read where it is cached: describing it clones nothing.
+        self.decoration.with(|decoration| {
+            out.value(
+                "decoration",
+                flui_foundation::inspect::Value::Debug(decoration),
+            );
+        });
+        out.field("position", &self.position)
+            .default(&DecorationPosition::Background);
     }
 }
 

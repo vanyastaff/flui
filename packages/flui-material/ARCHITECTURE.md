@@ -618,9 +618,6 @@ rebuild probes have distinct mounted owner inboxes so each fanout wake is
 observable. Their private map registration is a delivery fault seam, not
 supported cross-UI runtime Messenger topology. Rows check the first failure, every
 eligible delivery, actual subsequent rebuilds and accepted queue progress.
-Four bounded children add hostile secondary payloads with several panicking
-destructors and assert that none retire before or after recovery. Readiness is
-published after mounting; setup and operation have separate deadlines.
 
 
 ### Drawer drag extent follows its constrained declared panel width

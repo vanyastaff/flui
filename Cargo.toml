@@ -47,6 +47,7 @@ members = [
     "packages/flui-cupertino", # Cupertino theming and widget family
     "packages/flui-devtools",  # Profiler, timeline and inspector counters
     "crates/flui-hot-reload",  # Hot reload; an official package still under crates/ (AGENTS.md)
+    "crates/flui-system",      # Capability crate: launcher and file dialogs (ADR-0154)
 
     # Examples and tools (tier-kind = "tool")
     "examples/desktop_scene",                # Hot-reloadable scene plugin, loaded by HotReloadDriver
@@ -172,6 +173,12 @@ forbid = [
     "android_*",
 ]
 
+# A capability crate sits in tier pkg and carries its own OS code, so this set
+# replaces pkg's for it: OS crates pass, the hosts, the window and GPU stacks
+# and tokio do not (ADR-0154 §1).
+[workspace.metadata.flui.reach.kind.capability]
+forbid = ["flui-native", "flui-app", "flui-engine", "winit", "wgpu", "tokio"]
+
 [workspace.package]
 version = "0.2.0-dev"
 edition = "2024"
@@ -183,7 +190,9 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
-zbus = { version = "6", default-features = false, features = ["proxy", "tokio"] }
+# D-Bus on its own runtime, not tokio: the features unify, and a capability
+# crate must not reach tokio (ADR-0154 §1). zbus still awaits fine on tokio.
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adopted with the unified execution services,
 # ADR-0047, issue #557). `default-features = false` and no
@@ -753,7 +762,6 @@ workspace = true
 # layer (10) is above the design systems (7), so these edges point down
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
-flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
 flui-platform = { workspace = true }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
@@ -768,6 +776,9 @@ flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 flui-testing = { workspace = true, optional = true }
 flui-material = { path = "packages/flui-material", version = "=0.2.0-dev", optional = true }
 flui-cupertino = { path = "packages/flui-cupertino", version = "=0.2.0-dev", optional = true }
+# Capability crates (ADR-0154 §8): the facade alone names them, each behind
+# the feature of its name under `flui::services`.
+flui-system = { path = "crates/flui-system", version = "=0.2.0-dev", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -826,6 +837,11 @@ default = []
 # import site rather than a mystery empty namespace.
 material = ["dep:flui-material"]
 cupertino = ["dep:flui-cupertino"]
+
+# === Capability crates (ADR-0154 §8) ===
+# Off by default like every capability (ADR-0088 §6): `system` gives
+# `flui::services::system`, the providers of the launcher and the file dialogs.
+system = ["dep:flui-system"]
 # Deprecated and empty. The global widgets localizations now live in
 # `flui::widgets` and need no feature; this name stays only so a build that
 # still passes `flui/localizations` (the weekly workflow does) keeps resolving.

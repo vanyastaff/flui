@@ -301,6 +301,9 @@ layers = [
         "navigator",
     ],
     [
+        "popup_menu",
+    ],
+    [
         "router",
         "context_menu",
     ],

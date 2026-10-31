@@ -39,7 +39,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use flui_foundation::panic::retain_opaque_payload;
 use flui_platform::{
     CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
     WriteMode,
@@ -148,7 +147,7 @@ fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
             if first.is_none() {
                 first = Some(payload);
             } else {
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

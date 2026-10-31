@@ -20,11 +20,10 @@
 //!
 //! 1. **Mount** — [`flui::testing::HeadlessBinding::mount_root`], the same
 //!    canonical bootstrap every headless harness in this workspace shares.
-//! 2. **Inspect structure** — [`flui::testing::rendering::render_diagnostics`]
+//! 2. **Inspect structure** — [`flui::testing::rendering::render_snapshot`]
 //!    over the bound [`flui::testing::HeadlessBinding::pipeline_owner`],
-//!    rendered with [`flui::foundation::DiagnosticsNode::to_string_deep`].
-//!    (Writing this test found that the facade did not re-export
-//!    `render_diagnostics`; it does now.)
+//!    read by type through [`flui::foundation::inspect::SnapshotNode`].
+//!    (The facade re-exports `render_snapshot` for exactly this.)
 //! 3. **Inspect semantics** — [`flui::testing::HeadlessBinding::enable_semantics`]
 //!    and [`flui::testing::HeadlessBinding::a11y_tree`], queried with the
 //!    tree's [`find_by_label`](flui::testing::a11y::A11yTree::find_by_label).
@@ -32,8 +31,8 @@
 //!    [`flui::testing::replay::PointerScript::tap`] at the semantics node's
 //!    own bounds — the same `GestureBinding` input pipeline production code
 //!    routes through, not a widget-tree shortcut.
-//! 5. **Assert** — the render diagnostics dump again, checked for the
-//!    `RenderParagraph` "text" property advancing from `0` to `1`: the
+//! 5. **Assert** — the render snapshot again, checked for the
+//!    `RenderParagraph` `text` field advancing from `0` to `1`: the
 //!    rendered output, not an internal counter field.
 //!
 //! ## What step 3 relies on
@@ -51,9 +50,10 @@
 
 use std::time::Duration;
 
+use flui::foundation::inspect::SnapshotNode;
 use flui::geometry::Offset;
 use flui::prelude::*;
-use flui::testing::rendering::render_diagnostics;
+use flui::testing::rendering::render_snapshot;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
 use flui::widgets::column;
@@ -128,48 +128,50 @@ fn mount_agent_counter() -> HeadlessBinding {
     binding
 }
 
-/// Renders the current render-tree diagnostics as the deep-dump string an
-/// agent (or a human) would read — step 2's tool, reused for step 5's
+/// Takes the typed snapshot of the current render tree — step 2's tool, reused for step 5's
 /// assertion too, since both are "what does the render tree actually say".
-///
-fn render_dump(binding: &HeadlessBinding) -> String {
+fn render_dump(binding: &HeadlessBinding) -> SnapshotNode {
     let pipeline = binding
         .pipeline_owner()
         .expect("mount_agent_counter always returns a tree-bound binding");
-    pipeline.with(render_diagnostics).to_string_deep()
+    pipeline.with(render_snapshot)
 }
 
-/// Whether `dump` contains a diagnostics property line matching exactly
-/// `key: value` — a whole-line match rather than a substring one, so
-/// `"text: 1"` cannot accidentally match a dump that actually says
-/// `"text: 10"` or `"max_lines: 1"`.
-fn has_property_line(dump: &str, key: &str, value: &str) -> bool {
-    dump.lines()
-        .any(|line| line.trim() == format!("{key}: {value}"))
+/// The plain text of every `RenderParagraph` in `tree`, in tree order, read as the typed
+/// `text` field — an exact match per paragraph, so `"1"` cannot match a paragraph that
+/// says `"10"`.
+fn paragraph_texts(tree: &SnapshotNode) -> Vec<&str> {
+    tree.find_by_kind("RenderParagraph")
+        .as_slice()
+        .iter()
+        .filter_map(|paragraph| paragraph.get::<&str>("text").ok())
+        .collect()
 }
 
 #[test]
 fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     // --- 1. Mount: the counter UI, through the documented bootstrap. -------
     let mut binding = mount_agent_counter();
-
+    // --- 2. Inspect structure: snapshot the render tree and check a
     // --- 2. Inspect structure: dump the render-tree diagnostics and check a
     // known node is really there. `ElevatedButton` composes a Material
     // surface as a `RenderPhysicalShape` (see
     // `packages/flui-material/tests/elevated_button.rs`, which asserts the
     // same node by the same name) — a fact about the framework's own
     // composition, not something this test invents.
-    let initial_dump = render_dump(&binding);
+    let initial = render_dump(&binding);
     assert!(
-        initial_dump
-            .lines()
-            .any(|line| line.trim() == "RenderPhysicalShape"),
+        initial
+            .iter()
+            .any(|node| node.kind == "RenderPhysicalShape"),
         "expected a RenderPhysicalShape node (ElevatedButton's Material surface) \
-         in the diagnostics dump, got:\n{initial_dump}"
+         in the render tree, got paragraphs {:?}",
+        paragraph_texts(&initial)
     );
     assert!(
-        has_property_line(&initial_dump, "text", "0"),
-        "the counter must render its initial value \"0\"; dump was:\n{initial_dump}"
+        paragraph_texts(&initial).contains(&"0"),
+        "the counter must render its initial value \"0\"; paragraphs were {:?}",
+        paragraph_texts(&initial)
     );
 
     // --- 3. Inspect semantics: find the button by its label. ---------------
@@ -201,14 +203,15 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     binding.pump_frame(Duration::from_millis(16));
 
     // --- 5. Assert: the rendered text advanced 0 -> 1. ----------------------
-    let final_dump = render_dump(&binding);
+    let last = render_dump(&binding);
+    let texts = paragraph_texts(&last);
     assert!(
-        has_property_line(&final_dump, "text", "1"),
+        texts.contains(&"1"),
         "a tap on the Increment button must advance the rendered count to \"1\"; \
-         dump was:\n{final_dump}"
+         paragraphs were {texts:?}"
     );
     assert!(
-        !has_property_line(&final_dump, "text", "0"),
-        "the old rendered count must not remain after the tap; dump was:\n{final_dump}"
+        !texts.contains(&"0"),
+        "the old rendered count must not remain after the tap; paragraphs were {texts:?}"
     );
 }

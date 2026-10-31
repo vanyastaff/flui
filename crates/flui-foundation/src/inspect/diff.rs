@@ -340,8 +340,12 @@ fn compare_part(
     for field in before {
         match after.iter().find(|other| other.name == field.name) {
             Some(other) => {
-                let tolerance = options.tolerance(field.unit.or(other.unit));
-                if !value_close(&field.value, &other.value, tolerance, options.pixels) {
+                let unit = field.unit.or(other.unit);
+                let tolerance = options.tolerance(unit);
+                // A sized, positioned or inset value is within the tolerance of its stated unit
+                // (a fraction of the free space is not a pixel), or of pixels when it states none.
+                let geometric = unit.map_or(options.pixels, |_| tolerance);
+                if !value_close(&field.value, &other.value, tolerance, geometric) {
                     changes.push(part.change(
                         node(),
                         field.name,

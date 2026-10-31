@@ -57,9 +57,9 @@ use crate::{
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a `RenderSliver`",
     label = "missing `impl RenderSliver for {Self}`",
-    note = "a sliver-protocol render object implements `RenderSliver` (its `Arity`, `perform_layout` against `SliverConstraints`, `paint`, hit-testing) and `flui_foundation::Diagnosticable`; `RenderObject<SliverProtocol>` is then derived automatically"
+    note = "a sliver-protocol render object implements `RenderSliver` (its `Arity`, `perform_layout` against `SliverConstraints`, `paint`, hit-testing) and `flui_foundation::inspect::Inspect`; `RenderObject<SliverProtocol>` is then derived automatically"
 )]
-pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
+pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// The arity of this render sliver (Leaf, Optional, Variable, etc.)
     type Arity: Arity;
 
@@ -519,7 +519,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
 /// explanation.
 impl<T> RenderObject<SliverProtocol> for T
 where
-    T: RenderSliver + flui_foundation::Diagnosticable,
+    T: RenderSliver + flui_foundation::inspect::Inspect,
 {
     fn perform_layout_raw(
         &mut self,

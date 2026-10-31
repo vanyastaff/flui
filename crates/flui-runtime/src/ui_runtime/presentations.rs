@@ -334,6 +334,18 @@ impl UiRuntime {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
+    /// Whether `id` has begun closing: a close was carried out, now or when
+    /// the last hold on it was released, or the UI runtime is stopping. For
+    /// the testing kit, which reports a close the platform would see. `None`
+    /// if `id` is not resident.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn presentation_closing_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.closing_requested.get())
+    }
+
     /// The device pixel ratio `id`'s render pipeline paints and publishes
     /// semantics bounds at — for the dispatcher test proving a `Resized`
     /// event rescales exactly the presentation it was addressed to. `None`
@@ -826,7 +838,7 @@ impl UiRuntime {
         );
         if let Some(payload) = first_panic {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 resume_unwind(payload);
             }
