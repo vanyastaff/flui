@@ -50,7 +50,7 @@ mod capability;
 mod persisted;
 
 pub use capability::{StorageCapability, StorageHandle};
-pub use persisted::Persisted;
+pub use persisted::{Persisted, WeakPersisted};
 
 use flui_platform::{StorageError, StorageName};
 
@@ -110,18 +110,27 @@ impl DecodeError {
 ///
 /// The revision is kept in the stored file's header, so it keeps counting
 /// across runs; [`Persisted::set`] returns the revision of the value it
-/// accepted and [`Persisted::committed`] the latest one the storage
-/// confirmed.
+/// accepted, [`Persisted::committed`] the latest one the storage confirmed
+/// and [`Persisted::revision`] that of the value in memory, once it is
+/// stored. Revisions compare and order; they are not numbers to compute
+/// with. With the `serde` feature a revision serializes as its number, so a
+/// document can record which revision of another it was taken against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Revision(u64);
 
 impl Revision {
+    /// The revision of a document that was never stored.
+    pub const NONE: Self = Self(0);
+
     /// The revision numbered `n`, as a stored file's header records it.
     pub(crate) const fn new(n: u64) -> Self {
         Self(n)
     }
 
-    /// The revision as a number.
+    /// The number the stored file's header records, for display and
+    /// diagnostics only: to keep a revision, keep the `Revision`.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0

@@ -878,7 +878,8 @@ dev-agent = ["dep:flui-devtools", "flui-devtools/agent"]
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and
 # brightness (platform-api), velocity and gesture details (interaction), the
-# layout enums (rendering, and objects through widgets) and curves (animation).
+# layout enums (rendering, and objects through widgets), curves (animation) and
+# stored document revisions (view).
 serde = [
     "flui-painting/serde",
     "flui-platform/serde",
@@ -886,6 +887,7 @@ serde = [
     "flui-rendering/serde",
     "flui-animation/serde",
     "flui-widgets/serde",
+    "flui-view/serde",
 ]
 
 # The facade declares no other features. Earlier revisions carried commented

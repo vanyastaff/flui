@@ -2527,6 +2527,8 @@ dependencies = [
  "flui-testing",
  "futures-core",
  "parking_lot",
+ "serde",
+ "serde_json",
  "serial_test",
  "slab",
  "smallvec",
