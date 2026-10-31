@@ -370,7 +370,7 @@ pub struct PresentationState {
     pub(super) frame_request: Cell<Option<flui_platform::FrameRequest>>,
     /// The soft keyboard's occlusion as the window last reported it: sampled
     /// at each frame's vsync into `MediaQueryData::view_insets` while it moves
-    /// (ADR-0276 §3).
+    /// (ADR-0277 §3).
     pub(super) keyboard: Cell<flui_platform::KeyboardInset>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,

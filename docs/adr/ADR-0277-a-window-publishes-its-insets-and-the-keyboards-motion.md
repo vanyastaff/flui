@@ -1,4 +1,4 @@
-# ADR-0276: A window publishes its insets as one value, and the frame samples the keyboard's motion
+# ADR-0277: A window publishes its insets as one value, and the frame samples the keyboard's motion
 
 - **Status:** Accepted (2026-10-30). Implemented: the value, the capabilities, the frame sampling,
   the recording and the headless script (§1 to §3, §5). Not implemented: the Android, iOS and Web

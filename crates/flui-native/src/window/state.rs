@@ -24,7 +24,7 @@ pub(crate) struct ReportedFacts {
     /// The user's theme as applied to the window (ADR-0222).
     pub(crate) appearance: WindowAppearance,
     /// The safe area, the soft keyboard and the system-gesture edges, in
-    /// logical pixels (ADR-0276).
+    /// logical pixels (ADR-0277).
     pub(crate) insets: WindowInsets,
     /// Whether the platform lets the window run its UI (ADR-0035).
     pub(crate) execution: WindowExecutionState,
