@@ -346,17 +346,18 @@ const STEP_TOLERANCE: f64 = 1e-9;
 
 /// The element a text field is mirrored as, and an `<input>`'s `type`: one
 /// whose caret and selection a script can set, so the window's text input can
-/// edit through it (an `email` or `number` input has neither). A field of
-/// dates or times, a combo box and a spin button stay ARIA ones, served on
-/// the canvas.
+/// edit through it (an `email` or `number` input has neither), and that keeps
+/// the value it is given (a `url` input strips the whitespace around it, which
+/// the store holds; the editor's `inputmode` and `autocomplete` still say it
+/// is an address). A field of dates or times, a combo box and a spin button
+/// stay ARIA ones, served on the canvas.
 fn text_field(node: &Node) -> Option<(Tag, Option<&'static str>)> {
     let kind = match node.role() {
         Role::MultilineTextInput => return Some((Tag::Area, None)),
-        Role::TextInput | Role::EmailInput | Role::NumberInput => "text",
+        Role::TextInput | Role::EmailInput | Role::NumberInput | Role::UrlInput => "text",
         Role::SearchInput => "search",
         Role::PasswordInput => "password",
         Role::PhoneNumberInput => "tel",
-        Role::UrlInput => "url",
         _ => return None,
     };
     Some((Tag::Line, Some(kind)))
@@ -1254,7 +1255,7 @@ mod tests {
             (Role::SearchInput, "input", Some("search")),
             (Role::PasswordInput, "input", Some("password")),
             (Role::PhoneNumberInput, "input", Some("tel")),
-            (Role::UrlInput, "input", Some("url")),
+            (Role::UrlInput, "input", Some("text")),
             (Role::MultilineTextInput, "textarea", None),
         ] {
             let spec = field(role);

@@ -867,7 +867,15 @@ mod input {
                     .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
                 parent.insert_before(element.html(), self.canvas.next_sibling().as_ref())?;
                 self.editor.set(Some(element.html()));
-                if self.editor.has_focus() {
+                // The editor takes the canvas's focus, never the focus of
+                // another element of the semantics host (a slider the tree's
+                // focus moved to keeps its keys).
+                let on_canvas = self
+                    .canvas
+                    .owner_document()
+                    .and_then(|document| document.active_element())
+                    .is_some_and(|active| active.is_same_node(Some(self.canvas.as_ref())));
+                if on_canvas {
                     let _ = element.html().focus();
                 }
             } else {

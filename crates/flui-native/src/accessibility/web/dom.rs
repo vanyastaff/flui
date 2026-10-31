@@ -155,6 +155,9 @@ enum Work {
     Action(ActionRequest),
     /// The canvas may have moved in the viewport.
     Place,
+    /// The text input stopped serving a store through this field: it shows
+    /// its published value again.
+    Released(HtmlElement),
     /// The page's focus entered or left the host from outside the canvas's
     /// focus area.
     SyncFocus,
@@ -435,6 +438,7 @@ impl Page {
             }
             Work::Place => self.place(),
             Work::SyncFocus => self.editor.sync(),
+            Work::Released(element) => self.show_published(&element),
         }
     }
 
@@ -453,6 +457,13 @@ impl Page {
             }
         };
         self.editor.set_semantics(Some(&host.element));
+        let this = self.this.clone();
+        self.field
+            .on_release(Some(Rc::new(move |element: &HtmlElement| {
+                if let Some(this) = this.upgrade() {
+                    this.submit(Work::Released(element.clone()));
+                }
+            })));
         let replaced = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Host(host));
         // Removing the focused placeholder would leave the page's focus on
         // the body, where no key reaches the window.
@@ -521,6 +532,35 @@ impl Page {
         self.field.name(field.as_ref());
         if focus_was_in_window && (focus_moved || !self.holds_focus(&host)) {
             self.follow_focus();
+        }
+    }
+
+    /// Show a field's published value again: the store it was served
+    /// through held its own, and the tree may have published another since.
+    fn show_published(&self, element: &HtmlElement) {
+        if self.field.serves(element) {
+            return;
+        }
+        let value = {
+            let Ok(tree) = self.tree.try_borrow() else {
+                return;
+            };
+            let Some(node) = element
+                .get_attribute(NODE_ATTRIBUTE)
+                .and_then(|node| node.parse::<u64>().ok())
+            else {
+                return;
+            };
+            let mirrored = tree.elements.get(&NodeId(node));
+            if !mirrored.is_some_and(|mirrored| mirrored.is_same_node(Some(element.as_ref()))) {
+                return;
+            }
+            tree.mirror
+                .spec(NodeId(node))
+                .and_then(|spec| spec.value.clone())
+        };
+        if let Some(value) = value {
+            set_value(element, &value);
         }
     }
 
@@ -862,6 +902,7 @@ impl Page {
     fn retire(&self) {
         let stage = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Retired);
         self.work.borrow_mut().clear();
+        self.field.on_release(None);
         // The text input goes back to an editor of its own.
         self.field.name(None);
         match stage {

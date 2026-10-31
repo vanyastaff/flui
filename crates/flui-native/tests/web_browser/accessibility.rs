@@ -990,19 +990,43 @@ fn a_focused_text_field_is_edited_through_its_element() {
     );
 }
 
+/// Where the browser has no `EditContext`, the store the field served moves
+/// to a hidden editor when the tree's focus moves to another control, and
+/// that control keeps the page's focus: the editor takes the canvas's focus
+/// only.
+#[wasm_bindgen_test]
+async fn a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor() {
+    let _hidden = super::EditContextHidden::hide();
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let (canvas, accessibility) = served_form(&store);
+    assert!(field("name").expect("the field").focused);
+    accessibility.publish(form("ab", OTHER));
+    super::wait(0).await;
+    assert!(
+        super::editor().is_some(),
+        "the store is served by the hidden editor"
+    );
+    assert_eq!(focused(), "send", "the button keeps the page's focus");
+    canvas.window.close_now();
+}
+
 /// The store leaves the field's element when the tree's focus leaves the
 /// field, the field is removed or the window closes: it is served on the
 /// canvas again, the element loses its hints, and what is typed into the
 /// element after that never reaches the store; the host shows a field no
-/// store is served through as published.
+/// store is served through as published, the value published while it was
+/// served included.
 #[wasm_bindgen_test]
 async fn the_store_goes_back_to_the_canvas_when_the_field_goes() {
     let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
     let (canvas, accessibility) = served_form(&store);
     assert!(field("name").expect("the field").focused);
 
+    // A value published while the store is served is not written over it.
+    accessibility.publish(form("a", FIELD));
+    assert_eq!(field("name").expect("the field").value, "ab", "the store's");
     // The tree's focus moves on while the store is still the focused one.
-    accessibility.publish(form("ab", OTHER));
+    accessibility.publish(form("a", OTHER));
     super::wait(0).await;
     assert_eq!(
         super::edit_context_text().as_deref(),
@@ -1010,14 +1034,11 @@ async fn the_store_goes_back_to_the_canvas_when_the_field_goes() {
         "served on the canvas"
     );
     let state = field("name").expect("the field stays");
+    assert_eq!(state.value, "a", "the value published while it was served");
     assert_eq!(state.autocomplete, None, "its hints are gone");
     type_into_field(Some("name"), "abz", 3, false);
     assert_eq!(store.text(), "ab", "the element no longer edits the store");
-    assert_eq!(
-        field("name").expect("the field").value,
-        "ab",
-        "as published"
-    );
+    assert_eq!(field("name").expect("the field").value, "a", "as published");
 
     accessibility.publish(form("ab", FIELD));
     super::wait(0).await;

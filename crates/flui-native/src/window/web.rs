@@ -793,10 +793,6 @@ impl CanvasEditor for FocusSync {
         self.editor.set_semantics(host);
     }
 
-    fn has_focus(&self) -> bool {
-        effective_focus(&self.canvas)
-    }
-
     fn is_handoff(&self, event: &web_sys::Event) -> bool {
         is_focus_handoff(&self.canvas, event)
     }

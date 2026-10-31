@@ -1796,19 +1796,23 @@ and writes only what changed between two specs.
   own (a date, a spin button): the window's text input serves it there (an
   `EditContext` or the hidden editor).
 - **A text field is a native one** (`Tag::Line`, `Tag::Area`): an `<input>`
-  whose `type` lets a script set its caret (`text`, `search`, `password`,
-  `tel`, `url`), or a `<textarea>`, valued as published. The host names the
+  whose `type` lets a script set its caret and keeps the value it is given
+  (`text`, an address's too, `search`, `password`, `tel`), or a `<textarea>`,
+  valued as published. The host names the
   tree's focused field in `FocusedField`, which `CanvasRef` hands the host and
   the text input alike; while the text input serves a store, it serves it
   through the named field instead of an editor of its own, so a screen reader
   reads and edits the element the input method edits. The store is the source
   of truth: the field's edits reach it first and its text is written back, the
   host writes no published value over a served field, and a field no store is
-  served through shows its published value again after an edit. The field's
+  served through shows its published value again after an edit and once the
+  text input releases it (`FocusedField::on_release`). The field's
   hints are the store's status (`inputmode`, an `autocomplete` of its
   purpose, `enterkeyhint`). The focus leaving the field, the field's removal
   or the host's retirement moves the store back to the canvas, and the
-  element keeps no listener of the text input's.
+  element keeps no listener of the text input's. A hidden editor that takes
+  the store over takes the canvas's focus only, never another element's of the
+  host.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
@@ -1826,7 +1830,8 @@ Linux. In headless Chrome,
 `moving_a_slider_s_input_asks_the_node_for_its_value`,
 `scrolling_a_scroller_asks_the_node_for_its_offset`,
 `a_focused_text_field_is_edited_through_its_element`,
-`the_store_goes_back_to_the_canvas_when_the_field_goes` and
+`the_store_goes_back_to_the_canvas_when_the_field_goes`,
+`a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

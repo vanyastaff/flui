@@ -215,9 +215,6 @@ pub(crate) trait CanvasEditor {
     /// the canvas's focus area; `None` when there is none.
     fn set_semantics(&self, host: Option<&web_sys::HtmlElement>);
 
-    /// Whether the canvas, or the editor beside it, has the page's focus.
-    fn has_focus(&self) -> bool;
-
     /// Whether `event` only moves focus within the canvas's focus area
     /// (between the canvas and its editor), which the window does not see as
     /// a focus change.
@@ -253,6 +250,9 @@ impl std::fmt::Debug for CanvasRef {
     }
 }
 
+/// What the semantics host does with a field the text input released.
+pub(crate) type FieldRelease = Rc<dyn Fn(&web_sys::HtmlElement)>;
+
 /// The text field a canvas's semantics host mirrors where the tree's focus
 /// is ([`CanvasRef::field`]): the `<input>` or `<textarea>` a screen reader
 /// reads and edits as a native field. While the window's text input serves
@@ -266,6 +266,9 @@ pub(crate) struct FocusedField {
     served: RefCell<Option<web_sys::HtmlElement>>,
     /// What the text input does when the named element changes.
     changed: RefCell<Option<Rc<dyn Fn()>>>,
+    /// What the semantics host does with an element the text input stops
+    /// serving a store through.
+    released: RefCell<Option<FieldRelease>>,
 }
 
 impl FocusedField {
@@ -298,9 +301,26 @@ impl FocusedField {
         *self.changed.borrow_mut() = changed;
     }
 
+    /// Run `released` with each element the text input stops serving a store
+    /// through; `None` stops it.
+    pub(crate) fn on_release(&self, released: Option<FieldRelease>) {
+        *self.released.borrow_mut() = released;
+    }
+
     /// The text input edits a store through `element` now, or through none.
+    /// The semantics host hears of the element served before, with
+    /// nothing here borrowed, and shows the element's published value again.
     pub(crate) fn serve(&self, element: Option<&web_sys::HtmlElement>) {
-        *self.served.borrow_mut() = element.cloned();
+        let before = std::mem::replace(&mut *self.served.borrow_mut(), element.cloned());
+        let Some(before) = before.filter(|before| {
+            !element.is_some_and(|element| element.is_same_node(Some(before.as_ref())))
+        }) else {
+            return;
+        };
+        let released = self.released.borrow().clone();
+        if let Some(released) = released {
+            released(&before);
+        }
     }
 
     /// Whether the text input edits a store through `element`, whose value
