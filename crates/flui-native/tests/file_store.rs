@@ -1,7 +1,8 @@
 //! The file store behind `AppConfig::with_storage_dir`: directories created on the
 //! first write, values replaced atomically, inaccessible paths reported apart
-//! from corrupt ones, and a write based on a stale version refused. Native
-//! only: on wasm32 the store is the page's IndexedDB.
+//! from corrupt ones, a write based on a stale version refused, and a value
+//! copied aside under a name no value can have. Native only: on wasm32 the
+//! store is the page's IndexedDB.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::ErrorKind;
@@ -363,6 +364,59 @@ fn a_target_held_without_delete_sharing_is_busy() {
     assert_eq!(staged_files(&dirs.roaming), Vec::<String>::new());
 }
 
+fn copy_aside_keeps_the_value_under_the_first_free_name() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    assert_eq!(store.copy_aside(&NOTES), Err(StorageError::NotFound));
+
+    store
+        .write(&NOTES, b"unreadable", WriteMode::Replace)
+        .expect("the value is stored");
+    // A copy an earlier run kept is never written over.
+    std::fs::write(dirs.roaming.join("notes.corrupt-1"), b"kept before").expect("an old copy");
+
+    let copied = store.copy_aside(&NOTES).expect("the value is copied");
+    assert_eq!(copied.kept_as, "notes.corrupt-2");
+    assert_eq!(copied.version, StoredVersion::of_bytes(b"unreadable"));
+    let again = store.copy_aside(&NOTES).expect("a second copy");
+    assert_eq!(again.kept_as, "notes.corrupt-3");
+    for (file, bytes) in [
+        ("notes.corrupt-1", &b"kept before"[..]),
+        ("notes.corrupt-2", b"unreadable"),
+        ("notes.corrupt-3", b"unreadable"),
+    ] {
+        assert_eq!(
+            std::fs::read(dirs.roaming.join(file)).expect("the copy reads"),
+            bytes,
+            "{file}"
+        );
+    }
+    let stored = store.read(&NOTES, 1024).expect("the value reads");
+    assert_eq!(
+        stored.bytes.as_deref(),
+        Some(&b"unreadable"[..]),
+        "the value stays"
+    );
+
+    // The copy's version is the base a fresh start writes over.
+    store
+        .write(&NOTES, b"fresh", WriteMode::IfUnchanged(copied.version))
+        .expect("the copied value is replaced");
+
+    // A machine-local value is copied within its own scope.
+    store
+        .write(&SESSION, b"session", WriteMode::Replace)
+        .expect("the session is stored");
+    let session = store.copy_aside(&SESSION).expect("the session is copied");
+    assert_eq!(session.kept_as, "notes.corrupt-1");
+    assert_eq!(
+        std::fs::read(dirs.local.join(".machine-local").join("notes.corrupt-1"))
+            .expect("the session copy reads"),
+        b"session"
+    );
+}
+
 #[test]
 fn file_store_contract() {
     let mut cases: Vec<(&str, fn())> = vec![
@@ -398,9 +452,52 @@ fn file_store_contract() {
             "data_dirs_place_each_scope_under_the_application_name",
             data_dirs_place_each_scope_under_the_application_name,
         ),
+        (
+            "copy_aside_keeps_the_value_under_the_first_free_name",
+            copy_aside_keeps_the_value_under_the_first_free_name,
+        ),
     ];
     cases.extend(platform_cases());
     run_table("file_store_contract", &cases);
+}
+
+/// A stored value, a copy of it and the directories the store creates for
+/// them are reachable by their owner only, whatever the umask leaves to
+/// others.
+#[cfg(unix)]
+fn stored_values_and_their_copies_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode_of = |path: &Path| {
+        std::fs::metadata(path)
+            .expect("the entry exists")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    store
+        .write(&NOTES, b"private", WriteMode::Replace)
+        .expect("the value is stored");
+    store
+        .write(&SESSION, b"private", WriteMode::Replace)
+        .expect("the machine-local value is stored");
+    let copied = store.copy_aside(&NOTES).expect("the value is copied");
+    for file in ["notes", copied.kept_as.as_str()] {
+        assert_eq!(mode_of(&dirs.roaming.join(file)), 0o600, "{file}");
+    }
+    let machine_local = dirs.local.join(".machine-local");
+    assert_eq!(mode_of(&machine_local.join("notes")), 0o600);
+    for created in [
+        dir.path().join("roaming"),
+        dirs.roaming.clone(),
+        dirs.local,
+        machine_local,
+    ] {
+        assert_eq!(mode_of(&created), 0o700, "{}", created.display());
+    }
 }
 
 /// The rows only this platform can run.
@@ -425,8 +522,14 @@ fn platform_cases() -> Vec<(&'static str, fn())> {
 /// The rows only this platform can run.
 #[cfg(unix)]
 fn platform_cases() -> Vec<(&'static str, fn())> {
-    vec![(
-        "a_stale_base_is_refused_without_reading_a_long_value",
-        a_stale_base_is_refused_without_reading_a_long_value,
-    )]
+    vec![
+        (
+            "a_stale_base_is_refused_without_reading_a_long_value",
+            a_stale_base_is_refused_without_reading_a_long_value,
+        ),
+        (
+            "stored_values_and_their_copies_are_owner_only",
+            stored_values_and_their_copies_are_owner_only,
+        ),
+    ]
 }

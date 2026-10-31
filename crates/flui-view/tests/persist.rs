@@ -2,8 +2,9 @@
 //! `init_state`, loaded and written through the UI runtime's storage, with a
 //! `MemoryStorage` standing in for the disk.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
@@ -34,7 +35,11 @@ impl Document for Note {
     const MAX_BYTES: u64 = 64;
 
     fn initial() -> Self {
-        Self(String::new())
+        let text = NOTE_INITIAL.with(Cell::get);
+        if text == "initial panics" {
+            fail_the_codec();
+        }
+        Self(text.to_owned())
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -60,6 +65,10 @@ impl Document for Note {
 }
 
 thread_local! {
+    /// The text of `Note::initial`; a test that needs an initial value whose
+    /// encode panics sets it.
+    static NOTE_INITIAL: Cell<&'static str> = const { Cell::new("") };
+
     /// What a dropped `Note` runs: a destructor that reaches back into its
     /// document, set by the test that needs one.
     static ON_NOTE_DROP: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
@@ -992,4 +1001,220 @@ fn a_hidden_application_or_a_close_retries_a_busy_write_at_once() {
             "{case}: written before the 50 ms back-off"
         );
     }
+}
+
+/// A stored file the document cannot read is never written over until the
+/// application starts over, and starting over keeps its bytes first (R17):
+/// a file without a header, a body `decode` refuses and a decode that panics
+/// are each kept under a free name and replaced by the initial value; a
+/// reload that finds the file corrupted after a save reports it rather than
+/// the earlier save; a failed copy leaves the file and resumes on retry.
+#[test]
+fn corrupt_bytes_are_kept_until_start_over() {
+    let unreadable: [(&str, Vec<u8>); 3] = [
+        ("no header", b"not a document".to_vec()),
+        (
+            "refused body",
+            stored(1, "\u{fffd}").into_iter().chain([0xff]).collect(),
+        ),
+        ("decode panic", stored(1, "panic")),
+    ];
+    for (case, bytes) in unreadable {
+        let storage = MemoryStorage::new();
+        storage.put(&Note::NAME, bytes.clone());
+        let (mut laid, notes, _guard) = mount_guarded(&storage);
+        let refused = drive(&mut laid, notes.load()).map(|_| ());
+        assert!(refused.is_err(), "{case}: the load fails");
+        assert_eq!(
+            notes.set(Note("edit".into())),
+            Err(PersistError::NotLoaded),
+            "{case}"
+        );
+        laid.pump();
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            Some(bytes.clone()),
+            "{case}: untouched"
+        );
+
+        notes.start_over();
+        assert_eq!(notes.status(), SaveStatus::Saving, "{case}");
+        laid.pump();
+        laid.pump();
+        assert_eq!(notes.status(), SaveStatus::Clean, "{case}");
+        assert_eq!(storage.kept_aside(&Note::NAME), vec![bytes], "{case}: kept");
+        assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")), "{case}");
+        assert_eq!(notes.committed().map(Revision::get), Some(1), "{case}");
+        assert_eq!(
+            notes.set(Note("fresh".into())).map(Revision::get),
+            Ok(2),
+            "{case}: the fresh value is loaded"
+        );
+        laid.pump();
+        assert_eq!(
+            storage.contents(&Note::NAME),
+            Some(stored(2, "fresh")),
+            "{case}"
+        );
+    }
+
+    // A file corrupted after a save: the reload's failure, not the save's
+    // success, is the status, and starting over keeps that file.
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    storage.put(&Note::NAME, b"overwritten".to_vec());
+    assert!(drive(&mut laid, notes.load()).is_err());
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::NotLoaded(Some(PersistError::Corrupt { .. }))
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        storage.kept_aside(&Note::NAME),
+        vec![b"overwritten".to_vec()]
+    );
+
+    // A copy that fails writes nothing; a retry makes it.
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err());
+    storage.fail_copies(Some(StorageError::Full));
+    notes.start_over();
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Full))
+    );
+    assert_eq!(
+        storage.contents(&Note::NAME),
+        Some(b"not a document".to_vec())
+    );
+    storage.fail_copies(None);
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.kept_aside(&Note::NAME).len(), 1);
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+
+    // A readable document never starts over.
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    notes.start_over();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(storage.kept_aside(&Note::NAME), Vec::<Vec<u8>>::new());
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "first")));
+}
+
+/// A fresh start writes over the file the failed load read and no other: a
+/// file another writer stored since, here one in a newer format, is kept
+/// and the write is a conflict.
+#[test]
+fn start_over_never_writes_over_a_file_replaced_since_the_load() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+    let newer = b"flui-document notes 3 1\nfrom a newer build".to_vec();
+    storage.put(&Note::NAME, newer.clone());
+
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Failed(PersistError::Storage(StorageError::Conflict))
+    );
+    assert_eq!(storage.contents(&Note::NAME), Some(newer));
+}
+
+/// An initial value whose encode panics fails the fresh start even when its
+/// destructor panics too: the first failure is recorded before the
+/// destructor runs, so the start is not left `Saving` with nothing to finish
+/// it.
+#[test]
+fn an_initial_value_failing_encode_and_drop_fails_the_fresh_start() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+
+    NOTE_INITIAL.with(|initial| initial.set("panic"));
+    let fired = Rc::new(Cell::new(false));
+    let once = Rc::clone(&fired);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(once.replace(true), "the destructor broke");
+        }));
+    });
+    notes.start_over();
+    let pumped = catch_unwind(AssertUnwindSafe(|| {
+        laid.pump();
+        laid.pump();
+    }));
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    NOTE_INITIAL.with(|initial| initial.set(""));
+    assert!(fired.get(), "the destructor ran");
+    drop(pumped);
+
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::Failed(PersistError::Panicked {
+                during: CodecStep::Encode,
+                ..
+            })
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
+}
+
+/// A `Document::initial` that panics fails the fresh start instead of
+/// leaving it `Saving` with nothing to finish it; a retry once it works
+/// finishes the start.
+#[test]
+fn an_initial_value_that_panics_fails_the_fresh_start() {
+    let storage = MemoryStorage::new();
+    storage.put(&Note::NAME, b"not a document".to_vec());
+    let (mut laid, notes, _guard) = mount_guarded(&storage);
+    assert!(drive(&mut laid, notes.load()).is_err(), "the load fails");
+
+    NOTE_INITIAL.with(|initial| initial.set("initial panics"));
+    notes.start_over();
+    laid.pump();
+    laid.pump();
+    NOTE_INITIAL.with(|initial| initial.set(""));
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::Failed(PersistError::Panicked {
+                during: CodecStep::Initial,
+                ..
+            })
+        ),
+        "{:?}",
+        notes.status()
+    );
+    notes.retry();
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean, "a retry finishes it");
+    assert_eq!(storage.contents(&Note::NAME), Some(stored(1, "")));
 }

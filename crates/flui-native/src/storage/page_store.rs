@@ -4,7 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use flui_platform::{
-    StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+    CopiedAside, StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason,
+    WriteMode,
 };
 use js_sys::{Array, Function, Promise, Uint8Array};
 use tokio::sync::oneshot;
@@ -16,6 +17,11 @@ use super::DataDirs;
 /// The prefix machine-local values get under the local root, as on native
 /// targets, so equal text in the two scopes names two records.
 const MACHINE_LOCAL_DIR: &str = ".machine-local";
+
+/// What joins a value's name and a copy's number in the name
+/// [`FileStore::copy_aside`] keeps the copy under, as on native targets.
+/// A [`StorageName`] cannot hold `.`, so no value is ever named like a copy.
+const COPY_INFIX: &str = ".corrupt-";
 
 // Each call opens the database and closes it when its one transaction ends,
 // so an idle connection never blocks a later upgrade from another tab.
@@ -97,6 +103,30 @@ export function writeStoredValue(key, bytes, matches, baseLength) {
         });
     });
 }
+// The copy claims the first free `<key><infix><n>` and puts the value there
+// in the same readwrite transaction that reads it, so no other copy from
+// any tab claims the same name and the copy holds exactly the bytes read.
+export function copyStoredValue(key, infix) {
+    return transact('readwrite', (values, lengths, answer) => {
+        const request = values.openCursor(key);
+        request.onsuccess = () => {
+            const record = found(request);
+            if (!record) { answer(undefined); return; }
+            const value = record[0];
+            if (!(value instanceof Uint8Array)) { answer('foreign'); return; }
+            const claim = n => {
+                const free = values.count(key + infix + n);
+                free.onsuccess = () => {
+                    if (free.result > 0) { claim(n + 1); return; }
+                    values.put(value, key + infix + n);
+                    lengths.put(value.length, key + infix + n);
+                    answer([n, value]);
+                };
+            };
+            claim(1);
+        };
+    });
+}
 ")]
 extern "C" {
     /// The record under `key` as `[value]`, `undefined` when there is none,
@@ -114,6 +144,11 @@ extern "C" {
         matches: Option<&Function>,
         base_length: Option<f64>,
     ) -> Promise;
+    /// Copy the record under `key` to the first free `key + infix + n`,
+    /// `n` from 1, in one transaction. Resolves to `[n, bytes]`, `undefined`
+    /// when `key` holds nothing, or `'foreign'` when it holds no bytes.
+    #[wasm_bindgen(js_name = copyStoredValue)]
+    fn copy_stored_value(key: &str, infix: &str) -> Promise;
 }
 
 /// A store of named byte values in the page's IndexedDB, one record each,
@@ -241,6 +276,48 @@ impl FileStore {
             } else {
                 Err(StorageError::Conflict)
             }
+        })
+    }
+
+    /// Copy the value stored under `name` to the first free name
+    /// `<name>.corrupt-<n>` beside it, counting `n` from 1, and leave `name`
+    /// as it is.
+    ///
+    /// Reading the value, claiming the copy's name and putting the copy are
+    /// one readwrite transaction, so two copies, from any tab of the origin,
+    /// never share a name, and the returned version is the version of
+    /// exactly the bytes copied.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::NotFound`] when `name` holds no value;
+    /// [`StorageError::Inaccessible`] for a record this store did not write;
+    /// [`StorageError::Full`] when the origin's quota refuses the copy;
+    /// [`StorageError::Unsupported`] (`Unavailable`) without IndexedDB.
+    pub fn copy_aside(
+        &self,
+        name: &StorageName,
+    ) -> impl Future<Output = Result<CopiedAside, StorageError>> + Send + use<> {
+        let key = self.key(name);
+        let name = name.as_str();
+        on_page(async move {
+            let copied = JsFuture::from(copy_stored_value(&key, COPY_INFIX))
+                .await
+                .map_err(failure)?;
+            if copied.is_undefined() {
+                return Err(StorageError::NotFound);
+            }
+            let copied = copied.dyn_into::<Array>().map_err(|_| foreign())?;
+            let n = copied.get(0).as_f64().ok_or_else(foreign)?;
+            let bytes = copied
+                .get(1)
+                .dyn_into::<Uint8Array>()
+                .map_err(|_| foreign())?
+                .to_vec();
+            Ok(CopiedAside {
+                kept_as: format!("{name}{COPY_INFIX}{n}"),
+                version: StoredVersion::of_bytes(&bytes),
+            })
         })
     }
 

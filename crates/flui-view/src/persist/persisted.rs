@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use flui_platform::{
-    StorageError, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+    CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
+    UnsupportedReason, WriteMode,
 };
 use flui_scheduler::Instant;
 
@@ -108,6 +109,14 @@ struct DocumentState<D> {
     /// waits. A wait that ends is matched against it, so a wait made for
     /// an earlier edit never retries a later one.
     busy_deadline: Option<Instant>,
+    /// The version of the stored file the latest load could not read, if
+    /// it failed on the file's bytes: what a fresh start writes over.
+    unreadable: Option<StoredVersion>,
+    /// How far a fresh start [`Persisted::start_over`] began has come,
+    /// until its value is handed to the registry.
+    restart: Option<Restart>,
+    /// The copy aside in flight, if one runs.
+    copying: Option<TaskToken>,
 }
 
 /// A loaded value and the stored file it came from.
@@ -125,6 +134,18 @@ struct Published {
     bytes: Arc<[u8]>,
     mode: WriteMode,
     revision: Revision,
+}
+
+/// The steps of a fresh start: keep the unreadable bytes, then write the
+/// initial value over exactly those bytes.
+#[derive(Clone, Copy)]
+enum Restart {
+    /// The unreadable bytes, which the failed load read at this version,
+    /// are not kept yet.
+    Copying(StoredVersion),
+    /// They are kept; the initial value is written only over this version,
+    /// the one the failed load read.
+    Copied(StoredVersion),
 }
 
 /// Which close hold a document keeps.
@@ -208,6 +229,9 @@ impl<D: Document> Persisted<D> {
                     watching: false,
                     busy_retries: 0,
                     busy_deadline: None,
+                    unreadable: None,
+                    restart: None,
+                    copying: None,
                 }),
             }),
         }
@@ -235,11 +259,14 @@ impl<D: Document> Persisted<D> {
         let start = document.start_load();
         async move {
             let (generation, read) = start?;
-            let outcome = match read.await {
-                Ok(stored) => decode_stored::<D>(stored),
-                Err(error) => Err(PersistError::Storage(error)),
+            let (outcome, read) = match read.await {
+                Ok(stored) => {
+                    let version = stored.version;
+                    (decode_stored::<D>(stored), Some(version))
+                }
+                Err(error) => (Err(PersistError::Storage(error)), None),
             };
-            document.settle(generation, outcome)
+            document.settle(generation, outcome, read)
         }
     }
 
@@ -328,7 +355,8 @@ impl<D: Document> Persisted<D> {
         self.document.state.borrow().status.clone()
     }
 
-    /// After a failed write, write the latest value again; otherwise do
+    /// After a failed write, write the latest value again, or take up a
+    /// failed [`start_over`](Self::start_over) where it stopped; otherwise do
     /// nothing.
     pub fn retry(&self) {
         let document = &self.document;
@@ -340,6 +368,12 @@ impl<D: Document> Persisted<D> {
             }
             state.failure = None;
             document.clear_busy(&mut state);
+            if state.restart.is_some() {
+                state.status = SaveStatus::Saving;
+                drop(state);
+                document.restart();
+                return;
+            }
             let republish = state.published.as_ref().map(|published| {
                 (
                     Arc::clone(&published.bytes),
@@ -362,15 +396,51 @@ impl<D: Document> Persisted<D> {
         document.refresh();
     }
 
-    /// Give up on a stored file that cannot be decoded: keep its bytes under
-    /// a free `<name>-corrupt-N` name, then store [`Document::initial`] in
-    /// its place. Does nothing unless the last load found the file corrupt
-    /// or undecodable.
-    pub fn start_over(&self) {}
+    /// Give up on a stored file that cannot be read: keep its bytes under a
+    /// free name `<name>.corrupt-<n>` beside it
+    /// ([`Storage::copy_aside`](flui_platform::Storage::copy_aside)), then
+    /// store [`Document::initial`] over exactly those bytes. Does nothing
+    /// unless the last load found the file corrupt or could not decode it.
+    ///
+    /// The fresh start runs on the UI runtime's tasks; the status is
+    /// [`SaveStatus::Saving`] until the initial value is stored, and the
+    /// value is loaded, so [`set`](Self::set) works, once the copy is kept.
+    /// A failed step leaves the status [`SaveStatus::Failed`], and
+    /// [`retry`](Self::retry) takes up the fresh start where it stopped: a
+    /// kept copy is not made again. A file that changed since the failed load
+    /// read it is never written over: that write is a [`StorageError::Conflict`].
+    pub fn start_over(&self) {
+        let document = &self.document;
+        document.refresh();
+        {
+            let mut state = document.state.borrow_mut();
+            if !matches!(
+                &state.status,
+                SaveStatus::NotLoaded(Some(
+                    PersistError::Corrupt { .. }
+                        | PersistError::Decode(_)
+                        | PersistError::Panicked {
+                            during: CodecStep::Decode,
+                            ..
+                        }
+                ))
+            ) {
+                return;
+            }
+            let Some(base) = state.unreadable else {
+                return;
+            };
+            // A load still in flight is not applied over the fresh start.
+            state.generation = state.generation.wrapping_add(1);
+            state.restart = Some(Restart::Copying(base));
+            state.status = SaveStatus::Saving;
+        }
+        document.restart();
+    }
 }
 
 /// A load in flight: its generation and the storage read.
-type LoadStart = (u64, flui_platform::StorageFuture<Stored>);
+type LoadStart = (u64, StorageFuture<Stored>);
 
 impl<D: Document> OpenDocument<D> {
     /// Begin a load: refuse it over unsaved edits or without storage,
@@ -396,6 +466,7 @@ impl<D: Document> OpenDocument<D> {
         &self,
         generation: u64,
         outcome: Result<Loaded<D>, PersistError>,
+        read: Option<StoredVersion>,
     ) -> Result<Rc<D>, PersistError> {
         let mut state = self.state.borrow_mut();
         let latest = state.generation == generation;
@@ -403,6 +474,7 @@ impl<D: Document> OpenDocument<D> {
             // Bytes written before this load belong to the value it replaces:
             // the status follows the load, not their write.
             state.published = None;
+            state.unreadable = outcome.is_err().then_some(read).flatten();
         }
         let (result, replaced) = match outcome {
             Ok(loaded) => {
@@ -475,6 +547,91 @@ impl<D: Document> OpenDocument<D> {
             WriteMode::IfUnchanged(loaded.base)
         };
         Ok((revision, mode))
+    }
+
+    /// Run the next step of the fresh start [`Persisted::start_over`] began.
+    fn restart(self: &Rc<Self>) {
+        let step = self.state.borrow().restart;
+        match step {
+            None => {}
+            Some(Restart::Copied(base)) => self.write_initial(base),
+            Some(Restart::Copying(base)) => {
+                let (Ok(storage), Some(driver), Some(_)) =
+                    (&self.storage, &self.driver, &self.registry)
+                else {
+                    self.fail(PersistError::Storage(NO_REGISTRY.into()));
+                    return;
+                };
+                let copy = storage.copy_aside(&D::NAME);
+                let token =
+                    driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)));
+                let stale = self.state.borrow_mut().copying.replace(token);
+                drop(stale);
+                self.refresh();
+            }
+        }
+    }
+
+    /// Load [`Document::initial`] and hand it to the registry, written only
+    /// over the stored version `base`.
+    fn write_initial(self: &Rc<Self>, base: StoredVersion) {
+        let Some((_, publisher)) = &self.registry else {
+            self.fail(PersistError::Storage(NO_REGISTRY.into()));
+            return;
+        };
+        // A panic in it is contained and recorded: the fresh start is left
+        // failed and retryable, never `Saving` with nothing to finish it.
+        let value = match contained_initial::<D>() {
+            Ok(value) => value,
+            Err(error) => {
+                self.fail(error);
+                return;
+            }
+        };
+        let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
+            Ok(body) => body,
+            Err(payload) => {
+                let message = payload_text(&*payload)
+                    .unwrap_or("a panic without a message")
+                    .to_owned();
+                retain_opaque_payload(payload);
+                // The failure is recorded before the value's drop, which is
+                // application code and may panic in turn.
+                self.fail(PersistError::Panicked {
+                    during: CodecStep::Encode,
+                    message,
+                });
+                drop(value);
+                return;
+            }
+        };
+        // The first revision of a file that starts over.
+        let revision = Revision::new(1);
+        let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
+        let mode = WriteMode::IfUnchanged(base);
+        let replaced = {
+            let mut state = self.state.borrow_mut();
+            state.restart = None;
+            state.unreadable = None;
+            state.failure = None;
+            self.clear_busy(&mut state);
+            state.published = Some(Published {
+                bytes: Arc::clone(&bytes),
+                mode,
+                revision,
+            });
+            state.status = SaveStatus::Saving;
+            state.loaded.replace(Loaded {
+                value: Rc::new(value),
+                base,
+                revision,
+            })
+        };
+        publisher.publish(bytes, mode, revision);
+        self.refresh();
+        // A replaced value's drop is application code: it runs with no
+        // borrow held and after the initial value is published.
+        drop(replaced);
     }
 
     /// End a busy store's retries: the next refusal starts from the first
@@ -661,6 +818,39 @@ async fn watch<D: Document>(document: Weak<OpenDocument<D>>, registry: FlushRegi
     }
 }
 
+/// Keep the unreadable bytes of `document`, then write its initial value
+/// over them.
+async fn copy_aside<D: Document>(
+    document: Weak<OpenDocument<D>>,
+    copy: StorageFuture<CopiedAside>,
+    base: StoredVersion,
+) {
+    let copied = copy.await;
+    let Some(open) = document.upgrade() else {
+        return;
+    };
+    match copied {
+        Ok(CopiedAside { kept_as, version }) => {
+            tracing::info!(
+                document = D::NAME.as_str(),
+                kept_as,
+                "an unreadable document was kept aside; it starts over"
+            );
+            if version != base {
+                tracing::warn!(
+                    document = D::NAME.as_str(),
+                    "the document changed after the load that could not read it"
+                );
+            }
+            // Written over the file the failed load read, never over one
+            // that replaced it since: the storage refuses that as a conflict.
+            open.state.borrow_mut().restart = Some(Restart::Copied(base));
+            open.write_initial(base);
+        }
+        Err(error) => open.fail(PersistError::Storage(error)),
+    }
+}
+
 /// Why [`wait_or_hurry`] returned.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Woke {
@@ -760,13 +950,27 @@ fn framed<D: Document>(revision: Revision, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// [`Document::initial`], with a panic in it contained and reported.
+fn contained_initial<D: Document>() -> Result<D, PersistError> {
+    catch_unwind(D::initial).map_err(|payload| {
+        let message = payload_text(&*payload)
+            .unwrap_or("a panic without a message")
+            .to_owned();
+        retain_opaque_payload(payload);
+        PersistError::Panicked {
+            during: CodecStep::Initial,
+            message,
+        }
+    })
+}
+
 /// The document a storage read holds: [`Document::initial`] when nothing is
 /// stored, otherwise the body under a header naming this document in a
 /// format this build reads, decoded with any codec panic contained.
 fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError> {
     let Some(bytes) = stored.bytes else {
         return Ok(Loaded {
-            value: Rc::new(D::initial()),
+            value: Rc::new(contained_initial::<D>()?),
             base: stored.version,
             revision: Revision::new(0),
         });

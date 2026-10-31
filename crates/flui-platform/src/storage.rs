@@ -44,6 +44,22 @@ pub trait Storage: Send + Sync + 'static {
         bytes: Vec<u8>,
         mode: WriteMode,
     ) -> StorageFuture<StoredVersion>;
+
+    /// Copy the value stored under `name` to a new name beside it, and leave
+    /// `name` as it is.
+    ///
+    /// The copy takes the first free name `<name>.corrupt-<n>`, counting `n`
+    /// from 1, in the same scope; claiming it is atomic, so two copies never
+    /// share a name. A [`StorageName`] cannot hold `.`, so no value is ever
+    /// written over a copy. The copy is durable before the future resolves.
+    /// [`CopiedAside::version`] is the version of the bytes copied: a write
+    /// based on it replaces exactly what was kept.
+    ///
+    /// A copy keeps what the application could not read for a person to
+    /// recover, before the application starts the value over.
+    ///
+    /// [`StorageError::NotFound`] when `name` holds no value.
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside>;
 }
 
 /// What a [`Storage`] request resolves to: a `Send` future of `T` or a
@@ -376,6 +392,17 @@ pub struct Stored {
     pub version: StoredVersion,
 }
 
+/// Where [`Storage::copy_aside`] kept a value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopiedAside {
+    /// The name the copy is stored under, `<name>.corrupt-<n>`, in the
+    /// scope of the name it was copied from.
+    pub kept_as: String,
+    /// The version of the bytes copied, which the original name still holds
+    /// unless a write replaced them since.
+    pub version: StoredVersion,
+}
+
 /// How [`Storage::publish`] treats the value already stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -396,6 +423,9 @@ pub enum StorageError {
     /// a write based on a version cannot be made safely there.
     #[error("storage cannot do this: {0}")]
     Unsupported(#[from] Unsupported),
+    /// The request needs a stored value and the name holds none.
+    #[error("no value is stored under this name")]
+    NotFound,
     /// The value or its directory cannot be reached: no permission, a
     /// directory in the file's place, a removed medium.
     #[error("the stored value is inaccessible: {kind}")]
@@ -435,7 +465,8 @@ impl StorageError {
     pub const fn unsupported(&self) -> Option<Unsupported> {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::Inaccessible { .. }
+            Self::NotFound
+            | Self::Inaccessible { .. }
             | Self::Busy
             | Self::Full
             | Self::TooLarge { .. }
