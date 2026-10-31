@@ -155,12 +155,14 @@ fn posix_region(value: &str) -> Option<String> {
         .map(|region| region.code().to_owned())
 }
 
-/// The units glibc's `LC_MEASUREMENT` gives a region: US customary in the
-/// United States, Liberia and Myanmar, metric elsewhere.
+/// The measurement system CLDR's supplemental data gives a region, which is
+/// the default a formatter takes for it: US customary in the United States,
+/// Liberia and Myanmar, the UK system in the United Kingdom, metric elsewhere.
 #[cfg(any(linux_host, test))]
 fn measurement_of_region(region: &str) -> MeasurementSystem {
     match region {
         "US" | "LR" | "MM" => MeasurementSystem::UsCustomary,
+        "GB" => MeasurementSystem::Imperial,
         _ => MeasurementSystem::Metric,
     }
 }
@@ -266,8 +268,21 @@ mod tests {
             split.region().map(|region| region.unicode_value()),
             Some("dezzzz".to_owned())
         );
-        // British and German units are both metric, which the override implies.
-        assert_eq!(split.measurement(), None);
+        // A British units region under a German formats region keeps its own.
+        assert_eq!(split.measurement(), Some(MeasurementSystem::Imperial));
+        let metric_in_gb = posix(
+            &[("LANG", "en_GB.UTF-8"), ("LC_MEASUREMENT", "de_DE.UTF-8")],
+            Some(&Locale::en_gb()),
+        );
+        assert_eq!(
+            metric_in_gb.measurement(),
+            Some(MeasurementSystem::Metric),
+            "German units under a British language are not the UK default"
+        );
+        assert!(
+            posix(&[("LANG", "en_GB.UTF-8")], Some(&Locale::en_gb())).is_empty(),
+            "a British language alone implies its own units"
+        );
         let us_units = posix(
             &[("LANG", "en_US.UTF-8"), ("LC_TIME", "de_DE.UTF-8")],
             Some(&en_us),
