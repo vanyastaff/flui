@@ -1126,3 +1126,55 @@ pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
         "a steady layout schedules no frame"
     );
 }
+
+/// The touch that long-pressed a word goes on to extend the selection by
+/// words as it moves, keeping that word whichever way it goes, and the
+/// handles follow; the release ends the extension where it lands.
+///
+/// Red-check: leave the long press without a drag (the selection stays
+/// "beta"); report the moves as a pointer's (the cause is not touch).
+pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
+    let heard: Heard = Rc::default();
+    let causes = Rc::new(RefCell::new(Vec::new()));
+    let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .handles(Marked::default())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            noted.borrow_mut().push(change.cause);
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert_eq!(scene.handles(), 2);
+
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(
+        causes.borrow().last(),
+        Some(&SelectionChangeCause::User(SelectionInput::Touch))
+    );
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("alpha beta"));
+
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("alpha beta gam")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(scene.handles(), 2);
+    let ends = scene
+        .laid
+        .render_property(scene.paragraph(), "selection_handles")
+        .expect("the paragraph reports its handles");
+    assert!(!ends.contains("None"), "{ends}");
+}

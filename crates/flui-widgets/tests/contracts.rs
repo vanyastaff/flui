@@ -639,6 +639,7 @@ fn selection_area_handles() {
             ("selection_area_handles::shown_handles_follow_a_relayout_without_a_build", crate::selection_area_handles::shown_handles_follow_a_relayout_without_a_build),
             ("selection_area_handles::a_controller_selection_hides_the_handles", crate::selection_area_handles::a_controller_selection_hides_the_handles),
             ("selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles", crate::selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles),
+            ("selection_area_handles::a_long_press_extends_by_words_as_the_touch_moves", crate::selection_area_handles::a_long_press_extends_by_words_as_the_touch_moves),
         ],
     );
 }
