@@ -915,7 +915,11 @@ impl RenderBox for RenderParagraph {
             config.add_anchor(anchor.clone());
             config.set_semantics_boundary(true);
             if let Some(content) = self.selectable_runs() {
-                if !self.routes_links() {
+                if self.routes_links() {
+                    // Kept out of an outer merge without merging its link
+                    // regions into it (ADR-0282).
+                    config.set_merge_boundary(true);
+                } else {
                     config.set_merging_semantics_of_descendants(true);
                 }
                 config.set_text_content(content);

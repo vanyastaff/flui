@@ -453,6 +453,24 @@ impl Mirror {
             // The runs name the element: a link that holds runs is named by
             // its content, as a leaf link is.
             spec.attributes.retain(|&(name, _)| name != "aria-label");
+        } else if let Some(text) = spec.text.take_if(|_| {
+            entry
+                .parent
+                .is_some_and(|parent| self.run_text(parent).is_some())
+        }) {
+            // A region of a text whose runs the text kept (ADR-0282 §5): the
+            // text's element already shows its words, so the region shows
+            // none. A link is named by its words instead; static text needs
+            // no name of its own.
+            if entry.node.role() != Role::Label
+                && !spec
+                    .attributes
+                    .iter()
+                    .any(|&(name, _)| name == "aria-label")
+            {
+                spec.attributes.push(("aria-label", text));
+                spec.attributes.sort_by_key(|&(name, _)| name);
+            }
         }
         let entry = self
             .nodes
@@ -1056,5 +1074,50 @@ mod tests {
             mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
             Some("Free delivery")
         );
+    }
+
+    /// Selectable text whose regions could not hold its runs keeps them: its
+    /// element shows its words once, its link is named by its words and
+    /// shows none, and the stretch before the link shows none.
+    #[test]
+    fn a_text_that_kept_its_runs_shows_its_words_once() {
+        const BEFORE: NodeId = NodeId(23);
+        const LINK: NodeId = NodeId(24);
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK, FIRST_RUN, SECOND_RUN]);
+        text.add_action(Action::SetTextSelection);
+        let mut before = Node::new(Role::Label);
+        before.set_label("Read the ");
+        before.set_value("Read the ");
+        let mut link = Node::new(Role::Link);
+        link.set_label("terms");
+        link.set_url("https://example.com/terms");
+        link.add_action(Action::Click);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[FIRST])),
+                    (FIRST, text),
+                    (BEFORE, before),
+                    (LINK, link),
+                    (FIRST_RUN, run("Read the ")),
+                    (SECOND_RUN, run("terms")),
+                ],
+                ROOT,
+            ))
+            .expect("a text that kept its runs");
+        let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
+        assert_eq!(text_of(FIRST).as_deref(), Some("Read the terms"));
+        assert_eq!(text_of(BEFORE), None);
+        assert_eq!(text_of(LINK), None);
+        assert!(
+            mirror.spec(LINK).is_some_and(|spec| spec
+                .attributes
+                .iter()
+                .any(|(name, value)| *name == "aria-label" && value == "terms")),
+            "the link is named by its words"
+        );
+        assert_eq!(mirror.text_position(FIRST, 10), Some(at(SECOND_RUN, 1)));
     }
 }

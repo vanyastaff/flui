@@ -580,6 +580,8 @@ fn selection_area_text_runs() {
             ("selection_area::a_wrapped_link_holds_a_run_on_each_line", crate::selection_area::a_wrapped_link_holds_a_run_on_each_line),
             ("selection_area::a_clipped_link_leaves_its_runs_with_the_text", crate::selection_area::a_clipped_link_leaves_its_runs_with_the_text),
             ("selection_area::a_link_inside_a_cluster_leaves_the_runs_with_the_text", crate::selection_area::a_link_inside_a_cluster_leaves_the_runs_with_the_text),
+            ("selection_area::linked_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::linked_text_under_a_merging_ancestor_keeps_its_runs),
+            ("selection_area::linked_text_too_large_to_place_withholds_its_runs", crate::selection_area::linked_text_too_large_to_place_withholds_its_runs),
             ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
             ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
             ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),

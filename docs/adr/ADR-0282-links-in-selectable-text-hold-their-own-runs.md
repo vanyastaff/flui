@@ -72,11 +72,15 @@ the selection path does not change.
    crosses a link edge (a link that starts inside a grapheme cluster), when a region publishes
    nothing (a stretch an ellipsis cuts), or when the assembly leaves a region out of the tree (a
    clip drops it).
-6. **A linked paragraph does not merge.** It already kept its links as nodes; it now also keeps
-   its text regions as nodes, and its own node keeps the text content and accepts
-   `SetTextSelection` as ADR-0214 §3 says.
+6. **A linked paragraph is a merge boundary.** It does not merge its descendants: it keeps its
+   links and text regions as nodes. It is a merge boundary (ADR-0214 §3), so an outer merging
+   ancestor stops at it and its node keeps the text content and accepts `SetTextSelection` as
+   ADR-0214 §3 says. Regions hold ranges of the runs as authored: a transform that withholds the
+   text's runs leaves the ranges with nothing to publish.
 7. **The web host follows the regions.** `flui-native`'s web mirror shows a hosting link's or
-   region's runs as its element's text, and a link holding runs is named by that content.
+   region's runs as its element's text, and a link holding runs is named by that content. When
+   the text keeps its runs (decision 5), its element shows them, and its regions show no text: a
+   link is named by its words in `aria-label`.
 
 ### Consequences
 
@@ -99,8 +103,11 @@ the selection path does not change.
 - `a_clipped_link_leaves_its_runs_with_the_text`: a clip drops a link, and the text keeps every
   run in a full tree and in an update to a live adapter, each run listed once.
 - `a_link_inside_a_cluster_leaves_the_runs_with_the_text`: a link starting with a combining mark.
-- `a_link_in_selectable_text_shows_its_runs` and
-  `a_labelled_wrapper_over_selectable_text_keeps_its_text` (`flui-native`, web mirror).
+- `a_link_in_selectable_text_shows_its_runs`,
+  `a_labelled_wrapper_over_selectable_text_keeps_its_text` and
+  `a_text_that_kept_its_runs_shows_its_words_once` (`flui-native`, web mirror).
+- `linked_text_under_a_merging_ancestor_keeps_its_runs` and
+  `linked_text_too_large_to_place_withholds_its_runs`.
 - The debug assertion of decision 3 runs in every debug test that lays out a linked paragraph.
 - Native `TextPattern`, VoiceOver and Orca rows run on a host, as for ADR-0214.
 

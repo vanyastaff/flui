@@ -1308,6 +1308,39 @@ pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
     assert_eq!(run_values(&text).concat(), "Cafe\u{301} menu");
 }
 
+/// Linked selectable text under a merging ancestor keeps its node, its link
+/// nodes and their runs: the merge stops at the text.
+///
+/// Red-check: let a linked selectable text be a plain boundary (the merge
+/// absorbs it and its links, and no run is published).
+pub(crate) fn linked_text_under_a_merging_ancestor_keeps_its_runs() {
+    let laid = mounted(SelectionArea::new(
+        MergeSemantics::new().child(linked_text()),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    let links = find_all(state, Role::Link);
+    assert_eq!(links.len(), 2, "each link keeps its node");
+    assert_eq!(run_values(&links[0]), ["terms"]);
+    assert_eq!(run_values(&links[1]), ["privacy notice"]);
+}
+
+/// Linked selectable text whose runs no transform can place publishes no
+/// runs, and its regions hold none, rather than tripping the assembly.
+///
+/// Red-check: check the regions' ranges against the published text (the
+/// debug assertion fires on the withheld runs).
+pub(crate) fn linked_text_too_large_to_place_withholds_its_runs() {
+    use flui_widgets::Transform;
+
+    let laid = mounted(SelectionArea::new(
+        Transform::scale(1e39, 1.0).child(linked_text()),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    assert_eq!(find_all(state, Role::TextRun).len(), 0);
+}
+
 /// A change handler that ignores the changes.
 struct NoChanges;
 

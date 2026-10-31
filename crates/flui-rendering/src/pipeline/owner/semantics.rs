@@ -1109,6 +1109,8 @@ fn build_semantics_fragments_impl(
 
     let node = tree.get(id)?;
     let mut config = describe_semantics_configuration(id, node, regions);
+    // The runs regions may hold are the authored ones, transformed or not.
+    let authored_runs = config.text_content().map(|content| content.runs().len());
     // Runs are laid out in the declaring render object's space; its node is
     // published in the window's.
     if let Some(content) = config.text_content() {
@@ -1156,7 +1158,7 @@ fn build_semantics_fragments_impl(
     {
         regions.callbacks.retain(&region.config);
     }
-    debug_assert_hosted_runs(&config, &authored);
+    debug_assert_hosted_runs(authored_runs, &authored);
 
     let mut child_fragments = Vec::with_capacity(node.children().len());
     let mut children_block_previous = append_region_fragments(
@@ -1288,7 +1290,7 @@ fn build_semantics_fragments_impl(
 /// hold each of its runs once, in run order: their ranges, in region order,
 /// are consecutive and cover every run. Regions hold runs only of the text
 /// they are drawn by.
-fn debug_assert_hosted_runs(config: &SemanticsConfiguration, authored: &SemanticsRegions) {
+fn debug_assert_hosted_runs(authored_runs: Option<usize>, authored: &SemanticsRegions) {
     if !cfg!(debug_assertions) {
         return;
     }
@@ -1301,10 +1303,7 @@ fn debug_assert_hosted_runs(config: &SemanticsConfiguration, authored: &Semantic
     if hosted.is_empty() {
         return;
     }
-    let runs = config
-        .text_content()
-        .map(|content| content.runs().len())
-        .expect("BUG: regions hold runs of a text that declares none");
+    let runs = authored_runs.expect("BUG: regions hold runs of a text that declares none");
     let mut next = 0;
     for range in &hosted {
         debug_assert_eq!(
