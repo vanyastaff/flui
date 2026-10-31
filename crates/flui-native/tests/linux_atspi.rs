@@ -20,6 +20,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod cases {
     use std::io::{BufRead as _, BufReader};
+    use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::rc::Rc;
@@ -87,7 +88,10 @@ mod cases {
                 })
             })
             .collect();
-        libtest_mimic::run(&arguments, trials).exit();
+        let conclusion = libtest_mimic::run(&arguments, trials);
+        // `exit` runs no destructor: the buses and the X server stop here.
+        drop(session);
+        conclusion.exit();
     }
 
     /// An X server, a session bus and the accessibility bus, which the
@@ -113,7 +117,12 @@ mod cases {
     impl Drop for Session {
         fn drop(&mut self) {
             for child in self.children.iter_mut().rev() {
-                let _ = child.kill();
+                // Each child leads its own process group, which holds what it
+                // started: the launcher's accessibility bus and the registry
+                // that bus activates outlive a kill of the launcher alone.
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .status();
                 let _ = child.wait();
             }
         }
@@ -163,6 +172,7 @@ mod cases {
                 ))
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
+                .process_group(0)
                 .spawn()
                 .expect("dbus-daemon starts");
             let mut address = String::new();
@@ -186,6 +196,7 @@ mod cases {
                 .arg("--launch-immediately")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .process_group(0)
                 .spawn()
                 .expect("at-spi-bus-launcher starts");
             let bus = block_on(async {
@@ -362,6 +373,7 @@ mod cases {
                 .args([&display, "-screen", "0", "1024x768x24", "-nolisten", "tcp"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .process_group(0)
                 .spawn()
                 .expect("Xvfb starts");
             let deadline = Instant::now() + PATIENCE;
