@@ -867,3 +867,49 @@ fn damage_under_a_transform_backdrop_follows_what_it_reads() {
         assert_eq!(partial(region), expected, "{filter:?}");
     }
 }
+
+/// Under a shearing ancestor a transform backdrop's reach is measured on the
+/// surface, where the shear mixes its axes: bounds 50..100 under
+/// `(x, y) -> (x + y, y)` cover 100..200 by 50..100, and a filter that shows
+/// what lies 10 units down and right reads 20 px right of them, past the
+/// local reach scaled by the longest axis (14 px). A change 17 px right of
+/// them still repaints them.
+#[test]
+fn a_sheared_transform_backdrop_reads_on_the_surface() {
+    let shift = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, -10.0, -10.0)
+            .expect("a translation"),
+        sampling: ImageSampling::Linear,
+    };
+    let mut shear = Matrix4::IDENTITY;
+    shear.m[4] = 1.0;
+    let build = |token: &ContentToken, root: &ContentToken| {
+        let mut frame = Frame::new(1.0, root);
+        let parent = frame.root();
+        frame.boundary(
+            parent,
+            2,
+            token,
+            Offset::new(217.0, 105.0),
+            Size::new(1.0, 1.0),
+        );
+        let sheared = frame.tree.push_child(
+            parent,
+            LayerNode::new(Layer::from(TransformLayer::new(shear))),
+        );
+        frame.push(
+            sheared,
+            BackdropFilterLayer::new(
+                shift.clone(),
+                BlendMode::SrcOver,
+                Rect::from_xywh(50.0, 50.0, 50.0, 50.0),
+            ),
+        );
+        frame.scene()
+    };
+    let root = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&ContentToken::mint(), &root), SURFACE);
+    let region = differ.diff(&build(&ContentToken::mint(), &root), SURFACE);
+    assert_eq!(partial(region), covering(100.0, 50.0, 218.0, 106.0));
+}

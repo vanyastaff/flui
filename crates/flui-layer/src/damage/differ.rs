@@ -377,9 +377,9 @@ impl Frame {
                     if let Some(rect) = place(bounds, &ctx, full, false) {
                         // A transform reads where its inverse sends the
                         // bounds; past the surface it reads all of it.
-                        let read = (transform_reach(backdrop.filter(), backdrop.bounds())
-                            * max_scale(&ctx.transform))
-                        .min(full.width() + full.height());
+                        let read =
+                            transform_reach(backdrop.filter(), backdrop.bounds(), &ctx.transform)
+                                .min(full.width() + full.height());
                         let reach = device_reach(backdrop.filter(), &ctx.transform).max(read);
                         frame.backdrops.push((rect, reach));
                     }
@@ -670,38 +670,60 @@ fn device_reach(filter: &ImageFilter, transform: &Matrix4) -> f64 {
     (filter_reach(filter) * max_scale(transform)).max(renderer_growth(filter))
 }
 
-/// How far past `bounds` a transform filter reads, in local units: where its
-/// inverse sends the bounds, beyond them. A magnifier about a point inside
-/// reads within them; a shrinking or displacing transform reads outside.
-fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>) -> f64 {
+/// How far past `bounds` a transform filter reads, in surface pixels under
+/// `transform`: where its inverse sends the bounds, mapped to the surface and
+/// measured against the bounds mapped the same way. Measuring in surface
+/// space keeps a sheared ancestor's mixing of the axes. A magnifier about a
+/// point inside reads within its bounds; a shrinking or displacing transform
+/// reads outside. A projective ancestor has no bound.
+fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>, transform: &Matrix4) -> f64 {
     match filter {
-        ImageFilter::Transform { transform, .. } => {
-            let [xx, yx, xy, yy, x0, y0] = transform.inverse_coefficients();
+        ImageFilter::Transform { transform: map, .. } => {
+            if is_projective(transform) {
+                return f64::INFINITY;
+            }
+            let m = &transform.m;
+            let to_surface =
+                |(x, y): (f64, f64)| (m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13]);
+            let [xx, yx, xy, yy, x0, y0] = map.inverse_coefficients();
             let corners = [
                 bounds.top_left(),
                 bounds.top_right(),
                 bounds.bottom_left(),
                 bounds.bottom_right(),
-            ]
-            .map(|corner| {
-                (
+            ];
+            let box_of = |points: [(f64, f64); 4]| {
+                points.iter().fold(
+                    (
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        f64::NEG_INFINITY,
+                        f64::NEG_INFINITY,
+                    ),
+                    |(left, top, right, bottom), &(x, y)| {
+                        (left.min(x), top.min(y), right.max(x), bottom.max(y))
+                    },
+                )
+            };
+            let (left, top, right, bottom) =
+                box_of(corners.map(|corner| to_surface((corner.x, corner.y))));
+            let (read_left, read_top, read_right, read_bottom) = box_of(corners.map(|corner| {
+                to_surface((
                     xx * corner.x + xy * corner.y + x0,
                     yx * corner.x + yy * corner.y + y0,
-                )
-            });
-            corners
-                .iter()
-                .map(|&(x, y)| {
-                    (bounds.left() - x)
-                        .max(x - bounds.right())
-                        .max(bounds.top() - y)
-                        .max(y - bounds.bottom())
-                })
-                .fold(0.0, f64::max)
+                ))
+            }));
+            (left - read_left)
+                .max(read_right - right)
+                .max(top - read_top)
+                .max(read_bottom - bottom)
+                .max(0.0)
+                // A bilinear read also takes the texel past the edge.
+                + 1.0
         }
         ImageFilter::Compose(filters) => filters
             .iter()
-            .map(|filter| transform_reach(filter, bounds))
+            .map(|filter| transform_reach(filter, bounds, transform))
             .sum(),
         _ => 0.0,
     }

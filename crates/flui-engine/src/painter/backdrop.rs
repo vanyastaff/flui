@@ -288,6 +288,25 @@ impl GpuReplay {
             f64::from(viewport_size.0.min(attachment_size.0)),
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
+        // A grouped filter reads the backdrop its group captured on this
+        // surface; the first member captures the whole readable attachment.
+        // It captures before any crop below can skip it, so a member that
+        // shows nothing still fixes the group's backdrop before its children
+        // paint.
+        let snapshot = match &op.group {
+            Some(group) => Some(snapshots.capture(
+                group,
+                backing,
+                (
+                    viewport_size.0.min(attachment_size.0),
+                    viewport_size.1.min(attachment_size.1),
+                ),
+                surface_format,
+                resources,
+                encoder,
+            )?),
+            None => None,
+        };
         let Some(cropped) = output.intersect(&readable).filter(|rect| !rect.is_empty()) else {
             return Ok(());
         };
@@ -340,11 +359,13 @@ impl GpuReplay {
                 };
                 output = cropped;
                 let shown = to_source(output);
+                // A bilinear sample at the shown rect's edge blends the texel
+                // half a texel past it, so the copy takes that halo too.
                 let read = Rect::from_ltrb(
-                    shown.left().floor().max(readable.left()),
-                    shown.top().floor().max(readable.top()),
-                    shown.right().ceil().min(readable.right()),
-                    shown.bottom().ceil().min(readable.bottom()),
+                    (shown.left() - 0.5).floor().max(readable.left()),
+                    (shown.top() - 0.5).floor().max(readable.top()),
+                    (shown.right() + 0.5).ceil().min(readable.right()),
+                    (shown.bottom() + 0.5).ceil().min(readable.bottom()),
                 );
                 // A bilinear read takes four texels per output pixel.
                 (read, shown, 4)
@@ -381,22 +402,6 @@ impl GpuReplay {
             cpu_bytes: 0,
             objects: 14,
         })?;
-        // A grouped filter reads the backdrop its group captured on this
-        // surface; the first member captures the whole readable attachment.
-        let snapshot = match &op.group {
-            Some(group) => Some(snapshots.capture(
-                group,
-                backing,
-                (
-                    viewport_size.0.min(attachment_size.0),
-                    viewport_size.1.min(attachment_size.1),
-                ),
-                surface_format,
-                resources,
-                encoder,
-            )?),
-            None => None,
-        };
         let source =
             resources
                 .layer_texture_pool_mut()
@@ -456,10 +461,17 @@ impl GpuReplay {
             ((shown.right() - root_x - f64::from(left)) / f64::from(dimensions.0)) as f32,
             ((shown.bottom() - root_y - f64::from(top)) / f64::from(dimensions.1)) as f32,
         ];
+        // A resampled backdrop is read between its texels, also where the
+        // composite blends through the destination-reading path.
+        let sampling = match op.effect {
+            BackdropEffect::Blur(_) => wgpu::FilterMode::Nearest,
+            BackdropEffect::Resample { .. } => wgpu::FilterMode::Linear,
+        };
         self.composite_group_texture(
             filtered,
             output,
             uv,
+            sampling,
             1.0,
             [1.0; 3],
             op.blend,

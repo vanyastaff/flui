@@ -25,13 +25,18 @@ fn stripes() -> Layer {
 /// The stripes under `filter` as a backdrop filter over 16..48 on both
 /// axes, under `matrix`.
 fn scene(matrix: Matrix4, filter: ImageFilter) -> LayerTree {
+    blended(matrix, filter, BlendMode::Src)
+}
+
+/// [`scene`], composited with `blend`.
+fn blended(matrix: Matrix4, filter: ImageFilter, blend: BlendMode) -> LayerTree {
     let mut tree = LayerTree::new(Layer::from(TransformLayer::new(matrix)));
     tree.push_child(tree.root(), stripes());
     tree.push_child(
         tree.root(),
         Layer::from(BackdropFilterLayer::new(
             filter,
-            BlendMode::Src,
+            blend,
             Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
         )),
     );
@@ -60,6 +65,28 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         expect_pixel(&magnified, (x, 32), expected);
     }
 
+    // Between texels the loupe blends them. Pixel 23 shows (23.5 + 32) / 2 =
+    // 27.75, a quarter of the way from the black texel 27 to the white 28:
+    // about 64, where a nearest read gives 0. Pixel 16, at the loupe's edge,
+    // shows 24.25, a quarter of the white texel 23 past the shown rect: about
+    // 64 too, where a copy without that texel clamps to black.
+    let grey = |bytes: &[u8], x: u32| {
+        let [red, ..] = pixel(bytes, x, 32);
+        assert!(
+            (40..=90).contains(&red),
+            "pixel {x} reads {red}, not a blend"
+        );
+    };
+    grey(&magnified, 23);
+    grey(&magnified, 16);
+    // A blend that reads the destination samples the same way: over the
+    // white stripe 20..24, multiply keeps the blended grey.
+    let multiplied = capture(
+        renderer,
+        &blended(Matrix4::IDENTITY, magnify.clone(), BlendMode::Multiply),
+    );
+    grey(&multiplied, 23);
+
     // Under a layer transform the magnifier is in the layer's space: moved
     // 8 px right, the loupe covers 24..56 and its focal point is at 40, so
     // device pixel 34 shows the layer's (34.5 - 8 + 32) / 2 = 29.25, in the
@@ -71,6 +98,43 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
     );
     expect_pixel(&moved, (34, 32), WHITE);
 
+    // A grouped pane whose transform reads only past the surface shows
+    // nothing, yet still captures the group's backdrop before its child
+    // paints: the next pane of the group shows the white under the green
+    // child, not the child.
+    let group = BackdropGroupKey::new();
+    let away = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 200.0, 0.0).expect("a translation"),
+        sampling: ImageSampling::Linear,
+    };
+    let mut grouped = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::WHITE));
+    let pane = grouped.push_child(
+        grouped.root(),
+        Layer::from(
+            BackdropFilterLayer::new(
+                away,
+                BlendMode::SrcOver,
+                Rect::from_xywh(8.0, 8.0, 24.0, 48.0),
+            )
+            .with_group(Some(group.clone())),
+        ),
+    );
+    grouped.push_child(
+        pane,
+        picture(Rect::from_xywh(8.0, 8.0, 24.0, 48.0), Color::rgb(0, 255, 0)),
+    );
+    grouped.push_child(
+        grouped.root(),
+        Layer::from(
+            BackdropFilterLayer::new(
+                ImageFilter::blur(0.0),
+                BlendMode::Src,
+                Rect::from_xywh(24.0, 8.0, 32.0, 48.0),
+            )
+            .with_group(Some(group)),
+        ),
+    );
+    expect_pixel(&capture(renderer, &grouped), (28, 32), WHITE);
     // A rotated map has no lowering: the frame fails instead of drawing the
     // backdrop untransformed.
     let rotated = Matrix4::translation(32.0, 32.0, 0.0)

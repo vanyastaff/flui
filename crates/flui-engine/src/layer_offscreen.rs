@@ -431,6 +431,7 @@ impl GpuReplay {
                         let viewport_height_f32 = vp_h as f32;
                         let blend_op = AdvancedBlendOp {
                             foreground,
+                            foreground_sampling: wgpu::FilterMode::Nearest,
                             mode: op.mode,
                             device_bounds: op.device_bounds,
                             // Identity tint + full opacity: shape color/alpha is
@@ -549,6 +550,7 @@ impl GpuReplay {
                         filtered_tex,
                         dst_rect,
                         uv,
+                        wgpu::FilterMode::Nearest,
                         1.0,
                         [1.0; 3],
                         flui_painting::paint::BlendMode::SrcOver,
@@ -752,6 +754,7 @@ impl GpuReplay {
             offscreen,
             layer.bounds,
             uv,
+            wgpu::FilterMode::Nearest,
             layer.opacity,
             layer.tint_rgb,
             layer.blend,

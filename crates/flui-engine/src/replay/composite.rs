@@ -21,6 +21,7 @@ impl GpuReplay {
         texture: PooledTexture,
         bounds: Rect<f64>,
         uv: [f32; 4],
+        foreground_sampling: wgpu::FilterMode,
         opacity: f32,
         tint: [f32; 3],
         mode: BlendMode,
@@ -95,6 +96,7 @@ impl GpuReplay {
                 .ok_or(EngineError::CompositeBackdropUnavailable)?;
             let op = AdvancedBlendOp {
                 foreground: texture,
+                foreground_sampling,
                 mode,
                 device_bounds: bounds,
                 opacity,
