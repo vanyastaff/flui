@@ -134,15 +134,6 @@ type Fetch = Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>;
 /// One load from its read to its settled waiters.
 type Run = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// How a run comes by the load slot it holds from its read to its decode.
-enum LoadSlot {
-    /// Reserved at admission, for a run its lanes poll.
-    Reserved(Reservation),
-    /// Asked for at the run's first poll, in admission order, for a run
-    /// that only progresses while its caller polls it.
-    OnFirstPoll(Arc<OrderedSlots>, AdmissionOrder),
-}
-
 /// The identity of one load attempt, shared by its pending entry, its
 /// subscribers and its run.
 #[derive(Debug)]
@@ -278,13 +269,15 @@ impl DecodedImages {
     /// one on `lanes`.
     pub(crate) fn load(self: &Arc<Self>, source: ImageSource, lanes: Lanes) -> ImageLoad {
         let mut load = ImageLoad {
-            state: LoadState::Ready(None),
+            state: LoadState::Unadmitted,
             images: Arc::clone(self),
             source,
             lanes,
             handovers: 0,
         };
-        load.admit();
+        if load.lanes.is_some() {
+            load.admit();
+        }
         load
     }
 
@@ -323,16 +316,12 @@ impl DecodedImages {
                 cancel: None,
             },
         );
-        // A load bound for lanes reserves under the lock that assigned
-        // `order`, so load slots follow admission order however late each
-        // lane first runs it. A load that runs where it is polled asks only
-        // once it is polled: a future its caller holds unpolled must not
-        // keep a slot from the load the caller awaits. The slot queue's lock
-        // never takes this one, so the nesting cannot invert.
-        let load_slot = match lanes {
-            Some(_) => LoadSlot::Reserved(self.loads.reserve(order)),
-            None => LoadSlot::OnFirstPoll(Arc::clone(&self.loads), order),
-        };
+        // Reserved under the lock that assigned `order`, so load slots follow
+        // admission order however late each load first runs. A load with no
+        // lanes is admitted only once polled, so it reserves no slot while
+        // its caller holds it unpolled. The slot queue's lock never takes
+        // this one, so the nesting cannot invert.
+        let load_slot = self.loads.reserve(order);
         drop(state);
         let completion = Completion {
             images: Arc::clone(self),
@@ -347,16 +336,13 @@ impl DecodedImages {
     }
 
     /// Reads the source, decodes it and settles every waiter.
-    fn run(&self, completion: Completion, load_slot: LoadSlot, lanes: Lanes) -> Run {
+    fn run(&self, completion: Completion, load_slot: Reservation, lanes: Lanes) -> Run {
         let fetch = self.fetch(&completion.source);
         Box::pin(async move {
             // Granted before the read starts and held until the decode
             // returns: reads past admission, and the encoded bytes waiting
             // to decode, are bounded by count.
-            let _load = match load_slot {
-                LoadSlot::Reserved(reservation) => reservation.granted().await,
-                LoadSlot::OnFirstPoll(loads, order) => loads.acquire(order).await,
-            };
+            let _load = load_slot.granted().await;
             let outcome = match fetch.await {
                 Ok(bytes) => {
                     completion
@@ -729,6 +715,11 @@ pub struct ImageLoad {
 }
 
 enum LoadState {
+    /// Not yet admitted: a load that runs where it is polled joins or opens
+    /// a pending entry only at its first poll. Opened earlier, an entry a
+    /// caller holds unpolled would hold a load slot, and a request for the
+    /// same source would join a run nobody drives.
+    Unadmitted,
     Ready(Option<Result<Image>>),
     /// Waiting for a load that runs elsewhere: on an IO lane, or in another
     /// subscriber.
@@ -779,42 +770,39 @@ impl Drop for Subscription {
 impl ImageLoad {
     /// Joins or starts the load of this subscriber's source.
     fn admit(&mut self) {
-        loop {
-            self.state = match self.images.admit(&self.source, &self.lanes) {
-                Admission::Cached(image) => LoadState::Ready(Some(Ok(image))),
-                Admission::Joined(subscription) => LoadState::Waiting(subscription),
-                Admission::Lead { subscription, run } => {
-                    let Some(lanes) = &self.lanes else {
-                        self.state = LoadState::Leading {
-                            run: Some(run),
-                            subscription,
-                        };
-                        return;
+        self.state = match self.images.admit(&self.source, &self.lanes) {
+            Admission::Cached(image) => LoadState::Ready(Some(Ok(image))),
+            Admission::Joined(subscription) => LoadState::Waiting(subscription),
+            Admission::Lead { subscription, run } => {
+                let Some(lanes) = &self.lanes else {
+                    self.state = LoadState::Leading {
+                        run: Some(run),
+                        subscription,
                     };
-                    let (cancel, cancelled) = oneshot::channel();
-                    match lanes.spawn_io(Box::pin(until_cancelled(run, cancelled))) {
-                        Ok(()) => {
-                            self.images
-                                .attach(&self.source, &subscription.ticket, cancel);
-                            LoadState::Waiting(subscription)
-                        }
-                        // The refused run closed the entry as it dropped.
-                        // Lanes with no room now still have a thread here:
-                        // lead again, on it.
-                        Err(SpawnError::Saturated | SpawnError::Unavailable) => {
-                            drop(subscription);
-                            self.lanes = None;
-                            continue;
-                        }
-                        Err(reason) => LoadState::Ready(Some(Err(AssetError::LanesRefused {
-                            path: self.source.label().to_string(),
-                            reason,
-                        }))),
+                    return;
+                };
+                let (cancel, cancelled) = oneshot::channel();
+                match lanes.spawn_io(Box::pin(until_cancelled(run, cancelled))) {
+                    Ok(()) => {
+                        self.images
+                            .attach(&self.source, &subscription.ticket, cancel);
+                        LoadState::Waiting(subscription)
                     }
+                    // The refused run closed the entry as it dropped. Lanes
+                    // with no room now still have a thread here: lead again,
+                    // on it, once polled.
+                    Err(SpawnError::Saturated | SpawnError::Unavailable) => {
+                        drop(subscription);
+                        self.lanes = None;
+                        LoadState::Unadmitted
+                    }
+                    Err(reason) => LoadState::Ready(Some(Err(AssetError::LanesRefused {
+                        path: self.source.label().to_string(),
+                        reason,
+                    }))),
                 }
-            };
-            return;
-        }
+            }
+        };
     }
 
     /// Takes over a load closed unsettled, or answers once it has been
@@ -835,6 +823,7 @@ impl ImageLoad {
 impl std::fmt::Debug for ImageLoad {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = match self.state {
+            LoadState::Unadmitted => "unadmitted",
             LoadState::Ready(_) => "ready",
             LoadState::Waiting(_) => "waiting",
             LoadState::Leading { .. } => "leading",
@@ -852,6 +841,10 @@ impl Future for ImageLoad {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             let settled = match &mut self.state {
+                LoadState::Unadmitted => {
+                    self.admit();
+                    continue;
+                }
                 LoadState::Ready(outcome) => {
                     return Poll::Ready(
                         outcome

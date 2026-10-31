@@ -218,12 +218,13 @@ fn a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes() {
 }
 
 /// Loads with no lanes run only while polled, so ones their caller holds
-/// unpolled take no load slot: the load it awaits gets one even when there
-/// are more held loads than slots.
+/// unpolled hold nothing: the load it awaits gets a load slot even when
+/// there are more held loads than slots, and a request for a held source
+/// runs the load itself instead of waiting on a run nobody drives.
 ///
-/// Red-check: reserve the slot of a load without lanes at admission (the
-/// awaited load never starts).
-fn loads_held_unpolled_leave_the_slots_to_the_awaited_one() {
+/// Red-check: admit a load without lanes when it is created (the awaited
+/// load never starts).
+fn loads_held_unpolled_leave_the_load_to_the_awaited_one() {
     let registry = AssetRegistryBuilder::new()
         .with_default_capacity()
         .with_decode_threads(NonZeroUsize::MIN)
@@ -241,6 +242,15 @@ fn loads_held_unpolled_leave_the_slots_to_the_awaited_one() {
         .collect();
     assert_fixture(
         &block_on(registry.load_image(fixture_path(), None)).expect("the awaited load runs"),
+    );
+    drop(held);
+
+    let shared = AssetRegistryBuilder::new().with_default_capacity().build();
+    let held = shared.load_image(fixture_path(), None);
+    let lanes = ThreadLanes::new();
+    assert_fixture(
+        &block_on(shared.load_image(fixture_path(), Some(lanes.lanes())))
+            .expect("the request for the held source loads it"),
     );
     drop(held);
 }
@@ -441,8 +451,8 @@ fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
             a_decode_refused_by_retiring_lanes_is_taken_over_on_other_lanes,
         ),
         (
-            "unpolled loads hold no slot",
-            loads_held_unpolled_leave_the_slots_to_the_awaited_one,
+            "unpolled loads hold nothing",
+            loads_held_unpolled_leave_the_load_to_the_awaited_one,
         ),
         (
             "not a regular file",
