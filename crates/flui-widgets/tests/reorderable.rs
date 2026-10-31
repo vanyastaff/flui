@@ -352,13 +352,13 @@ pub(crate) fn a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle() {
     mouse_drag(&laid, row_at(0, CONTENT_X), row_at(2, CONTENT_X));
     laid.dispatch_pointer_up(row_at(2, CONTENT_X).0, row_at(2, CONTENT_X).1);
     settle(&mut laid);
-    assert!(shelf.moves().is_empty(), "the mouse drags only the handle");
+    assert_eq!(shelf.moves(), [], "the mouse drags only the handle");
 
     touch(&laid, 41, row_at(0, CONTENT_X), 0);
     touch(&laid, 41, row_at(2, CONTENT_X), 1);
     touch(&laid, 41, row_at(2, CONTENT_X), 2);
     settle(&mut laid);
-    assert!(shelf.moves().is_empty(), "a quick touch move drags nothing");
+    assert_eq!(shelf.moves(), [], "a quick touch move drags nothing");
 
     touch(&laid, 42, row_at(0, CONTENT_X), 0);
     laid.pump_for(Duration::from_secs(1));
@@ -381,7 +381,7 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
     press(&laid, &SingleActivator::named(NamedKey::Escape));
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);
-    assert!(shelf.moves().is_empty(), "Escape cancels the drag");
+    assert_eq!(shelf.moves(), [], "Escape cancels the drag");
 
     let pointer = flui_interaction::PointerId::try_from(9).expect("nonzero contact");
     let at = |index: usize| {
@@ -400,10 +400,7 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
         PointerKind::Mouse,
     ));
     settle(&mut laid);
-    assert!(
-        shelf.moves().is_empty(),
-        "a cancelled contact drops nothing"
-    );
+    assert_eq!(shelf.moves(), [], "a cancelled contact drops nothing");
 
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
     laid.pump();
@@ -411,7 +408,7 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
     laid.pump();
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);
-    assert!(shelf.moves().is_empty(), "an unmounted list drops nothing");
+    assert_eq!(shelf.moves(), [], "an unmounted list drops nothing");
     assert_eq!(shelf.items(), strings(&["a", "b", "c", "d"]));
 }
 
@@ -436,7 +433,7 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
         .map(|preview| (preview.from, preview.over))
         .collect();
     assert_eq!(seen, [(0, Some(0)), (0, Some(1)), (0, Some(3))]);
-    assert!(shelf.moves().is_empty());
+    assert_eq!(shelf.moves(), []);
 }
 
 /// The move commands: Alt+Down with focus in a row and assistive
@@ -505,7 +502,7 @@ pub(crate) fn a_long_press_on_selectable_text_selects_and_the_handle_still_drags
         Duration::from_millis(800),
     ));
     settle(&mut laid);
-    assert!(shelf.moves().is_empty(), "the long press moved the row");
+    assert_eq!(shelf.moves(), [], "the long press moved the row");
     assert!(
         shelf
             .log

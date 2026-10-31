@@ -877,12 +877,10 @@ impl RowMoves {
         let target = match intent {
             ReorderIntent::Start => Some(0),
             ReorderIntent::End => Some(last),
-            ReorderIntent::Up => back,
-            ReorderIntent::Down => forward,
             ReorderIntent::Left if self.rtl => forward,
-            ReorderIntent::Left => back,
             ReorderIntent::Right if self.rtl => back,
-            ReorderIntent::Right => forward,
+            ReorderIntent::Up | ReorderIntent::Left => back,
+            ReorderIntent::Down | ReorderIntent::Right => forward,
         };
         target.filter(|&target| target != self.index)
     }
