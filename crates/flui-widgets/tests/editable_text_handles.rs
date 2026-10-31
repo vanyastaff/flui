@@ -582,6 +582,73 @@ pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
     assert_eq!(scene.handles(), 0, "the ended drag lets its time run out");
 }
 
+/// A long press whose release lands over another word ends though the
+/// controller's listener panics on that last change: the selection it made
+/// gets its handles.
+///
+/// Red-check: let the release's panic skip the press's end (no handles).
+pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
+    use flui_foundation::Listenable;
+
+    let mut scene = Scene::over(CaretHandle::NEVER);
+    let armed = Rc::new(std::cell::Cell::new(true));
+    let fired = Rc::new(std::cell::Cell::new(false));
+    let watched = scene.controller.clone();
+    let listener = scene.controller.add_listener(Rc::new({
+        let armed = Rc::clone(&armed);
+        let fired = Rc::clone(&fired);
+        move || {
+            if armed.get() && watched.selection().end > 10 {
+                fired.set(true);
+                panic!("a listener fails on the release's change");
+            }
+        }
+    }));
+    let info = PointerInfo::new(
+        PointerId::try_from(6_u64).expect("a nonzero id"),
+        PointerKind::Touch,
+    );
+    let sample = |millis: u64, at: Offset<f64>| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite"),
+        )
+    };
+    scene
+        .laid
+        .dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(0, scene.along(start_of("alpha be"))),
+        )));
+    scene.laid.pump_for(Duration::from_millis(1000));
+    assert_eq!(
+        scene.controller.selection(),
+        6..10,
+        "the press selected beta"
+    );
+    let gamma = scene.along(start_of("alpha beta ga"));
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        scene
+            .laid
+            .dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::only(PointerButton::PRIMARY),
+                sample(1050, gamma),
+            )));
+    }));
+    // Whether the panic reaches here or the input path contains it, the
+    // listener failed on the release's change.
+    drop(released);
+    assert!(fired.get(), "the release made the last change");
+    armed.set(false);
+    scene.controller.remove_listener(listener);
+    scene.settle();
+    assert_eq!(scene.handles(), 2, "the ended press shows its handles");
+}
+
 /// An edit made while a long press holds its word ends the press: lifting
 /// after moving neither selects in the new text from the old word nor
 /// shows handles.

@@ -746,8 +746,8 @@ impl FieldLongPress {
             })
             .on_long_press_end(move |details| {
                 if let Some(handles) = released.upgrade() {
-                    handles.long_press_moved(details.global_position);
                     let mut failure = FirstPanic::new();
+                    failure.contain(|| handles.long_press_moved(details.global_position));
                     handles.long_press_ended(&mut failure);
                     failure.resume();
                 }
