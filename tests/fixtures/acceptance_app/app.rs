@@ -300,7 +300,7 @@ impl Document for Saved {
     }
 
     fn decode(_version: u32, body: &[u8]) -> Result<Self, DecodeError> {
-        serde_json::from_slice(body).map_err(|error| DecodeError::new(error.to_string()))
+        serde_json::from_slice::<Self>(body).map_err(|error| DecodeError::new(error.to_string()))
     }
 }
 
