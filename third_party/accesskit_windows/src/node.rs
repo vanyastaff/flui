@@ -737,7 +737,9 @@ impl NodeWrapper<'_> {
         });
         match (self.scroll_extents(horizontal), viewport) {
             (Some((min, max)), Some(viewport)) if max > min && viewport > 0.0 => {
-                let size = viewport / (viewport + (max - min)) * 100.0;
+                // Quartered first, so the content extent stays finite.
+                let shown = viewport / 4.0;
+                let size = shown / (shown + (max / 4.0 - min / 4.0)) * 100.0;
                 if size.is_finite() { size } else { 100.0 }
             }
             _ => 100.0,

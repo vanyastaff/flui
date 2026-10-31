@@ -185,6 +185,11 @@ fn scroll_pattern() -> Result<()> {
                 50.0,
                 "a range wider than f64::MAX reads finite"
             );
+            let shown = unsafe { wide.CurrentHorizontalViewSize() }?;
+            assert!(
+                shown > 0.0 && shown < 1e-300,
+                "a range wider than f64::MAX shows a sliver of its content, not none: {shown}"
+            );
             unsafe { wide.SetScrollPercent(100.0, UIA_ScrollPatternNoScroll) }?;
             let recorded: Vec<_> = requests
                 .lock()

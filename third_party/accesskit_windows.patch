@@ -1,5 +1,5 @@
 diff --git a/src/node.rs b/src/node.rs
-index f414f77..ea9ea3c 100644
+index f414f77..c3319c0 100644
 --- a/src/node.rs
 +++ b/src/node.rs
 @@ -12,7 +12,7 @@
@@ -11,7 +11,7 @@ index f414f77..ea9ea3c 100644
  };
  use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree, TreeState};
  use std::{
-@@ -645,6 +645,145 @@ impl NodeWrapper<'_> {
+@@ -645,6 +645,147 @@ impl NodeWrapper<'_> {
          self.node.supports_action(Action::ScrollIntoView, &filter)
      }
  
@@ -107,7 +107,9 @@ index f414f77..ea9ea3c 100644
 +        });
 +        match (self.scroll_extents(horizontal), viewport) {
 +            (Some((min, max)), Some(viewport)) if max > min && viewport > 0.0 => {
-+                let size = viewport / (viewport + (max - min)) * 100.0;
++                // Quartered first, so the content extent stays finite.
++                let shown = viewport / 4.0;
++                let size = shown / (shown + (max / 4.0 - min / 4.0)) * 100.0;
 +                if size.is_finite() { size } else { 100.0 }
 +            }
 +            _ => 100.0,
@@ -157,7 +159,7 @@ index f414f77..ea9ea3c 100644
      pub(crate) fn is_selection_item_pattern_supported(&self) -> bool {
          match self.node.role() {
              // TODO: tables (#29)
-@@ -796,6 +935,7 @@ fn enqueue_property_change(
+@@ -796,6 +937,7 @@ fn enqueue_property_change(
      IValueProvider,
      IRangeValueProvider,
      IScrollItemProvider,
@@ -165,7 +167,7 @@ index f414f77..ea9ea3c 100644
      ISelectionItemProvider,
      ISelectionProvider,
      ITextProvider,
-@@ -931,6 +1071,26 @@ impl PlatformNode {
+@@ -931,6 +1073,26 @@ impl PlatformNode {
          Ok(())
      }
  
@@ -192,7 +194,7 @@ index f414f77..ea9ea3c 100644
      fn do_action<F>(&self, f: F) -> Result<()>
      where
          F: FnOnce() -> (Action, Option<ActionData>),
-@@ -1379,6 +1539,85 @@ patterns! {
+@@ -1379,6 +1541,85 @@ patterns! {
              })
          }
      )),
@@ -291,10 +293,10 @@ index ff939e4..a35693b 100644
  mod subclassed;
 diff --git a/src/tests/scroll.rs b/src/tests/scroll.rs
 new file mode 100644
-index 0000000..d76cddc
+index 0000000..e54315b
 --- /dev/null
 +++ b/src/tests/scroll.rs
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,210 @@
 +// Copyright 2026 The AccessKit Authors. All rights reserved.
 +// Licensed under the Apache License, Version 2.0 (found in
 +// the LICENSE-APACHE file) or the MIT license (found in
@@ -481,6 +483,11 @@ index 0000000..d76cddc
 +                unsafe { wide.CurrentHorizontalScrollPercent() }?,
 +                50.0,
 +                "a range wider than f64::MAX reads finite"
++            );
++            let shown = unsafe { wide.CurrentHorizontalViewSize() }?;
++            assert!(
++                shown > 0.0 && shown < 1e-300,
++                "a range wider than f64::MAX shows a sliver of its content, not none: {shown}"
 +            );
 +            unsafe { wide.SetScrollPercent(100.0, UIA_ScrollPatternNoScroll) }?;
 +            let recorded: Vec<_> = requests

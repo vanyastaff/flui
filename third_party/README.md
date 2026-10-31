@@ -132,7 +132,7 @@ position slider's `RangeValue` and reads no position.
   extents, and `UIA_ScrollPatternNoScroll` when the axis doesn't scroll or has no position. Its
   `ViewSize` is the node's extent over that extent plus the scroll range. The six properties
   raise their change events, as every pattern's do. The percentages and targets are computed
-  without intermediate overflow, so a range wider than `f64::MAX` stays finite;
+  without intermediate overflow, so a range wider than `f64::MAX` reads and scrolls finite;
 - `Scroll` asks `ScrollUp`/`ScrollDown`/`ScrollLeft`/`ScrollRight` with `ScrollUnit::Item` for
   a small step and `ScrollUnit::Page` for a large one. Both axes are checked before either is
   asked, and an axis that doesn't scroll, or whose action the node doesn't take, refuses;
