@@ -343,14 +343,16 @@ fn movable_slider(node: &Node) -> Option<Slider> {
         return None;
     }
     let value = value.clamp(min, max);
-    // A range input snaps its value to its step: one the step does not reach
-    // from the minimum would be shown as another, so the input takes any.
+    // A range input snaps its value to its step: a value or a maximum the step
+    // does not reach from the minimum would be shown as another, or never
+    // reached, so the input takes any.
+    let on_step = |step: f64, at: f64| {
+        let steps = (at - min) / step;
+        (steps - steps.round()).abs() <= STEP_TOLERANCE * steps.abs().max(1.0)
+    };
     let step = finite(node.numeric_value_step())
         .filter(|step| *step > 0.0)
-        .filter(|step| {
-            let steps = (value - min) / step;
-            (steps - steps.round()).abs() <= STEP_TOLERANCE * steps.abs().max(1.0)
-        });
+        .filter(|&step| on_step(step, value) && on_step(step, max));
     Some(Slider {
         value,
         min,
@@ -1140,6 +1142,13 @@ mod tests {
             "a value off the step is not snapped"
         );
         assert_eq!(input.value.as_deref(), Some("32"));
+        let mut short_range = slider(false);
+        short_range.set_max_numeric_value(32.0);
+        assert_eq!(
+            attribute(&describe(&short_range), "step"),
+            Some("any"),
+            "a maximum off the step stays reachable"
+        );
         let read_only = describe(&slider(true));
         assert_eq!(
             read_only.tag.name(),

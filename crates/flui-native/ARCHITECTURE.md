@@ -1759,10 +1759,11 @@ and writes only what changed between two specs.
   it adjusts no ARIA slider; the moved value asks for `SetValue` or a step,
   and the input shows the node's value until the tree publishes the moved
   one, written again whenever its range changes, which the input sanitizes it
-  against. A value its step does not reach from the minimum gets `step="any"`,
-  as the input would snap it. A node mirrored as another element later (a
-  link given its address) gets a new element in its old one's place, with
-  its children. Both are out of the Tab order (`tabindex="-1"`).
+  against. A value or a maximum its step does not reach from the minimum gets
+  `step="any"`, as the input would snap or never reach it. A node mirrored as
+  another element later (a link given its address) gets a new element in its
+  old one's place, with its children. Both are out of the Tab order
+  (`tabindex="-1"`).
 - **A node that takes a scroll offset is a scroller.** Its element scrolls
   (`overflow: auto`, no scrollbar to take its box, `direction: ltr` whatever
   the page inherits) over an empty `flui-scroll-extent` as much larger than
