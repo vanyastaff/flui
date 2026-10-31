@@ -38,6 +38,16 @@ mod page_store;
 
 mod headless;
 mod memory_store;
+// Every host but Android and headless keeps its data there.
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    all(feature = "winit-backend", target_os = "linux")
+))]
 mod user_dirs;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,6 +56,15 @@ pub(crate) use headless::HeadlessData;
 pub(crate) use memory_store::MemoryStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    all(feature = "winit-backend", target_os = "linux")
+))]
 pub(crate) use user_dirs::UserDataDirs;
 
 /// The two directories a [`FileStore`] writes under.
