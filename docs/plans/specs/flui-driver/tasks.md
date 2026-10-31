@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events are in review; the inspect jobs follow). FD28, FD29 and FD30 can start now.
+  merged, the events (#2139) have merged, the inspect jobs are in review). FD28, FD29 and FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -399,6 +399,18 @@ graph LR
     `EventStream` / `AgentEvents` with `try_next`, `recv_timeout` and `is_finished`. Left for
     FD6: `input` events (the journal). Left for the announcement fan-out: `announcement` events.
     `frame.time_us` is not filled.
+- **Evidence, inspect (2026-10-31):**
+  - `flui-foundation`'s `inspect::a_node_reference_prints_and_parses_as_one_text`.
+  - `flui-runtime`'s `ui_runtime::tests::agent_inspect`: `each_tree_answers_with_its_own_handles`,
+    `a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window`,
+    `a_reference_to_another_window_is_unknown_and_never_read_here`,
+    `a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone`,
+    `the_limits_cut_the_tree_and_say_so`, `a_deeper_level_adds_fields`,
+    `layers_are_not_readable_because_the_sink_takes_the_scene`,
+    `a_window_that_closed_answers_gone`.
+  - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
+    Left: `inspect.layers` needs the sink or the presentation to keep the last scene (today
+    `not_supported`); the wire ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
 

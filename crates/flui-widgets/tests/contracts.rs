@@ -588,7 +588,7 @@ fn selection_area_text_runs() {
             ("selection_area::a_document_reads_its_texts_where_they_are_laid_out", crate::selection_area::a_document_reads_its_texts_where_they_are_laid_out),
             ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
             ("selection_area::a_silenced_text_is_left_out_of_the_selection", crate::selection_area::a_silenced_text_is_left_out_of_the_selection),
-            ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
+            ("selection_area::span_overrides_read_their_override_and_hold_their_runs", crate::selection_area::span_overrides_read_their_override_and_hold_their_runs),
             ("selection_area::the_highlight_colour_follows_the_area_style", crate::selection_area::the_highlight_colour_follows_the_area_style),
             ("selection_area::a_selection_highlights_the_parts_it_covers", crate::selection_area::a_selection_highlights_the_parts_it_covers),
             ("selection_area::an_edited_text_keeps_its_highlight_current", crate::selection_area::an_edited_text_keeps_its_highlight_current),

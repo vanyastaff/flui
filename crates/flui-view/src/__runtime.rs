@@ -28,13 +28,14 @@ use std::time::Duration;
 
 use flui_protocol::{
     ActOutcome, ActionRequest, Actionability, ActionabilityParams, Event, EventFilter,
-    LocateParams, Matches, ReadQuery, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
+    InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Snapshot, Tree, WaitOutcome,
+    WaitParams, WindowId,
 };
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
-use crate::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow};
+use crate::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow, InspectTarget};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
     FlushWriter, SESSION_END_BUDGET,
@@ -109,6 +110,17 @@ pub trait AgentPort: Send + Sync {
     ///
     /// When the request cannot be enqueued.
     fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault>;
+
+    /// Enqueue a snapshot of one of the window's trees: the owner takes it at its next drain.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn inspect(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> Result<AgentAnswer<InspectReading>, AgentFault>;
 
     /// Enqueue a playback request for this exact window's animation clock.
     ///

@@ -880,32 +880,77 @@ pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
     );
 }
 
-/// A span's accessibility override still decides what is read: overridden
-/// or silenced text keeps its label and lends no runs to the document.
+/// A span's accessibility override is the reading of a region of its own,
+/// and the region holds the span's runs, its authored text: an
+/// abbreviation reads as its word and selects as its letters, a silenced
+/// span is a hidden region whose characters a selection across it still
+/// covers, and a link keeps its override as its name.
 ///
-/// Red-check: publish runs from the authored text regardless (the document
-/// reads "Dr." and "secret").
-pub(crate) fn span_overrides_keep_their_reading_in_a_selection_area() {
+/// Red-check: read a selectable text that overrides a span through its
+/// label (the text holds its runs itself, so no region holds "Hi ");
+/// publish no region for a silenced span (its runs have no owner, so the
+/// text keeps them all).
+pub(crate) fn span_overrides_read_their_override_and_hold_their_runs() {
     use flui_painting::typography::TextSpan;
     use flui_widgets::RichText;
 
-    let laid = mounted(SelectionArea::new(Column::new((
+    let (area, seen) = recorded_area(Column::new((
         RichText::new(TextSpan::new("Dr.").with_semantics_label("Doctor")),
         RichText::new(TextSpan::with_children(vec![
             TextSpan::new("Hi "),
             TextSpan::new("secret").with_semantics_label(""),
+            TextSpan::new(" there"),
         ])),
-        Text::new("Omega"),
-    ))));
-    let tree = consumer(&laid);
-    let state = tree.state();
-    let read = find_all(state, Role::Document)[0].document_range().text();
-    assert_eq!(read, "Omega", "only text read as written lends runs");
-    assert!(
-        find_all(state, Role::Label)
+        RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Read the "),
+            TextSpan::new("EULA")
+                .with_link("app://terms")
+                .with_semantics_label("license agreement"),
+        ]))
+        .on_link(|_cx, _link| {}),
+    )));
+    let mut laid = mounted(area);
+    let (document, hi, there) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let labels = find_all(state, Role::Label);
+        let doctor = labels
             .iter()
-            .any(|node| node.label().as_deref() == Some("Doctor")),
-        "the override is still the label"
+            .find(|node| node.label().as_deref() == Some("Doctor"))
+            .expect("the override is a region's reading");
+        assert_eq!(run_values(doctor), ["Dr."]);
+        let hi = labels
+            .iter()
+            .find(|node| run_values(node) == ["Hi "])
+            .expect("the text before the silenced span holds its runs");
+        let generic = find_all(state, Role::GenericContainer);
+        let silenced = labels
+            .iter()
+            .chain(&generic)
+            .find(|node| run_values(node) == ["secret"])
+            .expect("the silenced span holds its runs");
+        assert!(silenced.is_hidden(), "the silenced span reads as nothing");
+        assert_eq!(silenced.label(), None);
+        let there = labels
+            .iter()
+            .find(|node| run_values(node) == [" there"])
+            .expect("the text after the silenced span holds its runs");
+        let link = &find_all(state, Role::Link)[0];
+        assert_eq!(link.label().as_deref(), Some("license agreement"));
+        assert_eq!(run_values(link), ["EULA"]);
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(hi)[0],
+            runs_of(there)[0],
+        )
+    };
+    laid.invoke_semantics_action(selection_request(document, at(hi, 0), at(there, 6)))
+        .expect("a selection across the silenced span is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("Hi secret there"),
+        "the selection covers the silenced characters"
     );
 }
 
