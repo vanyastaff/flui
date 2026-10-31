@@ -1,6 +1,6 @@
 # ADR-0271: The host font feed asks the platform which faces fall back, and FLUI's tables follow
 
-- **Status:** Accepted (2026-10-30). Not implemented: the answers of Windows, Apple and Android from API 29 (§3), and the locale-change trigger (§4).
+- **Status:** Accepted (2026-10-30). Not implemented: the locale-change trigger (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §7 only for its clause that
   FLUI's tables are the whole fallback order: the platform's answer now comes first, and the
@@ -134,7 +134,7 @@ emoji faces:
 | Target | Per script | Common | Emoji |
 |--------|------------|--------|-------|
 | Windows | `IDWriteFontFallback::MapCharacters` over the sample, with the locale; one face per script | none | `MapCharacters("😀")` |
-| macOS, iOS | `CTFontCreateForStringWithLanguage`, as a URL | `CTFontCopyDefaultCascadeListForLanguages` for the locale | `CTFontCreateForString("😀")` |
+| macOS, iOS | `CTFontCreateForStringWithLanguage`, looked up at run time since macOS 10.13 and 10.14 lack it, else `CTFontCreateForString`; the face's file, or its family where the file is a collection, whose index CoreText does not give | `CTFontCopyDefaultCascadeListForLanguages` for the locale | the same call with `😀` |
 | Linux, BSD | `FcFontSort` with the script's charset and the locale's langset; files whose charset covers the sample, in fontconfig's order | none | `FcFontSort` with `color=true` and the emoji charset |
 | Android, API 23 to 28 | `fonts.xml` fallback families whose `lang` names the script or implies it (`ja`, `ko`, `zh`), as files, in file order; among the Han families the locale's own first | untagged fallback families | the `und-Zsye` family |
 | Android, `Since<Api29>` | `AFontMatcher_match` over the sample, with the locale | none | `AFontMatcher_match("😀")` |
@@ -219,6 +219,9 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
   an equal answer changes nothing.
 - `fonts_xml_orders_fallback_by_language` (flui-native, `pub(crate)`, runs on Linux) parses
   the `fonts.xml` of API 23 and API 28, recorded from AOSP.
+- `the_font_matcher_answers_per_script_in_the_locale` (flui-native, `pub(crate)`, runs on Linux)
+  drives the API 29 path against callable stand-ins for the seven NDK functions: the locale, one
+  query per script and one for an emoji, the file and collection index, and every font released.
 - `fontconfig_answers_latin` (flui-native, Linux CI) gives a non-empty Latin list of existing files
   on the CI image. Where fontconfig is absent, it gets no answer.
 - A device run on Windows, macOS, iOS and Android renders Arabic, Devanagari, Han in ja-JP and

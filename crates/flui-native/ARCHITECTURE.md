@@ -424,7 +424,14 @@ trait depends on `flui-platform` instead.
   `SystemFallback::none`, never a panic. `fonts::linux` opens fontconfig with
   `dlopen` for the query and closes it after; `fonts::android` reads
   `fonts.xml` below API 29 (its parse runs on every host over AOSP's recorded
-  files) and gives none from API 29 until `AFontMatcher` answers.
+  files) and asks `AFontMatcher` from API 29, looked up like the other NDK
+  functions (`owner::android::ndk::FontMatching`, all seven or none).
+  `fonts::windows` hands DirectWrite the sample through an
+  `IDWriteTextAnalysisSource` of its own, whose methods cross `os_entry`;
+  `fonts::apple` looks `CTFontCreateForStringWithLanguage` up at run time,
+  since the macOS floor predates it. What two platforms share and can be
+  decided without the OS (naming a face by file or family, reading a sample
+  around a position) is the model's, tested on every host.
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
   platform, and `[package.metadata.flui.modules]` lists the four as

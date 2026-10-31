@@ -129,6 +129,9 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Dwm",
+    # The system font fallback, `IDWriteFontFallback::MapCharacters`
+    # (`fonts::windows`, ADR-0271 §3).
+    "Win32_Graphics_DirectWrite",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_UI_HiDpi",
@@ -253,6 +256,22 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
 # queue) every NSPasteboard operation is routed through. Zero-dep crate;
 # 0.2.0 is already pinned in Cargo.lock transitively via objc2-foundation.
 dispatch = "0.2"
+
+# Apple platforms: CoreText's answer to which faces fall back
+# (`fonts::apple`, ADR-0271 §3). Both are in the tree already, through
+# AppKit's and UIKit's bindings.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFString",
+    "CFURL",
+] }
+objc2-core-text = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CTFont",
+    "CTFontDescriptor",
+] }
 
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]

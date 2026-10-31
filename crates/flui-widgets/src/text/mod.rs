@@ -21,8 +21,9 @@ pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{EditableText, EditableTextState, SubmitCallback};
 pub use rich_text::RichText;
 pub use selection_area::{
-    DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectedText, SelectionArea,
-    SelectionContainer, SelectionHandles,
+    DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectError, SelectedText,
+    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
+    SelectionHandles, SelectionInput,
 };
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;
