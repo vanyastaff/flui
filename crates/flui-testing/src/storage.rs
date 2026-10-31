@@ -551,13 +551,17 @@ impl Future for CopyRequest {
         if self.answered {
             return Poll::Pending;
         }
+        // A waker's clone and drop run its owner's code: neither runs under
+        // the storage's lock.
+        let waker = cx.waker().clone();
         let mut state = self.state.lock();
         if state.copy_holds > 0 {
-            state.held_copies.push(cx.waker().clone());
+            state.held_copies.push(waker);
             return Poll::Pending;
         }
         let answer = state.copy_aside(&self.name);
         drop(state);
+        drop(waker);
         self.answered = true;
         Poll::Ready(answer)
     }
