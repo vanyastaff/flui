@@ -56,3 +56,6 @@ pub(crate) fn run_table(table: &str, cases: &[(&str, fn())]) {
         .collect();
     assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
 }
+
+#[path = "timer.rs"]
+mod timer;

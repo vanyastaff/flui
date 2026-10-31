@@ -220,7 +220,7 @@ pub use flui_rendering::RenderUpdateImpact;
 pub use flui_scheduler::{
     AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FramePhase, FrameTiming,
     FrameWaker, Instant, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
-    Seconds, TaskToken, duration::InvalidDurationConfig,
+    Seconds, Sleep, TaskToken, TimerHandle, duration::InvalidDurationConfig,
 };
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
