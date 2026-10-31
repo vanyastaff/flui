@@ -570,6 +570,16 @@ pub(crate) mod android {
         const SINCE: u64 = 29;
     }
 
+    /// `WindowInsets.getSystemGestureInsets` (API 29). Without it a window reports no system
+    /// gesture regions, `NotOnThisDevice`.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct SystemGestureInsets;
+
+    impl Gate for SystemGestureInsets {
+        type Version = AndroidApi;
+        const SINCE: u64 = 29;
+    }
+
     /// `VibrationEffect.Composition` with `PRIMITIVE_CLICK` and `PRIMITIVE_TICK`,
     /// `Vibrator.areAllPrimitivesSupported`, and the `CONFIRM`, `REJECT` and `GESTURE_END`
     /// feedback constants (API 30). Without them every haptic pattern falls back to the view's
@@ -698,7 +708,8 @@ mod tests {
         AndroidApi, BackgroundBlur, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects,
         GestureExclusion, HapticComposition, InMemoryDex, InsetsByType, InsetsController,
         LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
-        StylusHandwriting, SystemContrast, TextWeight, TouchpadGestures, VibrationTouchUsage,
+        StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures,
+        VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -764,6 +775,12 @@ mod tests {
         ));
         failures.extend(row::<GestureExclusion>(
             "GestureExclusion",
+            api(28),
+            api(29),
+            unknown,
+        ));
+        failures.extend(row::<SystemGestureInsets>(
+            "SystemGestureInsets",
             api(28),
             api(29),
             unknown,

@@ -191,10 +191,10 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
     fn drag_ended(&self, result: bool);
 
     /// Asks the Java view for the system-bar and cutout insets.
-    fn request_safe_area(&self);
+    fn request_insets(&self);
 
     /// Delivers the insets the Java view answered with.
-    fn settle_safe_area(&self);
+    fn settle_insets(&self);
 
     /// Delivers the night mode the configuration reports.
     fn settle_appearance(&self);
@@ -441,7 +441,7 @@ impl AndroidLoop {
                 }
                 java_view::ViewEvent::InsetsChanged => {
                     if let Some(window) = &window {
-                        window.request_safe_area();
+                        window.request_insets();
                     }
                 }
             }
@@ -660,7 +660,7 @@ impl host::Loop for AndroidLoop {
             let now = web_time::Instant::now();
             let window = self.window.lock().clone();
             if let Some(window) = window.as_ref() {
-                window.settle_safe_area();
+                window.settle_insets();
             }
             if self.activity.resumed.load(Ordering::SeqCst)
                 && self.sample_due(next_preference_sample, now)
@@ -670,7 +670,7 @@ impl host::Loop for AndroidLoop {
                 // already ends the cadence.
                 let observed = self.java_view.is_ready();
                 if let Some(window) = window.as_ref() {
-                    window.request_safe_area();
+                    window.request_insets();
                 }
                 self.refresh_scroll_factors();
                 if let Err(error) = self.refresh_preferences() {
@@ -837,7 +837,7 @@ impl host::Loop for AndroidLoop {
                                 // asked for, so the recreated surface is
                                 // configured at this size, not the old one.
                                 w.publish_state();
-                                w.request_safe_area();
+                                w.request_insets();
                                 // The request rode on the window that is gone. The
                                 // host sends its demand again on
                                 // `PrimarySurfaceRestored` as well: this one covers
@@ -899,7 +899,7 @@ impl host::Loop for AndroidLoop {
                             if let Some(w) = window {
                                 w.publish_state();
                                 // The insets of the old size no longer apply.
-                                w.request_safe_area();
+                                w.request_insets();
                                 w.request_redraw();
                             }
                         }
@@ -927,7 +927,7 @@ impl host::Loop for AndroidLoop {
                             let window = self.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();
-                                window.request_safe_area();
+                                window.request_insets();
                             }
                         }
                         MainEvent::LowMemory => {

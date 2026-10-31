@@ -1,8 +1,9 @@
 # ADR-0276: A window publishes its insets as one value, and the frame samples the keyboard's motion
 
 - **Status:** Accepted (2026-10-30). Implemented: the value, the capabilities, the frame sampling,
-  the recording and the headless script (§1 to §3, §5). Not implemented: the Android, iOS and Web
-  producers (§4).
+  the recording and the headless script (§1 to §3, §5), and the Android keyboard at rest and its
+  system gesture regions (§4). Not implemented: the Android keyboard's motion, and the iOS and
+  Web producers (§4).
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
@@ -142,7 +143,7 @@ absence:
 
 | Host | keyboard | system gestures |
 |---|---|---|
-| Android | `NotYetOnThisHost` until its producer lands | `NotYetOnThisHost` |
+| Android | `Native` | `Native` from API 29, `NotOnThisDevice` below |
 | iOS | `NotYetOnThisHost` | `NotOnThisPlatform` (UIKit names deferred edges, not insets) |
 | Web | `NotYetOnThisHost` | `NotOnThisPlatform` |
 | Win32 | `NotYetOnThisHost` (a tablet's touch keyboard, `InputPane`) | `NotOnThisPlatform` |
