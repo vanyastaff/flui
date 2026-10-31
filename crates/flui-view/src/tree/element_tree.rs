@@ -1720,7 +1720,6 @@ impl ElementTree {
             return;
         };
         let node = &self.nodes[index];
-        let payload = std::mem::ManuallyDrop::new(payload);
         owner.record_hook_panic(
             Some(id),
             node.parent(),
@@ -1729,7 +1728,7 @@ impl ElementTree {
             payload.as_ref(),
             "running an unmount hook",
         );
-        flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+        drop(payload);
     }
     /// Release every inherited edge and lifecycle marker on permanent teardown.
     fn unmount_inherited_dependencies(

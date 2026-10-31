@@ -99,7 +99,7 @@ impl UnmountHooks {
                 if first.is_none() {
                     first = Some(payload);
                 } else {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                 }
             }
         }

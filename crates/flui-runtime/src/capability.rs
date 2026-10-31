@@ -316,7 +316,7 @@ impl OwnerJobs {
         match (first, locals) {
             (Some(first), later) => {
                 if let Some(later) = later {
-                    flui_foundation::panic::retain_opaque_payload(later);
+                    drop(later);
                 }
                 Some(first)
             }
