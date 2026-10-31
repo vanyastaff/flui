@@ -63,11 +63,11 @@ mod cases {
         client.read(|answer| client.platform.clipboard().read_text(answer))
     }
 
-    /// One client writes concealed and reads it back, then writes and reads
-    /// its own text back; a second, whose
+    /// One client writes and reads its own text back; a second, whose
     /// window takes the keyboard, reads that text from the first through
     /// the compositor and writes its own; once the second's window closes
-    /// and the keyboard is back, the first reads the second's text.
+    /// and the keyboard is back, the first reads the second's text, then
+    /// writes concealed under that new input and reads it back.
     fn the_selection_crosses_between_clients(session: &Session) {
         // Weston's X11 backend gives its seat's keyboard to a client while its
         // output window has the X focus, which the harness's X connection
@@ -75,20 +75,7 @@ mod cases {
         let screen = session.screen();
         let _focus = (screen.connection, screen.root, screen.origin);
         let first = Client::open("first");
-        // The scenario every host runs: a concealed write pastes back and
-        // stays out of the history (ADR-0152 §6).
-        let clipboard = first.platform.clipboard();
-        assert_eq!(
-            a_concealed_write_stays_out_of_history(&*clipboard, |clipboard| {
-                first.read(|answer| clipboard.read_text(answer))
-            }),
-            Ok(())
-        );
         write(&first, "written by the first");
-        // A turn sends the new selection before the second client connects:
-        // otherwise the compositor still holds the concealed one, which a
-        // read of the client's own selection does not go through.
-        first.turn();
         assert_eq!(
             read(&first).as_deref(),
             Some("written by the first"),
@@ -133,6 +120,17 @@ mod cases {
             read(&first).as_deref(),
             Some("written by the second"),
             "the first client no longer owns the selection and reads the second's"
+        );
+        // The scenario every host runs: a concealed write pastes back and
+        // stays out of the history (ADR-0152 §6). It runs under the input
+        // the keyboard's return brought: Weston drops a selection set under
+        // the serial of the one it replaces.
+        let clipboard = first.platform.clipboard();
+        assert_eq!(
+            a_concealed_write_stays_out_of_history(&*clipboard, |clipboard| {
+                first.read(|answer| clipboard.read_text(answer))
+            }),
+            Ok(())
         );
         stop.send(()).expect("the second client listens");
         second.join().expect("the second client ends");
