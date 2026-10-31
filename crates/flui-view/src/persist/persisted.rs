@@ -168,9 +168,9 @@ enum HoldKind {
     Decision,
 }
 
-/// What a document's listeners are told about: its status and the latest
-/// revision the storage confirmed.
-type Reported = (SaveStatus, Option<Revision>);
+/// What a document's listeners are told about: its status, the latest
+/// revision the storage confirmed and the revision of the value in memory.
+type Reported = (SaveStatus, Option<Revision>, Option<Revision>);
 
 /// Tells a document's listeners of changes, one delivery at a time on the
 /// UI runtime's tasks.
@@ -251,7 +251,7 @@ impl<D: Document> Persisted<D> {
                 guard: cx.close_guard(),
                 announcer: Announcer {
                     notifier: ChangeNotifier::new(),
-                    told: RefCell::new((status.clone(), committed)),
+                    told: RefCell::new((status.clone(), committed, None)),
                     queued: Cell::new(false),
                     delivery: RefCell::new(None),
                 },
@@ -382,6 +382,18 @@ impl<D: Document> Persisted<D> {
     #[must_use]
     pub fn committed(&self) -> Option<Revision> {
         self.document.committed()
+    }
+
+    /// The revision of the value in memory while it is the stored one: the
+    /// stored file's after a load ([`Revision::NONE`] when nothing was
+    /// stored), a set value's once the storage confirms it. `None` before a
+    /// load succeeds and while a value is not yet stored, so a revision read
+    /// here always names bytes on disk: an edit lost before its write
+    /// commits never matches what a later load reads back.
+    #[must_use]
+    pub fn revision(&self) -> Option<Revision> {
+        self.document.refresh();
+        self.document.revision()
     }
 
     /// Where the document stands against its storage.
@@ -831,6 +843,21 @@ impl<D: Document> OpenDocument<D> {
         publisher.committed().map(|(revision, _)| revision)
     }
 
+    /// The revision of the value in memory, if it is the stored one.
+    fn revision(&self) -> Option<Revision> {
+        let state = self.state.borrow();
+        match (&state.status, &state.loaded) {
+            (SaveStatus::Clean, Some(loaded)) => Some(loaded.revision),
+            _ => None,
+        }
+    }
+
+    /// What the listeners are told about, as it stands.
+    fn reported(&self) -> Reported {
+        let status = self.state.borrow().status.clone();
+        (status, self.committed(), self.revision())
+    }
+
     /// Queue a delivery to the listeners if what they were told no longer
     /// stands and none is queued. Runs no listener: they run in the
     /// delivery, on a later turn of the runtime's tasks.
@@ -842,7 +869,7 @@ impl<D: Document> OpenDocument<D> {
         if announcer.queued.get() {
             return;
         }
-        let now = (self.state.borrow().status.clone(), self.committed());
+        let now = self.reported();
         if *announcer.told.borrow() == now {
             return;
         }
@@ -867,7 +894,7 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     open.refresh();
     let announcer = &open.announcer;
     announcer.queued.set(false);
-    let now = (open.state.borrow().status.clone(), open.committed());
+    let now = open.reported();
     let changed = {
         let mut told = announcer.told.borrow_mut();
         let changed = *told != now;
@@ -1079,7 +1106,7 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
         return Ok(Loaded {
             value: Rc::new(contained_initial::<D>()?),
             base: stored.version,
-            revision: Revision::new(0),
+            revision: Revision::NONE,
         });
     };
     let header = parse_header(&bytes, D::NAME.as_str())?;

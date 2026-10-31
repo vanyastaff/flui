@@ -1391,3 +1391,46 @@ fn a_listener_panic_leaves_later_changes_told() {
         "a later change is still told"
     );
 }
+
+#[test]
+fn revision_names_only_a_value_on_disk() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes) = mount(&storage);
+    assert_eq!(notes.revision(), None, "nothing is loaded yet");
+    let loaded = drive(&mut laid, notes.load());
+    assert!(
+        loaded.is_ok(),
+        "nothing stored loads the initial value: {loaded:?}"
+    );
+    assert_eq!(notes.revision(), Some(Revision::NONE), "nothing was stored");
+
+    let barrier = storage.hold_commits();
+    let lost = notes.set(Note("lost".into()));
+    laid.pump();
+    assert_eq!(notes.revision(), None, "a value not yet stored has none");
+    // The process dies before its write replaced the file.
+    drop((laid, notes));
+    drop(barrier);
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the file is as it was: {reloaded:?}");
+    assert_eq!(notes.revision(), Some(Revision::NONE));
+    assert_ne!(
+        notes.revision(),
+        lost.ok(),
+        "the lost edit's revision never matches what is read back"
+    );
+
+    let kept = notes.set(Note("kept".into())).ok();
+    laid.pump();
+    assert_eq!(notes.status(), SaveStatus::Clean);
+    assert_eq!(notes.revision(), kept, "a confirmed value has its revision");
+    assert_eq!(notes.revision(), notes.committed());
+    drop((laid, notes));
+
+    let (mut laid, notes) = mount(&storage);
+    let reloaded = drive(&mut laid, notes.load());
+    assert!(reloaded.is_ok(), "the kept edit loads: {reloaded:?}");
+    assert_eq!(notes.revision(), kept, "and a load reads it back");
+}

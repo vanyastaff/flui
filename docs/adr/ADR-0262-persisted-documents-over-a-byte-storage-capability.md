@@ -147,6 +147,7 @@ impl<D: Document> Persisted<D> {
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static;
     pub fn set(&self, value: D) -> Result<Revision, PersistError>;
     pub fn committed(&self) -> Option<Revision>;
+    pub fn revision(&self) -> Option<Revision>;
     pub fn status(&self) -> SaveStatus;
     pub fn retry(&self);
     pub fn start_over(&self);
@@ -173,10 +174,16 @@ and 800 ms, then `Failed`; a hidden or paused application and a close request re
 
 The document is `Listenable`, so a widget rebuilds with its status. A delivery runs on a later turn
 of the UI runtime's tasks, never inside a call on the document, and tells the listeners once for
-all the changes to `status()` and `committed()` since they were last told. A status that stands
-tells nobody and queues nothing, so a document at rest wakes no frame. A listener may call any
-method of the document: what it changes is told in the next delivery, and a listener that panics
-leaves the next delivery to come.
+all the changes to `status()`, `committed()` and `revision()` since they were last told. A status
+that stands tells nobody and queues nothing, so a document at rest wakes no frame. A listener may
+call any method of the document: what it changes is told in the next delivery, and a listener that
+panics leaves the next delivery to come.
+
+`revision()` is the revision of the value in memory only while that value is the stored one: the
+file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
+confirms it, `None` before a load and while a write is in flight or failed. What the application
+records against it (a session's draft taken against a version of the data) therefore names bytes on
+disk: an edit lost before its write commits never matches what a later load reads back.
 
 ### §4. A codec panic fails one save and keeps the document
 
@@ -249,7 +256,8 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
   `start_over_never_writes_over_a_file_replaced_since_the_load`,
   `listeners_hear_each_change_once_and_nothing_while_it_stands`,
-  `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`.
+  `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`,
+  `revision_names_only_a_value_on_disk`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
