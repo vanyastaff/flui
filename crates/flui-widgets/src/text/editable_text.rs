@@ -1918,6 +1918,7 @@ impl ViewState<EditableText> for EditableTextState {
         self.ime_focus_transition = Some(Rc::clone(&ime_focus_transition));
         let focus_node_for_ime = Rc::clone(&self.observed_focus_node);
         let handles_for_focus = Rc::downgrade(&self.touch_handles);
+        let drag_for_focus = Rc::downgrade(&self.selection_drag);
         self.ime_focus_listener_id = Some(self.manager().add_listener(Rc::new(
             move |previous, current| {
                 let focus_node = focus_node_for_ime.borrow();
@@ -1931,9 +1932,13 @@ impl ViewState<EditableText> for EditableTextState {
                 if was_focused == now_focused {
                     return;
                 }
-                // The focus leaving takes a touch's handles; the input
+                // The focus leaving takes a touch's handles and the contact
+                // still down, whose release would show them again; the input
                 // method still hears of it though that fails.
                 let mut failure = FirstPanic::new();
+                if !now_focused && let Some(drag) = drag_for_focus.upgrade() {
+                    drag.set(None);
+                }
                 if !now_focused && let Some(handles) = handles_for_focus.upgrade() {
                     handles.abandon(&mut failure);
                 }

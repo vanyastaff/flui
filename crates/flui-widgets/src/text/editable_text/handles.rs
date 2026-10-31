@@ -272,14 +272,34 @@ impl FieldHandles {
 
     /// Sets what the handles look like and when the caret's shows,
     /// rebuilding shown handles when the look changed.
-    pub(super) fn set_look(&self, look: Look, caret_handle: CaretHandle) {
-        self.caret_handle.set(caret_handle);
+    pub(super) fn set_look(self: &Rc<Self>, look: Look, caret_handle: CaretHandle) {
+        let retimed =
+            self.caret_handle.replace(caret_handle).hides_after() != caret_handle.hides_after();
         let old = self.look.borrow_mut().replace(look.clone());
         let mut failure = FirstPanic::new();
         if self.shown.get() == Some(Shown::Caret) && !caret_handle.shows_on_tap() {
             self.hide(&mut failure);
-        } else if !old.is_some_and(|old| old.same(&look)) {
-            self.refresh(&mut failure);
+        } else {
+            // A shown caret handle runs on the new timeout from now, or
+            // stops running out; an unchanged policy keeps its time. This
+            // runs in the field's build, where the timer can't change, so
+            // after the frame.
+            let post_frame = self
+                .parts
+                .borrow()
+                .as_ref()
+                .and_then(|parts| parts.post_frame.clone());
+            if retimed && let Some(post_frame) = post_frame {
+                let handles = Rc::downgrade(self);
+                let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
+                    if let Some(handles) = handles.upgrade() {
+                        handles.restart_timer();
+                    }
+                });
+            }
+            if !old.is_some_and(|old| old.same(&look)) {
+                self.refresh(&mut failure);
+            }
         }
         failure.resume();
     }

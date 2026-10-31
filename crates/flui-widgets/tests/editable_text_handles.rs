@@ -81,22 +81,28 @@ impl Scene {
         let field_focus = FocusNode::with_debug_label("field");
         let elsewhere = FocusNode::with_debug_label("elsewhere");
         let marked = Marked::default();
-        let field = EditableText::new(controller.clone(), Rc::clone(&field_focus))
-            .text_style(style())
-            .handles(marked.clone());
-        let app = WidgetsApp::new(Column::new((
-            SizedBox::new(400.0, 40.0).child(configure(field)),
-            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
-        )));
-        let mut laid = lay_out(app, tight(400.0, 300.0));
-        laid.pump();
-        Self {
-            laid,
+        let mut scene = Self {
+            laid: lay_out(SizedBox::shrink(), tight(400.0, 300.0)),
             controller,
             field_focus,
             elsewhere,
             marked,
-        }
+        };
+        scene.rebuild(configure);
+        scene
+    }
+
+    /// Builds the app again around the same controller, focus nodes and
+    /// handles, so the field updates in place.
+    fn rebuild(&mut self, configure: impl FnOnce(EditableText) -> EditableText) {
+        let field = EditableText::new(self.controller.clone(), Rc::clone(&self.field_focus))
+            .text_style(style())
+            .handles(self.marked.clone());
+        self.laid.pump_widget(WidgetsApp::new(Column::new((
+            SizedBox::new(400.0, 40.0).child(configure(field)),
+            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&self.elsewhere)),
+        ))));
+        self.laid.pump();
     }
 
     fn editable(&self) -> flui_foundation::RenderId {
@@ -436,5 +442,58 @@ pub(crate) fn the_focus_leaving_mid_press_cancels_the_long_press() {
     scene.settle();
     assert!(!scene.field_focus.has_focus());
     assert!(scene.selection().is_empty(), "{:?}", scene.selection());
+    assert_eq!(scene.handles(), 0);
+}
+
+/// A field given a new caret-handle timeout while its handle shows runs on
+/// the new one: a handle that stops timing out stays past the old deadline,
+/// and one that starts timing out goes once the new time passes.
+///
+/// Red-check: leave the timer alone when the policy changes (the handle goes
+/// at the old deadline).
+pub(crate) fn a_new_caret_handle_timeout_applies_to_the_shown_handle() {
+    let timed = CaretHandle::on_tap().hide_after(Duration::from_secs(1));
+    let mut scene = Scene::over(timed);
+    scene.tap(scene.along(start_of("alpha ")));
+    assert_eq!(scene.handles(), 1);
+    scene.laid.pump_for(Duration::from_millis(600));
+    scene.rebuild(|field| field.caret_handle(CaretHandle::on_tap()));
+    scene.laid.pump_for(Duration::from_millis(1200));
+    scene.settle();
+    assert_eq!(
+        scene.handles(),
+        1,
+        "an untimed handle outlives the old time"
+    );
+
+    scene.rebuild(|field| field.caret_handle(timed));
+    scene.laid.pump_for(Duration::from_millis(600));
+    assert_eq!(scene.handles(), 1, "within the new time");
+    scene.laid.pump_for(Duration::from_millis(600));
+    scene.settle();
+    assert_eq!(scene.handles(), 0, "the new time is up");
+}
+
+/// A touch whose field loses focus before it lifts shows no handles on
+/// the unfocused field.
+///
+/// Red-check: keep the contact when the focus leaves (its release shows the
+/// caret handle).
+pub(crate) fn the_focus_leaving_before_a_tap_lifts_shows_no_handles() {
+    let mut scene = Scene::over(CaretHandle::on_tap());
+    let tap = TouchScript::new("tap while the focus leaves")
+        .down(1, scene.along(start_of("alpha ")))
+        .wait(Duration::from_millis(50))
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let elsewhere = Rc::clone(&scene.elsewhere);
+    scene.laid.replay_with(&tap, |_laid, step| {
+        if step == 0 {
+            let _ = elsewhere.request_focus();
+        }
+    });
+    scene.settle();
+    assert!(!scene.field_focus.has_focus());
     assert_eq!(scene.handles(), 0);
 }

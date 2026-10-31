@@ -631,6 +631,8 @@ fn editable_text_handles() {
             ("editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles", crate::editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles),
             ("editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it", crate::editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it),
             ("editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press", crate::editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press),
+            ("editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle", crate::editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle),
+            ("editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles", crate::editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles),
         ],
     );
 }
