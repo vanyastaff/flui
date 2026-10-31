@@ -1,10 +1,16 @@
-//! Where and when bridged image decodes run, observed through real decoder
-//! hooks. A target of its own because image hook registrations are global and
-//! cannot be removed.
+//! Where and when image decodes run, observed through real decoder hooks. A
+//! target of its own because image hook registrations are global and cannot
+//! be removed.
 //!
 //! Each test registers a format whose files are an eight-byte signature
 //! followed by the committed PNG fixture, so its hook sees exactly its own
-//! decodes.
+//! decodes. Loads run on a native host's default lanes.
+
+#[allow(
+    dead_code,
+    reason = "shared with the main test binary, which uses the queued lanes"
+)]
+mod lanes;
 
 use std::ffi::OsString;
 use std::io::{Seek, SeekFrom};
@@ -15,6 +21,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_assets::{AssetRegistryBuilder, ImageSource};
+use lanes::{ThreadLanes, block_on};
 
 const PNG: &[u8] = include_bytes!("fixtures/tiny.png");
 const BUDGET: Duration = Duration::from_secs(5);
@@ -77,37 +84,28 @@ fn current_thread() -> tokio::runtime::Runtime {
         .expect("test runtime starts")
 }
 
-/// A decode that waits for a task on the host runtime's only async worker
-/// completes: the decode runs on the blocking pool, so the worker is free to
-/// run that task. Decoding on the worker would wait for itself.
+/// A decode that waits for a task on the IO lane's only worker completes:
+/// the decode runs on the compute lane, so the IO lane is free to run that
+/// task. Decoding on the IO lane would wait for itself.
 #[test]
-fn bridged_decodes_leave_a_host_runtimes_async_workers_free() {
+fn decodes_leave_the_io_lane_free() {
     const SIGNATURE: &[u8; 8] = b"FLUIWRK1";
-    let host = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("host runtime starts");
-    let worker = host.handle().clone();
+    let lanes = ThreadLanes::new();
+    let worker = lanes.io_handle();
     register_signed_png(SIGNATURE, "flui-worker-probe", move || {
         let (tx, rx) = std::sync::mpsc::channel();
         worker.spawn(async move {
             let _ = tx.send(());
         });
         rx.recv_timeout(Duration::from_secs(3))
-            .map_err(|_| std::io::Error::other("the host runtime's async worker is blocked"))
+            .map_err(|_| std::io::Error::other("the IO lane's worker is blocked"))
     });
     let files = SignedFiles::new("worker-probe");
     let path = files.write(SIGNATURE, "probe.img");
-    let registry = AssetRegistryBuilder::new()
-        .with_default_capacity()
-        .with_runtime_handle(host.handle().clone())
-        .build();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
-    let image = host
-        .block_on(async { tokio::time::timeout(BUDGET, registry.load_image_bridged(path)).await })
-        .expect("the load completes")
-        .expect("the decode reaches a free async worker");
+    let image = block_on(registry.load_image(path, Some(lanes.lanes())))
+        .expect("the decode reaches a free IO worker");
     assert_eq!((image.width(), image.height()), (4, 2));
 }
 
@@ -156,23 +154,27 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     let hook_gate = Arc::clone(&gate);
     register_signed_png(SIGNATURE, "flui-gated", move || hook_gate.pass());
     let files = SignedFiles::new("gated");
+    let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
         .with_default_capacity()
         .with_decode_threads(NonZeroUsize::MIN)
         .build();
 
-    let blocker = registry.load_image_bridged(files.write(SIGNATURE, "blocker.img"));
+    let blocker = registry.load_image(files.write(SIGNATURE, "blocker.img"), Some(lanes.lanes()));
     gate.wait_for_decodes(1);
     let stale: Vec<_> = (0..5)
         .map(|index| {
-            registry.load_image_bridged(files.write(SIGNATURE, &format!("stale-{index}.img")))
+            registry.load_image(
+                files.write(SIGNATURE, &format!("stale-{index}.img")),
+                Some(lanes.lanes()),
+            )
         })
         .collect();
     // Let the stale reads finish so they wait for the decode slot.
     std::thread::sleep(Duration::from_millis(100));
     drop(stale);
     let live_path = files.write(SIGNATURE, "live.img");
-    let live = registry.load_image_bridged(live_path.clone());
+    let live = registry.load_image(live_path.clone(), Some(lanes.lanes()));
     gate.open();
 
     let runtime = current_thread();
@@ -294,15 +296,19 @@ fn loads_past_admission_are_bounded_by_count() {
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let address = spawn_silent_server(Arc::clone(&requests), Arc::clone(&stop));
     let files = SignedFiles::new("bound");
+    let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
         .with_default_capacity()
         .with_decode_threads(NonZeroUsize::MIN)
         .build();
 
-    let blocker = registry.load_image_bridged(files.write(BLOCKER, "blocker.img"));
+    let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), Some(lanes.lanes()));
     gate.wait_for_decodes(1);
     let held: Vec<_> = (0..5)
-        .map(|index| registry.load_network_image_bridged(format!("http://{address}/{index}.img")))
+        .map(|index| {
+            registry
+                .load_network_image(format!("http://{address}/{index}.img"), Some(lanes.lanes()))
+        })
         .collect();
     std::thread::sleep(SETTLE);
     assert_eq!(
@@ -362,6 +368,7 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
         });
     }
     let files = SignedFiles::new("order");
+    let lanes = ThreadLanes::new();
     let registry = AssetRegistryBuilder::new()
         .with_default_capacity()
         .with_decode_threads(NonZeroUsize::MIN)
@@ -379,9 +386,10 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
 
     // A ready load does not wait for an earlier one still fetching.
     let (address, arrived, release) = spawn_held_server(response.clone());
-    let fetching = registry.load_network_image_bridged(format!("http://{address}/slow.img"));
+    let fetching =
+        registry.load_network_image(format!("http://{address}/slow.img"), Some(lanes.lanes()));
     arrived.recv_timeout(BUDGET).expect("the request arrives");
-    finish(registry.load_image_bridged(files.write(FILE, "ready.img")));
+    finish(registry.load_image(files.write(FILE, "ready.img"), Some(lanes.lanes())));
     assert_eq!(
         *order.lock().expect("order log"),
         ["file"],
@@ -394,11 +402,12 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     // With both ready and waiting, the earlier admission wins.
     let (address, arrived, release) = spawn_held_server(response);
 
-    let blocker = registry.load_image_bridged(files.write(BLOCKER, "blocker.img"));
+    let blocker = registry.load_image(files.write(BLOCKER, "blocker.img"), Some(lanes.lanes()));
     gate.wait_for_decodes(1);
-    let network = registry.load_network_image_bridged(format!("http://{address}/held.img"));
+    let network =
+        registry.load_network_image(format!("http://{address}/held.img"), Some(lanes.lanes()));
     arrived.recv_timeout(BUDGET).expect("the request arrives");
-    let file = registry.load_image_bridged(files.write(FILE, "file.img"));
+    let file = registry.load_image(files.write(FILE, "file.img"), Some(lanes.lanes()));
     // The file's read finishes and it waits for the slot before the response
     // is even sent; then the network load's bytes arrive and it waits too.
     std::thread::sleep(Duration::from_millis(100));

@@ -112,10 +112,10 @@ decoding outside the synchronous build/layout/paint path.
 ## Widget image loading
 
 Ordinary `registry.load(ImageAsset)` caches decoded images in Moka. Widget image
-providers use the registry's bridge methods, which bypass that typed cache. Their
+providers use the registry's image loads, which bypass that typed cache. Their
 small non-expiring LRU supports a synchronous frame-path probe and shares
 in-flight work by subscriber lifetime. This routing avoids a second typed-cache
-lookup for bridged loads; it is not a claim that all applications should maintain
+lookup for those loads; it is not a claim that all applications should maintain
 two image caches.
 
 ## Measuring an application

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use flui_assets::{AssetRegistry, ImageSource};
 use flui_painting::paint::Image as PixelImage;
+use flui_view::background::Background;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError};
@@ -17,7 +18,7 @@ use super::provider::{ImageProvider, ImageProviderError};
 ///
 /// There is no process-wide registry: the registry is an explicit
 /// constructor argument, so the same registry (and therefore
-/// the same background runtime, decoded-image cache, and lifetime) an
+/// the same decoded-image cache and lifetime) an
 /// application already manages is the one `AssetImage` loads through. The
 /// registry keeps the decoded images: two `AssetImage`s for one path share a
 /// decode only when they share a registry, and the registry gives them back
@@ -69,13 +70,19 @@ impl ImageProvider for AssetImage {
 
     /// Reuses the registry's decoded image, or shares an in-flight load for
     /// the same path. A hit refreshes recency without reading the source.
-    /// Failed loads are not cached and a later request can retry. Dropping the
-    /// future cancels the load once no other request waits for it.
+    /// The registry reads and decodes on `background`'s lanes, or where the
+    /// future is polled without them. Failed loads are not cached and a later
+    /// request can retry. Dropping the future cancels the load once no other
+    /// request waits for it.
     fn resolve_async(
         &self,
+        background: Option<&Background>,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let load = self.registry.load_image_bridged(Arc::clone(&self.path));
+        let load = self.registry.load_image(
+            Arc::clone(&self.path),
+            background.map(|background| Arc::clone(background.executor())),
+        );
         let path = Arc::clone(&self.path);
         Box::pin(async move {
             load.await

@@ -84,7 +84,7 @@ pub(crate) const MAX_DECODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 /// Decodes encoded image bytes into RGBA8 pixels, synchronously, refusing an
 /// image over [`MAX_DECODED_IMAGE_BYTES`].
 ///
-/// CPU-bound: the registry's bridged loads run it on a blocking thread, never
+/// CPU-bound: the registry's image loads run it on the compute lane, never
 /// on an async worker.
 pub(crate) fn decode_rgba8(
     path: &str,

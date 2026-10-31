@@ -1,33 +1,28 @@
-//! HTTP pooling and recovery through the consumer-facing image bridge.
+//! Network image loads: HTTP pooling and recovery on the lanes a load is
+//! given, and the typed error of a lane without the tokio reactor the HTTP
+//! client needs.
 
 use std::time::Duration;
 
-use flui_assets::AssetRegistryBuilder;
+use flui_assets::{AssetError, AssetRegistryBuilder};
 
+use crate::lanes::{QueuedLanes, ThreadLanes, block_on};
 use crate::network_support::{Response, spawn_server};
 
 const PNG: &[u8] = include_bytes!("fixtures/tiny.png");
 
 #[test]
-fn network_bridge_reuses_connections_and_recovers_after_decode_errors() {
+fn network_loads_reuse_connections_and_recover_after_decode_errors() {
     crate::cases::run_cases(&[
-        ("owned runtime", owned_runtime),
-        ("injected runtime", injected_runtime),
+        ("default lanes", round_trip),
         ("configured HTTP loader", configured_loader),
         ("independent registry pools", independent_registries),
-        ("ambient runtime replacement", ambient_runtime_replacement),
+        ("lanes replaced", lanes_replaced),
+        ("no reactor", no_reactor),
     ]);
 }
 
-fn owned_runtime() {
-    round_trip(false);
-}
-
-fn injected_runtime() {
-    round_trip(true);
-}
-
-fn round_trip(injected: bool) {
+fn round_trip() {
     let (address, server) = spawn_server(
         vec![
             Response::ok(b"invalid image"),
@@ -36,32 +31,15 @@ fn round_trip(injected: bool) {
         ],
         true,
     );
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("test runtime starts");
-    let builder = AssetRegistryBuilder::new().with_default_capacity();
-    let registry = if injected {
-        builder
-            .with_runtime_handle(runtime.handle().clone())
-            .build()
-    } else {
-        builder.build()
-    };
+    let lanes = ThreadLanes::new();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     let url = format!("http://{address}/image.png");
-    // Start each load outside Runtime::block_on so the owned-runtime row really
-    // selects the registry's fallback. Only polling the result uses this runtime.
-    let first = registry.load_network_image_bridged(url.clone());
-    let result = runtime.block_on(tokio_timeout(first));
+    let result = block_on(registry.load_network_image(url.clone(), Some(lanes.lanes())));
     assert!(result.is_err(), "malformed image must fail decoding");
     // The failure is not kept, so the same URL is requested again; the next
     // URL is a distinct image, because a decoded one would be a cache hit.
     for next_url in [url, format!("http://{address}/next.png")] {
-        let next = registry.load_network_image_bridged(next_url);
-        let image = runtime
-            .block_on(tokio_timeout(next))
+        let image = block_on(registry.load_network_image(next_url, Some(lanes.lanes())))
             .expect("next image load recovers");
         assert_eq!((image.width(), image.height()), (4, 2));
         assert_eq!(image.data().len(), 4 * 2 * 4);
@@ -71,12 +49,6 @@ fn round_trip(injected: bool) {
         1,
         "one registry must reuse its HTTP connection after a decode error"
     );
-}
-
-async fn tokio_timeout<F: std::future::Future>(future: F) -> F::Output {
-    tokio::time::timeout(Duration::from_secs(10), future)
-        .await
-        .expect("bridged load completes within timeout")
 }
 
 fn configured_loader() {
@@ -117,16 +89,13 @@ fn configured_loader() {
             .build()
     };
     // Configuration does not bind a connection driver to this undriven runtime.
-    let runtime = test_runtime();
+    let lanes = ThreadLanes::new();
     let url = format!("http://{address}/image.png");
-    let first = registry.load_network_image_bridged(url.clone());
     assert!(
-        runtime.block_on(tokio_timeout(first)).is_err(),
+        block_on(registry.load_network_image(url.clone(), Some(lanes.lanes()))).is_err(),
         "registry must honor the injected redirect policy across capacity transitions"
     );
-    let next = registry.load_network_image_bridged(url);
-    let decoded = runtime
-        .block_on(tokio_timeout(next))
+    let decoded = block_on(registry.load_network_image(url, Some(lanes.lanes())))
         .expect("next image recovers");
     assert_eq!((decoded.width(), decoded.height()), (4, 2));
     server.join().expect("server completed");
@@ -134,16 +103,17 @@ fn configured_loader() {
 
 fn independent_registries() {
     let (address, server) = spawn_server((0..4).map(|_| Response::ok(PNG)).collect(), true);
-    let runtime = test_runtime();
+    let lanes = ThreadLanes::new();
     for _ in 0..2 {
-        let registry = AssetRegistryBuilder::new()
-            .with_runtime_handle(runtime.handle().clone())
-            .with_default_capacity()
-            .build();
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
         // Two distinct images, so the second is a request and not a cache hit.
         for name in ["first", "second"] {
-            let image = registry.load_network_image_bridged(format!("http://{address}/{name}.png"));
-            let decoded = runtime.block_on(tokio_timeout(image)).expect("image loads");
+            let decoded =
+                block_on(registry.load_network_image(
+                    format!("http://{address}/{name}.png"),
+                    Some(lanes.lanes()),
+                ))
+                .expect("image loads");
             assert_eq!((decoded.width(), decoded.height()), (4, 2));
         }
         // Releasing the registry closes its idle connection; another registry
@@ -157,34 +127,49 @@ fn independent_registries() {
     );
 }
 
-fn ambient_runtime_replacement() {
+/// Each load runs on lanes of its own, retired after it: the retained client
+/// reconnects on the next lanes.
+fn lanes_replaced() {
     let (address, server) = spawn_server(vec![Response::ok(PNG), Response::ok(PNG)], true);
     let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     for name in ["first", "second"] {
-        let runtime = test_runtime();
-        let image = {
-            let _entered = runtime.enter();
-            registry.load_network_image_bridged(format!("http://{address}/{name}.png"))
-        };
-        let decoded = runtime
-            .block_on(tokio_timeout(image))
-            .expect("live ambient runtime loads");
+        let lanes = ThreadLanes::new();
+        let decoded = block_on(
+            registry
+                .load_network_image(format!("http://{address}/{name}.png"), Some(lanes.lanes())),
+        )
+        .expect("live lanes load");
         assert_eq!((decoded.width(), decoded.height()), (4, 2));
-        drop(runtime);
     }
     assert_eq!(
         server.join().expect("server completed"),
         2,
-        "runtime shutdown retires its connection; the retained client can reconnect"
+        "retired lanes retire their connection; the retained client can reconnect"
     );
 }
 
-fn test_runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("test runtime starts")
+/// With no lanes, or lanes without a tokio reactor, a network load is a
+/// typed error, not a panic inside the HTTP client.
+///
+/// Red-check: drop the reactor check (reqwest panics on the polling thread).
+fn no_reactor() {
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    let url = "http://127.0.0.1:9/unreached.png";
+    let without_lanes = block_on(registry.load_network_image(url, None));
+    assert!(
+        matches!(&without_lanes, Err(AssetError::ReactorUnavailable { url: failed }) if failed == url),
+        "a load polled outside tokio is a typed error, got {without_lanes:?}"
+    );
+    let queued = QueuedLanes::new();
+    let pending = registry.load_network_image(url, Some(queued.lanes()));
+    queued.run_until_idle();
+    assert!(
+        matches!(
+            block_on(pending),
+            Err(AssetError::ReactorUnavailable { .. })
+        ),
+        "an IO lane outside tokio is a typed error"
+    );
 }
 
 /// What the stalled server saw on its one connection.
@@ -248,19 +233,16 @@ fn spawn_stalled_server() -> (std::net::SocketAddr, std::sync::mpsc::Receiver<Se
 }
 
 /// Two waiters for one URL share one request. It stays open while either
-/// waits, and dropping the last one aborts it and closes its connection.
+/// waits, and dropping the last one cancels it and closes its connection.
 #[test]
 fn an_image_request_lives_exactly_as_long_as_someone_waits_for_it() {
     const WAIT: Duration = Duration::from_secs(5);
     let (address, events) = spawn_stalled_server();
-    let runtime = test_runtime();
-    let registry = AssetRegistryBuilder::new()
-        .with_runtime_handle(runtime.handle().clone())
-        .with_default_capacity()
-        .build();
+    let lanes = ThreadLanes::new();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     let url = format!("http://{address}/stalled.png");
-    let first = registry.load_network_image_bridged(url.clone());
-    let second = registry.load_network_image_bridged(url);
+    let first = registry.load_network_image(url.clone(), Some(lanes.lanes()));
+    let second = registry.load_network_image(url, Some(lanes.lanes()));
     assert_eq!(events.recv_timeout(WAIT), Ok(Seen::Request));
 
     drop(first);
