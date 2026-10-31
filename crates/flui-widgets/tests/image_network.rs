@@ -36,7 +36,7 @@ fn network_image_loads_with_the_hosts_http_client() {
     let registry = Arc::new(AssetRegistry::default());
     host.attach(&Image::network(Arc::clone(&registry), URL))
         .expect("root attaches");
-    let source = flui_assets::ImageSource::Network(URL.into());
+    let source = flui_assets::ImageSource::network(URL, &host.http().handle());
     let deadline = Instant::now() + DECODE_BUDGET;
     while registry.cached_image(&source).is_none() {
         assert!(
@@ -113,7 +113,7 @@ fn registry_responses(concurrent: bool) {
             } else {
                 let a = first.resolve_async(&first_services).await;
                 assert!(
-                    second.resolve().is_err(),
+                    second.cached(&second_services).is_none(),
                     "another registry must not inherit the first registry's cached response"
                 );
                 let b = second.resolve_async(&second_services).await;
@@ -136,7 +136,7 @@ fn registry_responses(concurrent: bool) {
         "distinct registries must not share HTTP responses (concurrent={concurrent})"
     );
     let cached = first
-        .resolve()
+        .cached(&first_services)
         .expect("same registry can use its decoded cache");
     assert_eq!(
         (cached.width(), cached.height()),

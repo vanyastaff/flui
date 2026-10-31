@@ -8,7 +8,8 @@
   through), [ADR-0047](ADR-0047-unified-execution-services.md) (no runtime outside the lanes),
   [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) (the scripted client lives next to its
   contract), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §2 (no `http` or `reqwest`
-  type in a contract signature)
+  type in a contract signature), [ADR-0118](ADR-0118-network-image-registry-identity.md) (amended by
+  §6: the response authority is the client's, not the registry's)
 
 ## Context and problem statement
 
@@ -87,6 +88,19 @@ lets a test hand every layer the same scripted client.
    `init_state` beside `BackgroundCapability` and hands both to its provider as `ImageServices`.
    A load without a client answers `AssetError::HttpUnavailable`, a failed request `AssetError::Http`
    and a non-2xx status `AssetError::HttpStatus`.
+6. **The response authority is typed.** A load no longer reaches its client through the registry,
+   so the registry is no longer what ADR-0118 made the authority of a response. `HttpClient` has a
+   required `authority(&self) -> HttpAuthority`: an opaque value built with
+   `HttpAuthority::of(&Arc<_>)` from the state the client's responses come from (the built-in
+   provider's pool of the run, `ScriptedHttp`'s script), compared by that allocation and keeping it
+   reserved through a weak reference, so a dead client's authority never matches a later one.
+   `ImageSource::Network` carries the URL with the authority of the client that fetches it
+   (`ImageSource::network(url, &http)`), and decoded images and loads in flight are kept per
+   registry, URL and authority. `ImageProvider::cached` takes the `ImageServices`, so
+   `NetworkImage` probes with the client its `Image` acquired; its `ImageCacheKey` keeps registry
+   and URL, since one `Image`'s client does not change while it is mounted. A required method
+   without a default is deliberate: a default could not name a custom client's state, and every
+   such client would share images with every other.
 
 ### Consequences
 
@@ -108,6 +122,8 @@ lets a test hand every layer the same scripted client.
   `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (`flui-assets`).
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the
   headless host.
+- `an_authority_is_its_states_allocation_and_outlives_it` (`flui-platform`) and
+  `one_registry_keeps_two_clients_images_of_one_url_apart` (`flui-assets`): §6.
 - `cargo xtask send-positions` lists the contract's `Send` and `Sync` positions.
 
 ## Pros and cons of the options

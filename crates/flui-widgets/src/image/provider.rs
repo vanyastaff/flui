@@ -163,7 +163,8 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     ///
     /// Must not block. The default `None` always starts
     /// [`resolve_async`](Self::resolve_async).
-    fn cached(&self) -> Option<PixelImage> {
+    fn cached(&self, services: &ImageServices) -> Option<PixelImage> {
+        let _ = services;
         None
     }
 

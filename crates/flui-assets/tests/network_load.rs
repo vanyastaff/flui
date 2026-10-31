@@ -377,3 +377,50 @@ fn a_url_conversion_may_reenter_the_client() {
         "the URL is converted before the client's lock is taken"
     );
 }
+
+/// A 5×3 PNG, told apart from [`PNG`]'s 4×2.
+const OTHER_PNG: &[u8] = include_bytes!("fixtures/tiny_5x3.png");
+
+/// Two clients that answer one URL with different images, on one registry:
+/// each load gets its own client's image, whether the other's is already
+/// decoded or still in flight, and each client sees its own request.
+///
+/// Red-check: key network sources by URL alone (each load gets the image
+/// of the client that fetched first).
+#[test]
+fn one_registry_keeps_two_clients_images_of_one_url_apart() {
+    for in_flight in [false, true] {
+        let first = ScriptedHttp::new();
+        first.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
+        let second = ScriptedHttp::new();
+        second.respond(URL, ScriptedResponse::ok(OTHER_PNG.to_vec()));
+        let lanes = QueuedLanes::new();
+        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+        let first_load =
+            registry.load_network_image(URL, lanes.services().with_http(first.handle()));
+        if !in_flight {
+            lanes.run_until_idle();
+        }
+        let second_load =
+            registry.load_network_image(URL, lanes.services().with_http(second.handle()));
+        lanes.run_until_idle();
+        let first_image = block_on(first_load).expect("the first client's image loads");
+        let second_image = block_on(second_load).expect("the second client's image loads");
+        assert_eq!(
+            (first_image.width(), first_image.height()),
+            (4, 2),
+            "in flight: {in_flight}"
+        );
+        assert_eq!(
+            (second_image.width(), second_image.height()),
+            (5, 3),
+            "in flight: {in_flight}"
+        );
+        assert_eq!(first.requests_to(URL), 1, "in flight: {in_flight}");
+        assert_eq!(second.requests_to(URL), 1, "in flight: {in_flight}");
+        let cached = registry
+            .cached_image(&flui_assets::ImageSource::network(URL, &second.handle()))
+            .expect("the second client's image is kept");
+        assert_eq!((cached.width(), cached.height()), (5, 3));
+    }
+}

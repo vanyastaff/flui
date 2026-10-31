@@ -57,7 +57,7 @@ use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
 use flui_platform::executor::{Executor, SpawnError};
-use flui_platform::http::{Http, HttpError, HttpRequest};
+use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
@@ -109,17 +109,45 @@ const MAX_HANDOVERS: u8 = 4;
 pub enum ImageSource {
     /// An asset path, read from the file system.
     Asset(Arc<str>),
-    /// An HTTP or HTTPS URL.
-    Network(Arc<str>),
+    /// An HTTP or HTTPS URL, as one client's authority answers it.
+    Network(NetworkSource),
 }
 
 impl ImageSource {
+    /// The image at `url` as `http` fetches it: two clients with different
+    /// authorities may answer one URL with different images, so they never
+    /// share a decoded image or a load (ADR-0118, ADR-0280 §6).
+    #[must_use]
+    pub fn network(url: impl Into<Arc<str>>, http: &Http) -> Self {
+        Self::Network(NetworkSource {
+            url: url.into(),
+            authority: Some(http.authority()),
+        })
+    }
+
     /// The path or URL, for error messages.
     pub(crate) fn label(&self) -> &Arc<str> {
         match self {
             Self::Asset(path) => path,
-            Self::Network(url) => url,
+            Self::Network(network) => &network.url,
         }
+    }
+}
+
+/// A network image's URL and the authority of the client that fetches it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetworkSource {
+    url: Arc<str>,
+    /// `None` for a load with no client: it fails, and shares nothing with
+    /// a load that has one.
+    authority: Option<HttpAuthority>,
+}
+
+impl NetworkSource {
+    /// The URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
@@ -164,6 +192,15 @@ impl LoadServices {
     pub fn with_http(mut self, http: Http) -> Self {
         self.http = Some(http);
         self
+    }
+
+    /// The source of a load of `url` with these services' client, or with
+    /// none.
+    pub(crate) fn network_source(&self, url: Arc<str>) -> ImageSource {
+        ImageSource::Network(NetworkSource {
+            url,
+            authority: self.http.as_ref().map(Http::authority),
+        })
     }
 }
 
@@ -582,7 +619,7 @@ impl DecodedImages {
 fn fetch(source: &ImageSource, http: Option<Http>) -> Fetch {
     match source {
         ImageSource::Asset(path) => Box::pin(read_in_chunks(Arc::clone(path))),
-        ImageSource::Network(url) => Box::pin(fetch_over_http(Arc::clone(url), http)),
+        ImageSource::Network(network) => Box::pin(fetch_over_http(Arc::clone(&network.url), http)),
     }
 }
 

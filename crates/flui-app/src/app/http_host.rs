@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use flui_platform::Unsupported;
 use flui_platform::capability::{CapabilityProvider, ProviderContext};
-use flui_platform::http::{Http, HttpCapability, HttpClient, HttpError, HttpFuture, HttpHost};
+use flui_platform::http::{
+    Http, HttpAuthority, HttpCapability, HttpClient, HttpError, HttpFuture, HttpHost,
+};
 use flui_platform::http::{HttpRequest, HttpResponse};
 
 use super::capability::ExecutionSlot;
@@ -44,9 +46,9 @@ impl HostHttp {
 impl CapabilityProvider<HttpCapability> for HostHttp {
     fn provide(&self, _cx: &ProviderContext<'_>) -> Result<Http, Unsupported> {
         #[cfg(target_os = "android")]
-        return Ok(Http::new(Arc::new(NotYet(HttpHost::Android))));
+        return Ok(Http::new(Arc::new(NotYet(Arc::new(HttpHost::Android)))));
         #[cfg(target_arch = "wasm32")]
-        return Ok(Http::new(Arc::new(NotYet(HttpHost::Web))));
+        return Ok(Http::new(Arc::new(NotYet(Arc::new(HttpHost::Web)))));
         #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
         {
             let services = self.slot.borrow().clone().ok_or_else(|| {
@@ -69,11 +71,16 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
         reason = "a native host on its embedder's executors answers from the lane"
     )
 )]
-struct NotYet(HttpHost);
+/// Its authority is its own: it answers nothing a cache could share.
+struct NotYet(Arc<HttpHost>);
 
 impl HttpClient for NotYet {
+    fn authority(&self) -> HttpAuthority {
+        HttpAuthority::of(&self.0)
+    }
+
     fn send(&self, _request: HttpRequest) -> HttpFuture<HttpResponse> {
-        let host = self.0;
+        let host = *self.0;
         Box::pin(std::future::ready(Err(HttpError::NotYetOnThisHost {
             host,
         })))
@@ -90,8 +97,8 @@ mod lanes {
 
     use flui_platform::executor::SpawnError;
     use flui_platform::http::{
-        BodySource, HeaderName, HeaderValue, Headers, HttpClient, HttpError, HttpFuture, HttpHost,
-        HttpRequest, HttpResponse, Method, ResponseBody, StatusCode,
+        BodySource, HeaderName, HeaderValue, Headers, HttpAuthority, HttpClient, HttpError,
+        HttpFuture, HttpHost, HttpRequest, HttpResponse, Method, ResponseBody, StatusCode,
     };
     use flui_runtime::execution::ExecutionServices;
     use tokio::sync::{mpsc, oneshot};
@@ -122,6 +129,11 @@ mod lanes {
     }
 
     impl HttpClient for LaneHttp {
+        // The run's pool answers: every handle the provider hands out shares it.
+        fn authority(&self) -> HttpAuthority {
+            HttpAuthority::of(&self.client)
+        }
+
         fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
             let Some(services) = self.services.upgrade() else {
                 return refused(SpawnError::ShuttingDown);

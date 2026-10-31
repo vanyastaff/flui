@@ -17,8 +17,8 @@ use parking_lot::Mutex;
 
 use crate::capability::{CapabilityRegistrar, ProviderContext};
 use crate::http::{
-    Headers, Http, HttpCapability, HttpClient, HttpError, HttpFuture, HttpRequest, HttpResponse,
-    ResponseBody, StatusCode,
+    Headers, Http, HttpAuthority, HttpCapability, HttpClient, HttpError, HttpFuture, HttpRequest,
+    HttpResponse, ResponseBody, StatusCode,
 };
 
 /// What a scripted URL answers.
@@ -158,6 +158,10 @@ impl ScriptedHttp {
 }
 
 impl HttpClient for ScriptedHttp {
+    fn authority(&self) -> HttpAuthority {
+        HttpAuthority::of(&self.state)
+    }
+
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
         let url = request.url().to_owned();
         let limit = request.body_limit();

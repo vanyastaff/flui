@@ -19,7 +19,7 @@ mod images;
 #[cfg(feature = "images")]
 mod ordered_slots;
 #[cfg(feature = "images")]
-pub use images::{ImageLoad, ImageSource, LoadServices};
+pub use images::{ImageLoad, ImageSource, LoadServices, NetworkSource};
 
 /// How a registry keeps and decodes images.
 #[cfg(feature = "images")]
@@ -176,7 +176,7 @@ impl AssetRegistry {
         services: LoadServices,
     ) -> ImageLoad {
         self.decoded_images
-            .load(ImageSource::Network(url.into()), services)
+            .load(services.network_source(url.into()), services)
     }
 
     /// The completed decoded image this registry keeps for `source`, made most

@@ -61,7 +61,8 @@ impl ImageProvider for AssetImage {
     /// [`Image`](crate::Image) does automatically via
     /// [`cache_key`](ImageProvider::cache_key)).
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        self.cached()
+        self.registry
+            .cached_image(&self.source())
             .ok_or(ImageProviderError::RequiresAsyncResolve {
                 provider_name: "AssetImage",
             })
@@ -88,11 +89,11 @@ impl ImageProvider for AssetImage {
         })
     }
 
-    fn cached(&self) -> Option<PixelImage> {
+    fn cached(&self, _services: &ImageServices) -> Option<PixelImage> {
         self.registry.cached_image(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {
-        Some(ImageCacheKey::registry(&self.registry, self.source()))
+        Some(ImageCacheKey::asset(&self.registry, Arc::clone(&self.path)))
     }
 }

@@ -458,7 +458,10 @@ registry keeps their decoded images in its own LRU, bounded by pixel bytes
 image larger than the budget is handed to its waiters and not kept.
 `cached_image` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two registries are two
-images (ADR-0250).
+images (ADR-0250). A network source is its URL with the `HttpAuthority` of the
+client that fetches it, so two clients answered different images at one URL
+never share a decoded image or a load (ADR-0280 §6); a load without a client
+shares nothing with one that has one.
 
 A load runs on the `LoadServices` its first request hands it: lanes (an
 `Arc<dyn flui_platform::executor::Executor>`, the UI runtime's for the `Image`

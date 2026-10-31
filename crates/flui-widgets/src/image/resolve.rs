@@ -234,7 +234,7 @@ impl ImageResolver {
 
         // An image the provider already holds resolves in this very frame,
         // with no placeholder.
-        if let Some(hit) = self.provider.cached() {
+        if let Some(hit) = self.provider.cached(&self.services) {
             self.published.lock().publish(generation, hit);
             return;
         }

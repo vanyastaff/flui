@@ -8,10 +8,12 @@
 //! runtime of the caller's: the host's provider runs the request where its
 //! network stack lives and wakes the waiter.
 
+use std::any::Any;
 use std::fmt;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -33,6 +35,53 @@ pub trait HttpClient: Send + Sync + 'static {
     /// response head arrives. Dropping the future, or the response's body
     /// before its end, abandons the request.
     fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse>;
+
+    /// Who answers this client's requests: two clients with the same
+    /// authority may share each other's responses, as a cache of fetched
+    /// images does (ADR-0280 §6). A client returns the authority of the
+    /// state its responses come from, its connection pool or its script,
+    /// so every handle over that state answers the same one.
+    fn authority(&self) -> HttpAuthority;
+}
+
+/// The identity of what answers an [`HttpClient`]'s requests.
+///
+/// Built from the client's own shared state and compared by that state's
+/// allocation, which the authority keeps reserved: one whose state is gone
+/// never matches a later client's, even one allocated at the same address.
+/// It keeps the state's allocation but not the state itself alive.
+#[derive(Clone)]
+pub struct HttpAuthority(Weak<dyn Any + Send + Sync>);
+
+impl HttpAuthority {
+    /// The authority of the client whose responses come from `state`.
+    #[must_use]
+    pub fn of<T: Send + Sync + 'static>(state: &Arc<T>) -> Self {
+        let state: Weak<T> = Arc::downgrade(state);
+        Self(state)
+    }
+}
+
+impl PartialEq for HttpAuthority {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(self.0.as_ptr(), other.0.as_ptr())
+    }
+}
+
+impl Eq for HttpAuthority {}
+
+impl Hash for HttpAuthority {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().cast::<()>().hash(state);
+    }
+}
+
+impl fmt::Debug for HttpAuthority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("HttpAuthority")
+            .field(&self.0.as_ptr().cast::<()>())
+            .finish()
+    }
 }
 
 /// The marker of the HTTP capability (ADR-0152): its handle is [`Http`].
@@ -58,6 +107,12 @@ impl Http {
     #[must_use]
     pub fn new(client: Arc<dyn HttpClient>) -> Self {
         Self { client }
+    }
+
+    /// Who answers this handle's requests; see [`HttpClient::authority`].
+    #[must_use]
+    pub fn authority(&self) -> HttpAuthority {
+        self.client.authority()
     }
 
     /// Send `request`; see [`HttpClient::send`].

@@ -4,7 +4,9 @@
   `HttpClient` contract, whose futures need no async runtime of the caller's, the `HttpCapability`
   marker with its `Send` handle `Http`, `HttpRequest`, `HttpResponse` with a chunked
   `ResponseBody`, and a typed `HttpError`. Behind `testing`, `ScriptedHttp` answers scripted
-  responses per URL, so no test reaches the network.
+  responses per URL, so no test reaches the network. `HttpClient::authority` returns an
+  `HttpAuthority` naming the state a client's responses come from, so caches keep two clients'
+  responses apart.
 - **`flui-app`**: the built-in HTTP provider, behind the default `http` feature, sends `reqwest`
   requests from the run's IO lane. Android, the web and an embedder's executors answer
   `HttpError::NotYetOnThisHost`.
@@ -19,11 +21,15 @@
 
 - **`flui-assets`**: `AssetRegistry::load_image` and `load_network_image` take `LoadServices`
   (lanes and an HTTP client) instead of lanes alone, and a network image is fetched with the
-  caller's client.
+  caller's client. `ImageSource::Network` holds a `NetworkSource`, the URL with the authority of
+  the client that fetches it (`ImageSource::network`), so one registry keeps two clients' images
+  of one URL apart.
 - **`flui-widgets`**: `ImageProvider::resolve_async` takes `&ImageServices` instead of
   `Option<&Background>`. `Image` acquires `HttpCapability` beside `BackgroundCapability`, so
   `Image::network` loads on the headless host. `NetworkImage` and `Image::network` need only the
-  `asset-images` feature.
+  `asset-images` feature. `ImageProvider::cached` takes `&ImageServices`, and
+  `NetworkImage::resolve` always answers `RequiresAsyncResolve`: which image is cached depends on
+  the client.
 
 ### Removed
 
