@@ -6,7 +6,8 @@
 //! [`ElementSpec`]s.
 
 use accesskit::{
-    Action, AriaCurrent, HasPopup, Live, Node, NodeId, Orientation, Rect, Role, Toggled,
+    Action, ActionData, AriaCurrent, HasPopup, Live, Node, NodeId, Orientation, Point, Rect, Role,
+    Toggled,
 };
 
 /// The element a node is mirrored as.
@@ -15,12 +16,23 @@ pub(crate) enum Tag {
     /// `<flui-node>`: an unknown tag, with no style or meaning of its own, so
     /// `role` alone says what it is.
     Node,
+    /// `<a href>`, for a link with a URL: a screen reader reads the address
+    /// and offers to copy or open it, which no ARIA attribute can say. A
+    /// `click` on it never navigates; it is the node's action.
+    Link,
+    /// `<input type="range">`, for a slider a user can move: the browser
+    /// adjusts it for a screen reader (VoiceOver's and TalkBack's swipes,
+    /// NVDA's arrows in browse mode), which it does for no ARIA slider, and
+    /// the adjusted value is the node's action.
+    Range,
 }
 
 impl Tag {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Node => "flui-node",
+            Self::Link => "a",
+            Self::Range => "input",
         }
     }
 }
@@ -46,14 +58,43 @@ pub(crate) struct ElementSpec {
     /// The element's own text, for a node whose name is its content: a text
     /// node before its children's elements.
     pub(crate) text: Option<String>,
+    /// A [`Tag::Range`]'s value, written to the `value` property: the
+    /// attribute stops counting once the browser adjusts the input.
+    pub(crate) value: Option<String>,
     pub(crate) placement: Placement,
+    /// A node a platform can scroll to an offset is a scroller.
+    pub(crate) scroll: Option<Scroll>,
+}
+
+/// A scroller's content and how far it is scrolled, in CSS pixels from its
+/// top left corner: the node's published position less its minimum, inside
+/// a content box as much larger than the element's as its extent is long.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Scroll {
+    pub(crate) left: f64,
+    pub(crate) top: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+impl Scroll {
+    /// Whether the element's own `scrollLeft` and `scrollTop` are this
+    /// scroll's, within a pixel: a browser rounds what it is given and
+    /// reports whole pixels.
+    pub(crate) fn is_at(&self, left: f64, top: f64) -> bool {
+        (self.left - left).abs() < 1.0 && (self.top - top).abs() < 1.0
+    }
 }
 
 /// The frame a node is placed in: its parent's bounds in the parent's own
-/// coordinates, which the parent's element box starts at.
+/// coordinates, which the parent's element box starts at, and how far the
+/// parent's element is scrolled. A scrolled node's children are published
+/// where they are seen, so each is placed as far into the content as the
+/// content is scrolled.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ParentFrame {
     pub(crate) origin: (f64, f64),
+    pub(crate) scrolled: (f64, f64),
 }
 
 impl ParentFrame {
@@ -62,8 +103,78 @@ impl ParentFrame {
         let origin = node
             .bounds()
             .map_or((0.0, 0.0), |bounds| (bounds.x0, bounds.y0));
-        Self { origin }
+        let scrolled =
+            scroll(node, (0.0, 0.0)).map_or((0.0, 0.0), |scroll| (scroll.left, scroll.top));
+        Self { origin, scrolled }
     }
+}
+
+/// One axis of a node's published scroll: where it is from the minimum, and
+/// how long the extent is; `None` without a finite, ordered extent.
+fn scroll_axis(position: Option<f64>, min: Option<f64>, max: Option<f64>) -> Option<(f64, f64)> {
+    let (min, max) = (min?, max?);
+    let length = max - min;
+    if !(min.is_finite() && length.is_finite() && length >= 0.0) {
+        return None;
+    }
+    let at = position
+        .filter(|position| position.is_finite())
+        .map_or(0.0, |position| position - min);
+    Some((at.clamp(0.0, length), length))
+}
+
+/// The scroll of a node's element of `size`, for a node a platform can
+/// scroll to an offset along an axis with a finite extent. The position
+/// slider of a scrollable publishes the same range and takes no offset, so
+/// it stays a slider.
+fn scroll(node: &Node, size: (f64, f64)) -> Option<Scroll> {
+    if !node.supports_action(Action::SetScrollOffset) {
+        return None;
+    }
+    let x = scroll_axis(node.scroll_x(), node.scroll_x_min(), node.scroll_x_max());
+    let y = scroll_axis(node.scroll_y(), node.scroll_y_min(), node.scroll_y_max());
+    if x.is_none() && y.is_none() {
+        return None;
+    }
+    let (left, wide) = x.unwrap_or((0.0, 0.0));
+    let (top, tall) = y.unwrap_or((0.0, 0.0));
+    Some(Scroll {
+        left,
+        top,
+        width: size.0 + wide,
+        height: size.1 + tall,
+    })
+}
+
+/// The offset a scroller's element scrolled to by the browser asks for, in
+/// the order the node publishes its position: its minimum plus how far the
+/// element is scrolled, on each axis the node scrolls along, and its
+/// published position on the other.
+pub(crate) fn scroll_offset(node: &Node, left: f64, top: f64) -> Option<Point> {
+    scroll(node, (0.0, 0.0))?;
+    let along = |position: Option<f64>, min: Option<f64>, max: Option<f64>, scrolled: f64| {
+        let finite = |value: &f64| value.is_finite();
+        match scroll_axis(position, min, max) {
+            Some((_, length)) => min.map(|min| min + scrolled.clamp(0.0, length)),
+            None => position.filter(finite),
+        }
+        .filter(finite)
+        .unwrap_or(0.0)
+    };
+    Some(Point::new(
+        along(
+            node.scroll_x(),
+            node.scroll_x_min(),
+            node.scroll_x_max(),
+            left,
+        ),
+        along(
+            node.scroll_y(),
+            node.scroll_y_min(),
+            node.scroll_y_max(),
+            top,
+        ),
+    ))
 }
 
 /// The DOM `id` each mirrored element gets, unique on the page: a scope per
@@ -146,20 +257,128 @@ pub(crate) fn describe(
     }
     states(node, role, &mut attributes);
     relations(node, ids, &mut attributes);
-    range(node, &mut attributes);
+    let slider = movable_slider(node);
+    let tag = if slider.is_some() {
+        Tag::Range
+    } else if node.role() == Role::Link && node.url().is_some() {
+        Tag::Link
+    } else {
+        Tag::Node
+    };
+    let mut value = None;
+    match (tag, slider) {
+        (Tag::Range, Some(slider)) => {
+            attributes.extend([
+                ("type", "range".to_owned()),
+                ("min", slider.min.to_string()),
+                ("max", slider.max.to_string()),
+                (
+                    "step",
+                    slider
+                        .step
+                        .map_or_else(|| "any".to_owned(), |step| step.to_string()),
+                ),
+            ]);
+            if let Some(text) = node.value() {
+                attributes.push(("aria-valuetext", text.to_owned()));
+            }
+            value = Some(slider.value.to_string());
+        }
+        (Tag::Link, _) => {
+            attributes.extend(node.url().map(|url| ("href", url.to_owned())));
+            range(node, &mut attributes);
+        }
+        _ => range(node, &mut attributes),
+    }
     live(node, &mut attributes);
-    if node.supports_action(Action::Focus) {
-        // Focusable by script and by assistive technology, never by the
-        // browser's Tab order: FLUI's focus traversal moves it.
+    // Focusable by script and by assistive technology, never by the browser's
+    // Tab order: FLUI's focus traversal moves it. A link and an input are in
+    // the Tab order by themselves.
+    if tag != Tag::Node || node.supports_action(Action::Focus) {
         attributes.push(("tabindex", "-1".to_owned()));
     }
     attributes.sort_by_key(|&(name, _)| name);
+    let placement = placement(node, parent, root);
     ElementSpec {
-        tag: Tag::Node,
+        tag,
         attributes,
-        text,
-        placement: placement(node, parent, root),
+        text: text.filter(|_| tag != Tag::Range),
+        value,
+        placement,
+        scroll: scroll(node, (placement.width, placement.height)),
     }
+}
+
+/// How far from a whole number of steps a value may be and still be on its
+/// slider's step, relative to the count: the division rounds.
+const STEP_TOLERANCE: f64 = 1e-9;
+
+/// A slider's range as an `<input type="range">` holds it; `step` is `None`
+/// where the input takes any value.
+struct Slider {
+    value: f64,
+    min: f64,
+    max: f64,
+    step: Option<f64>,
+}
+
+/// The range of a slider a user can move: a leaf whose node takes a value or
+/// a step, with a finite value inside a finite, ordered range. Any other
+/// slider stays an ARIA one, read but not adjusted.
+fn movable_slider(node: &Node) -> Option<Slider> {
+    let movable = [Action::SetValue, Action::Increment, Action::Decrement]
+        .into_iter()
+        .any(|action| node.supports_action(action));
+    if node.role() != Role::Slider || !node.children().is_empty() || !movable || node.is_read_only()
+    {
+        return None;
+    }
+    let finite = |value: Option<f64>| value.filter(|value| value.is_finite());
+    let (min, max) = (
+        finite(node.min_numeric_value())?,
+        finite(node.max_numeric_value())?,
+    );
+    let value = finite(node.numeric_value())?;
+    if min > max {
+        return None;
+    }
+    let value = value.clamp(min, max);
+    // A range input snaps its value to its step: a value or a maximum the step
+    // does not reach from the minimum would be shown as another, or never
+    // reached, so the input takes any.
+    let on_step = |step: f64, at: f64| {
+        let steps = (at - min) / step;
+        (steps - steps.round()).abs() <= STEP_TOLERANCE * steps.abs().max(1.0)
+    };
+    let step = finite(node.numeric_value_step())
+        .filter(|step| *step > 0.0)
+        .filter(|&step| on_step(step, value) && on_step(step, max));
+    Some(Slider {
+        value,
+        min,
+        max,
+        step,
+    })
+}
+
+/// What a slider's input moved to `value` by the browser asks for: the value
+/// itself where the node takes one, otherwise a step towards it.
+pub(crate) fn slider_request(node: &Node, value: f64) -> Option<(Action, Option<ActionData>)> {
+    if !value.is_finite() {
+        return None;
+    }
+    if node.supports_action(Action::SetValue) {
+        return Some((Action::SetValue, Some(ActionData::NumericValue(value))));
+    }
+    let current = node.numeric_value()?;
+    let action = if value > current {
+        Action::Increment
+    } else if value < current {
+        Action::Decrement
+    } else {
+        return None;
+    };
+    node.supports_action(action).then_some((action, None))
 }
 
 /// The node's relations, as IDREF lists of the targets' elements.
@@ -355,7 +574,8 @@ fn live(node: &Node, attributes: &mut Vec<(&'static str, String)>) {
 /// coordinates into its parent's, `D(x) = A·x + t`; the element's box starts
 /// at the node's bounds origin `b`, the parent's at `p`. With
 /// `transform-origin: 0 0` the element is at `A·b + t − p`, transformed by
-/// `A` alone.
+/// `A` alone, and as far into a scrolled parent's content `s` as it is
+/// scrolled: `A·b + t − p + s`.
 fn placement(node: &Node, parent: ParentFrame, root: bool) -> Placement {
     let bounds = node.bounds().unwrap_or(Rect::ZERO);
     let coefficients = if root {
@@ -365,8 +585,8 @@ fn placement(node: &Node, parent: ParentFrame, root: bool) -> Placement {
     };
     let [xx, yx, xy, yy, dx, dy] = coefficients.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     let (x0, y0) = (bounds.x0, bounds.y0);
-    let left = xx * x0 + xy * y0 + dx - parent.origin.0;
-    let top = yx * x0 + yy * y0 + dy - parent.origin.1;
+    let left = xx * x0 + xy * y0 + dx - parent.origin.0 + parent.scrolled.0;
+    let top = yx * x0 + yy * y0 + dy - parent.origin.1 + parent.scrolled.1;
     let linear = [xx, yx, xy, yy];
     Placement {
         left: finite_or_zero(left),
@@ -512,7 +732,7 @@ pub(crate) const fn aria_role(role: Role) -> Option<&'static str> {
 mod tests {
     use accesskit::{Action, Affine, Node, NodeId, Rect, Role, Toggled};
 
-    use super::{ElementIds, ParentFrame, describe, takes_text};
+    use super::{ElementIds, ParentFrame, Scroll, describe, takes_text};
 
     fn attribute<'a>(spec: &'a super::ElementSpec, name: &str) -> Option<&'a str> {
         spec.attributes
@@ -758,6 +978,7 @@ mod tests {
             bounds: Rect,
             transform: Option<Affine>,
             parent: (f64, f64),
+            scrolled: (f64, f64),
             root: bool,
             expect: (f64, f64, f64, f64, Option<[f64; 4]>),
         }
@@ -767,6 +988,7 @@ mod tests {
                 bounds: Rect::new(30.0, 40.0, 130.0, 60.0),
                 transform: None,
                 parent: (10.0, 10.0),
+                scrolled: (0.0, 0.0),
                 root: false,
                 expect: (20.0, 30.0, 100.0, 20.0, None),
             },
@@ -775,6 +997,7 @@ mod tests {
                 bounds: Rect::new(0.0, 0.0, 50.0, 50.0),
                 transform: Some(Affine::translate((5.0, -7.0))),
                 parent: (0.0, 0.0),
+                scrolled: (0.0, 0.0),
                 root: false,
                 expect: (5.0, -7.0, 50.0, 50.0, None),
             },
@@ -783,6 +1006,7 @@ mod tests {
                 bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
                 transform: Some(Affine::scale(2.0)),
                 parent: (0.0, 0.0),
+                scrolled: (0.0, 0.0),
                 root: true,
                 expect: (0.0, 0.0, 800.0, 600.0, None),
             },
@@ -791,14 +1015,25 @@ mod tests {
                 bounds: Rect::new(10.0, 0.0, 20.0, 10.0),
                 transform: Some(Affine::scale(2.0)),
                 parent: (0.0, 0.0),
+                scrolled: (0.0, 0.0),
                 root: false,
                 expect: (20.0, 0.0, 10.0, 10.0, Some([2.0, 0.0, 0.0, 2.0])),
+            },
+            Case {
+                name: "a scrolled parent's child is as far into its content as it is scrolled",
+                bounds: Rect::new(0.0, -30.0, 100.0, 10.0),
+                transform: None,
+                parent: (0.0, 0.0),
+                scrolled: (0.0, 120.0),
+                root: false,
+                expect: (0.0, 90.0, 100.0, 40.0, None),
             },
             Case {
                 name: "non-finite geometry is never published",
                 bounds: Rect::new(f64::NAN, 0.0, f64::INFINITY, 10.0),
                 transform: None,
                 parent: (0.0, 0.0),
+                scrolled: (0.0, 0.0),
                 root: false,
                 expect: (0.0, 0.0, 0.0, 10.0, None),
             },
@@ -814,6 +1049,7 @@ mod tests {
                 &node,
                 ParentFrame {
                     origin: case.parent,
+                    scrolled: case.scrolled,
                 },
                 case.root,
                 &ElementIds::new("t"),
@@ -832,6 +1068,171 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// A link with a URL, a slider a user can move and a scroller are
+    /// mirrored as the elements the browser adjusts and reads for them.
+    #[test]
+    fn a_node_the_browser_must_act_on_is_its_native_element() {
+        let link = {
+            let mut node = Node::new(Role::Link);
+            node.set_label("Docs");
+            node.set_url("https://example.com/docs");
+            node.add_action(Action::Click);
+            node
+        };
+        let slider = |read_only: bool| {
+            let mut node = Node::new(Role::Slider);
+            node.set_label("Volume");
+            node.set_numeric_value(30.0);
+            node.set_min_numeric_value(0.0);
+            node.set_max_numeric_value(100.0);
+            node.set_numeric_value_step(5.0);
+            node.set_value("30%");
+            node.add_action(Action::SetValue);
+            if read_only {
+                node.set_read_only();
+            }
+            node
+        };
+        let describe = |node: &Node| {
+            describe(
+                NodeId(7),
+                node,
+                ParentFrame::default(),
+                false,
+                &ElementIds::new("t"),
+            )
+        };
+
+        let anchor = describe(&link);
+        assert_eq!(anchor.tag.name(), "a");
+        assert_eq!(attribute(&anchor, "href"), Some("https://example.com/docs"));
+        assert_eq!(
+            attribute(&anchor, "tabindex"),
+            Some("-1"),
+            "never in the Tab order"
+        );
+        assert_eq!(anchor.text.as_deref(), Some("Docs"));
+        let mut without_url = link;
+        without_url.clear_url();
+        assert_eq!(describe(&without_url).tag.name(), "flui-node");
+
+        let input = describe(&slider(false));
+        assert_eq!(input.tag.name(), "input");
+        for (name, value) in [
+            ("type", Some("range")),
+            ("min", Some("0")),
+            ("max", Some("100")),
+            ("step", Some("5")),
+            ("aria-valuetext", Some("30%")),
+            ("aria-label", Some("Volume")),
+            ("aria-valuenow", None),
+            ("tabindex", Some("-1")),
+        ] {
+            assert_eq!(attribute(&input, name), value, "range input: {name}");
+        }
+        assert_eq!(input.value.as_deref(), Some("30"));
+        let mut off_step = slider(false);
+        off_step.set_numeric_value(32.0);
+        let input = describe(&off_step);
+        assert_eq!(
+            attribute(&input, "step"),
+            Some("any"),
+            "a value off the step is not snapped"
+        );
+        assert_eq!(input.value.as_deref(), Some("32"));
+        let mut short_range = slider(false);
+        short_range.set_max_numeric_value(32.0);
+        assert_eq!(
+            attribute(&describe(&short_range), "step"),
+            Some("any"),
+            "a maximum off the step stays reachable"
+        );
+        let read_only = describe(&slider(true));
+        assert_eq!(
+            read_only.tag.name(),
+            "flui-node",
+            "a slider nobody moves is read"
+        );
+        assert_eq!(attribute(&read_only, "aria-valuenow"), Some("30"));
+
+        let mut list = Node::new(Role::ScrollView);
+        list.set_bounds(Rect::new(0.0, 0.0, 200.0, 100.0));
+        list.set_scroll_y(150.0);
+        list.set_scroll_y_min(50.0);
+        list.set_scroll_y_max(450.0);
+        assert_eq!(
+            describe(&list).scroll,
+            None,
+            "a scroll nothing can set is placed only"
+        );
+        list.add_action(Action::SetScrollOffset);
+        assert_eq!(
+            describe(&list).scroll,
+            Some(Scroll {
+                left: 0.0,
+                top: 100.0,
+                width: 200.0,
+                height: 500.0
+            })
+        );
+    }
+
+    /// What the browser moving a range input or scrolling a scroller asks
+    /// the node for.
+    #[test]
+    fn the_browser_adjusting_an_element_asks_for_the_node_s_action() {
+        use accesskit::{ActionData, Point};
+
+        use super::{scroll_offset, slider_request};
+
+        let mut stepped = Node::new(Role::Slider);
+        stepped.set_numeric_value(30.0);
+        stepped.add_action(Action::Increment);
+        stepped.add_action(Action::Decrement);
+        assert_eq!(
+            slider_request(&stepped, 35.0),
+            Some((Action::Increment, None))
+        );
+        assert_eq!(
+            slider_request(&stepped, 25.0),
+            Some((Action::Decrement, None))
+        );
+        assert_eq!(slider_request(&stepped, 30.0), None);
+        assert_eq!(slider_request(&stepped, f64::NAN), None);
+        let mut set = stepped.clone();
+        set.add_action(Action::SetValue);
+        assert_eq!(
+            slider_request(&set, 42.0),
+            Some((Action::SetValue, Some(ActionData::NumericValue(42.0))))
+        );
+
+        let mut list = Node::new(Role::ScrollView);
+        list.set_scroll_x(7.0);
+        list.set_scroll_y(150.0);
+        list.set_scroll_y_min(50.0);
+        list.set_scroll_y_max(450.0);
+        assert_eq!(scroll_offset(&list, 0.0, 10.0), None, "no offset is taken");
+        list.add_action(Action::SetScrollOffset);
+        assert_eq!(
+            scroll_offset(&list, 3.0, 200.0),
+            Some(Point::new(7.0, 250.0)),
+            "the scrolled axis from its minimum, the other as published"
+        );
+        assert_eq!(
+            scroll_offset(&list, 0.0, 900.0),
+            Some(Point::new(7.0, 450.0)),
+            "never past the extent"
+        );
+        let scroll = super::Scroll {
+            left: 0.0,
+            top: 100.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        assert!(scroll.is_at(0.2, 100.9));
+        assert!(!scroll.is_at(0.0, 101.0));
     }
 
     /// The roles the window's text input serves on the canvas.

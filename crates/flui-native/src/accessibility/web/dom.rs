@@ -25,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use accesskit::{ActionRequest, NodeId, TreeId, TreeUpdate};
+use accesskit::{Action, ActionData, ActionRequest, NodeId, TreeId, TreeUpdate};
 use flui_platform::keyboard::KeyState;
 use flui_semantics::AssistiveFocusSupport;
 use flui_semantics::platform::{
@@ -33,9 +33,9 @@ use flui_semantics::platform::{
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement};
+use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement};
 
-use super::aria::{self, ElementIds, ElementSpec, Placement};
+use super::aria::{self, ElementIds, ElementSpec, Placement, Scroll, Tag};
 use super::mirror::{Mirror, Op, Refused};
 use crate::accessibility::bridge::BridgeShared;
 use crate::owner::slot::OwnerSlot;
@@ -44,6 +44,18 @@ use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef};
 
 /// The attribute that names the node an element mirrors.
 const NODE_ATTRIBUTE: &str = "data-flui-node";
+
+/// The empty element whose size is a scroller's content.
+const EXTENT_TAG: &str = "flui-scroll-extent";
+/// A scroller's own style: it scrolls with no scrollbar, which would take
+/// part of the box the node's viewport is, and its offsets run from the
+/// left edge whatever direction the page inherits, as the node's scroll
+/// does.
+const SCROLLER_STYLE: [(&str, &str); 3] = [
+    ("overflow", "auto"),
+    ("scrollbar-width", "none"),
+    ("direction", "ltr"),
+];
 /// How far from 1 the canvas's own scale may be before the host takes it:
 /// layout rounds a box to a fraction of a pixel.
 const SCALE_TOLERANCE: f64 = 1e-3;
@@ -180,6 +192,8 @@ struct Page {
     /// The composition root was asked for the whole tree after a refused
     /// update and has not answered with one that stands yet.
     asked_again: Cell<bool>,
+    /// The host is not shown, or not yet: it has no scroll to keep.
+    host_hidden: Cell<bool>,
     /// Watches the canvas's own `style`, `class` and `hidden` for a change
     /// that shows or hides it; dropped when the window closes.
     canvas_style: RefCell<Option<StyleObserver>>,
@@ -207,6 +221,7 @@ impl Page {
             work: RefCell::default(),
             running: Cell::new(false),
             asked_again: Cell::new(false),
+            host_hidden: Cell::new(true),
             canvas_style: RefCell::new(None),
         });
         let placeholder = page.placeholder()?;
@@ -299,6 +314,29 @@ impl Page {
                 }
             })?);
         }
+        let this = self.this.clone();
+        listeners.push(self.listen(target, "input", move |event| {
+            if let Some(this) = this.upgrade() {
+                this.slider_moved(&event);
+            }
+        })?);
+        // `scroll` does not bubble: the host sees its scrollers' in the
+        // capture phase.
+        let this = self.this.clone();
+        listeners.push(
+            CanvasListener::install_in_phase(
+                target,
+                "scroll",
+                &self.accepting,
+                true,
+                move |event| {
+                    if let Some(this) = this.upgrade() {
+                        this.scrolled(&event);
+                    }
+                },
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))?,
+        );
         // The window reads its focus again when it leaves or enters the host
         // from outside the canvas's focus area. The window's handler runs
         // from the queue: a mirrored element removed while it holds focus
@@ -450,18 +488,25 @@ impl Page {
         // an element that held it.
         let focus_was_in_window = self.holds_focus(&host) || self.canvas_focused();
         let mut focus_moved = false;
+        let mut scrolled = Vec::new();
         {
             let mut tree = self.tree.borrow_mut();
             for op in ops {
                 if matches!(op, Op::Focus(_)) {
                     focus_moved = true;
                 }
-                if let Err(error) = run(&self.document, &host, &mut tree.elements, op) {
+                if let Err(error) =
+                    run(&self.document, &host, &mut tree.elements, &mut scrolled, op)
+                {
                     warn_failure("the semantics host could not be changed", &error);
                 }
             }
         }
         self.place();
+        // Scrolled once placed and shown: a hidden element has no box.
+        for (element, scroll) in &scrolled {
+            scroll_to(element, scroll);
+        }
         if focus_was_in_window && (focus_moved || !self.holds_focus(&host)) {
             self.follow_focus();
         }
@@ -513,14 +558,12 @@ impl Page {
     /// A `click`, `focusin` or `contextmenu` on an element of the host,
     /// turned into the action its node supports.
     fn node_event(&self, kind: &str, event: &web_sys::Event) {
-        let Some(node) = event
-            .target()
-            .and_then(|target| target.dyn_into::<Element>().ok())
-            .and_then(|target| target.closest("[data-flui-node]").ok().flatten())
-            .and_then(|element| element.get_attribute(NODE_ATTRIBUTE))
-            .and_then(|id| id.parse::<u64>().ok())
-            .map(NodeId)
-        else {
+        // A link's address is read, never followed: the node's action is
+        // what a click on it does.
+        if kind == "click" && closest(event, "a[href]").is_some() {
+            event.prevent_default();
+        }
+        let Some((node, _)) = event_node(event) else {
             return;
         };
         // An event the host's own change fired (its `focus()`) finds the
@@ -545,6 +588,81 @@ impl Page {
             target_node: node,
             data: None,
         }));
+    }
+
+    /// The browser moved a slider's range input, for a screen reader: the
+    /// value, or a step towards it, is asked of the node. The input shows
+    /// the node's value again until the tree publishes the moved one, so a
+    /// move the node refuses leaves nothing behind.
+    fn slider_moved(&self, event: &web_sys::Event) {
+        let Some((node, element)) = event_node(event) else {
+            return;
+        };
+        let Some(input) = element.dyn_ref::<HtmlInputElement>() else {
+            return;
+        };
+        let value = input.value_as_number();
+        let Ok(tree) = self.tree.try_borrow() else {
+            return;
+        };
+        let request = tree
+            .mirror
+            .node(node)
+            .and_then(|mirrored| aria::slider_request(mirrored, value));
+        let published = tree.mirror.spec(node).and_then(|spec| spec.value.clone());
+        drop(tree);
+        if let Some(published) = published {
+            input.set_value(&published);
+        }
+        if let Some((action, data)) = request {
+            self.submit(Work::Action(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: node,
+                data,
+            }));
+        }
+    }
+
+    /// The browser scrolled a scroller, for a screen reader's swipe or to
+    /// reveal the element its cursor moved to: the offset it is scrolled to
+    /// is asked of the node, and the scroller goes back to the published
+    /// offset until the node publishes the new one, so a scroll the node
+    /// refuses leaves nothing behind. A scroll to where the node already is
+    /// (the host's own, after a publish) asks for nothing.
+    fn scrolled(&self, event: &web_sys::Event) {
+        let Some((node, element)) = event_node(event) else {
+            return;
+        };
+        let (left, top) = (
+            f64::from(element.scroll_left()),
+            f64::from(element.scroll_top()),
+        );
+        let Ok(tree) = self.tree.try_borrow() else {
+            return;
+        };
+        let Some(scroll) = tree.mirror.spec(node).and_then(|spec| spec.scroll) else {
+            return;
+        };
+        if scroll.is_at(left, top) {
+            return;
+        }
+        let offset = tree
+            .mirror
+            .node(node)
+            .and_then(|mirrored| aria::scroll_offset(mirrored, left, top));
+        drop(tree);
+        // The node scrolls, or refuses to: until it publishes where it is, the
+        // scroller stays where it was published, with its children.
+        scroll_to(&element, &scroll);
+        if let Some(offset) = offset {
+            self.submit(Work::Action(ActionRequest {
+                action: Action::SetScrollOffset,
+                target_tree: TreeId::ROOT,
+                target_node: node,
+                data: Some(ActionData::SetScrollOffset(offset)),
+            }));
+        }
     }
 
     /// Show what stands beside the canvas only while the canvas is shown,
@@ -579,7 +697,13 @@ impl Page {
             warn_failure("the semantics host could not be shown or hidden", &error);
         }
         if hidden || !host {
+            self.host_hidden.set(true);
             return;
+        }
+        // A hidden element keeps no scroll: the host shown again scrolls
+        // each scroller back to where its node is.
+        if self.host_hidden.replace(false) {
+            self.restore_scrolls();
         }
         let canvas = self.canvas.get_bounding_client_rect();
         let width = f64::from(self.canvas.client_width());
@@ -644,7 +768,27 @@ impl Page {
         }
     }
 
-    /// Whether the canvas's own style hides it.
+    /// Scroll every scroller to its node's scroll.
+    fn restore_scrolls(&self) {
+        let scrollers: Vec<(HtmlElement, Scroll)> = {
+            let Ok(tree) = self.tree.try_borrow() else {
+                return;
+            };
+            tree.elements
+                .iter()
+                .filter_map(|(&id, element)| {
+                    let scroll = tree.mirror.spec(id)?.scroll?;
+                    Some((element.clone(), scroll))
+                })
+                .collect()
+        };
+        for (element, scroll) in &scrollers {
+            scroll_to(element, scroll);
+        }
+    }
+
+    /// Whether the canvas is hidden: by its own style, or by an ancestor's
+    /// `display: none`, which leaves it no box.
     fn canvas_hidden(&self) -> bool {
         let Some(computed) = self
             .document
@@ -654,7 +798,9 @@ impl Page {
             return false;
         };
         let read = |property| computed.get_property_value(property).unwrap_or_default();
-        read("display") == "none" || read("visibility") != "visible"
+        read("display") == "none"
+            || read("visibility") != "visible"
+            || self.canvas.get_client_rects().length() == 0
     }
 
     fn host_element(&self) -> Option<HtmlElement> {
@@ -689,32 +835,69 @@ impl Page {
     }
 }
 
-/// Run one [`Op`] on the host's elements.
+/// The nearest element at or above `event`'s target that matches
+/// `selector`.
+fn closest(event: &web_sys::Event, selector: &str) -> Option<Element> {
+    event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+        .and_then(|target| target.closest(selector).ok().flatten())
+}
+
+/// The mirrored element `event` happened on, and its node.
+fn event_node(event: &web_sys::Event) -> Option<(NodeId, Element)> {
+    let element = closest(event, "[data-flui-node]")?;
+    let node = element.get_attribute(NODE_ATTRIBUTE)?.parse::<u64>().ok()?;
+    Some((NodeId(node), element))
+}
+
+/// Run one [`Op`] on the host's elements. An element whose scroll changed is
+/// added to `scrolled`, to be scrolled once every element is in place: a
+/// detached element has no box to scroll.
 fn run(
     document: &Document,
     host: &HtmlElement,
     elements: &mut HashMap<NodeId, HtmlElement>,
+    scrolled: &mut Vec<(HtmlElement, Scroll)>,
     op: Op,
 ) -> Result<(), JsValue> {
     match op {
         Op::Create { id, spec } => {
-            let element: HtmlElement = document.create_element(spec.tag.name())?.unchecked_into();
-            element.set_attribute(NODE_ATTRIBUTE, &id.0.to_string())?;
-            let style = element.style();
-            for (property, value) in [
-                ("position", "absolute"),
-                ("display", "block"),
-                ("margin", "0"),
-                ("transform-origin", "0 0"),
-            ] {
-                style.set_property(property, value)?;
+            let element = create(document, id, &spec)?;
+            if let Some(scroll) = spec.scroll {
+                scrolled.push((element.clone(), scroll));
             }
-            write(&element, None, &spec)?;
+            elements.insert(id, element);
+        }
+        Op::Replace { id, spec } => {
+            let element = create(document, id, &spec)?;
+            if let Some(old) = elements.get(&id) {
+                // The children's elements move over; the old element's own
+                // text and scroll extent stay behind with it.
+                let mut child = old.first_element_child();
+                while let Some(current) = child {
+                    child = current.next_element_sibling();
+                    if current.has_attribute(NODE_ATTRIBUTE) {
+                        element.append_child(&current)?;
+                    }
+                }
+                let focused = document.active_element().as_ref() == Some(old.as_ref());
+                old.replace_with_with_node_1(&element)?;
+                if focused {
+                    element.focus_with_options(&unscrolled())?;
+                }
+            }
+            if let Some(scroll) = spec.scroll {
+                scrolled.push((element.clone(), scroll));
+            }
             elements.insert(id, element);
         }
         Op::Update { id, old, new } => {
             if let Some(element) = elements.get(&id) {
                 write(element, Some(&old), &new)?;
+                if let Some(scroll) = new.scroll.filter(|scroll| old.scroll != Some(*scroll)) {
+                    scrolled.push((element.clone(), scroll));
+                }
             }
         }
         Op::Children { id, children } => {
@@ -750,6 +933,40 @@ fn run(
     Ok(())
 }
 
+/// A detached element for node `id`, brought to `spec`.
+fn create(document: &Document, id: NodeId, spec: &ElementSpec) -> Result<HtmlElement, JsValue> {
+    let element: HtmlElement = document.create_element(spec.tag.name())?.unchecked_into();
+    element.set_attribute(NODE_ATTRIBUTE, &id.0.to_string())?;
+    let style = element.style();
+    for (property, value) in [
+        ("position", "absolute"),
+        ("display", "block"),
+        ("margin", "0"),
+        ("transform-origin", "0 0"),
+    ] {
+        style.set_property(property, value)?;
+    }
+    if spec.tag == Tag::Range {
+        // The input's own look would size it; its box is the slider's.
+        for (property, value) in [("appearance", "none"), ("padding", "0"), ("border", "0")] {
+            style.set_property(property, value)?;
+        }
+    }
+    write(&element, None, spec)?;
+    Ok(element)
+}
+
+/// Scroll `element` to `scroll`, unless it is there: the browser answers a
+/// scroll with a `scroll` event, which then asks for nothing.
+fn scroll_to(element: &Element, scroll: &Scroll) {
+    if !scroll.is_at(
+        f64::from(element.scroll_left()),
+        f64::from(element.scroll_top()),
+    ) {
+        element.scroll_to_with_x_and_y(scroll.left, scroll.top);
+    }
+}
+
 /// Bring `element` from `old` (nothing, for a new element) to `new`.
 fn write(
     element: &HtmlElement,
@@ -774,9 +991,64 @@ fn write(
     if old.map(|old| &old.text) != Some(&new.text) {
         write_text(element, new.text.as_deref())?;
     }
+    // An input sanitizes its value against its range as `min`, `max` and
+    // `step` are written, so a changed attribute writes the value again.
+    if old.map(|old| (&old.value, &old.attributes)) != Some((&new.value, &new.attributes))
+        && let (Some(value), Some(input)) = (&new.value, element.dyn_ref::<HtmlInputElement>())
+    {
+        input.set_value(value);
+    }
     if old.map(|old| old.placement) != Some(new.placement) {
         place(element, &new.placement)?;
     }
+    if old.map(|old| old.scroll) != Some(new.scroll) {
+        write_extent(element, new.scroll.as_ref())?;
+    }
+    Ok(())
+}
+
+/// Make `element` a scroller over content of `scroll`'s size, or a plain
+/// box again. The content's size is an empty element of that size, the
+/// last child, which no arrangement of the children's elements moves.
+fn write_extent(element: &HtmlElement, scroll: Option<&Scroll>) -> Result<(), JsValue> {
+    let style = element.style();
+    let extent = element.query_selector(&format!(":scope > {EXTENT_TAG}"))?;
+    let Some(scroll) = scroll else {
+        for property in SCROLLER_STYLE.map(|(property, _)| property) {
+            style.remove_property(property)?;
+        }
+        if let Some(extent) = extent {
+            extent.remove();
+        }
+        return Ok(());
+    };
+    for (property, value) in SCROLLER_STYLE {
+        style.set_property(property, value)?;
+    }
+    let extent: HtmlElement = if let Some(extent) = extent {
+        extent.unchecked_into()
+    } else {
+        let document = element
+            .owner_document()
+            .ok_or_else(|| JsValue::from_str("the element has no document"))?;
+        let extent: HtmlElement = document.create_element(EXTENT_TAG)?.unchecked_into();
+        extent.set_attribute("aria-hidden", "true")?;
+        let style = extent.style();
+        for (property, value) in [
+            ("position", "absolute"),
+            ("display", "block"),
+            ("left", "0"),
+            ("top", "0"),
+            ("visibility", "hidden"),
+        ] {
+            style.set_property(property, value)?;
+        }
+        element.append_child(&extent)?;
+        extent
+    };
+    let style = extent.style();
+    style.set_property("width", &pixels(scroll.width))?;
+    style.set_property("height", &pixels(scroll.height))?;
     Ok(())
 }
 
@@ -815,13 +1087,21 @@ fn place(element: &HtmlElement, placement: &Placement) -> Result<(), JsValue> {
 }
 
 /// Make `children` the element children of `parent`, in order, moving only
-/// the ones out of place.
+/// the ones out of place. A scroller's extent is not a node's and stays.
 fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValue> {
-    let mut cursor = parent.first_element_child();
+    let mirrored = |mut element: Option<Element>| {
+        while let Some(current) = &element
+            && !current.has_attribute(NODE_ATTRIBUTE)
+        {
+            element = current.next_element_sibling();
+        }
+        element
+    };
+    let mut cursor = mirrored(parent.first_element_child());
     for child in children {
         let child: &Element = child.as_ref();
         if cursor.as_ref() == Some(child) {
-            cursor = child.next_element_sibling();
+            cursor = mirrored(child.next_element_sibling());
             continue;
         }
         let before: Option<&web_sys::Node> = cursor.as_ref().map(AsRef::as_ref);
@@ -830,16 +1110,18 @@ fn arrange(parent: &HtmlElement, children: &[&HtmlElement]) -> Result<(), JsValu
     // What is left is no longer this parent's: a later change places it
     // under its new parent, or removes it.
     while let Some(extra) = cursor {
-        cursor = extra.next_element_sibling();
+        cursor = mirrored(extra.next_element_sibling());
         extra.remove();
     }
     Ok(())
 }
 
 /// A `MutationObserver` on the attributes that can show or hide the canvas,
-/// disconnected when dropped.
+/// and a `ResizeObserver` on its box, which an ancestor hidden or shown
+/// takes away or gives back; both disconnected when dropped.
 struct StyleObserver {
     observer: web_sys::MutationObserver,
+    resized: web_sys::ResizeObserver,
     _callback: Closure<dyn Fn()>,
 }
 
@@ -855,8 +1137,17 @@ impl StyleObserver {
             .collect();
         options.set_attribute_filter(&filter);
         observer.observe_with_options(canvas, &options)?;
+        let resized = match web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref()) {
+            Ok(resized) => resized,
+            Err(error) => {
+                observer.disconnect();
+                return Err(error);
+            }
+        };
+        resized.observe(canvas);
         Ok(Self {
             observer,
+            resized,
             _callback: callback,
         })
     }
@@ -865,6 +1156,7 @@ impl StyleObserver {
 impl Drop for StyleObserver {
     fn drop(&mut self) {
         self.observer.disconnect();
+        self.resized.disconnect();
     }
 }
 

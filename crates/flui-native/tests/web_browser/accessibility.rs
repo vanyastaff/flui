@@ -108,6 +108,26 @@ export function scrollContainer(top) {
     scroller.dispatchEvent(new Event('scroll'));
 }
 export function removeScroller() { document.getElementById('scroller')?.remove(); }
+function byId(id) { return host().querySelector(`[data-flui-id="${id}"]`); }
+// The element's tag and its `href`, or null.
+export function elementOf(id) {
+    const element = byId(id);
+    return element ? [element.tagName.toLowerCase(), element.getAttribute('href') ?? ''] : null;
+}
+export function locationHash() { return location.hash; }
+// Move a range input as the browser does for a screen reader: a new value, then `input`.
+export function moveSlider(id, value) {
+    const input = byId(id);
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+export function sliderValue(id) { return byId(id).value; }
+// Scroll an element as the browser does: its `scroll` event follows at the next frame.
+export function scrollNode(id, top) { byId(id).scrollTop = top; }
+export function scrollOf(id) { return byId(id).scrollTop; }
+export function topOf(id) { return byId(id).offsetTop; }
+export function scrollLeftOf(id) { return byId(id).scrollLeft; }
+export function styleScroller(style) { document.getElementById("scroller").style.cssText += style; }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -143,6 +163,24 @@ extern "C" {
     fn scroll_container(top: f64);
     #[wasm_bindgen(js_name = removeScroller)]
     fn remove_scroller();
+    #[wasm_bindgen(js_name = elementOf)]
+    fn element_of(id: &str) -> Option<Vec<String>>;
+    #[wasm_bindgen(js_name = locationHash)]
+    fn location_hash() -> String;
+    #[wasm_bindgen(js_name = moveSlider)]
+    fn move_slider(id: &str, value: &str);
+    #[wasm_bindgen(js_name = sliderValue)]
+    fn slider_value(id: &str) -> String;
+    #[wasm_bindgen(js_name = scrollNode)]
+    fn scroll_node(id: &str, top: f64);
+    #[wasm_bindgen(js_name = scrollOf)]
+    fn scroll_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = topOf)]
+    fn top_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = scrollLeftOf)]
+    fn scroll_left_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = styleScroller)]
+    fn style_scroller(style: &str);
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -542,4 +580,263 @@ fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
         window.close_now();
         remove_scroller();
     }
+}
+
+/// A window's tree of `nodes` under a root of the canvas's size, whose
+/// one child is the first of them.
+fn under_root(children: Vec<(NodeId, Node)>) -> TreeUpdate {
+    let mut root = Node::new(Role::Window);
+    root.set_children(
+        children
+            .iter()
+            .take(1)
+            .map(|(id, _)| *id)
+            .collect::<Vec<NodeId>>(),
+    );
+    root.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    let mut nodes = vec![(ROOT, root)];
+    nodes.extend(children);
+    TreeUpdate {
+        nodes,
+        tree: Some(TreeInfo::new(ROOT)),
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    }
+}
+
+/// The action listener's record.
+fn record_actions(
+    accessibility: &Arc<dyn PlatformAccessibility>,
+) -> Arc<Mutex<Vec<ActionRequest>>> {
+    let actions: Arc<Mutex<Vec<ActionRequest>>> = Arc::default();
+    let heard = Arc::clone(&actions);
+    accessibility.set_action_listener(Arc::new(move |request| {
+        heard.lock().expect("the record").push(request);
+    }));
+    actions
+}
+
+/// A link with a URL is an anchor a screen reader reads the address of,
+/// and a click on it is the node's action, never a navigation. A link given
+/// its address later gets an anchor in place of its element.
+#[wasm_bindgen_test]
+fn a_link_is_an_anchor_whose_click_is_the_node_s_action() {
+    const LINK: NodeId = NodeId(2);
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    let link = |url: Option<&str>| {
+        let mut node = Node::new(Role::Link);
+        node.set_label("Docs");
+        node.set_author_id("docs");
+        if let Some(url) = url {
+            node.set_url(url);
+        }
+        node.add_action(Action::Click);
+        node.set_bounds(Rect::new(20.0, 20.0, 120.0, 40.0));
+        node
+    };
+    accessibility.publish(under_root(vec![(LINK, link(None))]));
+    activate_placeholder();
+    assert_eq!(
+        element_of("docs"),
+        Some(vec!["flui-node".to_owned(), String::new()]),
+        "a link with no address is an ARIA one"
+    );
+
+    // Given an address, its element is replaced by an anchor.
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(LINK, link(Some("#flui-navigated")))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+
+    assert_eq!(
+        element_of("docs"),
+        Some(vec!["a".to_owned(), "#flui-navigated".to_owned()])
+    );
+    let before = location_hash();
+    click_node("docs");
+    assert_eq!(location_hash(), before, "the click followed no address");
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .iter()
+        .map(|request| (request.action, request.target_node))
+        .collect();
+    assert_eq!(asked, [(Action::Click, LINK)]);
+    window.close_now();
+}
+
+/// A slider a user can move is a range input; the browser moving it asks
+/// the node for the value and shows the node's own until the tree
+/// publishes the moved one.
+#[wasm_bindgen_test]
+fn moving_a_slider_s_input_asks_the_node_for_its_value() {
+    const SLIDER: NodeId = NodeId(2);
+    let slider = |value: f64| {
+        let mut node = Node::new(Role::Slider);
+        node.set_label("Volume");
+        node.set_author_id("volume");
+        node.set_numeric_value(value);
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(100.0);
+        node.set_numeric_value_step(5.0);
+        node.add_action(Action::SetValue);
+        node.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+        node
+    };
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    accessibility.publish(under_root(vec![(SLIDER, slider(30.0))]));
+    activate_placeholder();
+    assert_eq!(
+        element_of("volume").map(|tag| tag[0].clone()).as_deref(),
+        Some("input")
+    );
+    assert_eq!(slider_value("volume"), "30");
+
+    move_slider("volume", "55");
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .iter()
+        .map(|request| (request.action, request.target_node, request.data.clone()))
+        .collect();
+    assert_eq!(
+        asked,
+        [(
+            Action::SetValue,
+            SLIDER,
+            Some(accesskit::ActionData::NumericValue(55.0))
+        )]
+    );
+    assert_eq!(
+        slider_value("volume"),
+        "30",
+        "the node's value until it moves"
+    );
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(SLIDER, slider(55.0))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(slider_value("volume"), "55");
+    // A new minimum the old step would snap the value to.
+    let mut moved_range = slider(55.0);
+    moved_range.set_min_numeric_value(2.0);
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(SLIDER, moved_range)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(slider_value("volume"), "55", "the published value stays");
+    window.close_now();
+}
+
+/// A node a platform scrolls to an offset is a scroller over content as
+/// long as its extent, scrolled as far as the node is, its children where
+/// they are seen, its offsets from the left edge on a right-to-left page.
+/// The browser scrolling it asks the node for the offset and goes back to
+/// where the node is until the node publishes the new one; the host's own
+/// scroll after a publish asks for nothing, and a scroller published while
+/// the canvas, or an ancestor of it, was hidden is scrolled once it is
+/// shown.
+#[wasm_bindgen_test]
+async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
+    const LIST: NodeId = NodeId(2);
+    const ITEM: NodeId = NodeId(3);
+    let list = |position: f64| {
+        let mut node = Node::new(Role::ScrollView);
+        node.set_author_id("list");
+        node.add_action(Action::SetScrollOffset);
+        node.set_scroll_x(100.0);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(200.0);
+        node.set_scroll_y(position);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(400.0);
+        node.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+        node.set_children(vec![ITEM]);
+        node
+    };
+    let item = |seen_at: f64| {
+        let mut node = Node::new(Role::Button);
+        node.set_label("Item");
+        node.set_author_id("item");
+        node.set_bounds(Rect::new(20.0, seen_at, 120.0, seen_at + 40.0));
+        node
+    };
+    let partial = |position: f64| TreeUpdate {
+        nodes: vec![(LIST, list(position)), (ITEM, item(220.0 - position))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    };
+    // A page written right to left, which the host inherits.
+    scrolled_canvas("direction: rtl; height: auto; overflow: visible", "");
+    let (_platform, window, accessibility) = open_on_page(RecordingWindowHandler::new());
+    let actions = record_actions(&accessibility);
+    accessibility.publish(under_root(vec![(LIST, list(100.0)), (ITEM, item(120.0))]));
+    activate_placeholder();
+    assert_eq!(scroll_of("list"), 100.0);
+    assert_eq!(scroll_left_of("list"), 100.0, "from the left edge");
+    assert_eq!(top_of("item"), 220.0, "the item is where it is seen");
+
+    scroll_node("list", 250.0);
+    super::wait(50).await;
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .drain(..)
+        .map(|request| (request.action, request.target_node, request.data))
+        .collect();
+    assert_eq!(
+        asked,
+        [(
+            Action::SetScrollOffset,
+            LIST,
+            Some(accesskit::ActionData::SetScrollOffset(
+                accesskit::Point::new(100.0, 250.0)
+            ))
+        )]
+    );
+    assert_eq!(
+        scroll_of("list"),
+        100.0,
+        "where the node is, until it moves"
+    );
+
+    accessibility.publish(partial(300.0));
+    super::wait(50).await;
+    assert_eq!(
+        scroll_of("list"),
+        300.0,
+        "scrolled to the published position"
+    );
+    assert_eq!(top_of("item"), 220.0);
+    assert!(
+        actions.lock().expect("the record").is_empty(),
+        "the host's own scroll asks for nothing"
+    );
+
+    style_canvas("; display: none");
+    super::wait(0).await;
+    // A hidden scroller has no box to scroll to what is published.
+    accessibility.publish(partial(350.0));
+    style_canvas("; display: block");
+    super::wait(50).await;
+    assert_eq!(scroll_of("list"), 350.0, "scrolled once shown again");
+
+    style_scroller("; display: none");
+    super::wait(50).await;
+    accessibility.publish(partial(380.0));
+    style_scroller("; display: block");
+    super::wait(50).await;
+    assert_eq!(scroll_of("list"), 380.0, "scrolled once its ancestor shows");
+    assert!(actions.lock().expect("the record").is_empty());
+    window.close_now();
+    remove_scroller();
 }
