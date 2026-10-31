@@ -74,7 +74,9 @@ pub(crate) struct Bus {
 impl Bus {
     pub(crate) async fn connection(&self) -> Result<zbus::Connection, PortalError> {
         let existing = self.lock().clone();
-        if let Some(connection) = existing {
+        // A bus that went away closes the connection for good; the next
+        // request connects again rather than reuse it.
+        if let Some(connection) = existing.filter(|connection| !connection.is_closed()) {
             return Ok(connection);
         }
         let builder = match &self.address {
@@ -82,9 +84,13 @@ impl Bus {
             None => zbus::connection::Builder::session(),
         };
         let connection = builder.build().await?;
-        // Two first requests may both connect; the one stored first wins and
+        // Two requests may both connect; the open one stored first wins and
         // the other connection closes with its last clone.
-        Ok(self.lock().get_or_insert(connection).clone())
+        let mut stored = self.lock();
+        match &*stored {
+            Some(winner) if !winner.is_closed() => Ok(winner.clone()),
+            _ => Ok(stored.insert(connection).clone()),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<zbus::Connection>> {

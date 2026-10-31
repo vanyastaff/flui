@@ -40,17 +40,23 @@ impl PrivateBus {
     /// A bus that starts the services `directory` describes on demand, as a
     /// desktop session starts its portal.
     fn with_services(directory: &Path) -> Self {
+        let listen = format!("unix:tmpdir={}", std::env::temp_dir().display());
+        Self::configured(directory, &listen)
+    }
+
+    /// A bus listening at `listen`, with its configuration and services in
+    /// `directory`.
+    fn configured(directory: &Path, listen: &str) -> Self {
         let config = directory.join("bus.conf");
         std::fs::write(
             &config,
             format!(
                 "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN\" \
                  \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n\
-                 <busconfig><type>session</type><listen>unix:tmpdir={tmp}</listen>\
+                 <busconfig><type>session</type><listen>{listen}</listen>\
                  <servicedir>{services}</servicedir>\
                  <policy context=\"default\"><allow send_destination=\"*\"/><allow receive_sender=\"*\"/><allow own=\"*\"/></policy>\
                  </busconfig>\n",
-                tmp = std::env::temp_dir().display(),
                 services = directory.display(),
             ),
         )
@@ -670,6 +676,38 @@ fn an_installed_portal_that_is_not_running_is_started_first() {
     let _ = std::fs::remove_dir_all(&services);
 }
 
+#[test]
+fn a_session_bus_that_restarts_is_connected_to_again() {
+    let directory =
+        std::env::temp_dir().join(format!("flui-system-restart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("a bus directory");
+    let socket = directory.join("bus");
+    let listen = format!("unix:path={}", socket.display());
+    // The address names the socket alone, as a session's does: the
+    // restarted bus has another identity.
+    let plugin = PortalOnBus::new(listen.as_str());
+    let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+
+    let portal = StandIn::serve_on(PrivateBus::configured(&directory, &listen));
+    assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
+    drop(portal);
+    let _ = std::fs::remove_file(&socket);
+    // The bus's end reaches the portal's connection.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let portal = StandIn::serve_on(PrivateBus::configured(&directory, &listen));
+    assert_eq!(
+        settle(&mut host, launcher.open_uri(&uri)),
+        Ok(Ok(())),
+        "the request after the restart reaches the new bus"
+    );
+    assert_eq!(portal.calls().len(), 1);
+    drop(portal);
+    let _ = std::fs::remove_dir_all(&directory);
+}
 #[test]
 fn a_named_pipe_without_a_writer_does_not_stall_the_caller() {
     let portal = StandIn::serve();
