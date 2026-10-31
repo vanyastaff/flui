@@ -1171,7 +1171,9 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         // `keyWindow` answers `None` when no window is key. The window id is
         // the native `NSWindow` pointer, the same identity `MacOSWindow`
         // reports, so a caller can compare them.
-        let key_window = owner.app.keyWindow()?;
+        // Off the main thread no window is key to this thread's knowledge:
+        // the application is read only where a marker proves it may be.
+        let key_window = owner.app.get(MainThreadMarker::new()?).keyWindow()?;
         let ptr = objc2::rc::Retained::as_ptr(&key_window) as u64;
         Some(WindowId(ptr))
     }
