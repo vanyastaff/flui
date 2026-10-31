@@ -130,6 +130,7 @@ mod input;
 pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
+pub mod launch;
 mod locale;
 pub mod os_options;
 mod placement;
