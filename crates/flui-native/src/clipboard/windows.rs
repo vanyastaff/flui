@@ -10,7 +10,7 @@
 
 use std::sync::{OnceLock, mpsc};
 
-use flui_platform::{ClipboardError, ClipboardRead};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 
 use windows::{
     Win32::{
@@ -20,7 +20,7 @@ use windows::{
         System::{
             DataExchange::{
                 CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-                OpenClipboard, SetClipboardData,
+                OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
             },
             LibraryLoader::GetModuleHandleW,
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
@@ -179,94 +179,118 @@ impl SyncClipboard for WindowsClipboard {
         }
     }
 
-    fn write_now(&self, text: String) {
+    fn write_now(&self, write: ClipboardWrite) {
+        let concealed = write.is_concealed();
+        let text = write.into_text();
         let Some(_session) = ClipboardSession::open() else {
             tracing::error!("Failed to open clipboard for writing");
             return;
         };
 
-        // SAFETY: `_session` holds the clipboard open for the whole block.
-        // `EmptyClipboard`/`GlobalAlloc` results are all checked before the
-        // next step runs. `size` is computed as
-        // `wide.len() * size_of::<u16>()`, the exact byte length of `wide`
-        // (a `Vec<u16>`, so `wide.as_ptr()` is valid for reads of `size`
-        // bytes) — the same `size` is passed to `GlobalAlloc`, so `ptr` from
-        // the matching `GlobalLock` is valid for writes of `size` bytes too;
-        // `copy_nonoverlapping` copies between two distinct allocations
-        // (the `Vec` and the newly allocated `HGLOBAL`), never the same
-        // memory. `GlobalUnlock`'s result is discarded for the same reason
-        // as in `read_text` (ambiguous success/fail without `GetLastError`,
-        // nothing actionable to do about it here). Ownership of `global`
-        // transfers to the clipboard only after `SetClipboardData` reports
-        // success. Every failure path between the successful `GlobalAlloc`
-        // and that point (`GlobalLock` failing, `SetClipboardData` failing)
-        // still owns `global` outright — nothing else has a handle to it or
-        // has started using it — so calling `GlobalFree` there is sound and
-        // this code does so explicitly rather than leaking (`HGLOBAL` has no
-        // automatic-free `Drop` impl of its own, so a bare early `return`
-        // would otherwise leak the allocation). Once `SetClipboardData`
-        // succeeds, `global` is no longer freed by this function at all —
-        // the clipboard owns it from that point on.
+        // SAFETY: `_session` holds the clipboard open on this thread for the
+        // whole block, and `EmptyClipboard` succeeds before any `set_data`,
+        // which is all `set_data` asks. `RegisterClipboardFormatW` takes a
+        // NUL-terminated wide string that `w!` builds as a static. `bytes`
+        // views `wide`, a live `Vec<u16>`, as its `len * 2` bytes, which `u8`
+        // may alias at any alignment.
         unsafe {
-            // Empty clipboard
             if EmptyClipboard().is_err() {
                 tracing::error!("Failed to empty clipboard");
                 return;
             }
 
-            // Convert Rust string to wide string (UTF-16)
-            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            let size = wide.len() * std::mem::size_of::<u16>();
-
-            // Allocate global memory
-            let global = match GlobalAlloc(GMEM_MOVEABLE, size) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::error!(?e, "Failed to allocate global memory");
-                    return;
+            // The markers go first: a concealed write the clipboard could not
+            // mark leaves the clipboard empty rather than publish the secret
+            // to the clipboard's history (ADR-0152 §6).
+            if concealed {
+                for (name, label) in CONCEALMENT_FORMATS {
+                    let format = RegisterClipboardFormatW(name);
+                    if format == 0 || !set_data(format, &EXCLUDE.to_le_bytes()) {
+                        tracing::error!(
+                            format = label,
+                            "a concealed clipboard write was dropped: its marker could not be set"
+                        );
+                        return;
+                    }
                 }
-            };
-
-            // Lock and copy data
-            let ptr = GlobalLock(global);
-            if ptr.is_null() {
-                tracing::error!("Failed to lock global memory");
-                // Ownership never transferred to the clipboard, so freeing
-                // `global` here is sound (see the SAFETY block above).
-                // Discarding the `Result`: raw `GlobalFree` documents NULL
-                // as its success return, but `windows::Win32::Foundation::HGLOBAL::is_invalid`
-                // treats a null/`-1` handle as invalid and this wrapper maps
-                // "invalid result" to `Err` — so a genuinely successful free
-                // surfaces here as `Err`, not `Ok`. Not reliable enough to
-                // log a success/failure claim from; the free is issued
-                // either way, which is the part that matters.
-                let _ = GlobalFree(Some(global));
-                return;
             }
 
-            std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), ptr.cast::<u8>(), size);
-
-            let _ = GlobalUnlock(global);
-
-            // Set clipboard data - clipboard takes ownership of the memory
-            // After successful SetClipboardData, we must NOT free the memory
-            if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(global.0))).is_err() {
-                tracing::error!("Failed to set clipboard data");
-                // The clipboard never took ownership on this path, so
-                // `global` is still ours to free — see the SetClipboardData
-                // SAFETY note above and the GlobalFree Result-polarity note
-                // on the GlobalLock failure path above for why the result is
-                // discarded rather than logged as success/failure.
-                let _ = GlobalFree(Some(global));
-                return;
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes = std::slice::from_raw_parts(
+                wide.as_ptr().cast::<u8>(),
+                wide.len() * std::mem::size_of::<u16>(),
+            );
+            if set_data(CF_UNICODETEXT.0 as u32, bytes) {
+                tracing::debug!(len = text.len(), concealed, "Wrote text to clipboard");
             }
-
-            // Success — the clipboard owns the memory from here on; the
-            // local HGLOBAL is a plain handle newtype with no Drop, so
-            // letting it fall out of scope frees nothing.
-            let _ = global;
-            tracing::debug!(len = text.len(), "Wrote text to clipboard");
         }
+    }
+
+    fn concealment(&self) -> Concealment {
+        Concealment::Honored
+    }
+}
+
+/// The registered formats that keep an entry out of Windows' clipboard
+/// history and cloud clipboard, each with the DWORD [`EXCLUDE`]: the
+/// monitor-processing exclusion clipboard managers honour, and the two
+/// formats Windows' own history reads.
+const CONCEALMENT_FORMATS: [(windows::core::PCWSTR, &str); 3] = [
+    (
+        w!("ExcludeClipboardContentFromMonitorProcessing"),
+        "ExcludeClipboardContentFromMonitorProcessing",
+    ),
+    (
+        w!("CanIncludeInClipboardHistory"),
+        "CanIncludeInClipboardHistory",
+    ),
+    (w!("CanUploadToCloudClipboard"), "CanUploadToCloudClipboard"),
+];
+
+/// The DWORD each of [`CONCEALMENT_FORMATS`] holds: zero, "not allowed".
+const EXCLUDE: u32 = 0;
+
+/// Puts a copy of `bytes` on the clipboard as `format`; `false` if it could
+/// not, after logging why.
+///
+/// # Safety
+///
+/// The calling thread holds the clipboard open through a
+/// [`ClipboardSession`] whose `EmptyClipboard` succeeded.
+unsafe fn set_data(format: u32, bytes: &[u8]) -> bool {
+    // SAFETY: `GlobalAlloc` is asked for `bytes.len()` bytes and checked, so
+    // the matching `GlobalLock`'s non-null `ptr` is valid for writes of that
+    // many bytes; `copy_nonoverlapping` copies between `bytes` and the new
+    // allocation, two distinct regions. `GlobalUnlock`'s result is
+    // discarded: it cannot tell "unlocked, success" from failure without
+    // `GetLastError`, and nothing is left to do with the lock either way.
+    // Until `SetClipboardData` succeeds `global` is ours alone, so the failure
+    // paths free it (`HGLOBAL` has no `Drop`); after, the clipboard owns it.
+    // The `GlobalFree` results are discarded because the wrapper maps its
+    // NULL success return to `Err`. The caller holds the clipboard open and
+    // emptied, as `SetClipboardData` requires.
+    unsafe {
+        let global = match GlobalAlloc(GMEM_MOVEABLE, bytes.len()) {
+            Ok(global) => global,
+            Err(error) => {
+                tracing::error!(?error, "Failed to allocate global memory");
+                return false;
+            }
+        };
+        let ptr = GlobalLock(global);
+        if ptr.is_null() {
+            tracing::error!("Failed to lock global memory");
+            let _ = GlobalFree(Some(global));
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+        let _ = GlobalUnlock(global);
+        if SetClipboardData(format, Some(HANDLE(global.0))).is_err() {
+            tracing::error!(format, "Failed to set clipboard data");
+            let _ = GlobalFree(Some(global));
+            return false;
+        }
+        true
     }
 }
 
@@ -454,6 +478,31 @@ mod tests {
             &[],
         ] {
             assert_eq!(decoded_len(text), String::from_utf16_lossy(text).len());
+        }
+    }
+
+    /// The scenario every host's clipboard runs: a concealed write pastes
+    /// back, with the formats that keep it out of the history and the cloud
+    /// clipboard (ADR-0152 §6).
+    #[test]
+    fn a_concealed_write_stays_out_of_the_windows_history() {
+        let clipboard = WindowsClipboard::new();
+        assert_eq!(
+            crate::testing::clipboard::a_concealed_write_stays_out_of_history(
+                &clipboard,
+                crate::testing::clipboard::read_at_once,
+            ),
+            Ok(())
+        );
+        let _session = open_session();
+        for (name, label) in CONCEALMENT_FORMATS {
+            // SAFETY: plain FFI calls; `name` is a static NUL-terminated wide
+            // string, and the session holds the clipboard open.
+            let available = unsafe {
+                let format = RegisterClipboardFormatW(name);
+                IsClipboardFormatAvailable(format).is_ok()
+            };
+            assert!(available, "{label} is on the clipboard");
         }
     }
 
