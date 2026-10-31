@@ -42,7 +42,7 @@ impl Ledgers {
     }
 }
 
-/// R1: after a walk through Home, a note and Settings, closing the application
+/// After a walk through Home, a note and Settings, closing the application
 /// drops every state, every page the router kept and the draft's listener.
 #[test]
 fn acceptance_app_close_releases_every_owner_after_navigation() {
@@ -61,7 +61,7 @@ fn acceptance_app_close_releases_every_owner_after_navigation() {
     }
 }
 
-/// R8: a panic in the Note editor's `build` replaces the editor with an error
+/// A panic in the Note editor's `build` replaces the editor with an error
 /// view; the screen's header still takes input, its Back leaves the error
 /// with its page, and the other screens work.
 #[test]
@@ -88,7 +88,7 @@ fn a_panicking_note_build_shows_error_view_and_other_screens_work() {
     assert!(run.shows("Compact rows: on"), "Home takes input");
 }
 
-/// R23: a close held by a failed save drops nothing, kept open or asked
+/// A close held by a failed save drops nothing, kept open or asked
 /// again; the user's Close without saving then closes the window, and the
 /// exit drops every value the application kept.
 #[test]
