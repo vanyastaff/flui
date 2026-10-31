@@ -27,19 +27,20 @@ use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, InputPath,
-    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
-    WaitParams, WindowId,
+    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, EventFilter,
+    InputPath, LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree,
+    WaitOutcome, WaitParams, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
 use flui_view::__runtime::{AgentPort, PendingAnswer};
-use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow, HandleKind};
 use parking_lot::{Mutex, RwLock};
 
 use super::UiRuntime;
+use super::agent_events::EventStream;
 use super::commands::{CommandSendError, UiCommand, UiCommandSender};
 use crate::semantics_host::SemanticsHandle;
 
@@ -125,6 +126,10 @@ pub enum AgentError {
     /// taken.
     #[error("the window already holds as many waits as it admits")]
     TooManyWaits,
+    /// The presentation already has as many live subscriptions as it admits; one ends (its
+    /// stream is dropped) before another is taken.
+    #[error("the window already has as many event subscriptions as it admits")]
+    TooManySubscriptions,
     /// The render tree was busy (a layout was in progress) when the hit-test
     /// asked for it; the same call can succeed after the frame.
     #[error("the render tree was busy")]
@@ -136,9 +141,11 @@ impl AgentError {
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
-                ErrorCode::Busy
-            }
+            Self::InboxFull
+            | Self::NoTreeYet
+            | Self::RenderTreeBusy
+            | Self::TooManyWaits
+            | Self::TooManySubscriptions => ErrorCode::Busy,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone | Self::NodeNotFound { issued: true, .. } => ErrorCode::Gone,
             Self::NodeNotFound { issued: false, .. } => ErrorCode::UnknownHandle,
@@ -156,9 +163,11 @@ impl AgentError {
     #[must_use]
     pub fn retry(&self) -> Retry {
         match self {
-            Self::InboxFull | Self::NoTreeYet | Self::RenderTreeBusy | Self::TooManyWaits => {
-                Retry::Soon
-            }
+            Self::InboxFull
+            | Self::NoTreeYet
+            | Self::RenderTreeBusy
+            | Self::TooManyWaits
+            | Self::TooManySubscriptions => Retry::Soon,
             _ => Retry::Never,
         }
     }
@@ -443,6 +452,27 @@ impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
     }
 }
 
+/// A subscription's answer, handed to a hook as the stream it reads.
+struct EventsAnswer(AgentReply<EventStream>);
+
+impl PendingAnswer<AgentEvents> for EventsAnswer {
+    fn try_take(&mut self) -> Option<Result<AgentEvents, AgentFault>> {
+        self.0.try_take().map(Self::wrap)
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<AgentEvents, AgentFault>> {
+        self.0.recv_timeout(timeout).map(Self::wrap)
+    }
+}
+
+impl EventsAnswer {
+    fn wrap(answer: Result<EventStream, AgentError>) -> Result<AgentEvents, AgentFault> {
+        answer
+            .map(flui_view::__runtime::agent_events)
+            .map_err(AgentFault::from)
+    }
+}
+
 /// What a presentation keeps for the development agent: see
 /// [`UiRuntime::dev_agent_window`]. Owner thread only.
 pub(crate) struct DevAgentSlot {
@@ -607,8 +637,10 @@ impl SemanticsAgent {
     ///
     /// A wait that runs out is still an answer: `satisfied: false`, with the last observation
     /// and why the window had not settled. `Frames` counts frames the owner presents after the
-    /// request and keeps them coming; a condition on events is refused until the event stream
-    /// exists. The timeout is on the window's clock, 5 s when absent and at most a day.
+    /// request and keeps them coming. A condition on an event holds once the window emits an
+    /// event of that kind after the request; it never holds for `input` or `announcement`, which
+    /// the window does not emit yet, so a wait on one runs to its timeout. The timeout is on the
+    /// window's clock, 5 s when absent and at most a day.
     ///
     /// # Errors
     ///
@@ -627,6 +659,42 @@ impl SemanticsAgent {
             UiCommand::SemanticsAgentWait {
                 presentation_id: self.sender.presentation_id,
                 params: Box::new(params),
+                reply,
+            },
+            answer,
+        )
+    }
+
+    /// Subscribe to this agent's window's events: the kinds `filters` select, in the order the
+    /// window emits them, from the moment the owner registers the subscription. The reply
+    /// carries the stream; dropping the stream ends the subscription.
+    ///
+    /// A subscriber that reads slower than the window emits misses events, counted, never
+    /// silently: its queue holds 256, and the next event that fits is preceded by a `gap` naming
+    /// how many were missed. `Input` and `Announcement` are accepted as filters but the window
+    /// does not emit them yet: a stream that selects only those stays silent until the window
+    /// closes.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
+    /// enqueued; the reply carries the rest, among them [`AgentError::TooManySubscriptions`] and
+    /// [`AgentError::InvalidArgument`] for no filter at all.
+    pub fn subscribe(
+        &self,
+        filters: Vec<EventFilter>,
+    ) -> Result<AgentReply<EventStream>, AgentError> {
+        let (command, answer) = self.subscribe_command(filters);
+        self.sender.send(command).map_err(AgentError::from_send)?;
+        Ok(answer)
+    }
+
+    fn subscribe_command(&self, filters: Vec<EventFilter>) -> (UiCommand, AgentReply<EventStream>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::SemanticsAgentSubscribe {
+                presentation_id: self.sender.presentation_id,
+                filters,
                 reply,
             },
             answer,
@@ -762,12 +830,13 @@ pub(crate) struct DevAgentPort {
 
 impl DevAgentPort {
     /// Run `enqueue` if the window is open, holding admission open for it.
-    fn admit<T>(
+    fn admit<T, P>(
         &self,
-        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, AgentReply<T>),
+        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, P),
     ) -> Result<AgentAnswer<T>, AgentFault>
     where
         T: Send + 'static,
+        P: PendingAnswer<T> + 'static,
     {
         let (admission, answer) = {
             let open = self.open.read();
@@ -821,6 +890,13 @@ impl AgentPort for DevAgentPort {
 
     fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
         self.admit(|agent| agent.wait_command(params))
+    }
+
+    fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+        self.admit(|agent| {
+            let (command, answer) = agent.subscribe_command(filters);
+            (command, EventsAnswer(answer))
+        })
     }
 
     fn actionability(

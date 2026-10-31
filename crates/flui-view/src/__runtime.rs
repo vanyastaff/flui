@@ -27,14 +27,14 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{
-    ActOutcome, ActionRequest, Actionability, ActionabilityParams, LocateParams, Matches,
-    ReadQuery, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
+    ActOutcome, ActionRequest, Actionability, ActionabilityParams, Event, EventFilter,
+    LocateParams, Matches, ReadQuery, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
 };
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
-use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
+use crate::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
     FlushWriter, SESSION_END_BUDGET,
@@ -102,6 +102,14 @@ pub trait AgentPort: Send + Sync {
     /// When the request cannot be enqueued.
     fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault>;
 
+    /// Enqueue a subscription to the window's events: the owner registers it at its next drain
+    /// and answers with the stream.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault>;
+
     /// Enqueue a playback request for this exact window's animation clock.
     ///
     /// # Errors
@@ -120,6 +128,23 @@ pub trait AgentPort: Send + Sync {
         &self,
         params: flui_protocol::AnnouncementsParams,
     ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault>;
+}
+
+/// The queue behind an [`AgentEvents`], which the runtime fills.
+pub trait EventSource: Send {
+    /// The next event, if one is queued.
+    fn try_next(&mut self) -> Option<Event>;
+
+    /// The next event, waiting up to `timeout`; `None` if none came, and once the stream ended.
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Event>;
+
+    /// Whether the stream ended and every event it queued was taken.
+    fn is_finished(&self) -> bool;
+}
+
+/// Wraps a runtime's queue as the [`AgentEvents`] a hook receives.
+pub fn agent_events(source: impl EventSource + 'static) -> AgentEvents {
+    AgentEvents::new(Box::new(source))
 }
 
 /// The pending half of an [`AgentAnswer`].

@@ -238,24 +238,6 @@ fn a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_e
 }
 
 #[test]
-fn a_wait_on_events_is_refused_until_the_event_stream_exists() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
-    let mut reply = wait(
-        &ui_runtime,
-        &agent,
-        Condition::Event(EventFilter::new(EventKind::Frame)),
-        None,
-    );
-    let _report = ui_runtime.drain_commands();
-
-    let error = reply
-        .try_take()
-        .expect("refused at the drain")
-        .expect_err("no event can satisfy it yet");
-    assert_eq!(error.code(), ErrorCode::InvalidArgument);
-}
-
-#[test]
 fn a_window_that_closes_first_answers_its_waits_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();

@@ -395,10 +395,12 @@ impl UiRuntime {
             .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
-        // left, and the waits an agent parked see the window as the frame left it.
+        // left, the events it produced are emitted, and the waits an agent parked see the window as
+        // the frame left it, events included.
         for presentation in self.presentations.iter() {
             Self::complete_agent_reads(presentation);
         }
+        self.publish_agent_events();
         self.evaluate_agent_waits(true);
         self.run_commit_anchor();
         result
