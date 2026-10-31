@@ -3,6 +3,8 @@
 
 mod dialogs;
 mod launcher;
+#[cfg(target_os = "linux")]
+mod portal;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;

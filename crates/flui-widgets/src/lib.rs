@@ -124,6 +124,7 @@ mod overlay;
 pub mod paint;
 pub mod physical_model;
 // The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+mod reorderable;
 pub mod router;
 pub mod scroll;
 pub mod semantics;
@@ -270,6 +271,10 @@ pub use paint::{
     DecoratedBox, IgnorePointer, Opacity, RepaintBoundary,
 };
 pub use physical_model::{PhysicalModel, PhysicalShape};
+pub use reorderable::{
+    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
+    ReorderableList, ReorderableListState,
+};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
