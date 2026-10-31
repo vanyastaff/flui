@@ -4,7 +4,7 @@
 //! their ends through layer links, so every touch below lands where the
 //! handle is painted.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -1032,4 +1032,97 @@ pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
     scene.settle();
     scene.touch_drag(shown, shown + past);
     assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+}
+
+/// A box `width` wide that rebuilds alone, so its row lays the rest out
+/// anew without building it.
+#[derive(Clone)]
+struct Gap {
+    width: Rc<Cell<f64>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+
+impl flui_view::View for Gap {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl flui_view::StatefulView for Gap {
+    type State = GapState;
+    fn create_state(&self) -> Self::State {
+        GapState(Rc::clone(&self.rebuild))
+    }
+}
+
+struct GapState(Rc<RefCell<Option<flui_view::RebuildHandle>>>);
+
+impl flui_view::ViewState<Gap> for GapState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        *self.0.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &Gap, _ctx: &dyn BuildContext) -> impl flui_view::IntoView {
+        SizedBox::new(view.width.get(), 10.0)
+    }
+}
+
+/// Text narrowed by a sibling, with no build of the area or its text, wraps
+/// a tall span off an end's line: the handles rebuild for the shorter line
+/// once the frame that laid it out has painted, and a steady layout after
+/// it schedules no frame.
+///
+/// Red-check: rebuild the handles only after their own or their text's
+/// build (they keep the tall line).
+pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::{Expanded, RichText, Row};
+
+    let width = Rc::new(Cell::new(0.0));
+    let rebuild = Rc::default();
+    let marked = Marked::default();
+    let tall = TextStyle::new().with_font_size(40.0);
+    let text =
+        RichText::new(TextSpan::new("alpha beta ").with_child(TextSpan::styled("GAMMA", tall)));
+    let app = WidgetsApp::new(Row::new((
+        Gap {
+            width: Rc::clone(&width),
+            rebuild: Rc::clone(&rebuild),
+        },
+        Expanded::new(SelectionArea::new(Column::new((text,))).handles(marked.clone())),
+    )));
+    let mut scene = Scene::laid_out(app, Rc::default());
+    let paragraph = scene.paragraph();
+    let line = scene.laid.size(paragraph).height;
+    scene.long_press(
+        scene.laid.absolute_offset(paragraph) + Offset::new(width_of("alpha be"), line / 2.0),
+    );
+    assert_eq!(scene.handles(), 2);
+    let before = marked.0.borrow().last().expect("built").line_height;
+    assert!(
+        before > 40.0,
+        "the end's line holds the tall span: {before}"
+    );
+
+    width.set(300.0);
+    rebuild
+        .borrow()
+        .as_ref()
+        .expect("the gap is mounted")
+        .schedule(flui_view::RebuildReason::StateChange);
+    scene.settle();
+    let after = marked.0.borrow().last().expect("built").line_height;
+    assert!(after < before / 2.0, "{after} after {before}");
+
+    let built = marked.0.borrow().len();
+    scene.settle();
+    assert_eq!(
+        marked.0.borrow().len(),
+        built,
+        "a steady layout rebuilds nothing"
+    );
+    assert!(
+        !scene.laid.scheduler().is_frame_scheduled(),
+        "a steady layout schedules no frame"
+    );
 }

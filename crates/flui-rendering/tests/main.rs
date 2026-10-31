@@ -29,6 +29,9 @@ mod layout_cycle_guard;
 #[path = "layout_dirty_root.rs"]
 mod layout_dirty_root;
 
+#[path = "leader_watch.rs"]
+mod leader_watch;
+
 #[path = "layout_poison.rs"]
 mod layout_poison;
 

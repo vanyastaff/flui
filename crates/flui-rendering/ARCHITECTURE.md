@@ -1234,6 +1234,29 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 `resolve_follower_transform`
 ([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
+### A follower's build hears its leader's geometry after paint
+
+**Rule.** A follower whose build depends on its leader (a selection handle sized to its end's
+line) watches it: `PipelineCell::watch_leader(link, lane) -> LeaderWatch`, a `Listenable` with
+`geometry() -> Option<LeaderGeometry>`. The watches live in a registry the cell and the owner
+share, so registering never checks the owner out, and an owner replaced through `with_mut` takes
+the cell's registry. After paint commits a layer tree, the owner compares each live watch with
+`tree.leader(link)` and schedules a delivery into the watch's post-frame lane only when the value
+changed; the listeners run there, outside every render-tree borrow.
+
+**Why.** The leader's size is already in the committed layer tree, so a watch costs one lookup
+per live watch per painted frame and nothing while the value holds: a steady layout queues no
+delivery and requests no frame (`leader_watch::a_watch_hears_only_changes`). A per-frame
+post-frame check would request frames itself; a value each render object reports from
+`perform_layout` needs an opt-in per object and a flush hook beside it.
+
+**Lag and coalescing.** A change is known once paint commits, so a follower that rebuilds from it
+shows the new value one frame later; that frame paints the same value and queues nothing. The
+queued flag clears before the listeners run, so changes painted before the lane runs deliver once
+with the newest value (`changes_before_the_lane_runs_deliver_once`), and a change during a
+delivery, or after a listener panicked, queues the next
+(`a_panicking_listener_keeps_the_next_delivery`).
+
 ### Expanded hit areas are resolved after the visual walk
 
 **Kind.** A hit test names the pointer kind asking (`PipelineOwner::hit_test`'s `kind`),

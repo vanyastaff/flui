@@ -278,6 +278,12 @@ impl LayerTree {
         self.leaders.get(&link).copied()
     }
 
+    /// Every `LeaderLayer` registered in this frame, with its link, in no
+    /// particular order.
+    pub fn leaders(&self) -> impl Iterator<Item = (LayerLink, LayerId)> + '_ {
+        self.leaders.iter().map(|(link, id)| (*link, *id))
+    }
+
     /// Whether `id` names a node of this tree.
     #[inline]
     pub fn contains(&self, id: LayerId) -> bool {
