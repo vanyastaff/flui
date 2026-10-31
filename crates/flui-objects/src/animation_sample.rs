@@ -79,6 +79,12 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
         self.cell.value.borrow().clone()
     }
 
+    /// Reads the last admitted value in place, without cloning it. `read` must not reach back
+    /// into this sample.
+    pub(crate) fn with<R>(&self, read: impl FnOnce(&T) -> R) -> R {
+        read(&self.cell.value.borrow())
+    }
+
     /// Subscribes to the proxy; each admitted change requests `impact`.
     /// Catches up with a change made while nothing listened.
     pub(crate) fn attach(

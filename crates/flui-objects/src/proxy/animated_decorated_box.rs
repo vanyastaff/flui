@@ -83,11 +83,13 @@ impl flui_foundation::inspect::Inspect for RenderAnimatedDecoratedBox {
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         // `BoxDecoration` has no typed mapping; it is described by its `Debug`.
-        let decoration = self.decoration();
-        out.value(
-            "decoration",
-            flui_foundation::inspect::Value::Debug(&decoration),
-        );
+        // The sample is read where it is cached: describing it clones nothing.
+        self.decoration.with(|decoration| {
+            out.value(
+                "decoration",
+                flui_foundation::inspect::Value::Debug(decoration),
+            );
+        });
         out.field("position", &self.position)
             .default(&DecorationPosition::Background);
     }
