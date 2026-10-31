@@ -42,7 +42,7 @@ use crate::popup_menu::{MenuSession, Presenter};
 /// platform's menu keys, on assistive technology's `ShowContextMenu` and from
 /// the control keyboard focus reveals in the area; each command is also the
 /// area's own custom action. Choosing an item closes the menu and performs
-/// its command's intent through the [`Actions`] chain where the area is
+/// its command's intent through the [`Actions`](crate::Actions) chain where the area is
 /// mounted.
 ///
 /// The menu sits at the pointer that opened it, or below the area when a key
