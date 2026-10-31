@@ -6,7 +6,9 @@ use std::num::NonZeroU32;
 
 use flui_foundation::PresentationId;
 use flui_foundation::inspect::{Link, NodeRef};
-use flui_protocol::{ErrorCode, InspectLevel, InspectNode, InspectParams, InspectReading, WindowId};
+use flui_protocol::{
+    ErrorCode, InspectLevel, InspectNode, InspectParams, InspectReading, WindowId,
+};
 use flui_view::dev_agent::InspectTarget;
 
 use super::agent_semantics::{counter, frame};
@@ -71,10 +73,7 @@ fn nodes(node: &InspectNode) -> Vec<&InspectNode> {
 #[test]
 fn each_tree_answers_with_its_own_handles() {
     let (ui_runtime, agent) = shown();
-    for (target, prefix) in [
-        (InspectTarget::Widgets, 'v'),
-        (InspectTarget::Render, 'r'),
-    ] {
+    for (target, prefix) in [(InspectTarget::Widgets, 'v'), (InspectTarget::Render, 'r')] {
         let reading = whole(&ui_runtime, &agent, target)
             .unwrap_or_else(|error| panic!("{target:?}: {error}"));
         assert_eq!(reading.roots.len(), 1, "{target:?} has one root");
@@ -154,8 +153,8 @@ fn a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone() {
     ] {
         let mut params = InspectParams::new(window(&ui_runtime));
         params.root = Some(root.to_owned());
-        let error = inspect(&ui_runtime, &agent, target, params)
-            .expect_err("not a handle of that tree");
+        let error =
+            inspect(&ui_runtime, &agent, target, params).expect_err("not a handle of that tree");
         assert_eq!(error.code(), ErrorCode::InvalidArgument, "`{root}`");
     }
 
@@ -164,7 +163,12 @@ fn a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone() {
     let error = inspect(&ui_runtime, &agent, InspectTarget::Render, params)
         .expect_err("no such render object");
     assert_eq!(error.code(), ErrorCode::Gone);
-    assert_eq!(error, AgentError::NodeGone { node: "r999999".to_owned() });
+    assert_eq!(
+        error,
+        AgentError::NodeGone {
+            node: "r999999".to_owned()
+        }
+    );
 }
 
 #[test]
@@ -175,7 +179,11 @@ fn the_limits_cut_the_tree_and_say_so() {
     let cut = inspect(&ui_runtime, &agent, InspectTarget::Widgets, params).expect("a cut read");
     assert_eq!(cut.count, 2);
     assert!(cut.truncated);
-    assert!(nodes(&cut.roots[0]).iter().any(|node| node.omitted_children > 0));
+    assert!(
+        nodes(&cut.roots[0])
+            .iter()
+            .any(|node| node.omitted_children > 0)
+    );
 
     let mut params = InspectParams::new(window(&ui_runtime));
     params.max_depth = Some(0);
@@ -183,7 +191,7 @@ fn the_limits_cut_the_tree_and_say_so() {
         inspect(&ui_runtime, &agent, InspectTarget::Render, params).expect("a root only");
     assert_eq!(root_only.count, 1);
     assert!(root_only.truncated);
-    assert!(root_only.roots[0].children.is_empty());
+    assert_eq!(root_only.roots[0].children, []);
 }
 
 #[test]

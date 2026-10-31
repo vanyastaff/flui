@@ -128,7 +128,7 @@ fn level_to_wire(level: Level) -> InspectLevel {
     match level {
         Level::Detail => InspectLevel::Detail,
         Level::Debug => InspectLevel::Debug,
-        _ => InspectLevel::Summary,
+        Level::Summary => InspectLevel::Summary,
     }
 }
 
@@ -233,7 +233,10 @@ fn reading_of(mut root: SnapshotNode) -> InspectReading {
     let mut convert = |node: &mut SnapshotNode| {
         count = count.saturating_add(1);
         truncated |= node.omitted_children > 0;
-        (node_to_wire(node), std::mem::take(&mut node.children).into_iter())
+        (
+            node_to_wire(node),
+            std::mem::take(&mut node.children).into_iter(),
+        )
     };
     let mut open = Vec::new();
     let mut current = convert(&mut root);
