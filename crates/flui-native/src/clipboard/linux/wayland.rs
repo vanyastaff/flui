@@ -47,7 +47,7 @@ use web_time::Instant;
 
 use super::owners::Owners;
 use super::text::TextForm;
-use crate::host::{NativeClipboard, NativePrimarySelection};
+use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 
@@ -59,8 +59,6 @@ const MANAGER_VERSION: u32 = 3;
 /// How long a read waits for the selection's owner to write its text, and a
 /// write for the reader to take it. An owner that hangs answers nothing.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-/// The most text a read takes: past it the selection is not read.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
 /// The most `send`s the application answers at once. Each holds a thread
 /// until its reader has the text or the deadline passes; a client asking
 /// faster than it reads is answered with nothing past this.
@@ -352,7 +350,7 @@ impl NativeClipboard for SeatClipboard {
                     .name("flui-wayland-clipboard".to_owned())
                     .spawn(move || {
                         let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .map(|bytes| Some(Arc::<str>::from(form.decode(bytes))));
+                            .and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 // The closure, and the resolver in it, is dropped: the read

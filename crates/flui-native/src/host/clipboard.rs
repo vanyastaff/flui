@@ -24,6 +24,45 @@ pub trait NativeClipboard {
     fn write_text(&self, text: String);
 }
 
+/// The most bytes of text a clipboard or primary-selection read answers, on
+/// every host: past it the read answers
+/// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) const MAX_TEXT: usize = 64 * 1024 * 1024;
+
+/// What a read answers with `text` the host handed over whole: refused past
+/// [`MAX_TEXT`] bytes before the shared copy is made, so text a host already
+/// holds is never copied a second time at any size the read refuses.
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) fn host_text(text: String) -> ClipboardRead {
+    if text.len() > MAX_TEXT {
+        tracing::warn!(
+            len = text.len(),
+            "a clipboard read past {MAX_TEXT} bytes was refused"
+        );
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(Some(Arc::from(text)))
+}
+
 /// A clipboard the operating system reads synchronously: its read answers
 /// at once.
 pub(crate) trait SyncClipboard {
@@ -139,5 +178,37 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
 
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
         (**self).read_text(answer);
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        windows,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        wayland_host,
+        x11_host,
+        feature = "winit-backend"
+    )
+))]
+mod tests {
+    use flui_platform::ClipboardError;
+
+    use super::{MAX_TEXT, host_text};
+
+    /// Text a host handed over is answered up to the limit and refused past
+    /// it, the refusal made before any copy of the text.
+    #[test]
+    fn host_text_is_refused_past_the_limit() {
+        let at_limit = "a".repeat(MAX_TEXT);
+        assert_eq!(
+            host_text(at_limit).map(|text| text.map(|text| text.len())),
+            Ok(Some(MAX_TEXT))
+        );
+        let past = "a".repeat(MAX_TEXT + 1);
+        assert_eq!(host_text(past), Err(ClipboardError::TooLarge));
     }
 }

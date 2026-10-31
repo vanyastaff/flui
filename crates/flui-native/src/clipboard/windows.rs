@@ -8,7 +8,7 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{OnceLock, mpsc};
 
 use flui_platform::{ClipboardError, ClipboardRead};
 
@@ -35,7 +35,7 @@ use windows::{
 };
 
 use crate::clipboard::lock;
-use crate::host::{NativeClipboard, SyncClipboard};
+use crate::host::{MAX_TEXT, NativeClipboard, SyncClipboard, host_text};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// Windows clipboard implementation
@@ -70,9 +70,6 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
         std::rc::Rc::new(WindowsClipboard::new())
     }
 }
-
-/// The most bytes of text a read answers, as on X11 and Wayland.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
 
 /// How many UTF-8 bytes `wide` decodes to, each unpaired surrogate as
 /// U+FFFD, as `String::from_utf16_lossy` writes it.
@@ -178,7 +175,7 @@ impl SyncClipboard for WindowsClipboard {
             let _ = GlobalUnlock(hglobal);
 
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
-            Ok(Some(Arc::from(rust_string)))
+            host_text(rust_string)
         }
     }
 

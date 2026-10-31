@@ -51,13 +51,11 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::linux::text::TextForm;
+use crate::host::MAX_TEXT;
 
 /// How long a transfer may wait for its peer: a whole read, or the next
 /// chunk of an `INCR` write.
 pub(super) const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most text a read takes; an owner offering more answers nothing.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
 
 /// The most `INCR` writes at once: a requestor that never deletes its
 /// property holds one until its timeout, and more are refused.
@@ -610,7 +608,7 @@ impl Selections {
             return Ok(());
         }
         let text = if reply.bytes_after == 0 {
-            decode(form, reply.value)
+            form.answer(reply.value)
         } else {
             Err(ClipboardError::TooLarge)
         };
@@ -645,7 +643,7 @@ impl Selections {
         } else if reply.value.is_empty() {
             let form = reading.form;
             let bytes = std::mem::take(bytes);
-            self.answer(decode(form, bytes));
+            self.answer(form.answer(bytes));
         } else if bytes.capacity() == 0 {
             // Nothing announced: the first chunk is kept as it came.
             *bytes = reply.value;
@@ -960,15 +958,6 @@ fn append(bytes: &mut Vec<u8>, chunk: &[u8]) {
         bytes.reserve_exact(grown - bytes.len());
     }
     bytes.extend_from_slice(chunk);
-}
-
-/// `bytes` received in `form` as text, refused past [`MAX_TEXT`] bytes of
-/// it: ISO 8859-1 and ill-formed UTF-8 grow as they decode.
-fn decode(form: TextForm, bytes: Vec<u8>) -> ClipboardRead {
-    if form.decoded_len(&bytes) > MAX_TEXT {
-        return Err(ClipboardError::TooLarge);
-    }
-    Ok(Some(Arc::from(form.decode(bytes))))
 }
 
 fn steps(

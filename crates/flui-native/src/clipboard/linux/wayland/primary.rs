@@ -358,7 +358,7 @@ impl super::SeatClipboard {
                     .name("flui-wayland-primary".to_owned())
                     .spawn(move || {
                         let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .map(|bytes| Some(Arc::<str>::from(form.decode(bytes))));
+                            .and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 if let Err(error) = spawned {

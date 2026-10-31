@@ -9,14 +9,12 @@
 //! are the system's policy, not a failure. A failed call is logged; a read
 //! answers [`ClipboardError::Unavailable`], a write writes nothing.
 
-use std::sync::Arc;
-
 use android_activity::AndroidApp;
 use flui_platform::{ClipboardError, ClipboardRead};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::SyncClipboard;
+use crate::host::{SyncClipboard, host_text};
 use crate::owner::android::activity::with_activity;
 
 /// The system clipboard of the Activity `app` runs.
@@ -53,7 +51,7 @@ fn clipboard_manager<'local>(
 
 impl SyncClipboard for AndroidClipboard {
     fn read_now(&self) -> ClipboardRead {
-        with_activity(&self.app, |env, activity| {
+        let text = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
                 return Ok(None);
@@ -103,7 +101,7 @@ impl SyncClipboard for AndroidClipboard {
                 )?
                 .l()?;
             let text = env.cast_local::<jni::objects::JString<'_>>(text)?;
-            Ok(Some(Arc::<str>::from(text.try_to_string(env)?)))
+            Ok(Some(text.try_to_string(env)?))
         })
         .map_err(|error| {
             tracing::warn!(
@@ -112,7 +110,8 @@ impl SyncClipboard for AndroidClipboard {
                 "clipboard read failed"
             );
             ClipboardError::Unavailable
-        })
+        })?;
+        text.map_or(Ok(None), host_text)
     }
 
     fn write_now(&self, text: String) {

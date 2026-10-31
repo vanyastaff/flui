@@ -11,15 +11,13 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use std::sync::Arc;
-
 use flui_platform::{ClipboardError, ClipboardRead};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
 
-use crate::host::{NativeClipboard, SyncClipboard};
+use crate::host::{NativeClipboard, SyncClipboard, host_text};
 
 use crate::host;
 use crate::owner::apple::IOSLoop;
@@ -69,7 +67,7 @@ impl SyncClipboard for IOSClipboard {
         let Some(string) = (unsafe { pasteboard.string() }) else {
             return Ok(None);
         };
-        Ok(Some(Arc::from(string.to_string())))
+        host_text(string.to_string())
     }
 
     fn write_now(&self, text: String) {

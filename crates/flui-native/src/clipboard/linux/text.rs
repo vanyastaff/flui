@@ -81,10 +81,19 @@ impl TextForm {
         }
     }
 
+    /// What a read answers with `bytes` received in this form: their text,
+    /// refused past [`MAX_TEXT`](crate::host::MAX_TEXT) bytes before it is
+    /// made, as ISO 8859-1 and ill-formed UTF-8 grow as they decode.
+    pub(crate) fn answer(self, bytes: Vec<u8>) -> flui_platform::ClipboardRead {
+        if self.decoded_len(&bytes) > crate::host::MAX_TEXT {
+            return Err(flui_platform::ClipboardError::TooLarge);
+        }
+        crate::host::host_text(self.decode(bytes))
+    }
+
     /// How many bytes of text [`decode`](Self::decode) makes of `bytes`,
     /// measured without making it: a reader refuses text past its limit
     /// before ISO 8859-1 or ill-formed UTF-8 grows as it decodes.
-    #[cfg(x11_host)]
     pub(crate) fn decoded_len(self, bytes: &[u8]) -> usize {
         let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
         match self {
@@ -226,7 +235,6 @@ mod tests {
 
     /// The decoded length is measured without decoding and matches what
     /// decoding makes, ill-formed UTF-8 and ISO 8859-1's high half included.
-    #[cfg(x11_host)]
     #[test]
     fn the_decoded_length_matches_the_decoded_text() {
         let cases: [&[u8]; 6] = [

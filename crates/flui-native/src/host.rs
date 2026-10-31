@@ -35,6 +35,19 @@
 
 mod clipboard;
 
+#[cfg(any(windows, wayland_host, x11_host))]
+pub(crate) use clipboard::MAX_TEXT;
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) use clipboard::host_text;
 pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 

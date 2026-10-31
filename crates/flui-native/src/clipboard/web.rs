@@ -20,7 +20,7 @@ use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::host::NativeClipboard;
+use crate::host::{NativeClipboard, host_text};
 
 pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,
@@ -77,7 +77,7 @@ impl NativeClipboard for WebClipboard {
         let promise = clipboard.read_text();
         wasm_bindgen_futures::spawn_local(async move {
             let text = match JsFuture::from(promise).await {
-                Ok(value) => Ok(value.as_string().map(Arc::<str>::from)),
+                Ok(value) => value.as_string().map_or(Ok(None), host_text),
                 Err(refusal) => {
                     tracing::debug!(
                         ?refusal,

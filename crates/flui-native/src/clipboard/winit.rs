@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 
 use flui_platform::{ClipboardError, ClipboardRead};
 
-use crate::host::SyncClipboard;
+use crate::host::{SyncClipboard, host_text};
 
 /// Arboard-based clipboard implementation
 ///
@@ -117,7 +117,7 @@ impl SyncClipboard for ArboardClipboard {
         match clipboard_session(|| clipboard.get_text()) {
             Ok(text) => {
                 tracing::debug!(len = text.len(), "Read text from clipboard");
-                Ok(Some(Arc::from(text)))
+                host_text(text)
             }
             // No text, whatever else the clipboard holds.
             Err(arboard::Error::ContentNotAvailable) => Ok(None),

@@ -23,14 +23,12 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
-use std::sync::Arc;
-
 use flui_platform::ClipboardRead;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard};
+use crate::host::{NativeClipboard, SyncClipboard, host_text};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -168,7 +166,7 @@ impl SyncClipboard for MacOSClipboard {
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
             Some(rust_string)
         });
-        Ok(text.map(Arc::from))
+        text.map_or(Ok(None), host_text)
     }
 
     fn write_now(&self, text: String) {

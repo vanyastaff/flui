@@ -483,9 +483,10 @@ The primary selection's handle and backend take the same types.
   holds it open, the display connection is gone, a host without one). `Denied` is a permission:
   the browser's `NotAllowedError`. `Timeout` is a selection owner that did not answer in time
   (X11, Wayland). `Malformed` is text invalid in its encoding (an unterminated `CF_UNICODETEXT`,
-  `arboard`'s conversion failure). `TooLarge` is a transfer past the host's limit (64 MiB on X11
-  and Wayland). On the web, a refused read still answers what the page last wrote, and names
-  its refusal only before the page wrote anything.
+  `arboard`'s conversion failure). `TooLarge` is text past 64 MiB, one limit on every host,
+  refused before FLUI copies it (decoded text measured first on Win32, X11 and Wayland). On
+  the web, a refused read still answers what the page last wrote, and names its refusal only
+  before the page wrote anything.
 - **Cost.** An answer takes one more owner job than before: the host's answer settles the shared
   read, which then resolves each reader.
 
