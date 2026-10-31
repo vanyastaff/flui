@@ -1331,7 +1331,12 @@ impl IOSWindow {
             } else {
                 WindowAppearance::Light
             },
-            safe_area: metrics.safe_area,
+            insets: flui_platform::WindowInsets::ZERO
+                .try_with_safe_area(metrics.safe_area)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "UIKit reported a safe area FLUI cannot publish; none is");
+                    flui_platform::WindowInsets::ZERO
+                }),
             execution: self.execution_now(),
             occluded: !foreground,
             hovered: self.delivery.hovered(),

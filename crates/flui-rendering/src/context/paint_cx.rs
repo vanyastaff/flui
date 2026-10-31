@@ -48,8 +48,8 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{Arity, Optional, Single, Variable};
-use flui_layer::LayerLink;
-use flui_painting::paint::{Alignment, BlendMode, Clip, ImageFilter, Shader};
+use flui_layer::{FollowerLayer, LayerLink};
+use flui_painting::paint::{BlendMode, Clip, ImageFilter, Shader};
 use flui_painting::{Canvas, DisplayList};
 
 use crate::traits::{PaintClip, PaintOpacity};
@@ -177,30 +177,12 @@ pub enum FragmentScope {
     },
     /// Follower-layer link tag (`RenderFollowerLayer`) — positions
     /// everything painted inside relative to whichever `Leader`
-    /// currently publishes under `link`. Also pushed UNCONDITIONALLY;
-    /// resolving the actual on-screen position is
-    /// deferred to a later render-time pass, not performed here (design
-    /// research plan §4/§8 — genuinely out of this pass's Tier-1 scope).
-    Follower {
-        /// The link this scope targets.
-        link: LayerLink,
-        /// This node's laid-out size (node-local), published the same way
-        /// [`Leader::size`](FragmentScope::Leader) is — required by
-        /// `FollowerLayer::calculate_offset`'s `follower_size` parameter
-        /// whenever `follower_anchor` is not top-left.
-        size: Size<f64>,
-        /// Pixel gap added on top of the anchor-derived linked
-        /// position, AND the standalone position used when unlinked
-        /// (one field serves both purposes).
-        target_offset: Offset<f64>,
-        /// Whether to remain visible when no leader currently publishes
-        /// under `link`.
-        show_when_unlinked: bool,
-        /// Anchor point on the leader's rect.
-        leader_anchor: Alignment,
-        /// Anchor point on this follower's own rect.
-        follower_anchor: Alignment,
-    },
+    /// currently publishes under the layer's link. Also pushed
+    /// UNCONDITIONALLY; the layer's transform is resolved against its leader
+    /// at composite time (`flui_layer::resolve_follower_transform`), not
+    /// here. The layer's `size` is this node's laid-out size (node-local),
+    /// published the same way [`Leader::size`](FragmentScope::Leader) is.
+    Follower(FollowerLayer),
 }
 
 /// An immutable recorded paint fragment — the output of one render
@@ -619,33 +601,15 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         self.rec.pop_scope();
     }
 
-    /// Wraps everything painted inside `f` in a `FollowerLayer` tagged
-    /// with `link`, publishing this node's own paint-time `size` to the
-    /// layer the same way [`Self::with_leader`] does (`RenderFollowerLayer`).
+    /// Wraps everything painted inside `f` in `follower`, publishing this
+    /// node's own paint-time size as the layer's `size` the same way
+    /// [`Self::with_leader`] does (`RenderFollowerLayer`).
     ///
-    /// Also pushed UNCONDITIONALLY — the
-    /// no-leader/hidden decision and the resolved on-screen position are
-    /// both determined at a later composite/render-time pass, not here.
-    // clippy::too_many_arguments is crate-wide allowed (lib.rs) — this
-    // carries the full follower-layer constructor surface.
-    pub fn with_follower(
-        &mut self,
-        link: LayerLink,
-        size: Size<f64>,
-        target_offset: Offset<f64>,
-        show_when_unlinked: bool,
-        leader_anchor: Alignment,
-        follower_anchor: Alignment,
-        f: impl FnOnce(&mut Self),
-    ) {
-        self.rec.push_scope(FragmentScope::Follower {
-            link,
-            size,
-            target_offset,
-            show_when_unlinked,
-            leader_anchor,
-            follower_anchor,
-        });
+    /// Also pushed UNCONDITIONALLY — the no-leader/hidden decision and the
+    /// resolved transform are both determined at composite time, not here.
+    pub fn with_follower(&mut self, follower: FollowerLayer, f: impl FnOnce(&mut Self)) {
+        self.rec
+            .push_scope(FragmentScope::Follower(follower.with_size(self.size)));
         f(self);
         self.rec.pop_scope();
     }

@@ -1,6 +1,6 @@
 //! The compositor tree.
 
-mod annotations;
+pub(crate) mod annotations;
 mod layer_tree;
 mod stamp;
 

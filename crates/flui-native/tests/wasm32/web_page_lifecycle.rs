@@ -376,7 +376,9 @@ async fn web_page_events_leave_with_the_window() {
 #[wasm_bindgen_test]
 async fn web_window_reports_what_a_page_can_do() {
     let (_probe, running, window) = page().await;
-    let mut expected = WindowCapabilities::NONE;
+    // A page reads no virtual keyboard yet (ADR-0277 §4).
+    let mut expected = WindowCapabilities::NONE
+        .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost);
     expected.sets_title = flui_platform::Availability::Native;
     expected.enters_fullscreen = flui_platform::Availability::Native;
     expected.closes = flui_platform::Availability::Emulated;

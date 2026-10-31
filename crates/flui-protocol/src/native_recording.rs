@@ -1027,6 +1027,21 @@ pub enum Capability {
     Unavailable(Absence),
 }
 
+impl Capability {
+    /// The capability a recording that predates a field reads as.
+    #[must_use]
+    pub const fn platform_absence() -> Self {
+        Self::Unavailable(Absence::NotOnThisPlatform)
+    }
+
+    /// Whether this is [`platform_absence`](Self::platform_absence), which a
+    /// writer leaves out.
+    #[must_use]
+    pub const fn is_platform_absence(&self) -> bool {
+        matches!(self, Self::Unavailable(Absence::NotOnThisPlatform))
+    }
+}
+
 /// Which commands a window honours, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1061,6 +1076,20 @@ pub struct Capabilities {
     pub material: Capability,
     /// Reporting that its frames reached the screen.
     pub reports_presentation: Capability,
+    /// Reporting where the soft keyboard covers it; a recording made before
+    /// the field existed reads as the platform's absence.
+    #[serde(
+        default = "Capability::platform_absence",
+        skip_serializing_if = "Capability::is_platform_absence"
+    )]
+    pub reports_keyboard_inset: Capability,
+    /// Reporting the edges system gestures take; read as
+    /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) is.
+    #[serde(
+        default = "Capability::platform_absence",
+        skip_serializing_if = "Capability::is_platform_absence"
+    )]
+    pub reports_system_gestures: Capability,
     /// Reporting its position.
     pub observes_position: Availability,
     /// Reporting that it is minimized.
@@ -1147,6 +1176,14 @@ pub struct WindowState {
     pub appearance: Appearance,
     /// The safe-area insets in logical pixels: top, right, bottom, left.
     pub safe_area: [f64; 4],
+    /// The soft keyboard's occlusion and its motion; absent while it is hidden
+    /// and at rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<KeyboardInset>,
+    /// The edges system gestures take, in logical pixels: top, right, bottom,
+    /// left; absent while zero.
+    #[serde(default, skip_serializing_if = "is_zero_insets")]
+    pub system_gestures: [f64; 4],
     /// Whether the platform lets it run its UI.
     pub execution: Execution,
     /// Whether the pointer is over it.
@@ -1155,6 +1192,60 @@ pub struct WindowState {
     pub active: bool,
     /// Which commands it honours.
     pub capabilities: Capabilities,
+}
+
+/// Whether all four insets are zero, which a writer leaves out.
+fn is_zero_insets(insets: &[f64; 4]) -> bool {
+    insets.iter().all(|inset| *inset == 0.0)
+}
+
+/// Where the soft keyboard covers a window, and how it gets there.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct KeyboardInset {
+    /// The occlusion once any motion ends, in logical pixels: top, right,
+    /// bottom, left.
+    pub target: [f64; 4],
+    /// The motion toward `target`; absent at rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<InsetMotion>,
+}
+
+/// A motion of the keyboard on the event timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct InsetMotion {
+    /// The occlusion it starts from: top, right, bottom, left.
+    pub from: [f64; 4],
+    /// When it starts on the event timeline, in nanoseconds.
+    pub start_ns: u64,
+    /// How long it lasts, in nanoseconds.
+    pub duration_ns: u64,
+    /// Its timing curve.
+    pub curve: InsetCurve,
+}
+
+/// A keyboard motion's timing curve.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "curve", rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum InsetCurve {
+    /// Progress proportional to time.
+    Linear,
+    /// A cubic Bézier through (0,0), the control points and (1,1).
+    CubicBezier {
+        /// The first control point's time.
+        x1: f64,
+        /// The first control point's progress.
+        y1: f64,
+        /// The second control point's time.
+        x2: f64,
+        /// The second control point's progress.
+        y2: f64,
+    },
+    /// UIKit's keyboard curve.
+    SystemKeyboard,
 }
 
 /// One registry call, after the header.

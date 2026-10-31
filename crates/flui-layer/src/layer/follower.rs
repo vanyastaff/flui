@@ -6,17 +6,38 @@ use flui_painting::paint::Alignment;
 
 use crate::LayerLink;
 
+/// What a follower does while its leader's anchor point is outside a clip
+/// that the leader sits under and the follower does not.
+///
+/// A follower usually lives in an overlay, so its common ancestor with the
+/// leader sits near the root and a scroll viewport's clip around the leader
+/// never reaches it. Clips at or above that common ancestor clip the follower
+/// itself and are never consulted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum LeaderClip {
+    /// Paint wherever the leader is, past the leader's clips: a tooltip or a
+    /// menu stays whole when its anchor is near a viewport edge.
+    #[default]
+    Escape,
+    /// Paint nothing and take no hits while the leader's anchor point lies
+    /// outside any of those clips: a selection handle hides when its end
+    /// scrolls out. The clip shapes are closed, so an anchor on a clip's edge
+    /// is inside it.
+    Hide,
+}
+
 /// Positions its subtree relative to the leader that shares its link.
 ///
 /// Both anchors and the follower's own `size` live on the layer so
-/// [`calculate_offset`] can run at composite time from the layer tree alone.
+/// [`linked_offset`] can run at composite time from the layer tree alone.
 /// Anchors outside `[-1, 1]` are legal off-rectangle pivots.
 ///
-/// The resolved position is computed by
-/// [`resolve_follower_offset`](crate::resolve_follower_offset), not stored
-/// here.
+/// The resolved transform is computed by
+/// [`resolve_follower_transform`](crate::resolve_follower_transform), not
+/// stored here.
 ///
-/// [`calculate_offset`]: Self::calculate_offset
+/// [`linked_offset`]: Self::linked_offset
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FollowerLayer {
     link: LayerLink,
@@ -25,6 +46,7 @@ pub struct FollowerLayer {
     leader_anchor: Alignment,
     follower_anchor: Alignment,
     size: Size<f64>,
+    leader_clip: LeaderClip,
 }
 
 impl FollowerLayer {
@@ -39,6 +61,7 @@ impl FollowerLayer {
             leader_anchor: Alignment::TOP_LEFT,
             follower_anchor: Alignment::TOP_LEFT,
             size: Size::ZERO,
+            leader_clip: LeaderClip::Escape,
         }
     }
 
@@ -83,6 +106,14 @@ impl FollowerLayer {
         self
     }
 
+    /// What this follower does while its leader's anchor is clipped out.
+    #[inline]
+    #[must_use]
+    pub fn with_leader_clip(mut self, leader_clip: LeaderClip) -> Self {
+        self.leader_clip = leader_clip;
+        self
+    }
+
     /// The link this follower targets.
     #[inline]
     pub fn link(&self) -> LayerLink {
@@ -119,17 +150,19 @@ impl FollowerLayer {
         self.size
     }
 
-    /// The offset to apply at this follower's tree position, given the
-    /// leader's origin relative to that position and the leader's size.
+    /// See [`Self::with_leader_clip`].
+    #[inline]
+    pub fn leader_clip(&self) -> LeaderClip {
+        self.leader_clip
+    }
+
+    /// Where this follower's origin sits in its leader's own coordinates.
     ///
     /// `leader_anchor` within `leader_size`, plus `target_offset`, minus
-    /// `follower_anchor` within this layer's own `size`.
-    pub fn calculate_offset(
-        &self,
-        leader_offset: Offset<f64>,
-        leader_size: Size<f64>,
-    ) -> Offset<f64> {
-        leader_offset + self.leader_anchor.along_size(leader_size) + self.target_offset
+    /// `follower_anchor` within this layer's own `size`. The resolver maps
+    /// that space onto the follower's, scale and rotation included.
+    pub fn linked_offset(&self, leader_size: Size<f64>) -> Offset<f64> {
+        self.leader_anchor.along_size(leader_size) + self.target_offset
             - self.follower_anchor.along_size(self.size)
     }
 }

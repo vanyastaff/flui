@@ -51,7 +51,10 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE
         .unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(PRESENTATION);
+        .without_presentation_feedback(PRESENTATION)
+        // `UIKeyboardWillChangeFrameNotification` is not read yet; UIKit names
+        // no system gesture insets, only edges an app may defer.
+        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
     capabilities.closes = Availability::Native;
     capabilities.frame_rate_hint = Availability::Native;
     capabilities
@@ -171,7 +174,10 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
             &MATERIAL,
             material_absence(facts.api, facts.cross_window_blur),
         )
-        .without_presentation_feedback(PRESENTATION);
+        .without_presentation_feedback(PRESENTATION)
+        // `WindowInsetsCompat` (IME and system gestures) is not read yet.
+        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
+        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
 }

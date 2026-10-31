@@ -89,7 +89,7 @@ impl PipelineOwner<Idle> {
             semantics_update_callback: None,
             last_layer_tree: None,
             scenes_painted: 0,
-            last_follower_offsets: FxHashMap::default(),
+            last_follower_transforms: FxHashMap::default(),
             retained_boundaries: FxHashMap::default(),
             retained_pixel_ratio: 1.0,
             root_content: None,

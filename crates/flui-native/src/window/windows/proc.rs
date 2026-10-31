@@ -1522,7 +1522,7 @@ pub(crate) fn sample_state(
             .flatten(),
         appearance,
         // A desktop window has no safe area, and Win32 never suspends one.
-        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        insets: flui_platform::WindowInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,
         // Win32 tells of a cloak and a locked session; a window covered by
         // others it does not report.

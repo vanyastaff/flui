@@ -85,6 +85,8 @@ pub struct HeadlessWindow {
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
     display: Mutex<Option<DisplayId>>,
+    /// What covers the window, as the test last reported it.
+    insets: Mutex<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
     /// every change this double makes to it.
     revision: Mutex<flui_platform::WindowRevision>,
@@ -159,6 +161,7 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
             display: Mutex::new(None),
+            insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
@@ -341,6 +344,7 @@ impl PlatformWindow for HeadlessWindow {
             flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
                 .with_focused(true)
                 .with_display(*self.display.lock())
+                .with_insets(*self.insets.lock())
                 .with_metrics(
                     flui_foundation::geometry::WindowMetrics::from_logical(
                         size,
@@ -1541,6 +1545,52 @@ impl HeadlessHost {
             self.ui_runtime.presentation_id(),
             flui_runtime::owner::WindowObservation::Focus(focused),
         );
+    }
+
+    /// Report `insets` as what covers `window`, as a host reports a change of
+    /// its safe area, keyboard or system gesture regions: the presentation's
+    /// `MediaQuery` carries them from the next [`pump`](Self::pump), and a
+    /// moving keyboard is sampled at each frame's time until it settles.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn set_window_insets(&self, window: HeadlessWindowId, insets: flui_platform::WindowInsets) {
+        *self.window_of(window).insets.lock() = insets;
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Insets(insets),
+        );
+    }
+
+    /// Start moving `window`'s keyboard to `target` now, over `duration` on
+    /// `curve`, as a host reports a keyboard that begins to show or hide: the
+    /// motion starts where the keyboard is at this instant, and the safe area
+    /// and system gesture regions stay as they were. Returns the keyboard as
+    /// reported, whose [`at`](flui_platform::KeyboardInset::at) names the
+    /// occlusion each later frame lays out with.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host, or the motion is invalid: a
+    /// negative or non-finite `target`, a zero `duration`, or an invalid
+    /// `curve`.
+    pub fn move_keyboard(
+        &self,
+        window: HeadlessWindowId,
+        target: flui_foundation::geometry::EdgeInsets,
+        duration: Duration,
+        curve: flui_platform::InsetCurve,
+    ) -> flui_platform::KeyboardInset {
+        let now = self.event_now();
+        let insets = *self.window_of(window).insets.lock();
+        let motion =
+            flui_platform::InsetMotion::try_new(insets.keyboard().at(now), now, duration, curve)
+                .expect("a keyboard motion with a duration and a valid curve");
+        let keyboard = flui_platform::KeyboardInset::try_moving(target, motion)
+            .expect("a keyboard target that is finite and not negative");
+        self.set_window_insets(window, insets.with_keyboard(keyboard));
+        keyboard
     }
 
     /// The primary window's gesture arena, the one its detectors compete in:
