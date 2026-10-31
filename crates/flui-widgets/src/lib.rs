@@ -270,6 +270,10 @@ pub use paint::{
     DecoratedBox, IgnorePointer, Opacity, RepaintBoundary,
 };
 pub use physical_model::{PhysicalModel, PhysicalShape};
+pub use reorderable::{
+    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
+    ReorderableList, ReorderableListState,
+};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
@@ -307,10 +311,6 @@ pub use scroll::{
 };
 pub use semantics::{
     ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
-};
-pub use reorderable::{
-    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
-    ReorderableList, ReorderableListState,
 };
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use swipe::{

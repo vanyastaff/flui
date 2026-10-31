@@ -21,9 +21,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::drag::{
-    DragReach,
-    AllowedActions, DragAndDrop, DragItem, DragObserver, DragOutcome, DragPoint, DragSession,
-    DragTrigger, MoveOutcome,
+    AllowedActions, DragAndDrop, DragItem, DragObserver, DragOutcome, DragPoint, DragReach,
+    DragSession, DragTrigger, MoveOutcome,
 };
 use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
@@ -138,6 +137,7 @@ pub struct Draggable {
     on_drag_started: Option<EventCallback>,
     on_drag_end: Option<ValueCallback<DragOutcome>>,
     devices: PointerKindSet,
+    axis: MultiDragAxis,
     reach: Option<DragReach>,
 }
 
@@ -180,6 +180,7 @@ impl Draggable {
             on_drag_started: None,
             on_drag_end: None,
             devices: PointerKindSet::all(),
+            axis: MultiDragAxis::Free,
             reach: None,
         })
     }
@@ -199,6 +200,7 @@ impl Draggable {
             on_drag_started: None,
             on_drag_end: None,
             devices: PointerKindSet::all(),
+            axis: MultiDragAxis::Free,
             reach: None,
         }
     }
@@ -206,6 +208,15 @@ impl Draggable {
     /// Only contacts of `devices` start a drag; read when the draggable mounts.
     pub(crate) fn devices(mut self, devices: PointerKindSet) -> Self {
         self.devices = devices;
+        self
+    }
+
+    /// The axis a contact must move along to start the drag, fixed at mount: a
+    /// list's handle takes its list's axis, so the drag, deeper than the
+    /// list's scroll on the same axis, wins the contact (ADR-0208 §2). The
+    /// drag then follows the pointer freely.
+    pub(crate) fn axis(mut self, axis: MultiDragAxis) -> Self {
+        self.axis = axis;
         self
     }
 
@@ -219,7 +230,9 @@ impl Draggable {
     /// themselves, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.alternatives = self.alternatives.map(|alternatives| alternatives.target(name));
+        self.alternatives = self
+            .alternatives
+            .map(|alternatives| alternatives.target(name));
         self
     }
 
@@ -713,6 +726,8 @@ pub struct DraggableState {
     trigger: DragTrigger,
     /// The devices whose contacts start a drag, fixed at mount.
     devices: PointerKindSet,
+    /// The axis a contact must move along to start a drag, fixed at mount.
+    axis: MultiDragAxis,
     policy: Option<GesturePolicy>,
     /// The hold of an enclosing context menu, and whether the widget's own
     /// alternatives are a menu: a long-press drag succeeds a menu's long press
@@ -751,9 +766,13 @@ impl StatefulView for Draggable {
             hold: None,
             trigger: self.trigger,
             devices: self.devices,
+            axis: self.axis,
             policy: None,
             enclosing_hold: None,
-            own_menu: self.alternatives.as_ref().is_some_and(GestureAlternatives::is_menu),
+            own_menu: self
+                .alternatives
+                .as_ref()
+                .is_some_and(GestureAlternatives::is_menu),
             own_hold: None,
             built_for: None,
             drag_attachment: Rc::new(RecognizerAttachment::default()),
@@ -887,7 +906,7 @@ impl DraggableState {
                 }
             },
         };
-        let drag = MultiDragGestureRecognizer::builder(drag_arena, MultiDragAxis::Free)
+        let drag = MultiDragGestureRecognizer::builder(drag_arena, self.axis)
             .settings(settings)
             .allowed_devices(self.devices)
             .on_start(on_start)

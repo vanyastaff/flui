@@ -171,7 +171,9 @@ impl DropTarget {
     /// make themselves, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.alternatives = self.alternatives.map(|alternatives| alternatives.target(name));
+        self.alternatives = self
+            .alternatives
+            .map(|alternatives| alternatives.target(name));
         self
     }
 

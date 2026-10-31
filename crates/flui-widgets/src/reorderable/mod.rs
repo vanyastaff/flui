@@ -25,15 +25,17 @@ use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 
-use flui_foundation::ViewKey;
 use flui_foundation::ValueKey;
+use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
-use flui_interaction::PointerKindSet;
 use flui_interaction::drag::{DragItem, DragReach, DragView};
+use flui_interaction::{MultiDragAxis, PointerKindSet};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::keyboard::NamedKey;
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -41,15 +43,16 @@ use flui_view::{EventCx, EventOutcome, WriterSource};
 
 use crate::interaction::actions::{ambient_action_chain, resolve};
 use crate::interaction::{
-    Action, ActionOutcome, Actions, Alternative, ControlPlacement, ControlSpec, GestureAlternatives,
-    GestureArenaScope, GestureCommand, Intent, ShowContextMenuIntent, SingleActivator,
+    Action, ActionOutcome, Actions, Alternative, ControlPlacement, ControlSpec,
+    GestureAlternatives, GestureArenaScope, GestureCommand, Intent, Shortcuts,
+    ShowContextMenuIntent, SingleActivator,
 };
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, Directionality, WidgetsLocalizations,
 };
 use crate::{
-    Center, ColoredBox, Column, ConstrainedBox, ContextMenuArea, Draggable, DropTarget, Expanded,
-    GestureDetector, ListView, Row, Scrollable, SizedBox, Text,
+    Center, ColoredBox, Column, ConstrainedBox, ContextMenuArea, Draggable, DropTarget,
+    GestureDetector, ListView, Listener, Padding, Positioned, Scrollable, SizedBox, Stack, Text,
 };
 
 /// A row's move, as [`ReorderableList`] reports it once: the item at `from`
@@ -108,7 +111,7 @@ pub struct ReorderPreview {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ReorderHandles {
-    /// The list puts a handle after each row's content.
+    /// The list puts a handle before each row's content.
     #[default]
     Default,
     /// Each row places its own, through [`ReorderableItem::handle`].
@@ -343,6 +346,8 @@ struct Shared {
     over: Cell<Option<usize>>,
     writer: RefCell<Option<WriterSource>>,
     announcer: RefCell<Option<Announcer>>,
+    /// The localizations the list was last built with, for its announcements.
+    strings: RefCell<Option<std::sync::Arc<BoxedWidgetsLocalizations>>>,
 }
 
 impl Shared {
@@ -366,16 +371,43 @@ impl Shared {
         self.write(|cx| preview(cx, ReorderPreview { from, over }));
     }
 
-    /// Move the item keyed `key` to `to`; nothing when it is there already.
-    fn reorder(&self, cx: &mut EventCx<'_>, key: &dyn ViewKey, to: usize, cause: ReorderCause) {
+    /// Move the item keyed `key` to `to`, and announce its new position;
+    /// nothing when it is there already.
+    fn reorder(
+        &self,
+        cx: &mut EventCx<'_>,
+        key: &dyn ViewKey,
+        to: usize,
+        cause: ReorderCause,
+    ) -> bool {
         let view = self.view.borrow().clone();
         let Some(from) = view.index_of(key) else {
-            return;
+            return false;
         };
         if from == to || to >= view.item_count {
-            return;
+            return false;
         }
+        // Named before the app's model moves the item.
+        let label = view.item_label.as_ref().map(|label| label(from));
+        let message = {
+            let strings = self.strings.borrow();
+            match strings.as_deref() {
+                Some(strings) => {
+                    strings.reorder_item_moved(label.as_deref(), to + 1, view.item_count)
+                }
+                None => DefaultWidgetsLocalizations.reorder_item_moved(
+                    label.as_deref(),
+                    to + 1,
+                    view.item_count,
+                ),
+            }
+        };
         (view.on_reorder)(cx, Reorder { from, to, cause });
+        let announcer = self.announcer.borrow().clone();
+        if let Some(announcer) = announcer {
+            let _ = announcer.announce(message, Urgency::Polite);
+        }
+        true
     }
 }
 
@@ -408,6 +440,7 @@ impl StatefulView for ReorderableList {
                 over: Cell::new(None),
                 writer: RefCell::new(None),
                 announcer: RefCell::new(None),
+                strings: RefCell::new(None),
             }),
         }
     }
@@ -429,7 +462,8 @@ impl ViewState<ReorderableList> for ReorderableListState {
         self.acquire(ctx);
     }
 
-    fn build(&self, view: &ReorderableList, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &ReorderableList, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.shared.strings.borrow_mut() = BoxedWidgetsLocalizations::maybe_of(ctx);
         let _prev = self.shared.view.replace(view.clone());
         let shared = Rc::clone(&self.shared);
         let list = view.clone();
@@ -467,6 +501,8 @@ struct HandleSource {
     key: Rc<dyn ViewKey>,
     feedback: BoxedView,
     menu: bool,
+    /// The list's axis, which a press on the handle moves along to drag.
+    axis: Axis,
 }
 
 impl HandleSource {
@@ -494,9 +530,23 @@ impl HandleSource {
     }
 
     fn handle(&self, child: BoxedView) -> BoxedView {
-        let handle = self.draggable(child, PointerKindSet::all());
+        // All of the handle's box takes the press, not only what it paints,
+        // and a press that moves along the list drags the row: on the list's
+        // axis the handle is deeper than the list's own scroll, so it wins.
+        let child = Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .child(child)
+            .boxed();
+        let axis = match self.axis {
+            Axis::Vertical => MultiDragAxis::Vertical,
+            Axis::Horizontal => MultiDragAxis::Horizontal,
+        };
+        let handle = self.draggable(child, PointerKindSet::all()).axis(axis);
         if self.menu {
-            DragHandle { child: handle.boxed() }.boxed()
+            DragHandle {
+                child: handle.boxed(),
+            }
+            .boxed()
         } else {
             handle.boxed()
         }
@@ -531,25 +581,72 @@ impl StatelessView for DragHandle {
     }
 }
 
-/// The handle the list puts after a row: three bars, as large as the
-/// platform's smallest touch target.
-fn default_handle(ctx: &dyn BuildContext) -> BoxedView {
-    let side = GestureArenaScope::settings_or_default_of(ctx)
-        .min_target_for(flui_interaction::PointerKind::Touch);
+/// The handle the list puts before a row's content: three bars, centred in
+/// a square as large as the platform's smallest touch target.
+fn default_handle() -> BoxedView {
     let bar = || {
         SizedBox::new(18.0, 2.0)
             .child(ColoredBox::new(Color::rgb(0x49, 0x45, 0x4F)))
             .boxed()
     };
     let gap = || SizedBox::new(18.0, 3.0).boxed();
-    ConstrainedBox::new(flui_rendering::constraints::BoxConstraints::tight_for(
-        Some(side),
-        Some(side),
-    ))
-    .child(Center::new().child(
-        Column::new(vec![bar(), gap(), bar(), gap(), bar()])
-            .main_axis_size(flui_objects::MainAxisSize::Min),
-    ))
+    Center::new()
+        .child(
+            Column::new(vec![bar(), gap(), bar(), gap(), bar()])
+                .main_axis_size(flui_objects::MainAxisSize::Min),
+        )
+        .boxed()
+}
+
+/// `content` with `handle` in a band `side` wide along its reading start (a
+/// vertical list) or its top (a horizontal one), the band at least as long
+/// as the touch minimum.
+///
+/// The handle comes before the content because keyboard focus in the row
+/// reveals the row's menu control at the trailing edge, where it would
+/// cover a handle. It is the stack's last layer, so it takes a press on the
+/// band before anything the content lays out beneath it.
+fn beside_handle(
+    content: BoxedView,
+    handle: BoxedView,
+    side: f64,
+    axis: Axis,
+    rtl: bool,
+) -> BoxedView {
+    let (content, band) = match (axis, rtl) {
+        (Axis::Vertical, false) => (
+            Padding::only(side, 0.0, 0.0, 0.0).child(content),
+            Positioned::new(handle)
+                .left(0.0)
+                .top(0.0)
+                .bottom(0.0)
+                .width(side),
+        ),
+        (Axis::Vertical, true) => (
+            Padding::only(0.0, 0.0, side, 0.0).child(content),
+            Positioned::new(handle)
+                .right(0.0)
+                .top(0.0)
+                .bottom(0.0)
+                .width(side),
+        ),
+        (Axis::Horizontal, _) => (
+            Padding::only(0.0, side, 0.0, 0.0).child(content),
+            Positioned::new(handle)
+                .top(0.0)
+                .left(0.0)
+                .right(0.0)
+                .height(side),
+        ),
+    };
+    let floor = match axis {
+        Axis::Vertical => BoxConstraints::new(0.0, f64::INFINITY, side, f64::INFINITY),
+        Axis::Horizontal => BoxConstraints::new(side, f64::INFINITY, 0.0, f64::INFINITY),
+    };
+    Stack::new(vec![
+        ConstrainedBox::new(floor).child(content).boxed(),
+        band.boxed(),
+    ])
     .boxed()
 }
 
@@ -591,18 +688,21 @@ impl StatelessView for ReorderRow {
             key: Rc::clone(&self.key),
             feedback: SizedBox::shrink().boxed(),
             menu,
+            axis: view.scroll_direction,
         };
         let feedback = item(&bare_source);
-        let source = HandleSource { feedback, ..bare_source };
+        let source = HandleSource {
+            feedback,
+            ..bare_source
+        };
         let content = item(&source);
+        let rtl = Directionality::maybe_of(ctx) == Some(TextDirection::Rtl);
         let content = match view.handles {
             ReorderHandles::Default => {
-                let handle = source.handle(default_handle(ctx));
-                let children = vec![Expanded::new(content).boxed(), handle];
-                match view.scroll_direction {
-                    Axis::Vertical => Row::new(children).boxed(),
-                    Axis::Horizontal => Column::new(children).boxed(),
-                }
+                let side = GestureArenaScope::settings_or_default_of(ctx)
+                    .min_target_for(flui_interaction::PointerKind::Touch);
+                let handle = source.handle(default_handle());
+                beside_handle(content, handle, side, view.scroll_direction, rtl)
             }
             ReorderHandles::Custom => content,
         };
@@ -632,7 +732,7 @@ impl StatelessView for ReorderRow {
             let list = Rc::clone(&self.list);
             move |cx, drag, _at, _action| {
                 if let Some(payload) = drag.value::<RowPayload>() {
-                    list.reorder(cx, &*payload.key, index, ReorderCause::Drag);
+                    let _ = list.reorder(cx, &*payload.key, index, ReorderCause::Drag);
                 }
             }
         });
@@ -641,15 +741,14 @@ impl StatelessView for ReorderRow {
         let strings: &dyn WidgetsLocalizations = localizations
             .as_deref()
             .map_or(&DefaultWidgetsLocalizations, |boxed| &**boxed);
-        let rtl = Directionality::maybe_of(ctx) == Some(TextDirection::Rtl);
         let commands = commands(strings, &view, index, rtl);
         let label = view.item_label.as_ref().map(|label| label(index));
         let row = match commands.split_first() {
             None => target.boxed(),
-            Some(((first, _), more)) if menu => {
+            Some(((first, _, _), more)) if menu => {
                 let area = ContextMenuArea::try_new(
                     first.clone(),
-                    more.iter().map(|(command, _)| command.clone()),
+                    more.iter().map(|(command, _, _)| command.clone()),
                 )
                 .expect("BUG: the move commands have distinct labels and keys");
                 match &label {
@@ -659,11 +758,13 @@ impl StatelessView for ReorderRow {
                 .child(target)
                 .boxed()
             }
-            Some(((first, intent), more)) => {
+            Some(((first, intent, _), more)) => {
                 let placement = view.controls.unwrap_or_default();
                 let spec = more.iter().fold(
                     ControlSpec::new(first.clone(), Text::new(arrow(*intent))).placement(placement),
-                    |spec, (command, intent)| spec.control(command.clone(), Text::new(arrow(*intent))),
+                    |spec, (command, intent, _)| {
+                        spec.control(command.clone(), Text::new(arrow(*intent)))
+                    },
                 );
                 let alternatives = GestureAlternatives::try_new(Alternative::VisibleControl(spec))
                     .expect("BUG: the move commands have distinct labels and keys");
@@ -675,21 +776,21 @@ impl StatelessView for ReorderRow {
                 .boxed()
             }
         };
-        let announce = label.clone();
+        // The moves' Alt keys are bound by the row, not as the commands'
+        // keys: ADR-0216 §1 keeps arrows, Home and End from gesture commands
+        // for text editing, and a text field inside the row still takes them
+        // first, since it handles its keys before they reach the row.
+        let row = commands
+            .iter()
+            .fold(Shortcuts::new(row), |shortcuts, (_, intent, key)| {
+                shortcuts.shortcut(key.clone(), *intent)
+            });
         Actions::new(row).action(RowMoves {
             list: Rc::clone(&self.list),
             key: Rc::clone(&self.key),
             index,
             count: view.item_count,
             rtl,
-            announce: Rc::new(move |position, count| match localizations.as_deref() {
-                Some(strings) => strings.reorder_item_moved(announce.as_deref(), position, count),
-                None => DefaultWidgetsLocalizations.reorder_item_moved(
-                    announce.as_deref(),
-                    position,
-                    count,
-                ),
-            }),
         })
     }
 }
@@ -712,7 +813,7 @@ fn commands(
     view: &ReorderableList,
     index: usize,
     rtl: bool,
-) -> Vec<(GestureCommand, ReorderIntent)> {
+) -> Vec<(GestureCommand, ReorderIntent, SingleActivator)> {
     let last = view.item_count.saturating_sub(1);
     let key = |named: NamedKey| SingleActivator::named(named).alt();
     let mut commands = Vec::new();
@@ -737,15 +838,23 @@ fn commands(
         ),
     };
     let mut push = |label: &str, intent: ReorderIntent, named: NamedKey| {
-        commands.push((GestureCommand::new(label, intent).key(key(named)), intent));
+        commands.push((GestureCommand::new(label, intent), intent, key(named)));
     };
     if index > 0 {
-        push(strings.reorder_item_to_start(), ReorderIntent::Start, NamedKey::Home);
+        push(
+            strings.reorder_item_to_start(),
+            ReorderIntent::Start,
+            NamedKey::Home,
+        );
         push(back.0, back.1, back_key);
     }
     if index < last {
         push(forward.0, forward.1, forward_key);
-        push(strings.reorder_item_to_end(), ReorderIntent::End, NamedKey::End);
+        push(
+            strings.reorder_item_to_end(),
+            ReorderIntent::End,
+            NamedKey::End,
+        );
     }
     commands
 }
@@ -757,7 +866,6 @@ struct RowMoves {
     index: usize,
     count: usize,
     rtl: bool,
-    announce: Rc<dyn Fn(usize, usize) -> String>,
 }
 
 impl RowMoves {
@@ -785,16 +893,11 @@ impl Action<ReorderIntent> for RowMoves {
     }
 
     fn invoke(&self, cx: &mut EventCx<'_>, intent: &ReorderIntent) -> ActionOutcome {
-        let Some(to) = self.target(*intent) else {
-            return ActionOutcome::NotPerformed;
-        };
-        self.list
-            .reorder(cx, &*self.key, to, ReorderCause::Command);
-        let message = (self.announce)(to + 1, self.count);
-        let announcer = self.list.announcer.borrow().clone();
-        if let Some(announcer) = announcer {
-            let _ = announcer.announce(message, Urgency::Polite);
+        match self.target(*intent) {
+            Some(to) if self.list.reorder(cx, &*self.key, to, ReorderCause::Command) => {
+                ActionOutcome::Performed
+            }
+            _ => ActionOutcome::NotPerformed,
         }
-        ActionOutcome::Performed
     }
 }

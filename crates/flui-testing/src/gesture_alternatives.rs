@@ -57,7 +57,7 @@ use flui_widgets::{
     SingleActivator,
 };
 
-use crate::a11y::{A11yTree, Action, ActionData, ActionRequest, Role, TreeId};
+use crate::a11y::{A11yNode, A11yTree, Action, ActionData, ActionRequest, Role, TreeId};
 use crate::replay::{MouseScript, PointerScript, TouchScript, VirtualScript};
 use crate::widgets::{LaidOut, lay_out};
 
@@ -599,10 +599,14 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 mounted.laid.replay(&press);
             }
             Opener::Assistive => {
+                // The row offering the command: in a list, every row has a
+                // menu, and only some offer a given move.
                 let target = {
                     let tree = tree(mounted)?;
+                    let opens = |node: &A11yNode<'_>| node.supports_action(Action::ShowContextMenu);
                     tree.nodes()
-                        .find(|node| node.supports_action(Action::ShowContextMenu))?
+                        .find(|node| opens(node) && offers(node, label))
+                        .or_else(|| tree.nodes().find(opens))?
                         .id()
                 };
                 mounted
@@ -857,15 +861,18 @@ fn center_of(rect: crate::a11y::A11yRect) -> Offset<f64> {
     )
 }
 
+/// Whether `node` offers `label` as a custom action.
+fn offers(node: &A11yNode<'_>, label: &str) -> bool {
+    node.raw()
+        .custom_actions()
+        .iter()
+        .any(|action| action.description == label)
+}
+
 /// The window rect of the node offering `label` as a custom action: the row.
 fn row_center<M>(mounted: &Mounted<M>, label: &str) -> Option<Offset<f64>> {
     let tree = tree(mounted)?;
-    let row = tree.nodes().find(|node| {
-        node.raw()
-            .custom_actions()
-            .iter()
-            .any(|action| action.description == label)
-    })?;
+    let row = tree.nodes().find(|node| offers(node, label))?;
     Some(center_of(tree.window_bounds(&row)?))
 }
 

@@ -140,6 +140,42 @@ fn drag_and_drop() {
     );
 }
 
+/// `ReorderableList`: a row moved by its handle and a touch long press,
+/// reported once, the drags that move nothing, the preview, the move commands
+/// and a dragged row that scrolls out of the built band.
+#[test]
+fn reorderable_list() {
+    run_cases(
+        "reorderable_list",
+        &[
+            (
+                "reorderable::a_handle_drag_reports_one_move_counted_after_removal",
+                crate::reorderable::a_handle_drag_reports_one_move_counted_after_removal as fn(),
+            ),
+            (
+                "reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle",
+                crate::reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle,
+            ),
+            (
+                "reorderable::a_drag_that_does_not_drop_moves_nothing",
+                crate::reorderable::a_drag_that_does_not_drop_moves_nothing,
+            ),
+            (
+                "reorderable::the_preview_follows_the_drag_over_the_rows",
+                crate::reorderable::the_preview_follows_the_drag_over_the_rows,
+            ),
+            (
+                "reorderable::the_move_commands_move_a_row_and_announce_it",
+                crate::reorderable::the_move_commands_move_a_row_and_announce_it,
+            ),
+            (
+                "reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops",
+                crate::reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops,
+            ),
+        ],
+    );
+}
+
 /// The editable-text capability: selection gestures, obscuring, IME, clipboard, keys.
 #[test]
 fn text_editing() {
@@ -1638,6 +1674,10 @@ fn gesture_alternatives() {
             (
                 "context_menu_area::context_menu_area_right_to_left",
                 crate::context_menu_area::context_menu_area_right_to_left,
+            ),
+            (
+                "reorderable::reorderable_list",
+                crate::reorderable::reorderable_list,
             ),
         ],
     );
