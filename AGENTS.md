@@ -132,7 +132,8 @@ with an answer you can point to in the code; the reviewers ask the same ones.
    `Display`, a `tracing` event (a subscriber is user code). At each one, are borrows and locks
    released and the state committed?
 2. **A panic at each of those points.** What state is left, which flag stays set, does the next
-   operation still work, is the first failure kept when two points panic?
+   operation still work, is the first failure kept when two points panic? A destructor that
+   panics while the thread is already unwinding aborts, as in std (ADR-0281): no guard for it.
 3. **Accepted work.** Every request, waker, obligation and hold the diff accepts is either
    delivered or refused with a typed error on every exit: success, panic, cancel, owner
    retirement, a full queue.
