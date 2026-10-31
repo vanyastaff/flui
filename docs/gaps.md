@@ -61,7 +61,7 @@ request.
 
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every app with a text field · **Parity:** [Text input](platform-parity.md#text-input)
 
-- No IME connection, soft keyboard, keyboard insets or input hints. The window contract carries keyboard insets (ADR-0276); no iOS, Android or Web host reports them yet.
+- No IME connection, soft keyboard, keyboard insets or input hints. The window contract carries keyboard insets (ADR-0277); no iOS, Android or Web host reports them yet.
 - **Runs on iOS:** an invisible `UITextInput` responder (ADR-0255 decision 11) takes the system keyboard when a field takes focus and turns its edits into composition and commits; on the iOS 27.1 Simulator the Japanese Romaji and nine-key Pinyin keyboards composed `日本語` and `你好` into an `EditableText` (2026-10-28).
 - **Missing on iOS:** the shared text-store host behind the responder (until it serves the field's text and layout, the responder answers `firstRectForRange:` and `caretRectForPosition:` with the field's caret area whatever the range, `selectionRectsForRange:` with no rects, and tells the field only edits at its caret), `UITextInteraction`'s selection UI, input hints, keyboard insets, hiding the keyboard checked on screen and a run on a device. The field draws kana and kanji as missing-glyph boxes on the Simulator: its font fallback has no CJK face there.
 - **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through a manual Android run a field submitted by Done while the keyboard still composed).

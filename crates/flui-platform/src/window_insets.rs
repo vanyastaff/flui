@@ -1,5 +1,5 @@
 //! Where a window's content is covered or contested: the safe area, the soft
-//! keyboard and its motion, and the edges system gestures take (ADR-0276).
+//! keyboard and its motion, and the edges system gestures take (ADR-0277).
 //!
 //! Every inset is logical pixels relative to the content area, finite and
 //! non-negative on every edge: the constructors refuse anything else, so a
@@ -305,7 +305,7 @@ pub enum InsetCurve {
 impl InsetCurve {
     /// The cubic Bézier that stands for [`SystemKeyboard`](Self::SystemKeyboard):
     /// `(0.380, 0.700, 0.125, 1.000)`, a measurement of UIKit's keyboard
-    /// motion (ADR-0276 §1).
+    /// motion (ADR-0277 §1).
     pub const SYSTEM_KEYBOARD_BEZIER: Self = Self::CubicBezier {
         x1: 0.380,
         y1: 0.700,

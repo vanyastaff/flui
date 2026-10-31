@@ -1,5 +1,5 @@
 //! `WindowInsets`: validation, and the keyboard's occlusion sampled along its
-//! motion (ADR-0276 §1).
+//! motion (ADR-0277 §1).
 
 use std::time::Duration;
 
