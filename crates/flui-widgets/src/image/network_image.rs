@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use flui_assets::{AssetRegistry, ImageSource};
 use flui_painting::paint::Image as PixelImage;
+use flui_view::background::Background;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError};
@@ -16,9 +17,9 @@ use super::provider::{ImageProvider, ImageProviderError};
 /// calling thread.
 ///
 /// Like [`AssetImage`](super::AssetImage), the registry is an explicit
-/// constructor argument, so the request
-/// runs on whichever background runtime and HTTP pool the application already
-/// owns, and the decoded image is kept by that registry.
+/// constructor argument, so the request uses the HTTP pool of the registry
+/// the application already owns, runs on the UI runtime's IO lane, and the
+/// decoded image is kept by that registry.
 /// Cached responses and pending loads are shared only by providers using the
 /// same registry and URL, because client headers and policies can change the
 /// response at an otherwise identical URL.
@@ -65,16 +66,20 @@ impl ImageProvider for NetworkImage {
     }
 
     /// Reuses the registry's decoded image, or shares an in-flight load for
-    /// the same URL. A hit refreshes recency without HTTP traffic. Failed
-    /// loads are not cached and a later request can retry. Dropping the future
-    /// aborts the request once no other request waits for it.
+    /// the same URL. A hit refreshes recency without HTTP traffic. The
+    /// request runs on `background`'s IO lane, which a native host's default
+    /// lanes run inside tokio, and the decode on its compute lane. Failed
+    /// loads are not cached and a later request can retry. Dropping the
+    /// future drops the request once no other request waits for it.
     fn resolve_async(
         &self,
+        background: Option<&Background>,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let load = self
-            .registry
-            .load_network_image_bridged(Arc::clone(&self.url));
+        let load = self.registry.load_network_image(
+            Arc::clone(&self.url),
+            background.map(|background| Arc::clone(background.executor())),
+        );
         let url = Arc::clone(&self.url);
         Box::pin(async move {
             load.await

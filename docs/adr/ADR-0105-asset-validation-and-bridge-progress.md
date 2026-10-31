@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-03
+- **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
+  for the second and third paragraphs of "Decision" only (the bridge's runtime)
 - **Related:** [ADR-0018](ADR-0018-async-builder-seam.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)

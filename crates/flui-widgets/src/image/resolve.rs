@@ -278,7 +278,7 @@ impl ImageResolver {
                         }
                     })
                 }
-                None => Box::pin(self.provider.resolve_async()),
+                None => self.provider.resolve_async(self.background.as_ref()),
             };
         let published = Arc::clone(&self.published);
         self.published.lock().inline_window = true;

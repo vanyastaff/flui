@@ -60,6 +60,24 @@ pub enum AssetError {
         reason: String,
     },
 
+    /// A network image load ran on an IO lane without a tokio reactor, which
+    /// the HTTP client needs. A native host's default lanes have one; a
+    /// host's own executor, or a load with no lanes, may not.
+    #[error("Network error for '{url}': its IO lane has no tokio reactor")]
+    ReactorUnavailable {
+        /// The URL that was not fetched.
+        url: String,
+    },
+
+    /// The background lanes refused a load because they are shutting down.
+    #[error("The background lanes refused to load '{path}': {reason}")]
+    LanesRefused {
+        /// The asset path or URL.
+        path: String,
+        /// Why the lanes refused it.
+        reason: flui_platform::executor::SpawnError,
+    },
+
     /// I/O error occurred.
     #[error("I/O error: {0}")]
     Io(String),
