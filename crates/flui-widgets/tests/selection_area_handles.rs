@@ -1178,3 +1178,48 @@ pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
         .expect("the paragraph reports its handles");
     assert!(!ends.contains("None"), "{ends}");
 }
+
+/// A listener that moves the focus away during a long press's extension
+/// ends it: the same touch moving on or releasing selects nothing more and
+/// leaves the focus where the listener put it.
+///
+/// Red-check: keep the extension when the focus leaves (the release takes
+/// the focus back and selects "alpha beta").
+pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .on_selection_changed(move |_cx, change| {
+            let selected = change
+                .selected
+                .as_ref()
+                .map(|selected| selected.text.clone());
+            if selected.as_deref() == Some("beta gamma") {
+                let _ = moved.request_focus();
+            }
+            recorded.borrow_mut().push(selected);
+        })
+        .handles(Marked::default());
+    let app = WidgetsApp::new(Column::new((
+        area,
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
+    assert_eq!(scene.handles(), 0);
+}

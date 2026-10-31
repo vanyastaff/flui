@@ -491,7 +491,7 @@ impl SelectionModel {
     }
 
     /// The drag `input` moves ended; a drag by another input goes on.
-    fn drag_ended(&self, input: SelectionInput) {
+    pub(super) fn drag_ended(&self, input: SelectionInput) {
         let mut drag = self.pointer.drag.borrow_mut();
         if drag.as_ref().is_some_and(|drag| drag.input == input) {
             *drag = None;
