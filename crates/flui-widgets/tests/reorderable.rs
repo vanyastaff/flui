@@ -25,8 +25,8 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
     Alternative, GestureAlternatives, GestureCommand, MenuSpec, Navigator, NavigatorHandle,
-    PageRoute, ReorderCause, ReorderIntent, ReorderPreview, ReorderableList, SingleActivator,
-    SizedBox, Text, Urgency,
+    PageRoute, ReorderCause, ReorderIntent, ReorderPreview, ReorderableList, SelectionArea,
+    SingleActivator, SizedBox, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -52,6 +52,10 @@ fn row_at(index: usize, x: f64) -> (f64, f64) {
 struct Log {
     moves: RefCell<Vec<(usize, usize, ReorderCause)>>,
     previews: RefCell<Vec<ReorderPreview>>,
+    /// The texts selected in rows, when the rows are selectable.
+    selected: RefCell<Vec<Option<String>>>,
+    /// Whether each row's text sits in a `SelectionArea`.
+    selectable: std::cell::Cell<bool>,
 }
 
 /// The shelf: its model, what it recorded and whether the list is shown.
@@ -162,13 +166,30 @@ impl ViewState<ShelfList> for ShelfListState {
             self.items.clone(),
             self.items.clone(),
         );
-        let (moved, previewed) = (Rc::clone(&shelf.log), Rc::clone(&shelf.log));
+        let (moved, previewed, selecting) = (
+            Rc::clone(&shelf.log),
+            Rc::clone(&shelf.log),
+            Rc::clone(&shelf.log),
+        );
         ReorderableList::builder(
             count,
             move |index| keys.with(|items| items[index].clone()),
             move |item| {
                 let name = rows.with(|items| items[item.index()].clone());
-                SizedBox::new(352.0, ROW).child(Text::new(name))
+                let text = Text::new(name);
+                if !selecting.selectable.get() {
+                    return SizedBox::new(352.0, ROW).child(text).into_view().boxed();
+                }
+                let record = Rc::clone(&selecting);
+                let area = SelectionArea::new(text).on_selection_changed(move |_cx, change| {
+                    record.selected.borrow_mut().push(
+                        change
+                            .selected
+                            .as_ref()
+                            .map(|selected| selected.text.clone()),
+                    );
+                });
+                SizedBox::new(352.0, ROW).child(area).into_view().boxed()
             },
             move |_cx, change| {
                 moved
@@ -266,11 +287,13 @@ fn custom_action(laid: &mut LaidOut, row: &str, label: &str) {
     .expect("the custom action is delivered");
 }
 
-/// Tab until the focused node is the row named `row` offering `label`.
+/// Tab into the list, whose one Tab stop is its remembered row, then walk
+/// its rows with the arrow keys until the row named `row` offering `label`
+/// has focus.
 fn focus_row(laid: &mut LaidOut, row: &str, label: &str) {
+    press(laid, &SingleActivator::named(NamedKey::Tab));
+    laid.pump();
     for _ in 0..32 {
-        press(laid, &SingleActivator::named(NamedKey::Tab));
-        laid.pump();
         let focused = row_action(laid, row, label).is_some_and(|(node, _)| {
             laid.a11y_tree()
                 .and_then(|tree| tree.focus().map(|focus| focus.id() == node))
@@ -279,6 +302,8 @@ fn focus_row(laid: &mut LaidOut, row: &str, label: &str) {
         if focused {
             return;
         }
+        press(laid, &SingleActivator::named(NamedKey::ArrowDown));
+        laid.pump();
     }
     panic!("row {row:?} offering {label:?} never took focus");
 }
@@ -465,6 +490,56 @@ pub(crate) fn a_dragged_row_scrolled_out_of_the_band_still_drops() {
     let (from, to, cause) = moves[0];
     assert_eq!((from, cause), (0, ReorderCause::Drag));
     assert!(to > 20, "the row dropped far down the list, at {to}");
+}
+
+/// A row and the selectable text inside it both want a touch long press: the
+/// deeper one wins, so the long press selects a word and moves nothing, and
+/// the row's handle still drags it.
+pub(crate) fn a_long_press_on_selectable_text_selects_and_the_handle_still_drags() {
+    let shelf = Shelf::new(&["alpha beta", "b", "c"]);
+    shelf.log.selectable.set(true);
+    let mut laid = shelf.mount();
+    let (_, y) = row_at(0, 0.0);
+    laid.replay(&PointerScript::long_press(
+        Offset::new(HANDLE_X + 30.0, y),
+        Duration::from_millis(800),
+    ));
+    settle(&mut laid);
+    assert!(shelf.moves().is_empty(), "the long press moved the row");
+    assert!(
+        shelf
+            .log
+            .selected
+            .borrow()
+            .iter()
+            .flatten()
+            .any(|text| text == "alpha"),
+        "the long press selected the word under it: {:?}",
+        shelf.log.selected.borrow()
+    );
+
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    laid.pump();
+    laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(shelf.moves(), [(0, 2, ReorderCause::Drag)]);
+}
+
+/// "Move to the end" in a long lazy list keeps focus on the moved row: the
+/// list brings it into view at its new place and focus follows its key.
+pub(crate) fn moving_a_row_to_the_end_of_a_long_list_keeps_its_focus() {
+    let shelf = Shelf::numbered(10_000);
+    let mut laid = shelf.mount();
+    laid.enable_semantics();
+    laid.pump();
+    focus_row(&mut laid, "0", "Move to the end");
+    press(&laid, &SingleActivator::named(NamedKey::End).alt());
+    settle(&mut laid);
+    assert_eq!(shelf.moves(), [(0, 9_999, ReorderCause::Command)]);
+    let focused = laid
+        .a11y_tree()
+        .and_then(|tree| tree.focus().map(|node| names_row(&tree, node.id(), "0")));
+    assert_eq!(focused, Some(true), "focus stayed on the moved row");
 }
 
 // --- Input-path matrix --------------------------------------------------------------------------

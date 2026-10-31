@@ -485,6 +485,7 @@ impl ViewState<ReorderableList> for ReorderableListState {
                 })
                 .scroll_direction(list.scroll_direction)
                 .find_index_by_key(move |key| keys.index_of(key))
+                .focusable(true)
                 .position(position)
                 .boxed()
             }))

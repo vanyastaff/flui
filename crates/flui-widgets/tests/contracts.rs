@@ -172,6 +172,14 @@ fn reorderable_list() {
                 "reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops",
                 crate::reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops,
             ),
+            (
+                "reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags",
+                crate::reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags,
+            ),
+            (
+                "reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus",
+                crate::reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus,
+            ),
         ],
     );
 }

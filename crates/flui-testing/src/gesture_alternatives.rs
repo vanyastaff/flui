@@ -13,7 +13,7 @@
 //!   duration scale of 0, where it must reach the same end state within two
 //!   frames, without animation;
 //! - each of the command's keys on the running platform, with focus moved
-//!   into the row by Tab;
+//!   into the row by Tab (and, in a list with roving focus, by its arrow keys);
 //! - one pointer: a [`VisibleControl`](Alternative::VisibleControl) pressed
 //!   with a mouse, a finger and a virtual (dwell or switch) pointer, and once
 //!   just outside its drawn bounds but inside the minimum target; a
@@ -414,22 +414,49 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
             .ok()
     }
 
-    /// Tab until the node offering `label` as a custom action has focus.
+    /// Move focus to the node offering `label` as a custom action: by Tab,
+    /// and when no Tab stop offers it, by the arrow keys from each stop, as
+    /// a list with roving focus is entered once and walked by its arrows.
     fn focus_row(mounted: &mut Mounted<M>, label: &str) -> Option<()> {
         for _ in 0..MAX_TABS {
             press(mounted, &SingleActivator::named(NamedKey::Tab));
             mounted.laid.pump();
-            let focused = tree(mounted)?.focus().is_some_and(|node| {
-                node.raw()
-                    .custom_actions()
-                    .iter()
-                    .any(|action| action.description == label)
-            });
-            if focused {
+            if Self::focus_offers(mounted, label)? {
                 return Some(());
             }
         }
+        for _ in 0..MAX_TABS {
+            press(mounted, &SingleActivator::named(NamedKey::Tab));
+            mounted.laid.pump();
+            let mut at = Self::focused(mounted);
+            for _ in 0..MAX_TABS {
+                press(mounted, &SingleActivator::named(NamedKey::ArrowDown));
+                mounted.laid.pump();
+                if Self::focus_offers(mounted, label)? {
+                    return Some(());
+                }
+                let now = Self::focused(mounted);
+                if now == at {
+                    break;
+                }
+                at = now;
+            }
+        }
         None
+    }
+
+    /// Whether the focused node offers `label` as a custom action.
+    fn focus_offers(mounted: &Mounted<M>, label: &str) -> Option<bool> {
+        Some(
+            tree(mounted)?
+                .focus()
+                .is_some_and(|node| offers(&node, label)),
+        )
+    }
+
+    /// The focused node.
+    fn focused(mounted: &Mounted<M>) -> Option<crate::a11y::NodeId> {
+        tree(mounted)?.focus().map(|node| node.id())
     }
 
     fn control_paths(&mut self, label: &str, reference: &(&str, Outcome<M>), initial: &M) {
