@@ -41,11 +41,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
+use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::linux::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
-
-/// What the application offers as its selection.
-type SelectionText = Rc<dyn Fn() -> Option<String>>;
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -234,33 +232,6 @@ impl Released {
     }
 }
 
-/// Drop the closures the dispatch retired, in order. Once a destructor
-/// panics the rest are retained, not dropped during the unwind, and the
-/// first failure goes on (ADR-0127).
-fn drop_retired(retired: Vec<SelectionText>) {
-    let mut retired = retired.into_iter();
-    for text in retired.by_ref() {
-        if let Err(failure) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(text)))
-        {
-            retired.for_each(std::mem::forget);
-            std::panic::resume_unwind(failure);
-        }
-    }
-}
-
-/// Ask the application's closure for its text. A closure that panics is
-/// retained rather than dropped during the unwind, which may be its last
-/// owner: a capture's destructor that panicked then would abort (ADR-0127).
-fn ask(text: SelectionText) -> Option<String> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| text())) {
-        Ok(answer) => answer,
-        Err(failure) => {
-            std::mem::forget(text);
-            std::panic::resume_unwind(failure)
-        }
-    }
-}
-
 /// The primary selection of [`super::SeatClipboard`].
 impl super::SeatClipboard {
     pub(super) fn offer_primary(&self, text: SelectionText) {
@@ -352,7 +323,7 @@ impl super::SeatClipboard {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
-            Read::Ask(text) => drop(answer.resolve(ask(text))),
+            Read::Ask(text) => answer_with(text, answer),
             Read::Pipe(reader, form) => {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-primary".to_owned())
@@ -684,6 +655,33 @@ mod tests {
             let drops = Rc::new(std::cell::Cell::new(0));
             let retired = vec![counted(&drops), counted(&drops)];
             fails_once(&drops, || drop_retired(retired));
+        });
+    }
+
+    /// Retired closures a teardown drops while the application's panic
+    /// unwinds are retained, so a capture that fails to drop cannot abort
+    /// the process, and the application's failure goes on.
+    #[test]
+    fn retired_closures_dropped_by_an_unwind_are_retained() {
+        in_child("retired_closures_dropped_by_an_unwind_are_retained", || {
+            /// Drops its closures as a host's teardown does.
+            struct Teardown(Vec<SelectionText>);
+
+            impl Drop for Teardown {
+                fn drop(&mut self) {
+                    drop_retired(std::mem::take(&mut self.0));
+                }
+            }
+
+            let drops = Rc::new(std::cell::Cell::new(0));
+            let teardown = Teardown(vec![counted(&drops), counted(&drops)]);
+            let failure = catch_unwind(AssertUnwindSafe(move || {
+                let _teardown = teardown;
+                panic!("the application failed")
+            }))
+            .expect_err("it failed");
+            assert_eq!(failure_text(&*failure), Some("the application failed"));
+            assert_eq!(drops.get(), 0, "every closure is retained");
         });
     }
 

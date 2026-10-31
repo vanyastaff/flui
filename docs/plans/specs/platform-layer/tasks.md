@@ -3680,6 +3680,26 @@ graph LR
   `a_large_selection_crosses_in_chunks` (300 000 символов, без `INCR` чтения падает),
   `a_selection_nobody_owns_reads_as_nothing`. Не сделано: передача clipboard менеджеру
   (`CLIPBOARD_MANAGER`, `SAVE_TARGETS`) при выходе — записано в `docs/gaps.md` (запись 6).
+  **Primary selection** — ветка `platform/x11-primary-selection` поверх `platform/x11-clipboard`.
+  Позиция `PrimarySelection` таблицы `X11` — `X11Loop`; хук `X11Host::clipboard(&Doorbell)`
+  отдаёт `Arc<dyn LoopClipboard>` (`NativeClipboard + NativePrimarySelection + deliver`), цикл
+  зовёт `deliver` на каждом ходу после событий. Нить ведёт обе селекции (`Selection` на каждую:
+  свои часы, четыре свойства чтения, владение, чтения), общие — окно, атомы, передачи `INCR`.
+  Замыкание приложения живёт на нити-владельце (`OwnerCell`), нить знает только номер
+  предложения (`Generation`). Запрос текста другим клиентом ждёт (не больше 16, 5 с), нить
+  пишет номер в `Notice` и звонит в `Doorbell`; ход цикла спрашивает замыкание без замков и шлёт
+  `Command::Answer`, ответ получают все запросы этого предложения. Замыкание, которое паникует,
+  всё равно отвечает пустым (`Unanswered` при раскрутке), паника идёт дальше. Чужое владение
+  (`SelectionClear`, неудачный захват) — `Notice::lost`, `owns()` сразу `false`, замыкание
+  падает на следующем ходу в защищённой последовательности. `TARGETS` и `TIMESTAMP` — сразу;
+  своё выделение приложение читает само, без сервера; `withdraw` снимает владение
+  (`SetSelectionOwner(None)` на время владения). `ask`/`drop_retired` перенесены в общий
+  `clipboard::linux::offered`. **Тесты** (откат проверен для двух):
+  `the_primary_selection_is_asked_only_when_read`,
+  `another_selection_takes_the_primary_from_the_offer` (без отбрасывания отнятого замыкания
+  падает), `a_withdrawn_offer_reads_as_nothing`,
+  `a_failing_selection_answers_its_reader_with_nothing` (без ответа при раскрутке читатель
+  ждёт срока и тест падает).
 - [x] **LY83** — ветка `platform/x11-input` от `main` @ `c8401e35b`, слито `main` @ `ee5480c57`
   (#1933). **Позиция ввода** таблицы `X11` — цикл (`type Input = X11Loop`): таблица делает
   `input::linux::x11::X11Input` (`X11Host::input`), цикл держит его через хук

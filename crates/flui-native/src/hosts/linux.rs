@@ -4,11 +4,11 @@
 //! storage positions, and keep the session's sources (the Settings portal,
 //! logind, the kernel's memory pressure) in the same shape
 //! (`owner::linux`). Both fill the input position: Wayland with its seats'
-//! input, X11 with XInput 2 and XKB. Wayland fills the clipboard position
-//! with its seats' selection, X11 with the `CLIPBOARD` selection on a
-//! connection of its own. Text input, drag and drop and X11's primary selection
-//! are `Absent` until each host speaks their protocols; a desktop has no
-//! haptics and no system bars.
+//! input, X11 with XInput 2 and XKB. Wayland fills the clipboard and primary
+//! selection positions with its seats' selections, X11 with the `CLIPBOARD`
+//! and `PRIMARY` selections on a connection of its own. Text input and drag
+//! and drop are `Absent` until each host speaks their protocols; a desktop
+//! has no haptics and no system bars.
 
 use std::sync::Arc;
 
@@ -166,9 +166,10 @@ mod x11 {
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
-    use crate::host::SharedClipboard;
     use crate::input::linux::x11::X11Input;
-    use crate::owner::linux::x11::{HostDisplays, LoopInput, X11Connection, X11Host, X11Loop};
+    use crate::owner::linux::x11::{
+        Doorbell, HostDisplays, LoopClipboard, LoopInput, X11Connection, X11Host, X11Loop,
+    };
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
     /// The X11 host's table.
@@ -185,7 +186,7 @@ mod x11 {
         type Text = Absent<position::Text>;
         type Accessibility = UnixAccessibility;
         type Clipboard = X11Loop;
-        type PrimarySelection = Absent<position::PrimarySelection>;
+        type PrimarySelection = X11Loop;
         type Drag = Absent<position::Drag>;
         // A desktop has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
@@ -226,9 +227,17 @@ mod x11 {
             X11Input::new(connection)
         }
 
-        /// The `CLIPBOARD` selection on a connection and a thread of its own.
-        fn clipboard() -> Result<Arc<dyn SharedClipboard>, PlatformError> {
-            Ok(Arc::new(X11Clipboard::start()?))
+        /// The `CLIPBOARD` and `PRIMARY` selections on a connection and a
+        /// thread of their own, which ring the loop's doorbell when the
+        /// application's primary selection is asked for.
+        fn clipboard(doorbell: &Doorbell) -> Result<Arc<dyn LoopClipboard>, PlatformError> {
+            let doorbell = doorbell.clone();
+            let wake = move || {
+                if let Err(error) = doorbell.ring() {
+                    tracing::error!(%error, "the X11 clipboard cannot wake the loop");
+                }
+            };
+            Ok(Arc::new(X11Clipboard::start(Box::new(wake))?))
         }
     }
 
