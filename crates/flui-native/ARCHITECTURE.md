@@ -1834,6 +1834,16 @@ and writes only what changed between two specs.
   paragraph, or the selection area), and the page shows the published
   selection again until the node publishes the new one; the published
   selection itself asks for nothing.
+- **A live region enters the page empty.** A browser reads out a change to
+  a live region it has seen, not one inserted with its text, so an element
+  that is `aria-live` polite or assertive and created or replaced with text
+  is created without it (`hold_live_text`) and given the text its node holds
+  then once the page has rendered it, after two animation frames
+  (`FrameWait`). That covers an announcement published before the host
+  existed (the announcer nodes of ADR-0204 §4 are live regions) and a live
+  region the tree adds with its content. A region removed before then is not
+  written; a background tab runs no frame, so its regions are given their
+  text when it is shown again.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
@@ -1844,6 +1854,7 @@ and writes only what changed between two specs.
 `an_offset_in_the_text_is_a_run_and_a_character`,
 `a_paragraph_s_text_is_its_runs_and_its_offsets_their_positions`,
 `the_page_shows_the_published_selection`,
+`a_live_node_is_a_live_region`,
 `each_update_becomes_the_dom_operations_it_needs`,
 `a_scroller_scrolling_replaces_its_children`,
 `an_update_that_cannot_stand_is_refused_and_changes_nothing`,
@@ -1863,7 +1874,8 @@ Linux. In headless Chrome,
 `a_field_keeps_the_line_breaks_it_cannot_show`,
 `a_textarea_s_line_feed_is_the_store_s_crlf`,
 `a_field_s_selection_keeps_its_direction`,
-`the_page_s_selection_is_the_selection_of_static_text` and
+`the_page_s_selection_is_the_selection_of_static_text`,
+`a_live_region_is_given_its_text_once_rendered` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 

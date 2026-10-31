@@ -179,6 +179,10 @@ export function selectPageText() {
     getSelection().setBaseAndExtent(text.firstChild, 0, text.firstChild, 4);
 }
 export function removePageText() { document.getElementById('page-text')?.remove(); }
+// A mirrored element's text, or null when there is none.
+export function textOf(id) { const element = byId(id); return element ? element.textContent : null; }
+// The text of the element `holdField` kept.
+export function heldText() { return held.textContent; }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -250,6 +254,10 @@ extern "C" {
     fn select_page_text();
     #[wasm_bindgen(js_name = removePageText)]
     fn remove_page_text();
+    #[wasm_bindgen(js_name = textOf)]
+    fn text_of(id: &str) -> Option<String>;
+    #[wasm_bindgen(js_name = heldText)]
+    fn held_text() -> String;
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -1444,5 +1452,67 @@ async fn the_page_s_selection_is_the_selection_of_static_text() {
     );
     assert_eq!(asked(), []);
     remove_page_text();
+    window.close_now();
+}
+
+const STATUS: NodeId = NodeId(40);
+
+/// The window with a status line holding `text`, live where `live` says.
+fn status_line(text: Option<&str>, live: Option<accesskit::Live>) -> TreeUpdate {
+    let Some(text) = text else {
+        return under_root(vec![]);
+    };
+    let mut status = Node::new(Role::Label);
+    status.set_value(text);
+    status.set_author_id("status");
+    status.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+    if let Some(live) = live {
+        status.set_live(live);
+        status.set_live_atomic();
+    }
+    under_root(vec![(STATUS, status)])
+}
+
+/// A live region that enters the page with its text is created empty and
+/// given its text once the page has rendered it, since a region inserted
+/// with its text is not read out: a message published before the host
+/// existed, and a region the tree adds. The text it holds by then is the
+/// one written, a region removed before then is not written, and text that
+/// is not live is written at once.
+#[wasm_bindgen_test]
+async fn a_live_region_is_given_its_text_once_rendered() {
+    let (_platform, window, accessibility) = open();
+    let polite = Some(accesskit::Live::Polite);
+    accessibility.publish(status_line(Some("Queued"), polite));
+    activate_placeholder();
+    assert_eq!(text_of("status").as_deref(), Some(""), "created empty");
+    super::wait(100).await;
+    assert_eq!(text_of("status").as_deref(), Some("Queued"), "then spoken");
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("One"), Some(accesskit::Live::Assertive)));
+    accessibility.publish(status_line(Some("Two"), Some(accesskit::Live::Assertive)));
+    assert_eq!(text_of("status").as_deref(), Some(""), "still waiting");
+    super::wait(100).await;
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Two"),
+        "the text it holds by then"
+    );
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("Gone"), polite));
+    hold_field("status");
+    accessibility.publish(status_line(None, None));
+    super::wait(100).await;
+    assert_eq!(text_of("status"), None, "removed");
+    assert_eq!(held_text(), "", "and never written");
+
+    accessibility.publish(status_line(Some("Plain"), None));
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Plain"),
+        "text that is not live is written at once"
+    );
     window.close_now();
 }

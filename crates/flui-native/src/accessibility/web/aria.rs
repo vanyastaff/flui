@@ -81,6 +81,16 @@ pub(crate) struct ElementSpec {
     pub(crate) scroll: Option<Scroll>,
 }
 
+impl ElementSpec {
+    /// Whether the element is a live region that speaks: `aria-live` polite
+    /// or assertive.
+    pub(crate) fn is_live(&self) -> bool {
+        self.attributes
+            .iter()
+            .any(|(name, value)| *name == "aria-live" && value != "off")
+    }
+}
+
 /// A scroller's content and how far it is scrolled, in CSS pixels from its
 /// top left corner: the node's published position less its minimum, inside
 /// a content box as much larger than the element's as its extent is long.
@@ -1361,6 +1371,32 @@ mod tests {
             (Role::Label, false),
         ] {
             assert_eq!(takes_text(&Node::new(role)), takes, "{role:?}");
+        }
+    }
+
+    /// A node live at a polite or assertive setting is a live region that
+    /// speaks; one live `Off`, or with no setting, is not.
+    #[test]
+    fn a_live_node_is_a_live_region() {
+        for (live, speaks) in [
+            (None, false),
+            (Some(accesskit::Live::Off), false),
+            (Some(accesskit::Live::Polite), true),
+            (Some(accesskit::Live::Assertive), true),
+        ] {
+            let mut node = Node::new(Role::Label);
+            node.set_value("Saved");
+            if let Some(live) = live {
+                node.set_live(live);
+            }
+            let spec = describe(
+                NodeId(7),
+                &node,
+                ParentFrame::default(),
+                false,
+                &ElementIds::new("t"),
+            );
+            assert_eq!(spec.is_live(), speaks, "{live:?}");
         }
     }
 
