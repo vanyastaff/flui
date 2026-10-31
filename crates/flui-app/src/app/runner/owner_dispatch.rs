@@ -1224,7 +1224,7 @@ pub(super) fn teardown_platform_ui_runtime() {
                 panic = flui_foundation::panic::payload_text(payload.as_ref()),
                 "the application ends with a terminal failure"
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }

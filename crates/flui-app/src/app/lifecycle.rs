@@ -159,7 +159,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
             Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
             Ok(Poll::Pending) => Poll::Pending,
             Err(payload) => {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
                 // A failed future may own hostile captures. Do not run its
                 // destruction after containing its poll failure.
                 std::mem::forget(self.inner.take());
@@ -173,7 +173,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 // evidence or strand a worker's accepted tail.
 pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
     }
 }
 
@@ -393,7 +393,7 @@ impl TaskSpawner {
                     let _ = report.try_send(TaskOutcome::Completed(value));
                 }
                 Err(payload) => {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                     let _ = report.try_send(TaskOutcome::Panicked);
                     contain_lifecycle_diagnostic(|| {
                         tracing::error!(
@@ -715,7 +715,7 @@ where
                         let retirement =
                             std::panic::catch_unwind(AssertUnwindSafe(|| drop(retired)));
                         if let Err(payload) = retirement {
-                            flui_foundation::panic::retain_opaque_payload(payload);
+                            drop(payload);
                             contain_lifecycle_diagnostic(|| {
                                 tracing::error!(
                                     worker = name,
@@ -734,7 +734,7 @@ where
                     }
                 }
                 Err(payload) => {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                     contain_lifecycle_diagnostic(|| {
                         tracing::error!(
                             worker = name,
@@ -1315,7 +1315,7 @@ pub(crate) struct PreparedService {
 impl PreparedService {
     pub(crate) fn refuse(self) {
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(self))) {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }
@@ -1351,7 +1351,7 @@ impl ServiceAdmission {
         {
             Ok(future) => future,
             Err(payload) => {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
                 contain_lifecycle_diagnostic(|| {
                     tracing::error!(
                         service = definition.name,
@@ -1692,8 +1692,8 @@ mod tests {
                 "retirement failure reported"
             );
             assert!(
-                !report_payload_retired.load(Ordering::Acquire),
-                "competing reporting payload retained"
+                report_payload_retired.load(Ordering::Acquire),
+                "competing reporting payload dropped"
             );
         } else {
             deterministic.run_until_idle();
@@ -1810,7 +1810,7 @@ mod tests {
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    fn failed_future_retains_opaque_payload_and_captures() {
+    fn failed_future_drops_opaque_payload() {
         let payload_retired = Arc::new(AtomicBool::new(false));
         let future_retired = Arc::new(AtomicBool::new(false));
         let capture = RetirementProbe(Arc::clone(&future_retired));
@@ -1829,12 +1829,12 @@ mod tests {
         ));
         drop(future);
         assert!(
-            !payload_retired.load(Ordering::Acquire),
-            "opaque payload retained"
+            payload_retired.load(Ordering::Acquire),
+            "opaque payload dropped"
         );
         assert!(
             !future_retired.load(Ordering::Acquire),
-            "failed future captures retained"
+            "a failed future's captures are forgotten with it"
         );
 
         let healthy_retired = Arc::new(AtomicBool::new(false));
@@ -1869,7 +1869,7 @@ mod tests {
             .expect("task");
         deterministic.run_until_idle();
         assert!(matches!(task.try_join(), Ok(TaskOutcome::Panicked)));
-        assert!(!retired.load(Ordering::Acquire), "opaque payload retained");
+        assert!(retired.load(Ordering::Acquire), "opaque payload dropped");
         let next = spawner
             .spawn_compute("following", |_context| 7)
             .expect("following task");
@@ -2117,8 +2117,8 @@ mod tests {
                     outgoing_worker_input_failure_preserves_accepted_replacement as fn(),
                 ),
                 (
-                    "failed_future_retains_opaque_payload_and_captures",
-                    failed_future_retains_opaque_payload_and_captures as fn(),
+                    "failed_future_drops_opaque_payload",
+                    failed_future_drops_opaque_payload as fn(),
                 ),
                 (
                     "task_reports_opaque_panic_before_retirement",

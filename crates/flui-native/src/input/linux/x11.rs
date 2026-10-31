@@ -1956,7 +1956,7 @@ mod live {
             }));
             if let Err(payload) = result {
                 if first.is_some() {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                 } else {
                     first = Some(payload);
                 }

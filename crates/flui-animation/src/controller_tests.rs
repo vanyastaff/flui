@@ -181,11 +181,7 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
             }
             std::panic::set_hook(previous_hook);
             SOURCE.with(|source| source.borrow_mut().take());
-            assert_eq!(
-                drops.get(),
-                1,
-                "healthy refusal retires; failed refusal retains opaque captures"
-            );
+            assert_eq!(drops.get(), 3, "every refusal drops its capture");
             assert!(!c.is_animating());
             assert_eq!(c.set_value(0.5), Err(AnimationError::Disposed));
             assert_eq!(

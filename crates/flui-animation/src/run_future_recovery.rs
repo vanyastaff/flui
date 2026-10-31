@@ -16,6 +16,12 @@ impl Drop for Bomb {
         panic!("capture retirement");
     }
 }
+struct Counted(Arc<AtomicUsize>);
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
 struct ProbeWake {
     calls: Arc<AtomicUsize>,
     action: Box<dyn Fn() + Send + Sync>,
@@ -50,7 +56,7 @@ fn assert_failure(result: std::thread::Result<()>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
 }
 fn assert_next_run() {
     let (completer, mut future) = AnimationRunFuture::pending();
@@ -67,16 +73,11 @@ fn assert_next_run() {
 
 fn competing_payloads(mode: &str) {
     let (completer, mut future) = AnimationRunFuture::pending();
-    let drops = Arc::new(AtomicUsize::new(0));
-    let secondary_drops = Arc::clone(&drops);
     let tail = Arc::new(AtomicUsize::new(0));
     let tail_calls = Arc::clone(&tail);
     future.when_complete_or_cancel(|_| panic!("primary continuation"));
     future.when_complete_or_cancel(move |_| {
-        std::panic::panic_any((
-            Bomb(Arc::clone(&secondary_drops)),
-            Bomb(Arc::clone(&secondary_drops)),
-        ));
+        panic!("secondary continuation");
     });
     future.when_complete_or_cancel(move |_| {
         tail_calls.fetch_add(1, Ordering::Relaxed);
@@ -103,7 +104,6 @@ fn competing_payloads(mode: &str) {
             "primary continuation"
         },
     );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
     assert_eq!(tail.load(Ordering::Relaxed), 1);
     assert_eq!(wakes.load(Ordering::Relaxed), 1);
     let terminal = Pin::new(&mut future).poll(&mut Context::from_waker(&wake));
@@ -117,7 +117,7 @@ fn competing_payloads(mode: &str) {
 
 fn captured_callback_failure(resolved: bool) {
     let drops = Arc::new(AtomicUsize::new(0));
-    let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
+    let captures = (Counted(Arc::clone(&drops)), Counted(Arc::clone(&drops)));
     if resolved {
         let (completer, future) = AnimationRunFuture::pending();
         completer.cancel().deliver();
@@ -142,7 +142,7 @@ fn captured_callback_failure(resolved: bool) {
             "callback body",
         );
     }
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    assert_eq!(drops.load(Ordering::Relaxed), 2);
     assert_next_run();
 }
 
@@ -199,62 +199,11 @@ fn waiter_failure_keeps_later_waiters_live(primary: bool, retirement: bool) {
     );
     assert_eq!(first_calls.load(Ordering::Relaxed), 1);
     assert_eq!(later_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        drops.load(Ordering::Relaxed),
-        usize::from(retirement && !primary)
-    );
+    assert_eq!(drops.load(Ordering::Relaxed), usize::from(retirement));
     assert_eq!(
         Pin::new(&mut later).poll(&mut Context::from_waker(&later_waker)),
         Poll::Ready(Ok(()))
     );
-    assert_next_run();
-}
-
-fn hostile_waker_captures_are_retained(unwinding: bool) {
-    struct HostileWake {
-        _captures: (Bomb, Bomb),
-    }
-    impl Wake for HostileWake {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            panic!("hostile waker failure");
-        }
-    }
-    let (completer, mut first) = AnimationRunFuture::pending();
-    let mut later = first.clone();
-    let drops = Arc::new(AtomicUsize::new(0));
-    let hostile = Waker::from(Arc::new(HostileWake {
-        _captures: (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))),
-    }));
-    register(&mut first, &hostile);
-    drop(hostile);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let wake = waker(&calls, || {});
-    register(&mut later, &wake);
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        if unwinding {
-            let _completer = completer;
-            panic!("outer failure");
-        }
-        completer.cancel().deliver();
-    }));
-    assert_failure(
-        result,
-        if unwinding {
-            "outer failure"
-        } else {
-            "hostile waker failure"
-        },
-    );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
-    assert!(first.is_canceled());
-    assert!(matches!(
-        Pin::new(&mut later).poll(&mut Context::from_waker(&wake)),
-        Poll::Ready(Err(_))
-    ));
     assert_next_run();
 }
 
@@ -464,12 +413,6 @@ fn run_delivery_recovery() {
         }),
         ("ordinary waker retirement", || {
             waiter_failure_keeps_later_waiters_live(false, true);
-        }),
-        ("hostile waker captured aggregate", || {
-            hostile_waker_captures_are_retained(false);
-        }),
-        ("unwinding hostile waker captured aggregate", || {
-            hostile_waker_captures_are_retained(true);
         }),
         (
             "replacement independent clones and cancellation",

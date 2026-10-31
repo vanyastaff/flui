@@ -86,7 +86,7 @@ pub(crate) fn emit_observation(
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
         // Retain both opaque obligations before reporting: either one's drop
         // glue may contain several panicking fields.
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
         std::mem::forget(slot.take());
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
@@ -94,7 +94,7 @@ pub(crate) fn emit_observation(
             );
         }));
         if let Err(payload) = reported {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }

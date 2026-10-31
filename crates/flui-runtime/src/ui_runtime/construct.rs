@@ -574,7 +574,7 @@ impl UiRuntime {
                 );
             }
         })) {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
         let handler = handler.borrow().clone();
         if let Some(handler) = handler {
@@ -584,7 +584,7 @@ impl UiRuntime {
                 Ok(()) => match catch_unwind(AssertUnwindSafe(|| drop(handler))) {
                     Ok(()) => false,
                     Err(payload) => {
-                        flui_foundation::panic::retain_opaque_payload(payload);
+                        drop(payload);
                         true
                     }
                 },
@@ -592,7 +592,7 @@ impl UiRuntime {
                     // Aggregate capture destruction is unsafe while preserving
                     // another failure; retain the opaque callback envelope.
                     std::mem::forget(handler);
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                     true
                 }
             };
@@ -606,7 +606,7 @@ impl UiRuntime {
                     );
                 }))
             {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             }
         }
     }

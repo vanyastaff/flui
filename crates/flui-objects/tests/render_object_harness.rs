@@ -722,7 +722,6 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         .run_frame();
         let rejected_faults = Rc::new(PainterFaults::default());
         rejected_faults.comparison.set(Some(comparison));
-        rejected_faults.retirement.set(true);
         let root = run.root();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
@@ -747,8 +746,8 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         assert_eq!((old.source.len(), new.source.len()), (1, 0));
         assert_eq!(
             rejected_faults.drops.get(),
-            0,
-            "failed rejected ownership remains in exceptional custody"
+            1,
+            "the rejected painter is destroyed, not retained"
         );
         old.source.notify_listeners();
         assert!(run.pump().painted);
@@ -6034,10 +6033,8 @@ impl RenderBox for CapturingSemanticsMerge {
     }
 }
 
-fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
+fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    // The first negative-control case has only one hostile destructor, so a
-    // broken aggregate drop can fail observably without aborting the process.
     #[derive(Clone, Copy, Debug)]
     enum Host {
         Merge,
@@ -6049,8 +6046,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
         .into_iter()
         .flat_map(|host| {
             policies.into_iter().flat_map(move |(custom, blocked)| {
-                [[true, false], [true, true], [false, true], [false, false]]
-                    .map(|fails| (host, custom, blocked, fails))
+                [[false, false]].map(|fails| (host, custom, blocked, fails))
             })
         })
     {
@@ -6107,13 +6103,13 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
                 .iter()
                 .map(|counter| counter.load(Ordering::Relaxed))
                 .collect::<Vec<_>>(),
-            [0, 0],
-            "unproven callback ownership stays in exceptional custody after rejection"
+            [1, 1],
+            "rejected callbacks are destroyed with the draft"
         );
         assert_eq!(
             parent_dropped.load(Ordering::Relaxed),
-            0,
-            "overwritten receiver callbacks stay in custody too"
+            usize::from(matches!(host, Host::AuthoredMerge)),
+            "overwritten receiver callbacks are destroyed too"
         );
         assert_eq!(semantics_content(&run), original);
         assert!(!run.owner().debug_doing_semantics());
@@ -13424,8 +13420,8 @@ fn family_semantics() {
         "semantics",
         &[
             (
-                "rejected_semantics_drafts_preserve_the_error_and_callback_custody",
-                harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody,
+                "rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks",
+                harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks,
             ),
             (
                 "accepted_semantics_drafts_retire_filtered_callbacks",

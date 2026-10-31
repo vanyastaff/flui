@@ -271,7 +271,7 @@ impl CommitGate {
             }
         };
         if let Some(later) = later {
-            flui_foundation::panic::retain_opaque_payload(later);
+            drop(later);
         }
     }
 
@@ -312,7 +312,7 @@ struct ParkedFailure(RefCell<Option<Parked>>);
 impl Drop for ParkedFailure {
     fn drop(&mut self) {
         if let Some(parked) = self.0.get_mut().take() {
-            flui_foundation::panic::retain_opaque_payload(parked.payload);
+            drop(parked.payload);
         }
     }
 }

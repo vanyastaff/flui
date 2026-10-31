@@ -217,7 +217,7 @@ impl FrameDriver {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
             {
                 runtime.report_contained_panic(record.binding.0, payload.as_ref());
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             }
         }
         match self {

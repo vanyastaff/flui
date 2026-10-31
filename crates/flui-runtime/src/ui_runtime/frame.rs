@@ -251,7 +251,7 @@ impl UiRuntime {
                         self.frame_failure_detail.get().panic_text(&*payload);
                     // The payload may contain several panicking destructors.
                     // Retain it before any recovery operation or diagnostics.
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                     if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
                         // The pipeline already consumed this presentation's
                         // paint dirtiness before either post-pipeline segment
@@ -1314,7 +1314,7 @@ impl UiRuntime {
         match (delivery_panic, wake_panic) {
             (Some(first), later) => {
                 if let Some(later) = later {
-                    flui_foundation::panic::retain_opaque_payload(later);
+                    drop(later);
                 }
                 resume_unwind(first);
             }

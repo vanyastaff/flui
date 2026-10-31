@@ -42,7 +42,6 @@ positions = [
     { item = "flui_foundation::observe::TreeObserver", at = "supertrait", marker = "Send" },
     { item = "flui_foundation::observe::TreeObserver", at = "supertrait", marker = "Sync" },
     { item = "flui_foundation::panic::payload_text", at = "dyn", marker = "Send" },
-    { item = "flui_foundation::panic::retain_opaque_payload", at = "dyn", marker = "Send" },
     { item = "flui_foundation::wasm::WasmNotSendSync", at = "supertrait", marker = "Send" },
     { item = "flui_foundation::wasm::WasmNotSendSync", at = "supertrait", marker = "Sync" },
     { item = "flui_hot_reload::dispatch::register_request_rebuild", at = "bound", marker = "Send" },

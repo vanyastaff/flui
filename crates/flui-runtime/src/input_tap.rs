@@ -23,7 +23,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::panic::payload_text;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId};
 use flui_interaction::PointerEvent;
 use flui_platform::PlatformInput;
@@ -320,7 +320,7 @@ impl TapState {
             }
             first
         };
-        retain_opaque_payload(payload);
+        drop(payload);
         let failure = message
             .as_deref()
             .unwrap_or("a panic without a text payload");
@@ -332,7 +332,7 @@ impl TapState {
             }
         }));
         if let Err(payload) = traced {
-            retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 

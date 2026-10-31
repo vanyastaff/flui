@@ -222,7 +222,7 @@ impl OwnerCalls {
         } else if self.first.is_none() {
             self.first = Some(payload);
         } else {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 
@@ -372,7 +372,7 @@ impl OwnerCalls {
 impl Drop for OwnerCalls {
     fn drop(&mut self) {
         if let Some(payload) = self.first.take() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }

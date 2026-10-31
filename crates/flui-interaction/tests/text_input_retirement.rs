@@ -157,23 +157,6 @@ fn retirement_can_release_the_last_external_owner() {
     assert_eq!(*platform.allowed.lock(), [true, false]);
 }
 
-fn owner_drop_contains_callback_failure_with_a_hostile_payload() {
-    struct Hostile;
-    impl Drop for Hostile {
-        fn drop(&mut self) {
-            panic!("panic payload retirement");
-        }
-    }
-    let (owner, platform) = owner();
-    let handle = owner.handle();
-    handle
-        .attach(callback_client(|| std::panic::panic_any(Hostile)))
-        .expect("initial attach");
-    drop(owner);
-    assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
-    assert_eq!(*platform.allowed.lock(), [true, false]);
-}
-
 struct DroppingStore<P = OnDrop> {
     inner: Rc<InMemoryTextStore>,
     _probe: P,
@@ -203,17 +186,7 @@ impl<P> TextStore for DroppingStore<P> {
 
 fn store_failure_wins_callback_failure_and_the_owner_recovers() {
     struct CallbackFailure;
-    impl Drop for CallbackFailure {
-        fn drop(&mut self) {
-            panic!("callback failure payload retirement");
-        }
-    }
     struct StoreFailure;
-    impl Drop for StoreFailure {
-        fn drop(&mut self) {
-            panic!("store failure payload retirement");
-        }
-    }
     let (owner, platform) = owner();
     let handle = owner.handle();
     let store: Rc<dyn TextStore> = Rc::new(DroppingStore {
@@ -228,9 +201,9 @@ fn store_failure_wins_callback_failure_and_the_owner_recovers() {
         .expect("initial attach");
     let failure =
         catch_unwind(AssertUnwindSafe(|| handle.detach(token))).expect_err("retirement panics");
-    // The payloads panic when dropped: retain the failure before asserting.
+    // The payload is typed, so the winner is told apart by its type.
     let store_won = failure.is::<StoreFailure>();
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(failure);
     assert!(
         store_won,
         "the store retires first and its opaque payload wins"
@@ -646,7 +619,7 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
             flui_foundation::panic::payload_text(&*failure),
             Some("retired client callback")
         );
-        flui_foundation::panic::retain_opaque_payload(failure);
+        drop(failure);
         assert_eq!(
             *released.lock(),
             Some(false),
@@ -934,10 +907,6 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
             retirement_can_release_the_last_external_owner,
         ),
         (
-            "owner drop",
-            owner_drop_contains_callback_failure_with_a_hostile_payload,
-        ),
-        (
             "competing failures",
             store_failure_wins_callback_failure_and_the_owner_recovers,
         ),
@@ -975,7 +944,7 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             failed.borrow_mut().push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(
@@ -1040,7 +1009,7 @@ fn callback_after_a_failed_store_is_retained() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("store retirement")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
@@ -1095,7 +1064,7 @@ fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("rejected store retirement")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
     assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     assert_eq!(handle.attach(client()), Err(TextInputError::Closed));
@@ -1118,7 +1087,7 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("outer failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
     assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
     assert_eq!(*platform.allowed.lock(), [true, false]);

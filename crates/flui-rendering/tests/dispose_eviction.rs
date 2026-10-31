@@ -317,7 +317,7 @@ fn visual_notifier_retirement_child(mode: &str) {
         (Ok(()), None) => {}
         (Err(payload), Some(text)) => {
             assert_eq!(payload.downcast_ref::<&'static str>(), Some(&text));
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
         _ => panic!("unexpected visual notifier outcome for {mode}"),
     }

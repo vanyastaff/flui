@@ -1098,8 +1098,8 @@ fn numeric_sizing_retains_wake_capture_across_last_owner_release() {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             retirements.load(Ordering::SeqCst),
-            usize::from(!invocation_fails),
-            "a caught invocation failure retains captures instead of entering a competing destructor"
+            1,
+            "the capture is destroyed after a caught invocation failure too"
         );
         assert!(OWNER_OBSERVER.with(|slot| {
             slot.borrow()

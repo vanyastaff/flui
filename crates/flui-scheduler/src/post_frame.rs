@@ -487,7 +487,7 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
     if first.is_none() {
         *first = Some(payload);
     } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
     }
 }
 
@@ -504,7 +504,7 @@ impl Drop for OwnerFrame {
         });
         if let Some(payload) = first {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }
@@ -842,7 +842,7 @@ impl Drop for PresentationFrameScope {
     fn drop(&mut self) {
         if let Some(payload) = self.close() {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

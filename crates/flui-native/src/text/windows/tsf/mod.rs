@@ -55,7 +55,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
-use flui_foundation::panic::retain_opaque_payload;
+use drop;
 use flui_platform::text_store::{
     CompositionEnd, OwnerCalls, TextStore, TextStoreHost, TextStoreHostError,
     commit_composition_in_place,
@@ -213,7 +213,7 @@ fn log_failure(payload: Box<dyn Any + Send>) {
             "application code a TSF document's teardown reached panicked"
         );
     });
-    retain_opaque_payload(payload);
+    drop(payload);
     // A failure the diagnostic raised is retained with the scope.
     drop(calls);
 }
@@ -284,7 +284,7 @@ impl TextServices {
         if let Err(payload) = catch_unwind(|| {
             tracing::debug!(target: "flui_native::tsf", client_id, "ITfThreadMgr activated");
         }) {
-            retain_opaque_payload(payload);
+            drop(payload);
         }
         Ok(services)
     }
@@ -430,7 +430,7 @@ impl TextServices {
             *failure = Some(payload);
         } else {
             drop(failure);
-            retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 
@@ -871,7 +871,7 @@ impl Drop for TextServices {
         if let Some((payload, recovery)) = self.take_failure() {
             if std::thread::panicking() {
                 drop(recovery);
-                retain_opaque_payload(payload);
+                drop(payload);
             } else {
                 let _recovery = recovery;
                 resume_unwind(payload);

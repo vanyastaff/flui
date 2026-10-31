@@ -1,4 +1,4 @@
-//! Swallowed removal-hook payloads cannot restart unwinding after containment.
+//! Swallowed removal-hook payloads are dropped after containment and never restart unwinding.
 use super::dense_reconcile_containment::{DenseHealthyLeaf, DenseRow};
 use flui_foundation::ViewKey;
 use flui_rendering::{
@@ -21,15 +21,14 @@ use std::{
 };
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-struct Bomb(Arc<AtomicUsize>);
-impl Drop for Bomb {
+struct DropCounted(Arc<AtomicUsize>);
+impl Drop for DropCounted {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("opaque removal hook payload destroyed");
     }
 }
 fn fail(drops: &Arc<AtomicUsize>) -> ! {
-    std::panic::panic_any((Bomb(Arc::clone(drops)), Bomb(Arc::clone(drops))));
+    std::panic::panic_any(DropCounted(Arc::clone(drops)));
 }
 #[derive(Clone, Copy)]
 enum Hook {
@@ -231,8 +230,8 @@ pub(crate) fn dispatch_child(kind: &str) {
         assert!(result.is_ok(), "removal-hook containment returns");
     }
     assert_eq!(observed.calls.get(), 1);
-    assert_eq!(original_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(report_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(original_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(report_drops.load(Ordering::SeqCst), usize::from(telemetry));
     assert_eq!(report_calls.load(Ordering::SeqCst), usize::from(telemetry));
     assert_eq!(
         tree.get(parent).expect("surviving parent").child_ids(),
@@ -307,13 +306,13 @@ pub(crate) fn dispatch_child(kind: &str) {
 fn run(kind: &str) {
     super::child_payload_recovery::run_child("FLUI_REMOVAL_HOOK_PAYLOAD_CHILD", kind);
 }
-pub(crate) fn dispose_payload_is_retained_after_containment() {
+pub(crate) fn dispose_payload_is_dropped_after_containment() {
     run("dispose");
 }
-pub(crate) fn deactivate_payload_is_retained_after_containment() {
+pub(crate) fn deactivate_payload_is_dropped_after_containment() {
     run("deactivate");
 }
-pub(crate) fn render_unmount_payload_is_retained_after_containment() {
+pub(crate) fn render_unmount_payload_is_dropped_after_containment() {
     run("render");
 }
 pub(crate) fn dispose_and_reporting_payloads_cannot_compete() {

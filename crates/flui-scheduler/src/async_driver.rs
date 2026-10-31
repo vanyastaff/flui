@@ -212,7 +212,7 @@ impl WakeShared {
                  the next wake"
             );
             // Its destructor may panic too; the owner's failure signal is set.
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }
@@ -609,7 +609,7 @@ impl RetiringTasks {
                 if first.is_none() {
                     first = Some(payload);
                 } else {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                 }
             }
         };
@@ -1036,7 +1036,7 @@ fn refuse(
         );
     });
     if let Err(payload) = diagnostic {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
     }
     if let Err(payload) = released {
         resume_unwind(payload);

@@ -169,9 +169,7 @@ impl ElementTree {
                     );
                     owner.push_recovered_panic(panic);
                 }
-                flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
-                    payload,
-                ));
+                drop(std::mem::ManuallyDrop::into_inner(payload));
                 substitute_id
             }
         }
@@ -274,7 +272,7 @@ impl ElementTree {
             );
             owner.push_recovered_panic(panic);
         }
-        flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+        drop(std::mem::ManuallyDrop::into_inner(payload));
         substitute_id
     }
 }

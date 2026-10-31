@@ -526,7 +526,7 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
                     "competing provider retirement"
                 })
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
             assert_eq!(drops.get(), usize::from(!provider_fails));
             assert!(
                 nodes[0].has_primary_focus(),
@@ -614,7 +614,7 @@ fn group_policy_replacement_preserves_failure_and_future_traversal() {
                 "competing group retirement failure"
             })
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
         assert_eq!(drops.get(), usize::from(!sorting_fails));
         assert!(nodes[0].has_primary_focus());
         assert!(manager.focus_next());
@@ -769,7 +769,7 @@ fn subscription_failure_preserves_unwind_and_allows_recovery() {
                 "subscription capture"
             })
         );
-        flui_foundation::panic::retain_opaque_payload(failure);
+        drop(failure);
         assert_eq!(drops.get(), usize::from(!already_unwinding));
         let calls = Rc::new(Cell::new(0));
         let observed = Rc::clone(&calls);
@@ -832,7 +832,7 @@ fn capture() -> (Rc<()>, Weak<()>) {
 
 fn expect_failure(run: impl FnOnce()) {
     let payload = catch_unwind(AssertUnwindSafe(run)).expect_err("the callback failure propagates");
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
 }
 
 fn focus_listener_capture_dies_with_its_manager() {
@@ -1688,7 +1688,7 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(case) {
             failed.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");
@@ -1708,7 +1708,7 @@ fn manager_listener_withdrawal_preserves_a_caught_failure() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(case) {
             failed.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");
@@ -1828,7 +1828,7 @@ fn scoped_global_key_registration_contracts() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(case) {
             failed.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");

@@ -118,7 +118,7 @@ pub(crate) fn apply_update<T, E>(
             if first.is_none() {
                 first = Some(payload);
             } else {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             }
         }
     }
@@ -177,7 +177,7 @@ pub(super) mod tests {
             flui_foundation::panic::payload_text(&*payload),
             Some("snapshot guard obligation dropped")
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
         assert_eq!(old_drops.load(Ordering::SeqCst), 1);
         {
             let guard = slot.lock();

@@ -403,62 +403,6 @@ fn a_panicking_self_uninstalled_hook_retains_its_captures() {
     );
 }
 
-fn secondary_payload_retirement(aggregate: bool) {
-    struct Payload(Arc<AtomicUsize>);
-    impl Drop for Payload {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            panic!("secondary payload destructor");
-        }
-    }
-    let scheduler = UpdateScheduler::new();
-    let _owner = install_owner(&scheduler);
-    let weak = crate::owner_callbacks::owner_probe(&scheduler);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let hook_calls = Arc::clone(&calls);
-    let payload_drops = Arc::new(AtomicUsize::new(0));
-    let hook_drops = Arc::clone(&payload_drops);
-    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
-        match hook_calls.fetch_add(1, Ordering::Relaxed) {
-            0 => {
-                let scheduler = weak.upgrade().expect("live scheduler");
-                pump_owner();
-                scheduler.request_frame();
-                panic!("primary failure");
-            }
-            1 => {
-                if aggregate {
-                    std::panic::panic_any((
-                        Payload(Arc::clone(&hook_drops)),
-                        Payload(Arc::clone(&hook_drops)),
-                    ));
-                }
-                std::panic::panic_any(Payload(Arc::clone(&hook_drops)));
-            }
-            _ => {}
-        }
-    })));
-    let failure =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scheduler.request_frame()))
-            .expect_err("hook failed");
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"primary failure"));
-    assert_eq!(
-        payload_drops.load(Ordering::Relaxed),
-        0,
-        "neither opaque payload nor aggregate field destructors may execute"
-    );
-    scheduler.request_frame();
-    assert_eq!(calls.load(Ordering::Relaxed), 3);
-}
-
-fn a_secondary_panic_payload_destructor_does_not_displace_the_first_failure() {
-    secondary_payload_retirement(false);
-}
-
-fn a_secondary_aggregate_with_two_panicking_fields_is_retained() {
-    secondary_payload_retirement(true);
-}
-
 fn perpetual_reentrant_demand_is_bounded_and_retained() {
     let scheduler = UpdateScheduler::new();
     let _owner = install_owner(&scheduler);
@@ -668,20 +612,12 @@ fn coalesced_wake_delivery_recovery() {
                 reentrant_hook_replacement_delivers_the_current_hook_after_failure as fn(),
             ),
             (
-                "a_secondary_aggregate_with_two_panicking_fields_is_retained",
-                a_secondary_aggregate_with_two_panicking_fields_is_retained as fn(),
-            ),
-            (
                 "perpetual_reentrant_demand_is_bounded_and_retained",
                 perpetual_reentrant_demand_is_bounded_and_retained as fn(),
             ),
             (
                 "a_panicking_self_uninstalled_hook_retains_its_captures",
                 a_panicking_self_uninstalled_hook_retains_its_captures as fn(),
-            ),
-            (
-                "a_secondary_panic_payload_destructor_does_not_displace_the_first_failure",
-                a_secondary_panic_payload_destructor_does_not_displace_the_first_failure as fn(),
             ),
             (
                 "scheduled_async_wake_retries_both_delivery_layers",

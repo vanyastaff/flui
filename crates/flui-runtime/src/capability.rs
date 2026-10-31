@@ -331,7 +331,7 @@ impl Drop for OwnerJobs {
         // first failure; this is the backstop for a queue dropped without it.
         if let Some(payload) = self.retire() {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

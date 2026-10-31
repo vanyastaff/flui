@@ -300,7 +300,7 @@ fn removal_during_a_failed_round_preserves_failure_and_progress() {
         Some(&"first status failure")
     );
     assert_eq!(removed_calls.get(), 0);
-    assert_eq!(drops.get(), 0, "failed delivery retains opaque captures");
+    assert_eq!(drops.get(), 1, "failed delivery still drops its captures");
     assert_eq!(tail_calls.get(), 1);
     let _run = controller.reverse().unwrap();
     assert_eq!(removed_calls.get(), 0);
@@ -463,7 +463,7 @@ fn enclosing_cleanup_preserves_its_first_failure() {
     let mut recovery = flui_foundation::panic::PanicRecovery::new();
     recovery.run(|| panic!("enclosing cleanup failure"));
     subscription.cancel_with_recovery(&mut recovery.scope());
-    assert_eq!(drops.get(), 0, "a failed cleanup retains opaque captures");
+    assert_eq!(drops.get(), 1, "a failed cleanup still drops its captures");
     drop(subscription);
     let calls = Rc::new(Cell::new(0));
     let _next = controller.subscribe_status({

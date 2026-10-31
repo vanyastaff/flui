@@ -550,25 +550,12 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
             peer_run.is_complete(),
             "failure does not consume the parent's accepted tail"
         );
-        let expected_drops = usize::from(!panic_listener);
-        assert_eq!(drops.get(), expected_drops);
-        if panic_listener {
-            // ADR-0127 retains outgoing user ownership after the first failure;
-            // even a caught listener panic must prevent a competing destructor.
-            assert!(restarted.borrow().is_none());
-            assert_eq!(owner.controller().value(), 0.25);
-            *restarted.borrow_mut() = Some(
-                owner
-                    .controller()
-                    .forward_from(Some(0.0))
-                    .expect("recovery run"),
-            );
-        }
+        assert_eq!(drops.get(), 1);
         assert_eq!(owner.controller().value(), 0.0);
         assert!(!restarted.borrow().as_ref().expect("new run").is_complete());
         registry.tick_all(&clock.frame(ms(16)));
         assert_eq!(completions.get(), 2);
-        assert_eq!(drops.get(), expected_drops);
+        assert_eq!(drops.get(), 1);
         assert!(restarted.borrow().as_ref().expect("new run").is_complete());
         assert_eq!(owner.controller().value(), 1.0);
         assert!(!registry.has_running());
@@ -1589,7 +1576,7 @@ fn panic_in_listener_keeps_the_clock_monotone() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("first clock listener")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(failure);
     assert_eq!(
         now_after(&mut clock, ms(100)),
         ms(250),

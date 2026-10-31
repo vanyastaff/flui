@@ -64,7 +64,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use flui_foundation::{MonotonicClock as _, panic::retain_opaque_payload as discard_panic_payload};
+use flui_foundation::MonotonicClock as _;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
@@ -1543,7 +1543,7 @@ impl UpdateScheduler {
             // not silently lost, only not the one that propagates. Matching
             // on both `Result`s (rather than `Option::or`-ing their errors
             // together) is what routes the DISCARDED side through
-            // `discard_panic_payload` instead of an uncontained `drop` --
+            // `drop` instead of an uncontained `drop` --
             // the payload can itself be a type whose own `Drop` panics.
             match (callback_result, notify_result) {
                 (Ok(()), Ok(())) => {}
@@ -1551,7 +1551,7 @@ impl UpdateScheduler {
                     std::panic::resume_unwind(payload);
                 }
                 (Err(callback_payload), Err(notify_payload)) => {
-                    discard_panic_payload(notify_payload);
+                    drop(notify_payload);
                     std::panic::resume_unwind(callback_payload);
                 }
             }
@@ -2426,7 +2426,7 @@ impl UpdateScheduler {
     /// catch-then-resume shape for a panicking post-frame callback, just
     /// upstream of it here. A SECOND (or later) waker's panic cannot be
     /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
-    /// through [`discard_panic_payload`] instead, retaining the opaque payload
+    /// through [`drop`] instead, retaining the opaque payload
     /// without invoking its possibly-panicking destruction.
     fn notify_frame_completion(
         &self,
@@ -3001,17 +3001,6 @@ mod tests {
         }
     }
 
-    /// A value whose own `Drop` panics; shared by the tests below that prove
-    /// a discarded panic payload's secondary panic-on-drop is contained
-    /// rather than left to escape.
-    struct PoisonPill;
-
-    impl Drop for PoisonPill {
-        fn drop(&mut self) {
-            panic!("poison pill dropped");
-        }
-    }
-
     /// A waker that panics must not starve waiters registered after it: the
     /// panic is caught, logged, and re-raised only once every waiter has
     /// been notified (issue #1057).
@@ -3112,23 +3101,22 @@ mod tests {
     }
 
     /// The same shape one level up: `end_frame_impl`'s own
-    /// `callback_result`/`notify_result` merge must discard a panicking
-    /// notify payload through `discard_panic_payload`, not an uncontained
-    /// `drop`, when the post-frame callback ALSO panicked and so is what
-    /// actually propagates.
-    fn end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic() {
+    /// `callback_result`/`notify_result` merge propagates the post-frame
+    /// callback's panic when the notify step ALSO panicked, and still resets
+    /// the phase.
+    fn end_frame_impl_keeps_the_callback_panic_over_a_notify_panic() {
         use std::task::Wake;
 
-        struct PoisonWaker;
-        impl Wake for PoisonWaker {
+        struct PanicWaker;
+        impl Wake for PanicWaker {
             fn wake(self: Arc<Self>) {
-                std::panic::panic_any(PoisonPill);
+                panic!("notify probe");
             }
         }
 
         let scheduler = UpdateScheduler::new();
         let mut future = scheduler.end_of_frame();
-        let waker = Waker::from(Arc::new(PoisonWaker));
+        let waker = Waker::from(Arc::new(PanicWaker));
         assert!(
             Pin::new(&mut future)
                 .poll(&mut Context::from_waker(&waker))
@@ -3154,13 +3142,13 @@ mod tests {
             flui_foundation::panic::payload_text(&*payload),
             Some("post-frame probe"),
             "the callback panicked first in this frame's own order, so its payload -- not \
-             the notify step's poison-pill one -- must be what escapes"
+             the notify step's -- must be what escapes"
         );
         assert_eq!(
             scheduler.phase(),
             SchedulerPhase::Idle,
-            "the phase reset must still run even though discarding the notify side's own \
-             panic-on-drop payload could itself have panicked"
+            "the phase reset must still run even though the notify side's own \
+             panic was caught alongside it"
         );
     }
 
@@ -3196,8 +3184,8 @@ mod tests {
                     scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed as fn(),
                 ),
                 (
-                    "end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic",
-                    end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic as fn(),
+                    "end_frame_impl_keeps_the_callback_panic_over_a_notify_panic",
+                    end_frame_impl_keeps_the_callback_panic_over_a_notify_panic as fn(),
                 ),
             ],
         );

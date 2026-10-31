@@ -2999,13 +2999,13 @@ fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
     if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
     {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
         std::mem::forget(observer);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
         }));
         if let Err(payload) = reported {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
 }
@@ -3125,17 +3125,7 @@ mod tests {
         );
     }
 
-    fn reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics() {
-        struct DropBomb;
-
-        impl Drop for DropBomb {
-            fn drop(&mut self) {
-                panic!("secondary payload drop");
-            }
-        }
-
-        struct AggregatePayload(DropBomb, DropBomb);
-
+    fn reentrant_retry_preserves_the_first_panic() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let scheduler_slot: Arc<Mutex<Option<ExternalBuildScheduler>>> = Arc::new(Mutex::new(None));
         let callback_slot = Arc::clone(&scheduler_slot);
@@ -3153,7 +3143,7 @@ mod tests {
                         reentrant.schedule(ElementId::new(1), RebuildReason::DependencyChange);
                         panic!("primary wake panic");
                     }
-                    2 => std::panic::panic_any(AggregatePayload(DropBomb, DropBomb)),
+                    2 => panic!("retry wake panic"),
                     _ => panic!("unexpected extra wake"),
                 },
             );
@@ -3162,7 +3152,7 @@ mod tests {
         *scheduler_slot.lock() = Some(scheduler);
 
         // The wake itself, as a scheduler requests it before containing it:
-        // the first panic resumes, the retry's payload is retained.
+        // the first panic resumes and the retry's panic is dropped.
         let fresh = inbox.admit_batch(
             &[ElementId::new(1)],
             RebuildReasons::from_reason(RebuildReason::StateChange),
@@ -3951,7 +3941,7 @@ mod tests {
                 ("exhausted_owner_tag_refusal_retains_the_supplied_focus_manager", exhausted_owner_tag_refusal_retains_the_supplied_focus_manager as fn()),
                 ("wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it", wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it as fn()),
                 ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
-                ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),
+                ("reentrant_retry_preserves_the_first_panic", reentrant_retry_preserves_the_first_panic as fn()),
                 ("direct_build_scheduling_retries_a_failed_wake", direct_build_scheduling_retries_a_failed_wake as fn()),
                 ("a_panicking_report_of_a_failed_wake_does_not_unwind", a_panicking_report_of_a_failed_wake_does_not_unwind),
                 ("nested_scope_quarantines_work_until_its_own_drain", nested_scope_quarantines_work_until_its_own_drain as fn()),

@@ -1179,7 +1179,7 @@ mod tests {
                 flui_foundation::panic::payload_text(failure.as_ref()),
                 Some("rejected controller capture")
             );
-            flui_foundation::panic::retain_opaque_payload(failure);
+            drop(failure);
             assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
             rejected.dispose();
             assert_eq!(

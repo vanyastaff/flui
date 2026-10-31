@@ -549,7 +549,7 @@ impl Drop for UiRuntime {
         }
         if let Some(payload) = first {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

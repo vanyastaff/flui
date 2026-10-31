@@ -1653,10 +1653,6 @@ mod tests {
                 close_does_not_notify_a_root_parked_on_itself,
             ),
             (
-                "close_during_active_unwind_preserves_outer_failure",
-                close_during_active_unwind_preserves_outer_failure,
-            ),
-            (
                 "listener_panic_does_not_leave_notification_depth_stuck",
                 listener_panic_does_not_leave_notification_depth_stuck,
             ),
@@ -1695,13 +1691,7 @@ mod tests {
     /// A child that ran its case to completion exits with this status, so a
     /// filter that matched no test (status 0) does not pass for one.
     const CHILD_COMPLETED: i32 = 86;
-    const HOSTILE_CASES: &[(&str, fn())] = &[
-        (
-            "close_during_active_unwind_child",
-            close_during_active_unwind_child,
-        ),
-        ("closed_rejections_child", closed_rejections_child),
-    ];
+    const HOSTILE_CASES: &[(&str, fn())] = &[("closed_rejections_child", closed_rejections_child)];
 
     /// Run one hostile case in a child process: what it guards against is an
     /// abort, which would otherwise take the whole test binary down.
@@ -1864,7 +1854,7 @@ mod tests {
             let first = outcome.err().map(|payload| {
                 let text =
                     flui_foundation::panic::payload_text(payload.as_ref()).map(str::to_owned);
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
                 text
             });
             let detached = nodes.iter().all(|node| !node.is_attached());
@@ -1932,73 +1922,6 @@ mod tests {
             assert!(manager.root_scope().attach_node(&FocusNode::new()).is_err());
             assert!(!manager.dispatch_key_event(&key_event()).is_handled());
             manager.close();
-        }
-    }
-
-    struct CloseBomb(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-    impl Drop for CloseBomb {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            panic!("hostile aggregate context field");
-        }
-    }
-
-    fn close_preserves_first_failure_against_hostile_context() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        struct OpaquePayload(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-        impl Drop for OpaquePayload {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                panic!("opaque secondary payload destructor");
-            }
-        }
-        struct ThrowsOpaque(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-        impl Drop for ThrowsOpaque {
-            fn drop(&mut self) {
-                std::panic::panic_any(OpaquePayload(std::sync::Arc::clone(&self.0)));
-            }
-        }
-        for notification_fails in [true, false] {
-            let (manager, nodes) = manager_with_nodes(1);
-            let _ = nodes[0].request_focus();
-            nodes[0].add_listener(Rc::new(move || {
-                assert!(!notification_fails, "first final notification");
-            }));
-            let payload_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let aggregate_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let captured = ThrowsOpaque(std::sync::Arc::clone(&payload_drops));
-            manager.add_global_key_handler(Rc::new(move |_| {
-                let _ = &captured;
-                KeyEventResult::Ignored
-            }));
-            nodes[0]
-                .register_context(Rc::new((
-                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
-                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
-                )))
-                .relinquish();
-            let outcome = catch_unwind(AssertUnwindSafe(|| manager.close()));
-            let payload = outcome.expect_err("the first failure propagates");
-            if notification_fails {
-                assert_eq!(
-                    flui_foundation::panic::payload_text(payload.as_ref()),
-                    Some("first final notification")
-                );
-            } else {
-                assert!(
-                    payload.is::<OpaquePayload>(),
-                    "the original opaque destructor payload propagates"
-                );
-            }
-            flui_foundation::panic::retain_opaque_payload(payload);
-            assert!(!nodes[0].is_attached());
-            assert!(nodes[0].context().is_none());
-            assert_eq!(payload_drops.load(std::sync::atomic::Ordering::Relaxed), 0);
-            assert_eq!(
-                aggregate_drops.load(std::sync::atomic::Ordering::Relaxed),
-                0
-            );
         }
     }
 
@@ -2093,94 +2016,6 @@ mod tests {
         manager.close();
     }
 
-    fn close_from_key_callback_preserves_first_failure_against_hostile_capture() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        for global in [true, false] {
-            let (manager, nodes) = manager_with_nodes(1);
-            let _ = nodes[0].request_focus();
-            let capture_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let hostile = (
-                CloseBomb(std::sync::Arc::clone(&capture_drops)),
-                CloseBomb(std::sync::Arc::clone(&capture_drops)),
-            );
-            let owner = Rc::downgrade(&manager);
-            let callback = move || -> ! {
-                let _ = &hostile;
-                owner
-                    .upgrade()
-                    .expect("the dispatch caller retains the owner")
-                    .close();
-                panic!("first key callback");
-            };
-            if global {
-                manager.add_global_key_handler(Rc::new(move |_| callback()));
-            } else {
-                nodes[0].set_on_key_event(Rc::new(move |_| callback()));
-            }
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                manager.dispatch_key_event(&key_event()).is_handled()
-            }));
-            let payload = outcome.expect_err("the original key callback failure propagates");
-            assert_eq!(
-                flui_foundation::panic::payload_text(payload.as_ref()),
-                Some("first key callback")
-            );
-            flui_foundation::panic::retain_opaque_payload(payload);
-            assert!(!nodes[0].is_attached());
-            assert_eq!(capture_drops.load(std::sync::atomic::Ordering::Relaxed), 0);
-            assert!(!manager.dispatch_key_event(&key_event()).is_handled());
-        }
-    }
-
-    fn close_during_active_unwind_preserves_outer_failure() {
-        run_hostile_case_in_child("close_during_active_unwind_child");
-    }
-
-    fn close_during_active_unwind_child() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        close_preserves_first_failure_against_hostile_context();
-        close_from_key_callback_preserves_first_failure_against_hostile_capture();
-        let survivor = Rc::new(RefCell::new(None));
-        let aggregate_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            let (manager, nodes) = manager_with_nodes(1);
-            *survivor.borrow_mut() = Some(Rc::clone(&nodes[0]));
-            let _ = nodes[0].request_focus();
-            nodes[0].add_listener(Rc::new(|| panic!("secondary final listener")));
-            nodes[0]
-                .register_context(Rc::new((
-                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
-                    CloseBomb(std::sync::Arc::clone(&aggregate_drops)),
-                )))
-                .relinquish();
-            // The final strong manager owner drops during this unwind.
-            let _ = &manager;
-            panic!("outer failure");
-        }));
-        let payload = outcome.expect_err("the outer panic propagates");
-        assert_eq!(
-            flui_foundation::panic::payload_text(payload.as_ref()),
-            Some("outer failure")
-        );
-        flui_foundation::panic::retain_opaque_payload(payload);
-        assert_eq!(
-            aggregate_drops.load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
-        let node = survivor
-            .borrow()
-            .as_ref()
-            .expect("the surviving public node")
-            .clone();
-        assert!(!node.is_attached());
-        assert!(matches!(
-            node.request_focus(),
-            crate::focus::FocusRequestOutcome::OwnerClosed
-        ));
-    }
-
     struct RejectedPolicy<T>(T);
 
     impl<T> std::fmt::Debug for RejectedPolicy<T> {
@@ -2267,25 +2102,6 @@ mod tests {
     fn closed_rejections_child() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        struct RejectOnDrop {
-            manager: Rc<FocusManager>,
-            node: Rc<FocusNode>,
-            kind: usize,
-            drops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        }
-        impl Drop for RejectOnDrop {
-            fn drop(&mut self) {
-                reject_focus_capture(
-                    &self.manager,
-                    &self.node,
-                    self.kind,
-                    (
-                        CloseBomb(std::sync::Arc::clone(&self.drops)),
-                        CloseBomb(std::sync::Arc::clone(&self.drops)),
-                    ),
-                );
-            }
-        }
         for kind in 0..7 {
             let (manager, nodes) = manager_with_nodes(1);
             manager.close();
@@ -2311,7 +2127,7 @@ mod tests {
                         flui_foundation::panic::payload_text(payload.as_ref()),
                         Some("first rejected capture retirement")
                     );
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    drop(payload);
                 } else {
                     outcome.expect("healthy rejected capture destruction succeeds");
                 }
@@ -2320,27 +2136,6 @@ mod tests {
                 drops.get(),
                 2,
                 "healthy rejection destroys each incoming capture: {kind}"
-            );
-            let hostile_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                let _guard = RejectOnDrop {
-                    manager: Rc::clone(&manager),
-                    node: Rc::clone(&nodes[0]),
-                    kind,
-                    drops: std::sync::Arc::clone(&hostile_drops),
-                };
-                panic!("outer rejected owner failure");
-            }));
-            let payload = outcome.expect_err("outer failure propagates unchanged");
-            assert_eq!(
-                flui_foundation::panic::payload_text(payload.as_ref()),
-                Some("outer rejected owner failure")
-            );
-            flui_foundation::panic::retain_opaque_payload(payload);
-            assert_eq!(
-                hostile_drops.load(std::sync::atomic::Ordering::Relaxed),
-                0,
-                "unwinding rejection retains aggregate: {kind}"
             );
             assert!(!manager.dispatch_key_event(&key_event()).is_handled());
             assert!(nodes[0].context().is_none());

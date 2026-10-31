@@ -50,7 +50,7 @@ fn reload_failure(failures: usize, fail_reassemble: bool) {
             "reload wake first"
         })
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
     assert!(
         tail.try_take().is_none(),
         "the failure leaves the accepted FIFO tail queued"

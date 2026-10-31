@@ -21,7 +21,7 @@ pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
 }
 
 /// Decode owns each completed field until the complete split is admitted.
-/// Failed/partial decoding retains opaque curves so its error stays authoritative.
+/// Failed or partial decoding drops the decoded curves; the decoding error stays authoritative.
 #[cfg(feature = "serde")]
 struct DecodedCurve<T>(Option<T>);
 
@@ -36,13 +36,6 @@ impl<T> DecodedCurve<T> {
 impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for DecodedCurve<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         T::deserialize(deserializer).map(|value| Self(Some(value)))
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<T> Drop for DecodedCurve<T> {
-    fn drop(&mut self) {
-        std::mem::forget(self.0.take());
     }
 }
 

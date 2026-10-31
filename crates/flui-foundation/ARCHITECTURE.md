@@ -395,15 +395,13 @@ The public subprocess table `notifier_ownership_and_recovery` checks borrowed
 non-Clone arguments, hostile payloads and self-removal captures, tracing failure
 in competition with a listener failure, chronological retirement competition
 and subsequent progress, including recursive relay retirement through the same
-channel. The common exceptional-payload operation is
-`panic::retain_opaque_payload`, used by notifications, signal reads
-and the test-table runner. This contract is recorded in
+channel. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md),
-with current delivery/propagation custody under ADR-0178.
-As refined by [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md),
-the shared operation releases exact `&'static str` and `String` payloads, whose
-destruction cannot call user code. Other dynamic payload types remain retained;
-callback snapshot retention and recovery ordering are unchanged.
+with current delivery/propagation custody under ADR-0178. Caught payloads that
+are not propagated are dropped where the decision is made
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)):
+a payload or capture whose destructor panics while the thread unwinds aborts,
+as in std.
 
 
 ## `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis

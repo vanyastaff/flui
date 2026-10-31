@@ -462,7 +462,7 @@ fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
     let during = observers.take_clock_failure();
     let mut failures = earlier.into_iter().chain(during).chain(outcome.err());
     if let Some(first) = failures.next() {
-        failures.for_each(flui_foundation::panic::retain_opaque_payload);
+        failures.for_each(drop);
         resume_unwind(first);
     }
 }

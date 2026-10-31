@@ -29,6 +29,13 @@ fn bomb(drops: &Arc<AtomicUsize>, message: &'static str) -> Bomb {
         message,
     }
 }
+/// A panic payload that records its drop; unlike [`Bomb`] it does not panic.
+struct DropCounted(Arc<AtomicUsize>);
+impl Drop for DropCounted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 fn aggregate(drops: &Arc<AtomicUsize>) -> (Bomb, Bomb) {
     (bomb(drops, "first capture"), bomb(drops, "second capture"))
 }
@@ -37,7 +44,7 @@ fn assert_first(payload: Box<dyn std::any::Any + Send>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
 }
 
 fn cancelled_failure(opaque_payload: bool, terminal: bool) {
@@ -63,7 +70,7 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
                 owner.commit(Hidden).expect("queued next event");
             }
             if opaque_payload {
-                std::panic::panic_any(aggregate(&payload_drops_in_callback));
+                std::panic::panic_any(DropCounted(Arc::clone(&payload_drops_in_callback)));
             }
             panic!("lifecycle body first");
         })
@@ -78,12 +85,16 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     let payload = catch_unwind(AssertUnwindSafe(|| source.drain()))
         .expect_err("body failure propagates after delivery");
     if opaque_payload {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
     } else {
         assert_first(payload, "lifecycle body first");
     }
     assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(payload_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        payload_drops.load(Ordering::SeqCst),
+        usize::from(opaque_payload),
+        "an opaque payload is dropped where it is caught"
+    );
     if terminal {
         assert_eq!(*events.borrow(), [Inactive, Detached]);
         assert_eq!(handle.snapshot(), Err(LifecycleClosed));
@@ -472,7 +483,7 @@ fn child(kind: &str) {
 pub(crate) fn self_cancelled_callback_failure_retains_its_capture_aggregate() {
     child("cancel");
 }
-pub(crate) fn self_cancellation_retains_competing_payload_and_capture_aggregates() {
+pub(crate) fn self_cancellation_drops_its_payload_and_retains_capture_aggregates() {
     child("cancel_opaque");
 }
 pub(crate) fn terminal_release_keeps_the_earlier_callback_failure() {

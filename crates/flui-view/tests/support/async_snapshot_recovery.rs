@@ -153,7 +153,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         flui_foundation::panic::payload_text(&*payload),
         Some("snapshot retirement first")
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
     assert_eq!(old_drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         incoming_drops.load(Ordering::SeqCst),
@@ -208,7 +208,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
             flui_foundation::panic::payload_text(&*payload),
             Some("snapshot retirement first")
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        drop(payload);
     } else {
         outcome.expect("healthy incoming retirement");
     }
@@ -280,7 +280,7 @@ fn eager_disposal() {
         flui_foundation::panic::payload_text(&*payload),
         Some("eager old retirement first")
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    drop(payload);
     tree.remove(root, &mut owner.element_owner_mut());
     drop(view);
     assert_eq!(old_drops.load(Ordering::SeqCst), 1);

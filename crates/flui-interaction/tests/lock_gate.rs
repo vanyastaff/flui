@@ -189,7 +189,7 @@ fn a_panicking_settle_reaches_the_gate_and_the_queue_drains() {
         Some("owner failure 1"),
         "the first failure stays authoritative"
     );
-    flui_foundation::panic::retain_opaque_payload(first);
+    drop(first);
     assert!(gate.take_failure().is_none(), "a failure is reported once");
 }
 
@@ -231,7 +231,7 @@ fn settling_runs_owner_code_outside_the_lock() {
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
             failures.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(failures.is_empty(), "failed settle cases: {failures:?}");
@@ -308,7 +308,7 @@ fn queued_text_store_grants_respect_gate_changes() {
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
             failures.push(name);
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
         }
     }
     assert!(failures.is_empty(), "failed gate cases: {failures:?}");

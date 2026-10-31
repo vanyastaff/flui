@@ -422,7 +422,7 @@ fn pointer_identity_contracts() {
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
             failures.push(name);
         }
     }

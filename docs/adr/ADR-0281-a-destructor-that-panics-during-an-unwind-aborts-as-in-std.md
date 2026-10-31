@@ -1,6 +1,6 @@
 # ADR-0281: A destructor that panics during an unwind aborts, as in std
 
-- **Status:** Accepted (2026-10-31). Not implemented: the retention helpers in `flui-foundation::panic` and the crate-local retention sites still leak; see Migration.
+- **Status:** Accepted (2026-10-31). Not implemented: crate-local retention sites outside `flui-foundation::panic` and `flui-animation` still leak; see Migration.
 - **Date:** 2026-10-31
 - **Supersedes:** [ADR-0127](ADR-0127-exceptional-path-retention.md) §2–§4 (retaining user-owned values after a caught failure or while unwinding) and its hit-test metadata retention; [ADR-0119](ADR-0119-inert-panic-payload-retirement.md) in full (retaining opaque payloads); [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md) §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes; [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §4 and [ADR-0272](ADR-0272-widgets-run-background-work-through-a-capability.md) §3–§4 only where they retain a payload, a capture or a failed future.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the boundary where a contained user panic ends up)
@@ -91,9 +91,10 @@ the owner-turn boundary of ADR-0258.
 ### Confirmation
 
 - `flui_foundation::panic::retain_opaque_payload` no longer exists, so a caller does not compile.
-- `PanicRecovery::retire` and `RecoveryScope::retire` have no `mem::forget`. A test in
-  `crates/flui-foundation/tests/` drops a retired value after a caught failure and keeps the
-  first failure when its destructor panics.
+- `PanicRecovery::retire` and `RecoveryScope::retire` have no `mem::forget`. The table test
+  `recovery_preserves_provenance_and_owned_failure` in `flui-foundation` (row "retirement
+  after a caught failure") drops a retired value after a caught failure and keeps the first
+  failure when its destructor panics.
 - Until the migration ends, `rg 'thread::panicking\(\)' crates packages src` counts the sites
   still to remove. A new one is a review finding against this ADR.
 

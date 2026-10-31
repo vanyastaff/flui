@@ -368,7 +368,7 @@ fn scale_and_force_press_owner_lifecycle() {
     let mut failures = Vec::new();
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            drop(payload);
             failures.push(name);
         }
     }

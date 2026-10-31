@@ -81,7 +81,7 @@ impl Drop for MainController {
         first.contain(|| drop(observer));
         if std::thread::panicking() {
             if let Some(payload) = first.into_payload() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                drop(payload);
             }
         } else {
             first.resume();
