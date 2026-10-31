@@ -31,6 +31,7 @@ use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::TextSelection;
@@ -47,10 +48,18 @@ use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
 use crate::text::controller::TextEditingController;
 use crate::text::primary_selection::PrimarySelectionOwner;
+use crate::text::selection_area::handles::Look;
 use crate::text::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
+use crate::{DefaultSelectionHandles, DotHandles, SelectionHandles};
 
 mod clipboard;
+mod cursor_area;
+mod handles;
+use cursor_area::CursorAreaLoop;
+
+pub use handles::CaretHandle;
+use handles::{FieldHandles, FieldLongPress, HandleParts};
 
 use clipboard::{ClipboardTextAction, claim_primary};
 
@@ -60,6 +69,8 @@ type ImeFocusTransition = Rc<dyn Fn(bool)>;
 struct SelectionDrag {
     contact: PointerId,
     source_anchor: usize,
+    /// Whether the contact is a touch, whose release shows the handles.
+    touch: bool,
 }
 
 /// Callback for [`EditableText::on_submitted`] — see that method's doc.
@@ -441,6 +452,8 @@ pub struct EditableText {
     pub(super) on_changed: Option<TextChanged>,
     /// What assistive technology is told about the field beyond its value.
     pub(super) field_semantics: FieldSemantics,
+    pub(super) handles: Option<Rc<dyn SelectionHandles>>,
+    pub(super) caret_handle: Option<CaretHandle>,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -481,6 +494,8 @@ impl EditableText {
             on_submitted: None,
             on_changed: None,
             field_semantics: FieldSemantics::default(),
+            handles: None,
+            caret_handle: None,
         }
     }
 
@@ -555,6 +570,30 @@ impl EditableText {
     #[must_use]
     pub fn selection_style(mut self, style: SelectionStyle) -> Self {
         self.selection_style = Some(style);
+        self
+    }
+
+    /// Build the touch handles with `handles`, in place of the nearest
+    /// [`DefaultSelectionHandles`]' or [`DotHandles`] in the opaque active
+    /// selection colour, as a [`SelectionArea`](crate::SelectionArea) does.
+    ///
+    /// A touch selection (a long press, which the same touch extends by
+    /// words, a double tap or a drag) shows a handle under each end, and a
+    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
+    /// handle moves its end. They show in the nearest
+    /// [`Overlay`](crate::Overlay), and none without one.
+    #[must_use]
+    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
+        self.handles = Some(Rc::new(handles));
+        self
+    }
+
+    /// Whether a tap shows a handle under the caret, in place of the
+    /// nearest [`DefaultSelectionHandles`]' choice or the platform's
+    /// ([`CaretHandle::default`]).
+    #[must_use]
+    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
+        self.caret_handle = Some(caret_handle);
         self
     }
 
@@ -716,6 +755,8 @@ impl std::fmt::Debug for EditableText {
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
             .field("field_semantics", &self.field_semantics)
+            .field("handles", &self.handles.is_some())
+            .field("caret_handle", &self.caret_handle)
             .finish()
     }
 }
@@ -885,6 +926,11 @@ pub struct EditableTextState {
     /// Acquired first in `init_state`: `on_changed` and `on_submitted` run
     /// inside a write it opens (ADR-0086). `None` only before `init_state`.
     writer: Option<WriterSource>,
+    /// The touch handles: shown by a touch, taken by a key, a mouse, the
+    /// focus leaving or a change they did not make.
+    touch_handles: Rc<FieldHandles>,
+    /// The touch long press that selects a word and shows its handles.
+    long_press: FieldLongPress,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -925,6 +971,8 @@ impl StatefulView for EditableText {
             post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
             writer: None,
+            touch_handles: FieldHandles::new(),
+            long_press: FieldLongPress::new(),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             reports_edits: Rc::new(Cell::new(true)),
@@ -1002,6 +1050,7 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             let commit = self.composition_commit();
             let paste = self.clipboard_action();
+            let handles = Rc::clone(&self.touch_handles);
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
@@ -1009,6 +1058,12 @@ impl EditableTextState {
                 let Some(position) = dispatch.global.position() else {
                     return;
                 };
+                // A mouse, pen or trackpad press ends a touch's handles.
+                if dispatch.global.pointer_kind() != Some(flui_interaction::PointerKind::Touch) {
+                    let mut failure = FirstPanic::new();
+                    handles.hide(&mut failure);
+                    failure.resume();
+                }
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
@@ -1042,6 +1097,8 @@ impl EditableTextState {
                 let admitted = SelectionDrag {
                     contact: press.pointer.id,
                     source_anchor: provisional,
+                    touch: dispatch.global.pointer_kind()
+                        == Some(flui_interaction::PointerKind::Touch),
                 };
                 drag_anchor.set(Some(admitted));
                 // A composition in this field is committed before the caret
@@ -1100,12 +1157,21 @@ impl EditableTextState {
         // gesture entirely — extend a selection the user abandoned.
         let release = {
             let drag_anchor = Rc::clone(&drag_anchor);
+            let handles = Rc::clone(&self.touch_handles);
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
-                if drag_anchor.get().is_some_and(|drag| {
+                let Some(drag) = drag_anchor.get().filter(|drag| {
                     Some(drag.contact)
                         == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
-                }) {
-                    drag_anchor.set(None);
+                }) else {
+                    return;
+                };
+                drag_anchor.set(None);
+                // A touch that tapped or dragged in the field leaves the
+                // handles of what it placed: the caret's or the selection's.
+                if drag.touch {
+                    let mut failure = FirstPanic::new();
+                    handles.show_for_touch(&mut failure);
+                    failure.resume();
                 }
             }
         };
@@ -1175,6 +1241,7 @@ impl EditableTextState {
         let owner = self.pipeline_owner.clone();
         let anchor = self.inner_anchor.clone();
         let controller = Rc::clone(&self.controller);
+        let handles = Rc::clone(&self.touch_handles);
 
         let mut detector =
             crate::interaction::GestureDetector::new().behavior(HitTestBehavior::Opaque);
@@ -1204,9 +1271,34 @@ impl EditableTextState {
                 };
                 controller.borrow().set_selection(range.start, range.end);
                 drag_anchor.set(None);
+                if details.kind == flui_interaction::PointerKind::Touch {
+                    let mut failure = FirstPanic::new();
+                    handles.show_for_touch(&mut failure);
+                    failure.resume();
+                }
             });
         }
         detector.child(child)
+    }
+
+    /// Follows the overlay the touch handles go in, the vsync that times
+    /// the caret's, and the gesture arena the long press competes in.
+    fn follow_handle_scope(&mut self, ctx: &dyn LifecycleContext) {
+        self.touch_handles.set_scope(
+            crate::Overlay::maybe_of(ctx),
+            crate::animated::VsyncScope::maybe_of(ctx),
+        );
+        let drag = Rc::downgrade(&self.selection_drag);
+        self.long_press.build(
+            crate::interaction::GesturePolicy::of(ctx),
+            &self.touch_handles,
+            // A long press takes its contact from the field's own drag.
+            Rc::new(move || {
+                if let Some(drag) = drag.upgrade() {
+                    drag.set(None);
+                }
+            }),
+        );
     }
 
     fn manager(&self) -> &Rc<FocusManager> {
@@ -1266,11 +1358,22 @@ impl EditableTextState {
         );
         let edits = self.edit_observer();
         let store = self.text_store.clone();
+        let handles = Rc::downgrade(&self.touch_handles);
         Rc::new(move |event| {
             // Each step runs though an earlier one failed (a queued grant,
             // `on_changed`, the observer): the platform hears of the key's
             // edit before the first failure is resumed.
             let mut calls = OwnerCalls::new();
+            // A key ends a touch's handles.
+            if event.state() == KeyState::Down
+                && let Some(handles) = handles.upgrade()
+            {
+                calls.run(|| {
+                    let mut failure = FirstPanic::new();
+                    handles.hide(&mut failure);
+                    failure.resume();
+                });
+            }
             // An IME grant still queued from the last frame lands first, so
             // this key's edit follows it rather than overtaking it.
             if let Some(store) = &store {
@@ -1316,12 +1419,16 @@ impl EditableTextState {
         let primary = Rc::clone(&self.primary);
         let controller = Rc::downgrade(&self.controller);
         let obscure = Rc::clone(&self.obscure);
+        let handles = Rc::downgrade(&self.touch_handles);
         Rc::new(move || {
             // Each runs though the other's owner code fails; the first
             // failure is resumed after both.
             let mut failure = FirstPanic::new();
             failure.contain(|| rebuild_notifier.notify_listeners());
             failure.contain(|| claim_primary(&primary, &controller, &obscure));
+            if let Some(handles) = handles.upgrade() {
+                handles.controller_changed(&mut failure);
+            }
             failure.resume();
         })
     }
@@ -1810,6 +1917,7 @@ impl ViewState<EditableText> for EditableTextState {
         });
         self.ime_focus_transition = Some(Rc::clone(&ime_focus_transition));
         let focus_node_for_ime = Rc::clone(&self.observed_focus_node);
+        let handles_for_focus = Rc::downgrade(&self.touch_handles);
         self.ime_focus_listener_id = Some(self.manager().add_listener(Rc::new(
             move |previous, current| {
                 let focus_node = focus_node_for_ime.borrow();
@@ -1819,12 +1927,32 @@ impl ViewState<EditableText> for EditableTextState {
                 let now_focused = current
                     .as_ref()
                     .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
+                drop(focus_node);
                 if was_focused == now_focused {
                     return;
                 }
-                ime_focus_transition(now_focused);
+                // The focus leaving takes a touch's handles; the input
+                // method still hears of it though that fails.
+                let mut failure = FirstPanic::new();
+                if !now_focused && let Some(handles) = handles_for_focus.upgrade() {
+                    handles.hide(&mut failure);
+                }
+                failure.contain(|| ime_focus_transition(now_focused));
+                failure.resume();
             },
         )));
+
+        self.touch_handles.mount(HandleParts {
+            pipeline: self.pipeline_owner.clone(),
+            inner_anchor: self.inner_anchor.clone(),
+            controller: Rc::clone(&self.controller),
+            obscure: Rc::clone(&self.obscure),
+            obscuring_character: Rc::clone(&self.obscuring_character),
+            repaint: self.rebuild_notifier.clone(),
+            commit: self.composition_commit(),
+            post_frame: self.post_frame_handle.clone(),
+        });
+        self.follow_handle_scope(ctx);
 
         // Attach last. Besides normal pre-mount `request_focus`, this also
         // covers a route scope's pending first-focus intent: either path may
@@ -1840,6 +1968,17 @@ impl ViewState<EditableText> for EditableTextState {
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
         self.accepts_semantics_actions.set(new_view.enabled);
+        // A disabled field shows no handles, and a replaced controller's
+        // selection is not the one shown handles were for.
+        let replaced = !self
+            .controller
+            .borrow()
+            .is_same_controller(&new_view.controller);
+        if !new_view.enabled || replaced {
+            let mut failure = FirstPanic::new();
+            self.touch_handles.hide(&mut failure);
+            failure.resume();
+        }
         if !new_view.enabled {
             self.selection_drag.set(None);
         }
@@ -2047,6 +2186,7 @@ impl ViewState<EditableText> for EditableTextState {
             self.parent = Some(parent);
         }
         self.record_action_chain(ctx);
+        self.follow_handle_scope(ctx);
     }
 
     fn build(&self, view: &EditableText, ctx: &dyn BuildContext) -> impl IntoView {
@@ -2076,12 +2216,33 @@ impl ViewState<EditableText> for EditableTextState {
             semantics: view.field_semantics.clone(),
         };
         let inner_anchor = self.inner_anchor.clone();
+        // The handles look as the area's do: given, a default's, else dots
+        // in the opaque active selection colour.
+        let look = view
+            .handles
+            .clone()
+            .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
+            .map_or_else(
+                || {
+                    Look::Dots(DotHandles::new(
+                        appearance.selection_style.active.with_alpha(255),
+                    ))
+                },
+                Look::Given,
+            );
+        let caret_handle = view
+            .caret_handle
+            .or_else(|| DefaultSelectionHandles::caret_handle_of(ctx))
+            .unwrap_or_default();
+        self.touch_handles.set_look(look, caret_handle);
+        let touch_handles = Rc::clone(&self.touch_handles);
 
         // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
         // loop reaches the editable by taking `inner_anchor`'s FIRST child,
         // so anything inserted between the two would break that walk.
         let field = crate::interaction::Listener::new()
             .behavior(HitTestBehavior::Opaque)
+            .recognizer_when(&self.long_press.attachment, move |_down| enabled)
             .child(crate::__private::AnchoredBox::new(
                 self.anchor.clone(),
                 AnimatedBuilder::new(std::rc::Rc::new(self.rebuild_notifier.clone()), move || {
@@ -2092,6 +2253,7 @@ impl ViewState<EditableText> for EditableTextState {
                         &appearance,
                         inner_anchor.clone(),
                         &semantics_actions,
+                        &touch_handles,
                     )
                 }),
             ));
@@ -2113,6 +2275,14 @@ impl ViewState<EditableText> for EditableTextState {
         // No edit from here on reaches the owner: the field is going away
         // (ADR-0142 item 4).
         self.reports_edits.set(false);
+        // The touch handles leave the overlay, and the long press its arena.
+        self.long_press.dispose();
+        let handles = Rc::clone(&self.touch_handles);
+        calls.run(|| {
+            let mut failure = FirstPanic::new();
+            handles.retire(&mut failure);
+            failure.resume();
+        });
         // This field's own rebuild listener goes first: the commit below
         // must not schedule a build of a subtree that is being unmounted.
         if let Some(id) = self.controller_listener_id.take() {
@@ -2232,134 +2402,6 @@ impl ViewState<EditableText> for EditableTextState {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// The self-rescheduling IME cursor-area tracking loop (ADR-0030).
-///
-/// One instance is created per IME attach (focus gain). Each firing reads the
-/// caret's current global rect and forwards it through
-/// [`TextInputHandle::set_cursor_area`] when it changed, then reschedules
-/// itself for the next completed frame, dormant whenever no frame runs.
-/// `Clone` because
-/// [`flui_scheduler::PostFrameHandle::schedule`] takes an `FnOnce`, so the only way to
-/// make it self-rescheduling without boxing a trait object is for each
-/// firing to consume `self` and, if still alive, construct the next firing's
-/// closure from a fresh clone of the same capture.
-#[derive(Clone)]
-struct CursorAreaLoop {
-    post_frame: flui_scheduler::PostFrameHandle,
-    pipeline_owner: Option<PipelineCell>,
-    /// The `EditableTextRenderView`'s own inner anchor (ADR-0030) — see
-    /// `EditableTextState::inner_anchor`'s doc.
-    inner_anchor: flui_objects::SubtreeAnchor,
-    text_input: TextInputHandle,
-    /// The field's text store, told when the rect moves (TSF's
-    /// `OnLayoutChange`) and given a chance each frame to report app edits.
-    /// Weak: the loop must not keep a disposed field's store alive.
-    store: std::rc::Weak<EditableTextStore>,
-    /// Per-attach liveness flag — see `EditableTextState::cursor_area_alive`'s
-    /// doc for why it is fresh per attach. Checked at the START of every
-    /// firing so a callback already queued when the attach ended dies
-    /// silently instead of resurrecting a stale loop or running alongside a
-    /// newer one.
-    alive: Rc<Cell<bool>>,
-    /// The last rect actually sent. Fresh per attach (never shared across
-    /// attaches, see `EditableTextState::init_state`'s IME focus listener) —
-    /// a brand-new IME session must always get the first rect, even at an
-    /// unchanged caret position.
-    last_sent: Rc<Cell<Option<Bounds<f64>>>>,
-}
-
-impl CursorAreaLoop {
-    /// Register the next firing. Every `schedule` failure is warned,
-    /// never silent: a loop that stops rescheduling without a diagnostic is
-    /// a candidate window stuck at (0, 0) with no signal anything is wrong.
-    fn schedule(self) {
-        let post_frame = self.post_frame.clone();
-        if let Err(error) = post_frame.schedule(move |_timing| self.fire()) {
-            tracing::warn!(
-                ?error,
-                "IME cursor-area tick could not be (re)scheduled; the platform \
-                 candidate window will stop following the caret"
-            );
-        }
-    }
-
-    fn fire(self) {
-        if !self.alive.get() {
-            return;
-        }
-        // The observer, the platform and diagnostics are other code: each
-        // runs though an earlier one failed, the loop is rescheduled, and the
-        // first failure is resumed after that.
-        let mut calls = OwnerCalls::new();
-        let store = self.store.upgrade();
-        if let Some(store) = &store {
-            calls.run(|| store.controller_changed());
-        }
-        // A `None` read is a transient miss (the anchored subtree unmounted
-        // mid-rebuild, or a transform is momentarily unavailable) — skip
-        // this firing's send but keep the loop alive. Only `alive == false`
-        // ever stops rescheduling.
-        if let Some(rect) = self.global_caret_rect()
-            && Some(rect) != self.last_sent.get()
-        {
-            match calls.run(|| self.text_input.set_cursor_area(rect)) {
-                Some(Err(error)) => {
-                    self.alive.set(false);
-                    calls.run(|| {
-                        tracing::warn!(
-                            ?error,
-                            "IME cursor-area tracking stopped because its presentation is unavailable"
-                        );
-                    });
-                    calls.resume();
-                    return;
-                }
-                Some(Ok(())) => {
-                    self.last_sent.set(Some(rect));
-                    if let Some(store) = &store {
-                        calls.run(|| store.layout_changed());
-                    }
-                }
-                None => {}
-            }
-        }
-        // A read the store answered `NoLayout` inside an edit session owes the
-        // input method a notification once layout exists, even when the rect
-        // is the one already sent.
-        if let Some(store) = &store {
-            calls.run(|| store.settle_owed_layout());
-        }
-        calls.run(|| self.schedule());
-        calls.resume();
-    }
-
-    /// The IME candidate window's current target rect in window-root-space
-    /// logical pixels: the anchored `RenderEditable`'s committed transform
-    /// to the render root (the text store's geometry uses the same one;
-    /// it equals `inner_anchor`'s, since `RenderSubtreeAnchor` lays its
-    /// child out at its own origin), applied to the editable's composing
-    /// region rect when one is active, falling back to its collapsed caret
-    /// rect otherwise (prefer the composing rect, fall back to the caret rect
-    /// when none is available). ADR-0030
-    /// upgrades this loop from the caret-rect-only reduction ADR-0030
-    /// originally landed.
-    ///
-    /// `None` also when the pipeline is checked out by a frame phase
-    /// (`with_editable_global` uses `try_with`): the loop fires as a
-    /// post-frame callback, after the pipeline is released, so this only
-    /// skips one firing's send instead of panicking, and the next firing
-    /// retries.
-    fn global_caret_rect(&self) -> Option<Bounds<f64>> {
-        let owner = self.pipeline_owner.as_ref()?;
-        with_editable_global(owner, &self.inner_anchor, |editable, to_root| {
-            let local_rect = editable
-                .rect_for_composing_range()
-                .unwrap_or_else(|| editable.caret_local_rect());
-            Some(bounds_from_rect(to_root.transform_rect(&local_rect)))
-        })
-    }
-}
 
 /// `Rect` (min/max corners) to `Bounds` (origin/size) — `PlatformTextInput::
 /// set_ime_cursor_area`'s parameter convention, matching `PlatformWindow::
@@ -2694,6 +2736,9 @@ struct EditableTextRenderView {
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,
+    /// The links shown touch handles follow the start (or the caret) and
+    /// the end under.
+    handle_links: (Option<LayerLink>, Option<LayerLink>),
 }
 
 impl EditableTextRenderView {
@@ -2702,7 +2747,7 @@ impl EditableTextRenderView {
         if let Some(style) = self.text_style.clone() {
             span = span.with_style(style);
         }
-        RenderEditable::new(span, TextDirection::Ltr)
+        let mut editable = RenderEditable::new(span, TextDirection::Ltr)
             .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_caret_byte_offset(self.caret_byte_offset)
@@ -2712,7 +2757,10 @@ impl EditableTextRenderView {
             .with_caret_color(self.caret_color)
             .with_selection(self.selection.clone())
             .with_selection_color(self.selection_color)
-            .with_composing_range(self.composing_range.clone())
+            .with_composing_range(self.composing_range.clone());
+        let (start, end) = self.handle_links;
+        let _ = editable.set_selection_handles(start, end);
+        editable
     }
 }
 
@@ -2746,6 +2794,8 @@ impl RenderView for EditableTextRenderView {
         impact |= render_object.set_selection(self.selection.clone());
         impact |= render_object.set_selection_color(self.selection_color);
         impact |= render_object.set_composing_range(self.composing_range.clone());
+        let (start, end) = self.handle_links;
+        impact |= render_object.set_selection_handles(start, end);
         impact
     }
 }
@@ -2789,6 +2839,7 @@ fn build_field_view(
     appearance: &FieldAppearance,
     inner_anchor: flui_objects::SubtreeAnchor,
     actions: &FieldSemanticsActions,
+    handles: &FieldHandles,
 ) -> BoxedView {
     // `enabled` is defensive here: `did_update_view` already unfocuses a
     // field that becomes disabled while focused, so `has_primary_focus`
@@ -2899,6 +2950,7 @@ fn build_field_view(
                 appearance.selection_style.inactive
             },
             text_style: appearance.text_style.clone(),
+            handle_links: handles.published_links(),
         },
     );
     semantics.child(field).boxed()

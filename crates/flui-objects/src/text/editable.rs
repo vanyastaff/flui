@@ -39,7 +39,7 @@ mod runs;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
-use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_painting::paint::Clip;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 use flui_painting::{
@@ -54,6 +54,7 @@ use flui_rendering::{
         BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
         PaintCx,
     },
+    layer::LayerLink,
     parent_data::BoxParentData,
     semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
@@ -110,6 +111,11 @@ pub struct RenderEditable {
     /// Fill for the selection highlight. Fully transparent by default so a
     /// caller that sets a selection without choosing a colour paints nothing.
     selection_color: Color,
+    /// The link the selection's start, or the caret while the selection is
+    /// collapsed, is published under for a handle that follows it.
+    start_handle: Option<LayerLink>,
+    /// The link the selection's end is published under.
+    end_handle: Option<LayerLink>,
 }
 
 impl RenderEditable {
@@ -139,6 +145,8 @@ impl RenderEditable {
             composing_range: None,
             selection: None,
             selection_color: Color::TRANSPARENT,
+            start_handle: None,
+            end_handle: None,
         }
     }
 
@@ -361,6 +369,66 @@ impl RenderEditable {
         }
     }
 
+    /// Publishes where the selection's ends sit, for handles that follow
+    /// them, as [`RenderParagraph::set_selection_handles`](crate::RenderParagraph::set_selection_handles)
+    /// does: a zero-width leader as tall as the caret at the selection's
+    /// start under `start` and at its end under `end`. While the selection
+    /// is collapsed the caret is published under `start` and nothing under
+    /// `end`. The leaders are painted inside the field's clip, so an end
+    /// scrolled out of the field is clipped out with its glyphs. `None`
+    /// publishes nothing for that end.
+    pub fn set_selection_handles(
+        &mut self,
+        start: Option<LayerLink>,
+        end: Option<LayerLink>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.start_handle == start && self.end_handle == end {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        let was_compositing = self.publishes_handles();
+        self.start_handle = start;
+        self.end_handle = end;
+        if was_compositing == self.publishes_handles() {
+            flui_rendering::RenderUpdateImpact::PAINT
+        } else {
+            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
+        }
+    }
+
+    fn publishes_handles(&self) -> bool {
+        self.start_handle.is_some() || self.end_handle.is_some()
+    }
+
+    /// Pushes a leader at each published end: the selection's two ends, or
+    /// the caret alone under the start link while the selection is
+    /// collapsed.
+    fn paint_handle_leaders(&self, ctx: &mut PaintCx<'_, Leaf>) {
+        let ends = match self.selection.as_ref() {
+            Some(range) if !range.is_empty() => [
+                (self.start_handle, TextPosition::downstream(range.start)),
+                (self.end_handle, TextPosition::upstream(range.end)),
+            ],
+            _ => [
+                (
+                    self.start_handle,
+                    TextPosition::downstream(self.safe_caret_offset(self.caret_byte_offset)),
+                ),
+                (None, TextPosition::downstream(0)),
+            ],
+        };
+        for (link, position) in ends {
+            let (Some(link), Some(caret)) = (link, self.caret_rect_at(position)) else {
+                continue;
+            };
+            ctx.with_transform(
+                Matrix4::translation(caret.left(), caret.top(), 0.0),
+                |ctx| {
+                    ctx.with_leader(link, Size::new(0.0, caret.height()), |_| {});
+                },
+            );
+        }
+    }
+
     /// Updates the caret byte position.
     pub fn set_caret_byte_offset(&mut self, offset: usize) -> flui_rendering::RenderUpdateImpact {
         let offset = self.safe_caret_offset(offset);
@@ -511,6 +579,29 @@ impl RenderEditable {
             Point::new(self.caret_offset.dx, self.caret_offset.dy),
             Size::new(self.caret_width, self.resolved_caret_height()),
         )
+    }
+
+    /// Where a caret at `position` (a byte offset into
+    /// [`Self::plain_text`]) would paint, in the same local, scrolled
+    /// coordinates as [`Self::caret_local_rect`]: what a handle following a
+    /// selection end measures. `None` before layout.
+    #[must_use]
+    pub fn caret_rect_at(&self, position: TextPosition) -> Option<Rect> {
+        if !self.painter.has_layout() {
+            return None;
+        }
+        let position = TextPosition {
+            offset: self.safe_caret_offset(position.offset),
+            ..position
+        };
+        let caret = self.painter.get_offset_for_caret(position);
+        let (x, y) = (caret.dx - self.scroll_x, caret.dy);
+        (x.is_finite() && y.is_finite()).then(|| {
+            Rect::from_origin_size(
+                Point::new(x, y),
+                Size::new(self.caret_width, self.resolved_caret_height()),
+            )
+        })
     }
 
     /// The byte offset in [`Self::plain_text`] that a point in this render
@@ -719,12 +810,27 @@ impl Diagnosticable for RenderEditable {
                 .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
         );
         properties.add("selection_color", format!("{:?}", self.selection_color));
+        properties.add(
+            "selection_handles",
+            format!(
+                "{:?}",
+                (
+                    self.start_handle.map(|link| link.id()),
+                    self.end_handle.map(|link| link.id()),
+                )
+            ),
+        );
     }
 }
 
 impl RenderBox for RenderEditable {
     type Arity = Leaf;
     type ParentData = BoxParentData;
+
+    /// A field that publishes its selection's ends pushes leader layers.
+    fn always_needs_compositing(&self) -> bool {
+        self.publishes_handles()
+    }
 
     fn perform_layout(
         &mut self,
@@ -870,6 +976,7 @@ impl RenderBox for RenderEditable {
         let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
         ctx.with_clip_rect(bounds, Clip::HardEdge, |ctx| {
             self.paint_visible_content(ctx);
+            self.paint_handle_leaders(ctx);
         });
     }
 }

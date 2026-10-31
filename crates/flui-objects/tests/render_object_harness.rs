@@ -2155,6 +2155,37 @@ fn harness_editable_paints_the_selection_behind_the_glyphs() {
     );
 }
 
+/// A field publishes the caret under the start link while its selection is
+/// collapsed, and both ends of a selection under their links, as a
+/// paragraph does; without links it pushes no leader.
+///
+/// Red-check: publish both ends whatever the selection (the collapsed
+/// field pushes two leaders).
+fn harness_editable_publishes_its_selection_ends_for_handles() {
+    let leaders = |selection: Option<std::ops::Range<usize>>, links: bool| {
+        let (start, end) = if links {
+            (Some(LayerLink::new()), Some(LayerLink::new()))
+        } else {
+            (None, None)
+        };
+        let mut editable = RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_caret_byte_offset(4)
+            .with_selection(selection);
+        let _ = editable.set_selection_handles(start, end);
+        let run = RenderTester::mount(box_node(editable))
+            .with_constraints(loose(160.0))
+            .run_frame();
+        run.structure()
+            .iter()
+            .filter(|layer| **layer == "Leader")
+            .count()
+    };
+    assert_eq!(leaders(None, true), 1, "the caret alone");
+    assert_eq!(leaders(Some(4..4), true), 1, "a collapsed selection");
+    assert_eq!(leaders(Some(0..4), true), 2, "both ends of a selection");
+    assert_eq!(leaders(Some(0..4), false), 0, "no links, no leaders");
+}
+
 // ------------------------------------------------------------------------
 // Composing-region underline (ADR-0030)
 // ------------------------------------------------------------------------
@@ -13150,6 +13181,10 @@ fn family_text_and_image() {
             (
                 "editable_paints_the_selection_behind_the_glyphs",
                 harness_editable_paints_the_selection_behind_the_glyphs,
+            ),
+            (
+                "editable_publishes_its_selection_ends_for_handles",
+                harness_editable_publishes_its_selection_ends_for_handles,
             ),
             (
                 "editable_composing_underline_paints_at_the_exact_multibyte_box",
