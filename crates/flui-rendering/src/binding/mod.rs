@@ -356,7 +356,7 @@ pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
 
 /// Prints a textual representation of the pipeline owner tree.
 ///
-/// When the owner has a root, this renders its typed snapshot ([`PipelineOwner::inspect`]) as
+/// When the owner has a root, this renders its typed snapshot ([`PipelineOwner::inspect`](crate::pipeline::PipelineOwner::inspect)) as
 /// the plain outline: each render object's own fields, with the committed geometry, offset and
 /// dirty flags the tree adds; otherwise it falls back to the owner's `Debug` representation.
 pub fn debug_dump_pipeline_owner_tree<B: RendererBinding + ?Sized>(binding: &B) -> String {

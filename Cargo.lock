@@ -1845,7 +1845,6 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
- "flui-macros",
  "flui-material",
  "flui-native",
  "flui-objects",
