@@ -40,6 +40,7 @@ pub(crate) mod headless;
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     windows,
     test
@@ -47,6 +48,8 @@ pub(crate) mod headless;
 pub(crate) mod host_queue;
 #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
 pub(crate) mod ime;
+#[cfg(any(wayland_host, test))]
+pub(crate) mod linux;
 pub(crate) mod sizing;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
