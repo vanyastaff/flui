@@ -1294,8 +1294,7 @@ pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
 
     let laid = mounted(SelectionArea::new(
         flui_widgets::RichText::new(TextSpan::with_children(vec![
-            TextSpan::new("Caf"),
-            TextSpan::new("e"),
+            TextSpan::new("Cafe"),
             TextSpan::new("\u{301} menu").with_link("app://menu"),
         ]))
         .on_link(|_cx, _link| {}),
