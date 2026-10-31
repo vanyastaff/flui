@@ -131,6 +131,10 @@ impl RebuildHandle {
     ///
     /// Inert when the handle is inert, and harmless when the element has since
     /// been unmounted — `build_scope` skips ids whose node is gone.
+    ///
+    /// Never unwinds when the frame-request hook fails: the failure is
+    /// reported, the rebuild stays queued and the frame request stays owed,
+    /// so code that schedules and then keeps working always finishes.
     pub fn schedule(&self, reason: RebuildReason) {
         if let Some(active) = &self.inner {
             active.scheduler.schedule(active.element, reason);

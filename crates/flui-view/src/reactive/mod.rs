@@ -1385,33 +1385,6 @@ mod tests {
         }
     }
 
-    struct ArmedValue {
-        name: &'static str,
-        drop_armed: Arc<std::sync::atomic::AtomicBool>,
-        equality_panics: bool,
-    }
-
-    impl PartialEq for ArmedValue {
-        fn eq(&self, other: &Self) -> bool {
-            assert!(
-                !(self.equality_panics || other.equality_panics),
-                "comparison probe"
-            );
-            self.name == other.name
-        }
-    }
-
-    impl Drop for ArmedValue {
-        fn drop(&mut self) {
-            if self
-                .drop_armed
-                .swap(false, std::sync::atomic::Ordering::Relaxed)
-            {
-                std::panic::panic_any(self.name);
-            }
-        }
-    }
-
     fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let reactive = Reactive::new();
@@ -1701,7 +1674,10 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
 
-    fn invalidation_panic_retains_a_successful_updaters_capture_bundle() {
+    /// A wake that fails while an update invalidates its readers is reported,
+    /// not unwound into the writer: the value is committed, the reader is
+    /// scheduled, and the updater and its captures end normally.
+    fn a_failing_wake_during_an_update_is_reported_not_unwound() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
         r.set_scheduler(ExternalBuildScheduler::from_parts(
@@ -1711,12 +1687,8 @@ mod tests {
         let signal = r.signal(0u8);
         let reader = ElementId::new(1);
         r.register_element_reader(signal.slot(), reader);
-        let capture_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let capture = ArmedValue {
-            name: "successful updater capture destructor probe",
-            drop_armed: Arc::clone(&capture_armed),
-            equality_panics: false,
-        };
+        let capture_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let capture = DropFlagged(Arc::clone(&capture_dropped));
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             signal.update(&w(&r), move |value| {
@@ -1725,15 +1697,25 @@ mod tests {
             })
         }));
 
-        let payload = outcome.expect_err("the invalidation panic must resume");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake probe"));
         assert!(
-            capture_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "opaque captures are retained once invalidation has failed"
+            matches!(outcome, Ok(Ok(()))),
+            "the failing wake is reported, not unwound into the writer"
+        );
+        assert!(
+            capture_dropped.load(std::sync::atomic::Ordering::Relaxed),
+            "the updater ended normally"
         );
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
         assert_eq!(scheduled(&inbox), vec![reader]);
-        capture_armed.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Records that it was dropped.
+    struct DropFlagged(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlagged {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     #[test]
@@ -1766,8 +1748,8 @@ mod tests {
                     updater_panic_keeps_priority_over_its_captures_destructor_panic as fn(),
                 ),
                 (
-                    "invalidation_panic_retains_a_successful_updaters_capture_bundle",
-                    invalidation_panic_retains_a_successful_updaters_capture_bundle as fn(),
+                    "a_failing_wake_during_an_update_is_reported_not_unwound",
+                    a_failing_wake_during_an_update_is_reported_not_unwound as fn(),
                 ),
             ],
         );
