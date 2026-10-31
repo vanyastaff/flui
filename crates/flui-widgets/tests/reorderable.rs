@@ -16,6 +16,7 @@ use flui_foundation::geometry::{Axis, Offset, Size};
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_painting::styling::Color;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
@@ -25,9 +26,9 @@ use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
-    Alternative, DecoratedBox, GestureAlternatives, GestureCommand, MenuSpec, Navigator,
-    NavigatorHandle, PageRoute, ReorderCause, ReorderIntent, ReorderPreview, ReorderableList,
-    SelectionArea, SingleActivator, SizedBox, Text, Urgency,
+    Alternative, DecoratedBox, DefaultFocusRingStyle, FocusRingStyle, GestureAlternatives,
+    GestureCommand, MenuSpec, Navigator, NavigatorHandle, PageRoute, ReorderCause, ReorderIntent,
+    ReorderPreview, ReorderableList, SelectionArea, SingleActivator, SizedBox, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -73,6 +74,8 @@ struct Shelf {
     shown: StateHandle<bool>,
     /// Whether the list scrolls horizontally.
     horizontal: StateHandle<bool>,
+    /// Whether the focus ring above the overlay has its second color.
+    ring: StateHandle<bool>,
     log: Rc<Log>,
 }
 
@@ -87,6 +90,7 @@ impl Shelf {
             ),
             shown: StateHandle::new(true),
             horizontal: StateHandle::new(false),
+            ring: StateHandle::new(false),
             log: Rc::default(),
         }
     }
@@ -98,6 +102,7 @@ impl Shelf {
             items: StateHandle::new(names),
             shown: StateHandle::new(true),
             horizontal: StateHandle::new(false),
+            ring: StateHandle::new(false),
             log: Rc::default(),
         }
     }
@@ -124,18 +129,44 @@ struct Desk(Shelf);
 
 impl View for Desk {
     fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
+        ElementKind::stateful(self)
     }
 }
 
-impl StatelessView for Desk {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+struct DeskState {
+    navigator: NavigatorHandle,
+    ring: StateHandle<bool>,
+}
+
+impl StatefulView for Desk {
+    type State = DeskState;
+
+    fn create_state(&self) -> DeskState {
         let navigator = NavigatorHandle::new();
         let shelf = self.0.clone();
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             ShelfList(shelf.clone()).into_view().boxed()
         }));
-        Navigator::new(navigator)
+        DeskState {
+            navigator,
+            ring: self.0.ring.clone(),
+        }
+    }
+}
+
+impl ViewState<Desk> for DeskState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.ring.bind(ctx);
+    }
+
+    /// The focus ring's style sits above the overlay, so a change of it
+    /// rebuilds what the overlay shows.
+    fn build(&self, _view: &Desk, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut style = FocusRingStyle::BUILT_IN;
+        if self.ring.with(|ring| *ring) {
+            style.outer = Color::rgb(0x00, 0x60, 0xC0);
+        }
+        DefaultFocusRingStyle::new(style, Navigator::new(self.navigator.clone()))
     }
 }
 
@@ -563,7 +594,8 @@ pub(crate) fn a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row() {
 }
 
 /// A drag of a row without a label shows a plate the row's size, so the drag
-/// is seen; the plate is gone when the drag ends.
+/// is seen, and keeps that size when the row is rebuilt during the drag; the
+/// plate is gone when the drag ends.
 pub(crate) fn a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size() {
     fn row_sized(laid: &LaidOut, id: RenderId, found: &mut usize) {
         if laid.try_size(id) == Some(Size::new(400.0, ROW)) {
@@ -587,6 +619,17 @@ pub(crate) fn a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size() {
     let (dragging_plates, dragging_sized) = count(&mut laid);
     assert_eq!(dragging_plates, plates + 1, "the drag shows one plate");
     assert!(dragging_sized > sized, "the plate is the row's size");
+    // The app rebuilds the list during the drag: the plate keeps its size.
+    shelf.items.update(|items| items[3] = "z".to_owned());
+    laid.pump();
+    shelf.ring.update(|ring| *ring = true);
+    laid.dispatch_pointer_move(row_at(1, HANDLE_X).0, row_at(1, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(
+        count(&mut laid),
+        (dragging_plates, dragging_sized),
+        "a rebuild keeps the plate"
+    );
     press(&laid, &SingleActivator::named(NamedKey::Escape));
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);

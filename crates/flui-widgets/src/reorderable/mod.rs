@@ -793,6 +793,7 @@ impl StatelessView for ReorderRow {
                 None => RowPlate {
                     list: Rc::clone(&self.list),
                     anchor: anchor.clone(),
+                    measured: Rc::default(),
                 }
                 .boxed(),
             },
@@ -925,6 +926,9 @@ impl StatelessView for ReorderRow {
 struct RowPlate {
     list: Rc<Shared>,
     anchor: SubtreeAnchor,
+    /// The row's size as last measured: a rebuild of the row during the
+    /// drag publishes it under a new anchor, and the plate keeps its size.
+    measured: Rc<std::cell::Cell<Option<Size>>>,
 }
 
 impl View for RowPlate {
@@ -935,7 +939,9 @@ impl View for RowPlate {
 
 impl StatelessView for RowPlate {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let Some(size) = self.list.row_size(&self.anchor) else {
+        let measured = self.list.row_size(&self.anchor).or(self.measured.get());
+        self.measured.set(measured);
+        let Some(size) = measured else {
             return SizedBox::shrink().boxed();
         };
         let style = DefaultFocusRingStyle::of(ctx);
