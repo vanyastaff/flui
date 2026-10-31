@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-31). Not implemented: the retention helpers in `flui-foundation::panic` and the crate-local retention sites still leak; see Migration.
 - **Date:** 2026-10-31
-- **Supersedes:** [ADR-0127](ADR-0127-exceptional-path-retention.md) §2–§4 (retaining user-owned values after a caught failure or while unwinding) and its hit-test metadata retention; [ADR-0119](ADR-0119-inert-panic-payload-retirement.md) in full (retaining opaque payloads); [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md) §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes.
+- **Supersedes:** [ADR-0127](ADR-0127-exceptional-path-retention.md) §2–§4 (retaining user-owned values after a caught failure or while unwinding) and its hit-test metadata retention; [ADR-0119](ADR-0119-inert-panic-payload-retirement.md) in full (retaining opaque payloads); [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md) §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes; [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §4 and [ADR-0272](ADR-0272-widgets-run-background-work-through-a-capability.md) §3–§4 only where they retain a payload, a capture or a failed future.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the boundary where a contained user panic ends up)
 
 ## Context and problem statement
