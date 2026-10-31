@@ -29,7 +29,7 @@ fn retain_failure(result: std::thread::Result<()>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 fn next_request() {
     let (mut request, completer) = TransferRequest::pending();

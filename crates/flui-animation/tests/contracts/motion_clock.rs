@@ -1576,7 +1576,7 @@ fn panic_in_listener_keeps_the_clock_monotone() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("first clock listener")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(
         now_after(&mut clock, ms(100)),
         ms(250),

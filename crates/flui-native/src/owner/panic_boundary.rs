@@ -214,7 +214,7 @@ fn contained<R>(
                     "an OS entry panicked"
                 );
             });
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             None
         }
     }

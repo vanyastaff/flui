@@ -2579,7 +2579,7 @@ impl<'a> PresentationCloseRecovery<'a> {
             Ok(value) => Some(value),
             Err(payload) => {
                 if self.preserving() {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 } else {
                     crate::lifecycle_state::preserve_first_lifecycle_panic(
                         &mut self.first,
@@ -2619,7 +2619,7 @@ impl<'a> PresentationCloseRecovery<'a> {
     fn finish(self) {
         if let Some(payload) = self.first {
             if std::thread::panicking() {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

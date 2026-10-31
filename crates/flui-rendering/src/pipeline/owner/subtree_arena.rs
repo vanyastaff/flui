@@ -1466,9 +1466,11 @@ unsafe fn layout_subtree_borrowed_impl(
                         }))
                     {
                         // Reporting is secondary; do not retire its opaque failure or report it again.
-                        drop(reporting_payload);
+                        flui_foundation::panic::discard_payload(reporting_payload);
                     }
-                    drop(std::mem::ManuallyDrop::into_inner(payload));
+                    flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
+                        payload,
+                    ));
                     return Err(crate::error::RenderError::poisoned(
                         debug_name,
                         crate::error::PoisonPhase::Layout,
@@ -2160,9 +2162,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                     }))
                 {
                     // Reporting is secondary; do not retire its opaque failure or report it again.
-                    drop(reporting_payload);
+                    flui_foundation::panic::discard_payload(reporting_payload);
                 }
-                drop(std::mem::ManuallyDrop::into_inner(payload));
+                flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
+                    payload,
+                ));
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,

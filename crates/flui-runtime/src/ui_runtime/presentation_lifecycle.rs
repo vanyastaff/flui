@@ -269,7 +269,7 @@ impl UiRuntime {
                         },
                         payload.as_ref(),
                     );
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
             }
             closes.due.extend(settled.close.map(|reason| (id, reason)));
@@ -753,7 +753,7 @@ impl UiRuntime {
         drop(lifecycle_windows);
         if let Some(payload) = first_panic {
             if std::thread::panicking() {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 resume_unwind(payload);
             }

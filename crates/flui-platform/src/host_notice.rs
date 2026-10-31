@@ -309,7 +309,7 @@ impl Drop for SessionEndBlock {
             // unwinding) into an abort; its payload is left alone rather
             // than dropped, which could panic in turn.
             if let Err(payload) = catch_unwind(AssertUnwindSafe(release)) {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

@@ -385,6 +385,43 @@ fn a_value_retired_after_a_caught_failure_is_destroyed_under_containment() {
     );
 }
 
+/// ADR-0281 §3: a later callback's payload whose destructor panics is
+/// discarded under containment, so the next callback still runs and the
+/// first failure is the one resumed.
+fn a_later_payload_with_a_panicking_destructor_is_contained() {
+    let hostile = Arc::new(AtomicUsize::new(0));
+    let ran = Arc::new(AtomicUsize::new(0));
+    let mut recovery = PanicRecovery::new();
+    recovery.run(|| panic!("first failure"));
+    let payload = HostileDrop(Arc::clone(&hostile));
+    recovery.run(move || std::panic::panic_any(payload));
+    recovery.run(|| {
+        ran.fetch_add(1, Ordering::Relaxed);
+    });
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        1,
+        "the payload was destroyed"
+    );
+    assert_eq!(ran.load(Ordering::Relaxed), 1, "the next callback ran");
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+        .expect_err("the first failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
+
+    let folded = Arc::new(AtomicUsize::new(0));
+    let mut first = flui_foundation::panic::FirstPanic::default();
+    first.contain(|| panic!("first failure"));
+    let payload = HostileDrop(Arc::clone(&folded));
+    first.contain(move || std::panic::panic_any(payload));
+    assert_eq!(
+        folded.load(Ordering::Relaxed),
+        1,
+        "fold destroyed the later payload"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.resume()))
+        .expect_err("the first failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
+}
 #[test]
 fn recovery_preserves_provenance_and_owned_failure() {
     crate::run_table(&[
@@ -399,6 +436,10 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "retirement after a caught failure",
             a_value_retired_after_a_caught_failure_is_destroyed_under_containment,
+        ),
+        (
+            "later payload with a panicking destructor",
+            a_later_payload_with_a_panicking_destructor_is_contained,
         ),
         (
             "unproved retirement",

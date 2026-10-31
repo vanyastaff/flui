@@ -91,7 +91,7 @@ pub(super) fn preserve_first_failure(
     if let Err(payload) = result {
         custody.signal.set(true);
         if first.is_some() {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             *first = Some(payload);
         }

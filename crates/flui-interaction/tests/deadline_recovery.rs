@@ -1629,7 +1629,7 @@ fn owner_deadline_recovery_matrix() {
             if first_failure.is_none() {
                 first_failure = Some(payload);
             } else {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

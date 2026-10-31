@@ -98,7 +98,7 @@ impl RuntimeLocals {
                 match first {
                     None => first = Some(payload),
                     // The first failure goes on; a later one is dropped (ADR-0281).
-                    Some(_) => drop(payload),
+                    Some(_) => flui_foundation::panic::discard_payload(payload),
                 }
             }
         }

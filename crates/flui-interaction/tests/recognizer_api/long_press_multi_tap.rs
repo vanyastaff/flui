@@ -703,7 +703,7 @@ fn held_press_and_multi_tap_owner_contracts() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(case) {
             failed.push(name);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");

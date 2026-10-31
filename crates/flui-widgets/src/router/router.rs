@@ -600,7 +600,7 @@ impl<R: Routable> RouterShared<R> {
             Err(payload) => {
                 drop(delivery);
                 if std::thread::panicking() {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     return;
                 }
                 std::panic::resume_unwind(payload);

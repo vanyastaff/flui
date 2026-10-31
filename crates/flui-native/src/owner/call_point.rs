@@ -122,7 +122,7 @@ impl Failure {
                 "a handler panicked; the platform carries on without its answer"
             );
         });
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

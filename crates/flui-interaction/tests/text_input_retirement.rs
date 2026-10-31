@@ -203,7 +203,7 @@ fn store_failure_wins_callback_failure_and_the_owner_recovers() {
         catch_unwind(AssertUnwindSafe(|| handle.detach(token))).expect_err("retirement panics");
     // The payload is typed, so the winner is told apart by its type.
     let store_won = failure.is::<StoreFailure>();
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         store_won,
         "the store retires first and its opaque payload wins"
@@ -619,7 +619,7 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
             flui_foundation::panic::payload_text(&*failure),
             Some("retired client callback")
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert_eq!(
             *released.lock(),
             Some(false),
@@ -944,7 +944,7 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             failed.borrow_mut().push(name);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(
@@ -1009,7 +1009,7 @@ fn callback_after_a_failed_store_is_retained() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("store retirement")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
@@ -1064,7 +1064,7 @@ fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("rejected store retirement")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
     assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     assert_eq!(handle.attach(client()), Err(TextInputError::Closed));
@@ -1087,7 +1087,7 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("outer failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
     assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
     assert_eq!(*platform.allowed.lock(), [true, false]);

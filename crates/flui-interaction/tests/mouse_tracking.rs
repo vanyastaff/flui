@@ -1792,7 +1792,7 @@ fn run_rows(table: &str, rows: &[(&str, fn())]) {
     let mut failures = Vec::new();
     for &(name, case) in rows {
         if let Err(payload) = catch_unwind(case) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             failures.push(name);
         }
     }

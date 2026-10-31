@@ -15,13 +15,13 @@ fn report(payload: &(dyn Any + Send), context: &'static str) {
             "frame completion delivery failed"
         );
     })) {
-        drop(secondary);
+        flui_foundation::panic::discard_payload(secondary);
     }
 }
 
 pub(crate) fn retain_reported(payload: Payload, context: &'static str) {
     report(payload.as_ref(), context);
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 
 pub(crate) struct WakeBatch<'a> {
@@ -62,7 +62,7 @@ impl<'a> WakeBatch<'a> {
         if self.first.is_none() {
             self.first = Some(payload);
         } else {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -92,7 +92,7 @@ impl<'a> WakeBatch<'a> {
             if propagate && !std::thread::panicking() {
                 std::panic::resume_unwind(payload);
             }
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

@@ -150,7 +150,7 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
                 flui_foundation::panic::payload_text(failure.as_ref()),
                 Some("vsync retirement first")
             );
-            drop(failure);
+            flui_foundation::panic::discard_payload(failure);
         } else {
             assert!(result.is_ok());
         }

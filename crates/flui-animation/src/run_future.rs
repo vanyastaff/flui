@@ -124,10 +124,10 @@ fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPaylo
     if first.is_none() {
         *first = Some(payload);
     } else {
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     if let Err(secondary) = reported {
-        drop(secondary);
+        flui_foundation::panic::discard_payload(secondary);
     }
 }
 
@@ -151,7 +151,7 @@ fn invoke_contained<T>(
 fn finish_delivery(first: Option<PanicPayload>) {
     if let Some(payload) = first {
         if std::thread::panicking() {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             std::panic::resume_unwind(payload);
         }

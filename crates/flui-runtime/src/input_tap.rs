@@ -320,7 +320,7 @@ impl TapState {
             }
             first
         };
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
         let failure = message
             .as_deref()
             .unwrap_or("a panic without a text payload");
@@ -332,7 +332,7 @@ impl TapState {
             }
         }));
         if let Err(payload) = traced {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 

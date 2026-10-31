@@ -173,7 +173,7 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
         1,
         "the later envelope is retained"
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
 }
 
 fn terminal_retirement_competition() {
@@ -274,7 +274,7 @@ fn terminal_retirement_preserves_incoming_unwind() {
             0,
             "opaque captures remain retained"
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
     }
 }
 
@@ -339,7 +339,7 @@ fn value_terminal_retirement_preserves_the_first_failure() {
         );
         assert_eq!(value_drops.load(Ordering::SeqCst), usize::from(!extract));
         assert_eq!(listener_drops.load(Ordering::SeqCst), usize::from(extract));
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
     }
 }
 
@@ -370,7 +370,7 @@ fn value_retirement_failure_releases_the_shared_channel() {
         flui_foundation::panic::payload_text(&*failure),
         Some("value retirement failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     alias.notify();
     assert_eq!(calls.load(Ordering::SeqCst), 1, "the clone still notifies");
     assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
@@ -415,7 +415,7 @@ fn value_terminal_retirement_preserves_incoming_unwind() {
     );
     assert_eq!(value_drops.load(Ordering::SeqCst), 0);
     assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
 }
 
 fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {

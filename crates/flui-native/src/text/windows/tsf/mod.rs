@@ -213,7 +213,7 @@ fn log_failure(payload: Box<dyn Any + Send>) {
             "application code a TSF document's teardown reached panicked"
         );
     });
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
     // A failure the diagnostic raised is retained with the scope.
     drop(calls);
 }
@@ -284,7 +284,7 @@ impl TextServices {
         if let Err(payload) = catch_unwind(|| {
             tracing::debug!(target: "flui_native::tsf", client_id, "ITfThreadMgr activated");
         }) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         Ok(services)
     }
@@ -430,7 +430,7 @@ impl TextServices {
             *failure = Some(payload);
         } else {
             drop(failure);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -871,7 +871,7 @@ impl Drop for TextServices {
         if let Some((payload, recovery)) = self.take_failure() {
             if std::thread::panicking() {
                 drop(recovery);
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 let _recovery = recovery;
                 resume_unwind(payload);

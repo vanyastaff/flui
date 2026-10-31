@@ -557,7 +557,7 @@ impl GestureBinding {
             let woken = catch_unwind(AssertUnwindSafe(|| self.request_hover_refresh()));
             if let Err(payload) = woken {
                 if outcome.is_err() || later_failure.is_some() {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 } else {
                     later_failure = Some(payload);
                 }
@@ -609,7 +609,7 @@ impl GestureBinding {
             self.close.leave();
             if let Err(payload) = retired {
                 if failed {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 } else {
                     failed = true;
                     first = Some(payload);

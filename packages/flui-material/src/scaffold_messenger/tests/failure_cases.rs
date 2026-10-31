@@ -376,7 +376,7 @@ pub(super) fn run() {
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             failures.push(name);
-            drop(payload);
+            flui_sdk::foundation::panic::discard_payload(payload);
         }
     }
     assert!(failures.is_empty(), "failed Messenger cases: {failures:?}");

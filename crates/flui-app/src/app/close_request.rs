@@ -524,7 +524,7 @@ impl CloseRequestRouter {
                 "close-request handler panicked; vetoing the close (a panicking handler cannot \
                  be read as consent to discard unsaved work)"
             );
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             CloseResponse::KeepOpen
         })
     }
@@ -575,7 +575,7 @@ impl CloseRequestRouter {
                     );
                     // Kept, not dropped: a payload whose destructor panics
                     // must not overturn the refusal on its way out.
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     return CloseResponse::KeepOpen;
                 }
             }

@@ -551,7 +551,7 @@ impl X11Loop {
                             self.windows.event(&event);
                         }))
                     {
-                        drop(second);
+                        flui_foundation::panic::discard_payload(second);
                     }
                     std::panic::resume_unwind(payload);
                 }

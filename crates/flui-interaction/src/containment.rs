@@ -77,7 +77,7 @@ impl RoutePanic {
 impl Retain for RoutePanic {
     /// Retain a failure already superseded or reported (ADR-0119).
     fn retain(self) {
-        drop(self.payload);
+        flui_foundation::panic::discard_payload(self.payload);
     }
 }
 

@@ -432,7 +432,7 @@ impl ObserverHub {
                     *first = Some(payload);
                 } else {
                     drop(first);
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
                 EventTime::from_nanos(0)
             }
@@ -557,7 +557,7 @@ impl ObserverHub {
                 Ok(()) => drop(window),
                 Err(payload) => {
                     Owned(window).retain();
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
             }
         }
@@ -588,7 +588,7 @@ impl Failures {
             self.first = Some(payload);
         } else {
             self.later += 1;
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -608,9 +608,9 @@ impl Failures {
                 "a gesture observer panicked; it stays registered and later observations continue"
             );
         })) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
-        drop(first);
+        flui_foundation::panic::discard_payload(first);
     }
 }
 
@@ -637,7 +637,7 @@ impl Retire {
         }
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(observer))) {
             self.failed.set(self.failed.get() + 1);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

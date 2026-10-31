@@ -45,12 +45,29 @@ pub fn is_internal_invariant(text: &str) -> bool {
     text.starts_with("BUG:")
 }
 
+/// Drop a caught panic payload that is not propagated.
+///
+/// A payload's destructor is user code that runs after its failure was
+/// caught, so it runs under containment (ADR-0281 §3): if it panics, that
+/// panic's payload is discarded the same way, and the caller's boundary keeps
+/// its answer and its first failure. A field of the payload that panics while
+/// another field's destructor unwinds still aborts, as in std (ADR-0281 §1).
+pub fn discard_payload(payload: Box<dyn Any + Send>) {
+    let mut pending = Some(payload);
+    while let Some(payload) = pending.take() {
+        if let Err(next) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+        {
+            pending = Some(next);
+        }
+    }
+}
+
 /// The first panic of a run of callbacks, kept while the rest still run.
 ///
 /// Delivery to several receivers must not stop at the first that panics, and
 /// must not hide it: [`contain`](Self::contain) runs each one, the first
-/// payload is held, later payloads are dropped (a payload destructor that
-/// panics while the thread unwinds aborts, as in std: ADR-0281), and
+/// payload is held, later payloads are discarded under containment
+/// ([`discard_payload`]), and
 /// [`resume`](Self::resume) raises the first once everything has run.
 #[derive(Default)]
 pub struct FirstPanic(Option<Box<dyn Any + Send>>);
@@ -81,19 +98,19 @@ impl FirstPanic {
         }
     }
 
-    /// Hold `payload` unless an earlier panic is held; drop it otherwise.
+    /// Hold `payload` unless an earlier panic is held; discard it otherwise.
     pub fn record(&mut self, payload: Box<dyn Any + Send>) {
         Self::fold(&mut self.0, Some(payload));
     }
 
     /// Fold `next` into `first`: the first payload stays, a later one is
-    /// dropped.
+    /// discarded under containment.
     pub fn fold(first: &mut Option<Box<dyn Any + Send>>, next: Option<Box<dyn Any + Send>>) {
         if let Some(payload) = next {
             if first.is_none() {
                 *first = Some(payload);
             } else {
-                drop(payload);
+                discard_payload(payload);
             }
         }
     }
@@ -355,7 +372,7 @@ impl PanicRecovery {
             && let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| report(&competing)))
         {
-            drop(payload);
+            discard_payload(payload);
         }
         self.finish();
     }
@@ -366,7 +383,7 @@ impl PanicRecovery {
                 std::panic::resume_unwind(payload);
             }
             Some(CapturedFailure::InheritedAnnotation { payload, .. }) => {
-                drop(payload);
+                discard_payload(payload);
             }
             None => {}
         }
@@ -429,7 +446,7 @@ impl RecoveryScope<'_> {
                     .unwrap_or("<non-string panic payload>")
                     .to_owned(),
             );
-            drop(payload);
+            discard_payload(payload);
         } else {
             self.owner.first = Some(match captured {
                 CapturedFailure::Authoritative { payload, class } if self.owner.incoming => {

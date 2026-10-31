@@ -512,7 +512,7 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             }));
             if let Err(payload) = updated {
                 match first {
-                    Some(_) => drop(payload),
+                    Some(_) => flui_foundation::panic::discard_payload(payload),
                     None => first = Some(payload),
                 }
             }

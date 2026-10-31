@@ -908,7 +908,7 @@ fn terminal_owner_matrix(kind: TerminalOwner) {
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some("terminal first")
             );
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             assert!(outcome.is_ok());
         }
@@ -1019,7 +1019,7 @@ fn driven_terminal_cancels_before_retiring_callback() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("driven first")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(run.is_canceled());
     assert!(matches!(
         observer.forward(),
@@ -1044,7 +1044,7 @@ fn driven_terminal_cancels_before_retiring_callback() {
         flui_foundation::panic::payload_text(&*failure),
         Some("primary driven continuation")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(vsync.is_empty());
     assert!(run.is_canceled());
     assert!(matches!(
@@ -1222,7 +1222,7 @@ fn parent_subscriptions_detach_all_after_failure() {
                 "value removal"
             })
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert!(parent.values.lock().expect("parent values").is_empty());
         assert!(parent.statuses.lock().expect("parent statuses").is_empty());
         assert_eq!(
@@ -1285,7 +1285,7 @@ fn split_owned_curves_retire_independently() {
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some("split first")
             );
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             assert!(failure.is_ok());
         }
@@ -1355,7 +1355,7 @@ fn split_partial_clone_failure_drops_the_partial_clone() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("split clone failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(split.transform(0.25), 0.25, "original remains usable");
     drop(split);
     assert_eq!(
@@ -1384,7 +1384,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(
         *drops.lock().expect("constructor custody"),
         vec!["constructor curve"]
@@ -1413,7 +1413,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         parent
             .values
@@ -1438,7 +1438,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         current
             .values
@@ -1481,7 +1481,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent value failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
 
     let old = terminal_parent(false);
     let proxy = ProxyAnimation::new(old.clone());
@@ -1502,7 +1502,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent status failure")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     old.fail_status.store(false, Ordering::SeqCst);
     assert_eq!(proxy.value(), 0.5);
     drop(proxy);
@@ -1625,7 +1625,7 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("serde curve retirement")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("incoming split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -1637,7 +1637,7 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("serde incoming")
     );
-    drop(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
 
     let split =

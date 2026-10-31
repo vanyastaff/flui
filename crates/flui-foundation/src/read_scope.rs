@@ -418,10 +418,10 @@ fn finish_read<R>(
     let outcome = match out {
         Some(Ok(Err(payload))) => {
             if let Err(secondary) = graph_outcome {
-                drop(secondary);
+                crate::panic::discard_payload(secondary);
             }
             if let Err(secondary) = disposed {
-                drop(secondary);
+                crate::panic::discard_payload(secondary);
             }
             Err(payload)
         }
@@ -443,7 +443,7 @@ fn finish_read<R>(
             Err(payload) => {
                 discard_secondary(result);
                 if let Err(secondary) = disposed {
-                    drop(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -463,7 +463,7 @@ fn finish_read<R>(
             }
             Err(payload) => {
                 if let Err(secondary) = disposed {
-                    drop(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -486,7 +486,7 @@ fn finish_read<R>(
             }
             Err(payload) => {
                 if let Err(secondary) = disposed {
-                    drop(secondary);
+                    crate::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -525,7 +525,7 @@ fn finish_subscription<R>(
         },
         Err(payload) => {
             if let Some(Err(secondary)) = subscription {
-                drop(secondary);
+                crate::panic::discard_payload(secondary);
             }
             std::panic::resume_unwind(payload)
         }

@@ -179,7 +179,7 @@ fn retire_outside_delivery(outgoing: Option<Observer>) {
             message = flui_foundation::panic::payload_text(payload.as_ref()),
             "a retired haptics observer panicked while it was dropped"
         );
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

@@ -1233,7 +1233,7 @@ fn dispatch_native_inputs(inputs: Vec<(Rc<dyn LoopWindow>, NativeDispatch)>) {
         }));
         if let Err(payload) = result {
             if first.is_some() {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 first = Some(payload);
             }

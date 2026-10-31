@@ -24,7 +24,7 @@ fn run_rows(rows: &[(&str, fn())]) {
         if let Err(payload) = catch_unwind(row) {
             eprintln!("row `{name}` failed");
             failed.push(name);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(failed.is_empty(), "failed rows: {failed:?}");

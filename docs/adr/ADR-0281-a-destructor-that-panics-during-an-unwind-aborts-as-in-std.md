@@ -54,10 +54,13 @@ turns a rule written at every drop site into ordinary destruction.
 retain (`std::mem::forget`, `ManuallyDrop` without a release) a user-owned value or a panic
 payload to prevent it. `std::thread::panicking()` is no longer a reason to skip a destructor.
 
-§2. **Panic payloads are dropped normally.** A payload that is not propagated with
-`resume_unwind` is dropped at the place that decided not to propagate it. `payload_text` keeps
-borrowing it for diagnostics. `retain_opaque_payload` is deleted, and `FirstPanic::fold` drops a
-later payload instead of retaining it.
+§2. **Panic payloads are destroyed, under containment.** A payload that is not propagated with
+`resume_unwind` is destroyed at the place that decided not to propagate it, with
+`flui_foundation::panic::discard_payload`: the failure is already caught, so the payload's
+destructor is user code after a caught failure (§3), and a panic it raises is discarded the same
+way instead of escaping the boundary that caught the first one. `payload_text` keeps borrowing
+it for diagnostics. `retain_opaque_payload` is deleted, and `FirstPanic::fold` discards a later
+payload instead of retaining it.
 
 §3. **After a caught failure, a container keeps destroying what it withdrew.** It still
 withdraws each value and releases its borrows and locks first (ADR-0127 §1 stands). Each
@@ -94,7 +97,8 @@ the owner-turn boundary of ADR-0258.
 - `PanicRecovery::retire` and `RecoveryScope::retire` have no `mem::forget`. The table test
   `recovery_preserves_provenance_and_owned_failure` in `flui-foundation` (row "retirement
   after a caught failure") drops a retired value after a caught failure and keeps the first
-  failure when its destructor panics.
+  failure when its destructor panics; row "later payload with a panicking destructor" discards a
+  payload whose destructor panics and still runs the next callback.
 - Until the migration ends, `rg 'thread::panicking\(\)' crates packages src` counts the sites
   still to remove. A new one is a review finding against this ADR.
 

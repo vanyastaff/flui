@@ -511,11 +511,13 @@ impl<P: Protocol> RenderEntry<P> {
                             }))
                         {
                             // Reporting is secondary; do not retire its opaque failure or report it again.
-                            drop(reporting_payload);
+                            flui_foundation::panic::discard_payload(reporting_payload);
                         }
                         // The reporting borrow has ended. Release known text
                         // payloads; arbitrary destruction remains retained.
-                        drop(std::mem::ManuallyDrop::into_inner(payload));
+                        flui_foundation::panic::discard_payload(
+                            std::mem::ManuallyDrop::into_inner(payload),
+                        );
                         Err(crate::error::RenderError::poisoned(
                             debug_name,
                             crate::error::PoisonPhase::Layout,

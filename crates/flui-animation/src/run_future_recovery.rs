@@ -56,7 +56,7 @@ fn assert_failure(result: std::thread::Result<()>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 fn assert_next_run() {
     let (completer, mut future) = AnimationRunFuture::pending();

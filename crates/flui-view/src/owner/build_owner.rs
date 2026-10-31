@@ -2999,13 +2999,13 @@ fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
     if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
     {
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
         std::mem::forget(observer);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
         }));
         if let Err(payload) = reported {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

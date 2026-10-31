@@ -159,7 +159,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
             Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
             Ok(Poll::Pending) => Poll::Pending,
             Err(payload) => {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // A failed future may own hostile captures. Do not run its
                 // destruction after containing its poll failure.
                 std::mem::forget(self.inner.take());
@@ -173,7 +173,7 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 // evidence or strand a worker's accepted tail.
 pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -393,7 +393,7 @@ impl TaskSpawner {
                     let _ = report.try_send(TaskOutcome::Completed(value));
                 }
                 Err(payload) => {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     let _ = report.try_send(TaskOutcome::Panicked);
                     contain_lifecycle_diagnostic(|| {
                         tracing::error!(
@@ -715,7 +715,7 @@ where
                         let retirement =
                             std::panic::catch_unwind(AssertUnwindSafe(|| drop(retired)));
                         if let Err(payload) = retirement {
-                            drop(payload);
+                            flui_foundation::panic::discard_payload(payload);
                             contain_lifecycle_diagnostic(|| {
                                 tracing::error!(
                                     worker = name,
@@ -734,7 +734,7 @@ where
                     }
                 }
                 Err(payload) => {
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     contain_lifecycle_diagnostic(|| {
                         tracing::error!(
                             worker = name,
@@ -1315,7 +1315,7 @@ pub(crate) struct PreparedService {
 impl PreparedService {
     pub(crate) fn refuse(self) {
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(self))) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -1351,7 +1351,7 @@ impl ServiceAdmission {
         {
             Ok(future) => future,
             Err(payload) => {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
                 contain_lifecycle_diagnostic(|| {
                     tracing::error!(
                         service = definition.name,

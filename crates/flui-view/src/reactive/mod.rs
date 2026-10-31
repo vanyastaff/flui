@@ -940,7 +940,7 @@ impl Reactive {
             Err(payload) => {
                 std::mem::forget(f);
                 if let Err(secondary) = finalized {
-                    drop(secondary);
+                    flui_foundation::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -1001,7 +1001,7 @@ impl Reactive {
                     std::mem::forget(f);
                     discard_secondary(result);
                     if let Err(secondary) = invalidated {
-                        drop(secondary);
+                        flui_foundation::panic::discard_payload(secondary);
                     }
                     std::panic::resume_unwind(payload)
                 }
@@ -1029,10 +1029,10 @@ impl Reactive {
             Err(payload) => {
                 std::mem::forget(f);
                 if let Err(secondary) = finalized {
-                    drop(secondary);
+                    flui_foundation::panic::discard_payload(secondary);
                 }
                 if let Err(secondary) = invalidated {
-                    drop(secondary);
+                    flui_foundation::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -1069,7 +1069,7 @@ impl ReadGraph for Reactive {
             },
             Err(payload) => {
                 if let Err(secondary) = finalized {
-                    drop(secondary);
+                    flui_foundation::panic::discard_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -1104,7 +1104,7 @@ fn retain_first_panic(first: &mut Option<Box<dyn Any + Send>>, outcome: std::thr
         if first.is_none() {
             *first = Some(payload);
         } else {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -1269,7 +1269,7 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         if let Some(payload) = first {
             discard_secondary(retired);
             if let Err(secondary) = invalidated {
-                drop(secondary);
+                flui_foundation::panic::discard_payload(secondary);
             }
             std::panic::resume_unwind(payload);
         }

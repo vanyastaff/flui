@@ -1728,7 +1728,7 @@ impl ElementTree {
             payload.as_ref(),
             "running an unmount hook",
         );
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     /// Release every inherited edge and lifecycle marker on permanent teardown.
     fn unmount_inherited_dependencies(

@@ -147,7 +147,7 @@ fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
             if first.is_none() {
                 first = Some(payload);
             } else {
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

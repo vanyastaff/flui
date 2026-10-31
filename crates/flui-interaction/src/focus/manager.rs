@@ -1854,7 +1854,7 @@ mod tests {
             let first = outcome.err().map(|payload| {
                 let text =
                     flui_foundation::panic::payload_text(payload.as_ref()).map(str::to_owned);
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
                 text
             });
             let detached = nodes.iter().all(|node| !node.is_attached());
@@ -2127,7 +2127,7 @@ mod tests {
                         flui_foundation::panic::payload_text(payload.as_ref()),
                         Some("first rejected capture retirement")
                     );
-                    drop(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 } else {
                     outcome.expect("healthy rejected capture destruction succeeds");
                 }

@@ -51,7 +51,7 @@ fn text_of(payload: Box<dyn std::any::Any + Send>) -> String {
     let text = flui_foundation::panic::payload_text(&*payload)
         .unwrap_or("an opaque payload")
         .to_owned();
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
     text
 }
 

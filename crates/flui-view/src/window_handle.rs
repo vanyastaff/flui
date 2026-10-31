@@ -316,7 +316,7 @@ impl Drop for WindowSource {
         let mut first = None;
         self.states.release(&mut first);
         if let Some(payload) = first {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

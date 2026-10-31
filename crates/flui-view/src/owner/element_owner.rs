@@ -638,7 +638,7 @@ impl ElementOwner<'_> {
                 "lifecycle hook panicked; contained"
             );
         })) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -657,7 +657,7 @@ impl ElementOwner<'_> {
                 "lifecycle hook panicked; recovery transaction pending"
             );
         })) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         StagedRecoveredPanic::new(panic)
     }

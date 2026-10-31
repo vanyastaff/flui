@@ -211,7 +211,7 @@ impl SemanticsActionInvocation {
                             if first.is_none() {
                                 first = Some(payload);
                             } else {
-                                drop(payload);
+                                flui_foundation::panic::discard_payload(payload);
                             }
                         }
                     }
@@ -1761,7 +1761,7 @@ impl SemanticsOwner {
                 // The sink is the adapter's: its panic, which the panic hook
                 // has reported, is contained before anything else runs, and
                 // nothing is announced in its place, which would speak twice.
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
         delivered.unwrap_or(0)

@@ -279,9 +279,9 @@ fn panicked(payload: Box<dyn std::any::Any + Send>) -> BackgroundError {
             "background work panicked"
         );
     }));
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
     if let Err(diagnostic) = report {
-        drop(diagnostic);
+        flui_foundation::panic::discard_payload(diagnostic);
     }
     BackgroundError::Panicked
 }

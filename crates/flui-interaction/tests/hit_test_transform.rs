@@ -419,7 +419,7 @@ fn hit_test_transform_admission() {
         ),
     ] {
         if let Err(payload) = catch_unwind(case) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             failures.push(name);
         }
     }
@@ -440,7 +440,7 @@ fn hit_test_offset_admission() {
         ),
     ] {
         if let Err(payload) = catch_unwind(case) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             failures.push(name);
         }
     }

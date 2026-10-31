@@ -426,7 +426,7 @@ fn remember_completion_failure(first: &mut CompletionFailure, result: std::threa
         if first.is_none() {
             *first = Some(payload);
         } else {
-            drop(payload);
+            flui_sdk::foundation::panic::discard_payload(payload);
         }
     }
 }

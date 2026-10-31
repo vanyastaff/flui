@@ -851,7 +851,7 @@ where
                 payload.as_ref(),
                 "disposing StatefulElement",
             );
-            drop(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
     }
 
@@ -923,7 +923,7 @@ where
                 payload.as_ref(),
                 "deactivating StatefulElement",
             );
-            drop(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
     }
 
@@ -1227,7 +1227,7 @@ where
                 payload.as_ref(),
                 "unmounting the render object of RenderElement",
             );
-            drop(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,

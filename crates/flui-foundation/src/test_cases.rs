@@ -18,7 +18,7 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
                 })
                 .unwrap_or_else(|| "non-string panic payload".to_owned());
             failures.push(format!("case `{name}` failed: {message}"));
-            drop(payload);
+            crate::panic::discard_payload(payload);
         }
     }
     assert!(

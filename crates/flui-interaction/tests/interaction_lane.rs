@@ -4739,7 +4739,7 @@ fn pointer_route_retirement_reenters_and_preserves_the_next_contact() {
     let mut failures = Vec::new();
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
             failures.push(name);
         }
     }
@@ -6165,7 +6165,7 @@ fn reentrant_presentation_close_stops_snapshotted_callbacks() {
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
             failed.push(name);
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(failed.is_empty(), "failed cases: {failed:?}");
@@ -6368,7 +6368,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
             Some("reentrant close callback"),
             "{kind}"
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert_eq!(
             dropped.get(),
             None,

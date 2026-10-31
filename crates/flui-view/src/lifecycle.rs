@@ -327,7 +327,7 @@ impl Drop for LifecycleSource {
         .err();
         preserve(&mut first, failure);
         if let Some(payload) = first {
-            drop(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

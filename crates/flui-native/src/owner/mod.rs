@@ -660,7 +660,7 @@ impl WindowRequest {
                         .unwrap_or("non-string panic payload")
                 );
                 panic_boundary::contain_owner_callback(|| tracing::error!("{message}"));
-                drop(payload);
+                flui_foundation::panic::discard_payload(payload);
                 Err(OpenWindowError::Backend { message })
             }
         }

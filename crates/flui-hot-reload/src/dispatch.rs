@@ -200,7 +200,7 @@ mod tests {
                 register_request_rebuild_with_counter(|| panic!("rejected hook ran"), &counter)
             }))
             .expect_err("exhausted allocator must permanently refuse");
-            drop(failure);
+            flui_foundation::panic::discard_payload(failure);
         }
         drop(first);
         request_rebuild();
@@ -226,7 +226,7 @@ mod tests {
                 message.starts_with("BUG: rebuild hook generation capacity exhausted")
             })
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert_eq!(
             drops.load(Ordering::Relaxed),
             0,
@@ -295,7 +295,7 @@ mod tests {
             Some("replaced capture destruction"),
             "the destructor failure propagates"
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert!(
             REQUEST_REBUILD.lock().hook.is_none(),
             "final-generation hook is withdrawn with its unwound guard"

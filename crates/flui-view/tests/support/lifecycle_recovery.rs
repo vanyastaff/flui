@@ -44,7 +44,7 @@ fn assert_first(payload: Box<dyn std::any::Any + Send>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    drop(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 
 fn cancelled_failure(opaque_payload: bool, terminal: bool) {
@@ -85,7 +85,7 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     let payload = catch_unwind(AssertUnwindSafe(|| source.drain()))
         .expect_err("body failure propagates after delivery");
     if opaque_payload {
-        drop(payload);
+        flui_foundation::panic::discard_payload(payload);
     } else {
         assert_first(payload, "lifecycle body first");
     }
