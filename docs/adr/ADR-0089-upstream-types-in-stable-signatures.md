@@ -1,6 +1,9 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
 - **Status:** Proposed
+- **Superseded-by:** proposed [ADR-0284](ADR-0284-ui-runtimes-may-have-dedicated-owners.md),
+  effective only on its acceptance, for §6's shrinking transfer-position list solely at the
+  dedicated launch factory bound. No allowlist exception is introduced by this note.
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: §3's narrower semantics
   vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
   counterpart, and role-bearing flags are roles. The rule that stable signatures carry no

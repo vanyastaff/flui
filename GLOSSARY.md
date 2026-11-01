@@ -10,9 +10,19 @@ An independent instance of UI state and execution, with one owner and one or
 more presentations. Separate runtimes remain independent even on the same host.
 _Avoid_: Realm, UI session, UI host, window
 
+**UI owner**:
+The execution authority responsible for a UI runtime's complete lifetime.
+Several runtimes may share an owner; a dedicated owner serves one runtime.
+_Avoid_: Native window, presentation, application
+
+**Native owner**:
+The execution authority responsible for an operating environment's UI objects
+and callbacks. It may also be the UI owner, but the responsibilities are distinct.
+_Avoid_: UI runtime, renderer
+
 **Host**:
-FLUI's integration with one operating environment: it supplies execution (the
-owner thread and its loop) and presentation (windows, input, text, displays and
+FLUI's integration with one operating environment: it supplies execution and
+presentation (windows, input, text, displays and
 the rest of the core list) to UI runtimes, and may serve several runtimes
 without merging their state. In `flui-native` a host is one table of types
 (`impl Host`) and one file per feature.
