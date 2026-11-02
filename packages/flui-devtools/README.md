@@ -62,7 +62,7 @@ All of this reads one `Capture`. `FrameTimingLayer::new` makes a private one;
 over the same spans. A frame belongs to the runtime that drove it (the `runtime` field of its
 `frame` span) and a span inside it to the presentation whose segment it ran in, so two runtimes
 rendering under one subscriber are two `Partition`s of the capture. A `Profiler` has one stream
-of frames: it follows the first runtime that names itself, and the capture keeps the others.
+of frames: it follows the first runtime that names itself (or the one `over_runtime` names), and the capture keeps the others.
 Which spans are phases is `Phase::of`, the one `(target, name)` table, so an application span
 named `paint` is not one.
 

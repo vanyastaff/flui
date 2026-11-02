@@ -205,6 +205,8 @@ impl UiRuntime {
                 .map_or(&unknown, |snapshot| &snapshot.values),
             start,
         );
+        // The scheduler's `frame` span reports whose frame it is from the moment it opens.
+        owner_frame.set_trace_runtime(ui_runtime_id.as_u64());
         Ok(Self {
             id: ui_runtime_id,
             preferences: RefCell::new(preferences),

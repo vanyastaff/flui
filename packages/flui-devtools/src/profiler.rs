@@ -54,6 +54,9 @@ use web_time::{Duration, Instant};
 /// The period assumed for a frame that reports none: one 60 Hz frame.
 const DEFAULT_FRAME_PERIOD_MS: f64 = 1000.0 / 60.0;
 
+/// How many hand-measured phases wait, with no frame to place them, before the oldest is forgotten.
+const MAX_UNPLACED_PHASES: usize = 256;
+
 /// Where the profiler draws the line between a smooth frame and jank.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -206,7 +209,7 @@ impl Drop for PhaseGuard {
     fn drop(&mut self) {
         let duration = self.start.elapsed();
         let mut inner = self.profiler.lock();
-        inner.end_phase(self.phase, duration);
+        inner.end_phase(self.phase, duration, self.start);
     }
 }
 
@@ -222,6 +225,9 @@ struct ProfilerInner {
     frame_period: Option<Duration>,
     /// Current frame phases
     current_phases: Vec<PhaseInfo>,
+    /// Phases measured by hand while no frame was begun by the caller, with when each started:
+    /// a frame the capture closes places them against its own start.
+    unplaced: Vec<(FramePhase, Instant)>,
     /// Frame history
     frame_history: VecDeque<FrameStats>,
     /// Total frames processed
@@ -239,6 +245,7 @@ impl ProfilerInner {
             frame_start: None,
             frame_period: None,
             current_phases: Vec::new(),
+            unplaced: Vec::new(),
             frame_history: VecDeque::with_capacity(max_history),
             total_frames: 0,
             jank_frames: 0,
@@ -249,6 +256,7 @@ impl ProfilerInner {
         self.frame_start = Some(Instant::now());
         self.frame_period = None;
         self.current_phases.clear();
+        self.unplaced.clear();
     }
 
     fn end_frame(&mut self) {
@@ -300,6 +308,7 @@ impl ProfilerInner {
             self.frame_history.push_back(stats);
         }
 
+        self.unplaced.clear();
         self.frame_number += 1;
         self.total_frames += 1;
     }
@@ -308,10 +317,15 @@ impl ProfilerInner {
         Instant::now()
     }
 
-    fn end_phase(&mut self, phase: FramePhase, duration: Duration) {
+    fn end_phase(&mut self, phase: FramePhase, duration: Duration, started: Instant) {
         let start_offset = if let Some(frame_start) = self.frame_start {
             frame_start.elapsed().saturating_sub(duration)
         } else {
+            // No frame was begun by hand: a frame the capture closes places this phase.
+            if self.unplaced.len() >= MAX_UNPLACED_PHASES {
+                self.unplaced.remove(0);
+            }
+            self.unplaced.push((phase, started));
             Duration::ZERO
         };
         self.add_phase(phase, duration, start_offset);
@@ -387,10 +401,22 @@ impl Profiler {
     /// Phases that ran more than once in the frame merge into one total, as with
     /// [`Self::profile_phase`]. A phase the application measured by hand while the frame ran stays
     /// beside the framework's.
-    pub(crate) fn ingest(&self, frame: &crate::capture::CapturedFrame) {
+    pub(crate) fn ingest(&self, frame: &crate::capture::CapturedFrame, epoch: Instant) {
         let mut inner = self.inner.lock();
         inner.frame_period = frame.period();
         let frame_start = frame.span().start();
+        // Phases the application measured by hand during this frame sit where they started in it.
+        let frame_began = epoch + frame_start;
+        let mut placed = Vec::new();
+        for (phase, started) in std::mem::take(&mut inner.unplaced) {
+            if placed.contains(&phase) {
+                continue;
+            }
+            if let Some(recorded) = inner.current_phases.iter_mut().find(|p| p.phase == phase) {
+                recorded.start_offset = started.saturating_duration_since(frame_began);
+                placed.push(phase);
+            }
+        }
         let mut phases: Vec<_> = frame
             .spans()
             .iter()

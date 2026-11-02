@@ -71,7 +71,8 @@
 //! `UiRuntime`s render concurrently under one shared subscriber the second runtime's frames
 //! are not mixed into the first's statistics; a missing frame is honest, a blended one is a
 //! fabrication. The [`Capture`] keeps both, partitioned. To profile several runtimes at once,
-//! install one `FrameTimingLayer` and [`Profiler`] pair per runtime, each over its own capture.
+//! install one pair per runtime with [`FrameTimingLayer::over_runtime`], each over its own
+//! capture.
 //!
 //! # Timing comes from the span, not the callback
 //!
@@ -139,20 +140,53 @@ impl FrameTimingLayer {
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
-        let followed: Mutex<Option<UiRuntimeId>> = Mutex::new(None);
-        capture.on_frame(move |_, frame| {
+        Self::following(capture, profiler, None)
+    }
+
+    /// Like [`Self::over`], profiling exactly `runtime`: the frames of any other runtime, and
+    /// frames that did not say which runtime drove them, are left to the capture. One pair per
+    /// runtime profiles several runtimes at once.
+    #[must_use]
+    pub fn over_runtime<S>(
+        capture: &Capture,
+        profiler: Arc<Profiler>,
+        runtime: UiRuntimeId,
+    ) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        Self::following(capture, profiler, Some(runtime))
+    }
+
+    /// `pinned` is the runtime the profiler follows; without one, the first runtime that names
+    /// itself.
+    fn following<S>(
+        capture: &Capture,
+        profiler: Arc<Profiler>,
+        pinned: Option<UiRuntimeId>,
+    ) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        let followed: Mutex<Option<UiRuntimeId>> = Mutex::new(pinned);
+        capture.on_frame(move |from, frame| {
             if !frame.is_outermost() {
                 return;
             }
-            // A frame that did not say which runtime drove it cannot be told apart, so it is
-            // taken; the first one that does say fixes the runtime the profiler follows.
-            if let Some(runtime) = frame.span().partition().runtime() {
-                let mut followed = followed.lock();
-                if *followed.get_or_insert(runtime) != runtime {
-                    return;
+            match frame.span().partition().runtime() {
+                Some(runtime) => {
+                    let mut followed = followed.lock();
+                    if *followed.get_or_insert(runtime) != runtime {
+                        return;
+                    }
                 }
+                // A frame that did not say which runtime drove it cannot be told apart, so a
+                // profiler that follows the first runtime takes it; one pinned to a runtime
+                // does not.
+                None if pinned.is_some() => return,
+                None => {}
             }
-            profiler.ingest(frame);
+            profiler.ingest(frame, from.epoch());
         });
         let layer = Self {
             inner: CaptureLayer::new(capture.clone()),
@@ -387,7 +421,67 @@ mod tests {
         );
     }
 
-    /// one is not counted.
+    /// Two pairs on one registry each profile the runtime they were given, not the first one seen.
+    #[test]
+    fn a_profiler_over_a_named_runtime_ignores_the_others() {
+        use std::num::NonZeroU32;
+
+        let frame_of = |runtime: u64| {
+            let _frame =
+                tracing::debug_span!(target: "flui.frame", "frame", runtime = runtime).entered();
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        };
+        let first = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let second = UiRuntimeId::new_gen(1, NonZeroU32::MIN);
+        let (profile_first, profile_second) =
+            (Arc::new(Profiler::new()), Arc::new(Profiler::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(FrameTimingLayer::over_runtime(
+                &Capture::new(),
+                Arc::clone(&profile_first),
+                first,
+            ))
+            .with(FrameTimingLayer::over_runtime(
+                &Capture::new(),
+                Arc::clone(&profile_second),
+                second,
+            ));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(first.as_u64());
+            frame_of(second.as_u64());
+            frame_of(second.as_u64());
+        });
+
+        assert_eq!(profile_first.frame_history().len(), 1);
+        assert_eq!(profile_second.frame_history().len(), 2);
+    }
+
+    /// A phase measured by hand part-way through a frame keeps its place in it.
+    #[test]
+    fn a_hand_measured_phase_keeps_its_offset_in_the_frame() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("late work")));
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        let late = stats
+            .phase(crate::profiler::FramePhase::Custom("late work"))
+            .expect("the hand-measured phase is kept");
+        assert!(
+            late.start_offset >= std::time::Duration::from_millis(25),
+            "placed after the 30 ms wait, not at the frame start: {late:?}"
+        );
+    }
+
+    /// An application span that merely shares a phase's name
+    /// is not counted.
     ///
     /// Fails when `phase_for` goes back to matching the name alone.
     #[test]

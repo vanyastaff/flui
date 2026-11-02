@@ -35,3 +35,7 @@
 - Several `Capture`s can watch one registry, a nested frame's work no longer takes the enclosing
   frame's presentation, and the trace export writes `frame_ms` and `jank` counters for a frame
   that reported no display period (judged against 60 Hz).
+- `OwnerFrame::set_trace_runtime` names the runtime a `frame` span reports from the moment it
+  opens, so a frame whose callback panics still says whose frame it was.
+  `FrameTimingLayer::over_runtime` profiles a named runtime, one pair per runtime, and a phase
+  measured by hand with `Profiler::profile_phase` keeps its offset inside a captured frame.

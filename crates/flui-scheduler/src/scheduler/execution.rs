@@ -381,6 +381,15 @@ impl OwnerFrame {
             None
         };
         if let Some(span) = span.as_ref() {
+            // Whose frame this is is known before the first callback runs: a callback that
+            // panics still leaves a frame that names its runtime.
+            if recovery.first.is_none()
+                && let Some(runtime) = self.trace_runtime()
+            {
+                recovery.attempt(|| {
+                    span.record("runtime", runtime);
+                });
+            }
             let entered = recovery.attempt(|| span.enter());
             if recovery.first.is_none() {
                 recovery.attempt(|| {

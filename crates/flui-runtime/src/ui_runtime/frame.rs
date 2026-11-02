@@ -387,15 +387,8 @@ impl UiRuntime {
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
         mut prepare: impl FnMut(),
-        mut pipeline: impl FnMut() -> bool,
+        pipeline: impl FnMut() -> bool,
     ) -> bool {
-        // The frame span learns whose frame it is once it is open: the capture layer in
-        // `flui-devtools` partitions a frame's spans by this id.
-        let runtime = self.id().as_u64();
-        let pipeline = move || {
-            tracing::Span::current().record("runtime", runtime);
-            pipeline()
-        };
         let mut commits_closed = None;
         let commit_slot = &mut commits_closed;
         // Owed until the anchor below completes: a drive that unwinds leaves
