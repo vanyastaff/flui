@@ -494,11 +494,13 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;
         };
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "multidrag.add_pointer",
-            pointer = ?pointer,
-            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
-        );
+            pointer = pointer.get().get(),
+            event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
+        )
+        .entered();
         if !is_primary_down(dispatch.local) {
             return;
         }
@@ -572,11 +574,13 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         );
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "multidrag.handle_event",
-            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
-            event = %crate::gesture::observability::GestureEvent::EventReceived,
-        );
+            kind = crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = crate::gesture::observability::GestureEvent::EventReceived.as_str(),
+        )
+        .entered();
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;
         };

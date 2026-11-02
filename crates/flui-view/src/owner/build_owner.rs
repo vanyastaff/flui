@@ -1505,6 +1505,7 @@ impl BuildOwner {
         // `drain_build_scope` once the drain completes — declared empty here
         // so the field exists on the span from the start.
         let _span = tracing::debug_span!(
+            target: "flui.frame",
             "build",
             dirty_elements = self.dirty_count(),
             absorbed_mid_drain = tracing::field::Empty,
@@ -1783,10 +1784,13 @@ impl BuildOwner {
             // not come back.
             self.global_key_reservations.note_parent_rebuild(id);
 
-            let rebuild_span = tracing::info_span!(
+            // A per-node span: TRACE, primitives only (the element's packed id, the reasons as a
+            // bitmask over `RebuildReason::ALL`).
+            let rebuild_span = tracing::trace_span!(
+                target: "flui.tree",
                 "element_rebuild",
-                element = ?id,
-                reasons = %reasons_at_start,
+                element = id.as_u64(),
+                reasons = u64::from(reasons_at_start.bits()),
             );
             let _rebuild_entered = rebuild_span.enter();
 

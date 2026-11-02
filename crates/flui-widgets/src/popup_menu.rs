@@ -107,7 +107,7 @@ impl Presenter {
     pub(crate) fn present(&self, request: MenuRequest) {
         let Some(navigator) = self.navigator.clone() else {
             tracing::warn!(
-                target: "flui::a11y",
+                target: "flui.a11y",
                 "a menu has no Navigator above it, so it cannot open"
             );
             return;

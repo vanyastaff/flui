@@ -28,7 +28,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// ```
 ///
 /// The callback may return `()` or the `Result` of a write; a refused write
-/// is logged on the `flui::signals` target, not dropped silently.
+/// is logged on the `flui.signals` target, not dropped silently.
 ///
 /// Pressing it is a primary-button tap anywhere over the child (the tap
 /// target is opaque); the keyboard's activation while it has focus — Enter,

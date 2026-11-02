@@ -639,7 +639,7 @@ fn a_panicking_observer_is_contained_and_the_first_failure_kept() {
     let reports: Vec<_> = captured
         .records()
         .iter()
-        .filter(|record| record.target == "flui_interaction::gesture::observer")
+        .filter(|record| record.target == "flui.input.observer")
         .collect();
     assert_eq!(reports.len(), 1, "one report per pass:\n{captured}");
     assert_eq!(reports[0].field("panic"), Some("first observer failure"));
@@ -739,7 +739,7 @@ fn an_observer_that_installs_a_replacement_then_panics_retires_contained() {
     let report = captured
         .records()
         .iter()
-        .find(|record| record.target == "flui_interaction::gesture::observer")
+        .find(|record| record.target == "flui.input.observer")
         .expect("the failure is reported");
     assert_eq!(report.field("panic"), Some("installing observer failure"));
     assert_eq!(report.field("failed_retirements"), Some("1"));

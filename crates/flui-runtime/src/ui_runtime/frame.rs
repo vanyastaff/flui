@@ -648,6 +648,7 @@ impl UiRuntime {
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this ui_runtime"
         );
+        let _commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
         tracing::trace!(
@@ -866,7 +867,10 @@ impl UiRuntime {
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
             producer.stage_agent_layer_reads(scene.tree());
-            let render_verdict = match catch_unwind(AssertUnwindSafe(|| sink.submit(scene))) {
+            let render_verdict = match catch_unwind(AssertUnwindSafe(|| {
+                let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
+                sink.submit(scene)
+            })) {
                 Ok(verdict) => verdict,
                 Err(payload) => {
                     producer.restore_staged_agent_layer_reads();

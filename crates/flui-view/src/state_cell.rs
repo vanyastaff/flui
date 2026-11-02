@@ -98,7 +98,7 @@ fn mutation_rebuild(
     };
     let admission = binding.writer.write(|cx| binding.writer.check_context(cx));
     if let Err(error) = admission {
-        tracing::warn!(target: "flui::signals", %error, "a local state write was refused");
+        tracing::warn!(target: "flui.signals", %error, "a local state write was refused");
         return Err(error);
     }
     Ok(Some(binding.rebuild))

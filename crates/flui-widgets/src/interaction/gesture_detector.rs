@@ -563,7 +563,7 @@ struct MultiTapSlot {
 /// ```
 ///
 /// A callback may return `()` or the `Result` of a write; a refused write is
-/// logged on the `flui::signals` target. A closure bound with `let` before it
+/// logged on the `flui.signals` target. A closure bound with `let` before it
 /// is passed needs [`callback`] or [`callback_with`] to fix its signature.
 ///
 /// # Arena and settings
@@ -1355,7 +1355,7 @@ impl GestureRecognizerFactory for TransformFactory {
 /// recognizers then compete in the enclosing branch uncomposed.
 fn composition_diagnostic(error: &flui_interaction::gesture::CompositionError) {
     tracing::warn!(
-        target: "flui_widgets::gesture_detector",
+        target: "flui.input.gesture_detector",
         %error,
         "GestureDetector: composition refused; its recognizers compete uncomposed"
     );

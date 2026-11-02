@@ -343,7 +343,7 @@ impl PrimaryContact {
             deadline: None,
         };
         *self.current.borrow_mut() = Some(contact);
-        tracing::debug!(name: "recognizer.start_tracking", ?pointer,
+        tracing::debug!(name: "recognizer.start_tracking", target: "flui.input", ?pointer,
             event = %crate::gesture::observability::GestureEvent::StartedTracking,
             "recognizer started tracking");
         Ok((id, held_out))
@@ -427,7 +427,7 @@ impl PrimaryContact {
         outgoing.entry.reject_without_self_with_recovery(recovery);
         self.arena()
             .invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
-                tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
+                tracing::debug!(name: "recognizer.reject", target: "flui.input", pointer = ?outgoing.snapshot.pointer,
                     event = %crate::gesture::observability::GestureEvent::ArenaRejected,
                     "recognizer rejected gesture");
             });
@@ -462,7 +462,7 @@ impl PrimaryContact {
                 }),
                 "withdrawn contact sweep",
             );
-            tracing::debug!(name: "recognizer.stop_tracking", pointer = ?snapshot.pointer,
+            tracing::debug!(name: "recognizer.stop_tracking", target: "flui.input", pointer = ?snapshot.pointer,
                 event = %crate::gesture::observability::GestureEvent::StoppedTracking,
                 "recognizer stopped tracking");
             super::callback_containment::finish_containment(first, std::thread::panicking());
@@ -495,7 +495,7 @@ impl PrimaryContact {
         if let Some(failure) = failure {
             failure.resume();
         }
-        tracing::debug!(name: "recognizer.stop_tracking", pointer = ?snapshot.pointer,
+        tracing::debug!(name: "recognizer.stop_tracking", target: "flui.input", pointer = ?snapshot.pointer,
             event = %crate::gesture::observability::GestureEvent::StoppedTracking,
             "recognizer stopped tracking");
         Some(snapshot)

@@ -202,6 +202,7 @@ impl BuildOwner {
         // silently drops the `record` call — without this, every fixpoint
         // pass's own mid-drain re-entries would vanish from the trace.
         let _span = tracing::debug_span!(
+            target: "flui.frame",
             "build",
             during_layout = true,
             absorbed_mid_drain = tracing::field::Empty,
@@ -255,7 +256,7 @@ impl BuildOwner {
                     if !element_alive || !render_alive {
                         tracing::debug!(
                             ?render_id,
-                            element = ?entry.element,
+                            element = entry.element.as_u64(),
                             element_alive,
                             render_alive,
                             "service_layout_builders: pruning stale layout-builder entry"

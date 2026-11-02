@@ -87,6 +87,7 @@ impl PipelineOwner<PaintPhase> {
         }
 
         let _span = tracing::debug_span!(
+            target: "flui.frame",
             "paint",
             dirty_nodes = self.scheduler.paint_queue_len(),
             // How many of those are queued only to have some node's own effect
@@ -388,7 +389,7 @@ impl PipelineOwner<PaintPhase> {
                 && let Some(render_node) = self.render_tree.get(dirty_node.id)
             {
                 tracing::warn!(
-                    id = ?dirty_node.id,
+                    id = dirty_node.id.as_u64(),
                     depth = dirty_node.depth,
                     "run_paint: dirty node not reached by root descent (multi-root, \
                      detached subtree, or a child its parent stopped laying out); \
@@ -1002,7 +1003,7 @@ impl PipelineOwner<PaintPhase> {
             let LayerPatch { patches, consumed } = patch;
             if !patches.is_empty() {
                 tracing::trace!(
-                    boundary = ?boundary_id,
+                    boundary = boundary_id.as_u64(),
                     layers = patches.len(),
                     "paint: composited-layer update, subtree replayed"
                 );

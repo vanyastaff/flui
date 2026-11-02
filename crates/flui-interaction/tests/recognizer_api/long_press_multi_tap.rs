@@ -526,9 +526,7 @@ struct FailingOnRejection(std::sync::atomic::AtomicBool);
 
 impl tracing::Subscriber for FailingOnRejection {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata
-            .target()
-            .starts_with("flui_interaction::gesture::recognizers")
+        metadata.target().starts_with("flui.input")
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)

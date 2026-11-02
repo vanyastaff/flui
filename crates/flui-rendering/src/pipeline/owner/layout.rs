@@ -47,7 +47,7 @@ impl PipelineOwner<Layout> {
     /// dependent geometry.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
         let _span =
-            tracing::debug_span!("layout", dirty_nodes = self.scheduler.layout_queue_len(),)
+            tracing::debug_span!(target: "flui.frame", "layout", dirty_nodes = self.scheduler.layout_queue_len(),)
                 .entered();
 
         // Process own dirty nodes if any
@@ -93,7 +93,7 @@ impl PipelineOwner<Layout> {
                         node.clear_needs_layout();
                     }
                     tracing::trace!(
-                        id = ?dirty_node.id,
+                        id = dirty_node.id.as_u64(),
                         "run_layout: skipping layout-poisoned dirty entry",
                     );
                     continue;
@@ -112,7 +112,7 @@ impl PipelineOwner<Layout> {
                     .is_some_and(|n| !n.needs_layout());
                 if already_clean {
                     tracing::trace!(
-                        id = ?dirty_node.id,
+                        id = dirty_node.id.as_u64(),
                         "run_layout: skipping dirty-queue entry whose NEEDS_LAYOUT \
                          was already cleared this iteration",
                     );
@@ -153,14 +153,14 @@ impl PipelineOwner<Layout> {
                     // draws nothing is what it looks like.
                     if self.root_id == Some(dirty_node.id) {
                         tracing::warn!(
-                            id = ?dirty_node.id,
+                            id = dirty_node.id.as_u64(),
                             "run_layout: the root has no root_constraints; skipping its \
                              dirty entry. The binding must call set_root_constraints \
                              before run_frame (it auto-marks the root dirty)."
                         );
                     } else {
                         tracing::debug!(
-                            id = ?dirty_node.id,
+                            id = dirty_node.id.as_u64(),
                             "run_layout: non-root dirty entry has no cached constraints \
                              and its parent did not lay it out this pass; it keeps \
                              NEEDS_LAYOUT until the parent's perform_layout calls \
@@ -169,7 +169,16 @@ impl PipelineOwner<Layout> {
                     }
                     continue;
                 };
-                match self.layout_dirty_root(dirty_node.id, constraints) {
+                // One span per relayout root, not per node: the walk below it is the root's cost.
+                let root_span = tracing::trace_span!(
+                    target: "flui.frame",
+                    "layout_root",
+                    node = dirty_node.id.as_u64(),
+                )
+                .entered();
+                let laid_out = self.layout_dirty_root(dirty_node.id, constraints);
+                drop(root_span);
+                match laid_out {
                     Ok(_) => {
                         self.layout_poison.note_success(dirty_node.id);
                     }
@@ -203,7 +212,7 @@ impl PipelineOwner<Layout> {
                                     node.clear_needs_layout();
                                 }
                                 tracing::debug!(
-                                    id = ?dirty_node.id,
+                                    id = dirty_node.id.as_u64(),
                                     ?kind,
                                     "layout poison re-engaged after a fresh \
                                      invalidation; the node still fails layout \
@@ -225,7 +234,7 @@ impl PipelineOwner<Layout> {
                                         node.clear_needs_layout();
                                     }
                                     tracing::error!(
-                                        id = ?dirty_node.id,
+                                        id = dirty_node.id.as_u64(),
                                         ?kind,
                                         error = ?e,
                                         "layout poison engaged: dirty-root layout \
