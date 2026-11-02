@@ -46,6 +46,7 @@ impl tracing::Subscriber for PanicsOnSpan {
 /// Fails when the first panic leaves the layout phase set or drops the drained batch: the second
 /// mark is then routed to a queue nobody drains, and the root keeps its old size.
 fn layout_survives(subscriber: PanicsOnSpan) {
+    let closes = subscriber.on_exit;
     let (mut owner, root) = {
         let mut owner = flui_rendering::pipeline::PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
@@ -55,6 +56,11 @@ fn layout_survives(subscriber: PanicsOnSpan) {
             .insert_child_render_object(root, Box::new(RenderColoredBox::red(10.0, 10.0)))
             .expect("the child attaches");
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
+        // One whole frame first, so the tree is laid out and painted and owes nothing; the
+        // constraints change then dirties layout alone.
+        let (mut owner, shown) = owner.run_frame();
+        shown.expect("the first frame runs");
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(150.0, 150.0))));
         (owner.into_layout(), root)
     };
     // A second dispatcher keeps the callsites' interest from being cached against another
@@ -73,6 +79,14 @@ fn layout_survives(subscriber: PanicsOnSpan) {
             .any(|node| node.id == root),
         "the root was dropped from the dirty queue"
     );
+    if closes {
+        // The root was laid out before the span closed, so its changed geometry still owes a
+        // paint that the retained (now clean) layout entry would not bring back.
+        assert!(
+            !owner.nodes_needing_paint().is_empty(),
+            "the laid-out root owes a paint"
+        );
+    }
     tracing::callsite::rebuild_interest_cache();
 
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));

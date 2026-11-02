@@ -643,7 +643,13 @@ impl UiRuntime {
     }
 
     /// Commit a painted presentation after the sink accepts its scene.
-    fn commit_painted_frame(&self, presentation: &PresentationState) {
+    ///
+    /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
+    /// resume once the verdict's own obligations have run.
+    fn commit_painted_frame(
+        &self,
+        presentation: &PresentationState,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this ui_runtime"
@@ -673,9 +679,7 @@ impl UiRuntime {
         super::input::preserve_first_input_panic(&mut subscriber_panic, event, "commit event");
         let closed = catch_unwind(AssertUnwindSafe(|| drop(commit_span))).err();
         super::input::preserve_first_input_panic(&mut subscriber_panic, closed, "commit span");
-        if let Some(payload) = subscriber_panic {
-            resume_unwind(payload);
-        }
+        subscriber_panic
     }
 
     fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
@@ -903,9 +907,19 @@ impl UiRuntime {
                     );
                     verdict
                 }
-                // The sink panicked, or the span failed before it was called.
+                // The sink panicked, or the span failed before it was called. Either way the scene
+                // is lost after the pipeline consumed its paint work: the repaint and the wake are
+                // owed before the first failure resumes, and a later failure of theirs yields to it.
                 (None, Err(payload)) => {
                     producer.restore_staged_agent_layer_reads();
+                    let owed = catch_unwind(AssertUnwindSafe(|| {
+                        self.mark_needs_full_repaint_for(producer);
+                        self.wake_frame();
+                    }))
+                    .err();
+                    if let Some(later) = owed {
+                        flui_foundation::panic::discard_payload(later);
+                    }
                     resume_unwind(payload);
                 }
                 (None, Ok(())) => {
@@ -955,7 +969,11 @@ impl UiRuntime {
                 let submit_at = producer.clock().now();
                 match render_verdict {
                     SubmitVerdict::Presented => {
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         // The frame reached `present()`: frame-aligned haptics
                         // play with it (ADR-0210 §4). Only this arm plays them;
                         // the others leave the queue to its deadline.
@@ -982,7 +1000,11 @@ impl UiRuntime {
                         replay_committed_input = true;
                     }
                     SubmitVerdict::NoPresent => {
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         // No frame-aligned haptics: the backend found no damage,
                         // so the screen kept the previous frame and the change a
                         // queued request confirms never showed. A request queued
@@ -1044,7 +1066,11 @@ impl UiRuntime {
                         // The frame never reached the screen, so frame-aligned
                         // haptics wait: a retry that presents before their
                         // deadline plays them, otherwise they resolve `Suppressed`.
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         producer.record_frame_dropped();
                         let streak = producer.record_frame_withheld();
                         replay_committed_input = true;

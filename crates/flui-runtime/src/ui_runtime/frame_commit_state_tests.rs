@@ -230,3 +230,61 @@ fn a_subscriber_that_panics_as_the_submit_span_closes_keeps_the_retry() {
         "the retry has paint work to resubmit and reaches the sink"
     );
 }
+
+/// A subscriber that cannot open the `submit` span keeps the sink from ever seeing the scene, and
+/// the pipeline has already spent that scene's paint work: the repaint is owed before the panic
+/// resumes, or the next frame finds nothing to draw.
+///
+/// Fails when only the staged agent reads are restored.
+#[test]
+fn a_subscriber_that_panics_opening_the_submit_span_keeps_the_repaint_owed() {
+    let ui_runtime = mount_box();
+    let mut backend = ScriptedSink::always_presents();
+
+    let panicked = render_under(
+        PanicsOnSpan {
+            name: "submit",
+            on_exit: false,
+        },
+        || {
+            ui_runtime.render_frame(&mut backend);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert_eq!(backend.submit_calls, 0, "the sink never saw the scene");
+    assert!(ui_runtime.needs_redraw(), "the retry is armed");
+    let mut succeeding = ScriptedSink::always_presents();
+    assert!(
+        ui_runtime.render_frame(&mut succeeding),
+        "the lost scene is painted again"
+    );
+}
+
+/// A withheld frame whose `commit` span fails still records the withholding and arms its retry:
+/// the commit's panic waits for the verdict's own obligations.
+///
+/// Fails when `commit_painted_frame` unwinds before the verdict arm finishes.
+#[test]
+fn a_subscriber_that_panics_in_the_commit_span_of_a_withheld_frame_keeps_the_retry() {
+    let ui_runtime = mount_box();
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+
+    let panicked = render_under(
+        PanicsOnSpan {
+            name: "commit",
+            on_exit: true,
+        },
+        || {
+            ui_runtime.render_frame(&mut withheld);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(ui_runtime.needs_redraw(), "the retry is armed");
+    let mut succeeding = ScriptedSink::always_presents();
+    assert!(
+        ui_runtime.render_frame(&mut succeeding),
+        "the withheld scene is painted again"
+    );
+}

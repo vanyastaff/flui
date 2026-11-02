@@ -197,6 +197,11 @@ impl PipelineOwner<Layout> {
                 {
                     // The node was laid out; queueing it again is harmless, because an entry
                     // whose layout flag is already clear is skipped.
+                    // Its geometry changed, so the paint it owes is marked before the panic resumes:
+                    // the retained entry is clean and the next pass skips it.
+                    if laid_out.is_ok() {
+                        self.mark_needs_paint(dirty_node.id);
+                    }
                     let _ = self.scheduler.exit_phase(PhaseKind::Layout);
                     self.scheduler
                         .retain_layout_batch(&dirty_nodes[index..], false);
