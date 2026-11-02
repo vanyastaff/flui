@@ -101,7 +101,7 @@ impl HttpClient for NotYet {
 /// A client whose exchanges each hold a slot of the run's IO lane: the web's
 /// `fetch` runs in the page, not on the lane, and is admitted by it all the
 /// same.
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(target_arch = "wasm32", all(test, not(target_os = "android"))))]
 mod held {
     use std::pin::Pin;
     use std::sync::Weak;
