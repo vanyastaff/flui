@@ -21,3 +21,6 @@ mod teardown;
 
 #[cfg(test)]
 mod persistence;
+
+#[cfg(test)]
+mod ime;
