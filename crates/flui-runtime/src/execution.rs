@@ -893,24 +893,28 @@ impl fmt::Debug for ExecutionServices {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for ExecutionServices {
     fn drop(&mut self) {
         // Last-resort teardown for the path that never ran the explicit
-        // `shutdown` (a panic mid-teardown, a test dropping its host).
+        // `shutdown` (a panic mid-teardown, a test dropping its host), on
+        // every target: a wait for room outlives the services and must hear
+        // that they stopped.
+        self.lifecycle.accepting.store(false, Ordering::Release);
         // `shutdown_background` never blocks, so — unlike `Runtime`'s own
         // blocking `Drop` — this is safe even if the drop happens from
         // inside a task running on some other runtime.
-        self.lifecycle.accepting.store(false, Ordering::Release);
-        self.cancel.cancel();
-        if let Backend::Default(pools) = &self.backend {
-            let io = pools.io.lock().take_runtime();
-            let compute = pools.compute.lock().take_runtime();
-            if let Some(runtime) = io {
-                runtime.shutdown_background();
-            }
-            if let Some(runtime) = compute {
-                runtime.shutdown_background();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.cancel.cancel();
+            if let Backend::Default(pools) = &self.backend {
+                let io = pools.io.lock().take_runtime();
+                let compute = pools.compute.lock().take_runtime();
+                if let Some(runtime) = io {
+                    runtime.shutdown_background();
+                }
+                if let Some(runtime) = compute {
+                    runtime.shutdown_background();
+                }
             }
         }
         self.lifecycle.stopping.wake_all();
@@ -1462,6 +1466,26 @@ mod tests {
         assert_eq!(Arc::strong_count(&count), 2, "only the test's own waker");
     }
 
+    /// Services dropped without a shutdown end a wait that outlives them,
+    /// which then hears they stopped.
+    fn dropped_services_end_a_wait_for_room() {
+        let deterministic = DeterministicExecutors::new();
+        let services = ExecutionServices::with_limits(Some(deterministic.host_executors()), 1, 1);
+        services
+            .spawn_compute(Box::new(|| {}))
+            .expect("within the admission window");
+        let (waiting, waker) = counting_waker(false);
+        let mut wait = services.room(Lane::Compute);
+        assert!(poll(&mut wait, &waker).is_pending());
+
+        drop(services);
+        assert_eq!(waiting.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            poll(&mut wait, &waker),
+            Poll::Ready(Err(SpawnError::ShuttingDown))
+        );
+    }
+
     /// Shutdown wakes a wait for room, which then hears it is shutting
     /// down: one waiting on the admission window, and one waiting on a host
     /// pool with no room, whose lifecycle is the host's.
@@ -1529,6 +1553,10 @@ mod tests {
                 (
                     "shutdown_wakes_a_waiter_for_room",
                     shutdown_wakes_a_waiter_for_room as fn(),
+                ),
+                (
+                    "dropped_services_end_a_wait_for_room",
+                    dropped_services_end_a_wait_for_room as fn(),
                 ),
                 (
                     "a_dropped_wait_lets_go_of_its_waker",
