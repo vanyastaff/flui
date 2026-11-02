@@ -112,7 +112,9 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
             Ok(stream) => admit(stream, shared),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
             Err(error) => {
-                tracing::debug!(kind = ?error.kind(), "agent endpoint accept failed");
+                super::trace(
+                    || tracing::debug!(kind = ?error.kind(), "agent endpoint accept failed"),
+                );
                 std::thread::sleep(POLL);
             }
         }
@@ -127,7 +129,7 @@ fn accept_loop(listener: &Listener, shared: &Arc<Shared>) {
 
 fn admit(stream: interprocess::local_socket::Stream, shared: &Arc<Shared>) {
     if shared.live.load(Ordering::SeqCst) >= shared.limits.max_connections {
-        tracing::debug!("agent endpoint full; closing a connection unread");
+        super::trace(|| tracing::debug!("agent endpoint full; closing a connection unread"));
         return;
     }
     if stream.set_nonblocking(true).is_err() {

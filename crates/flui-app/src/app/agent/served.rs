@@ -13,6 +13,14 @@ pub(crate) use self::launch::Launch;
 #[cfg(test)]
 pub(crate) use self::launch::Limits;
 
+/// Emits what `event` traces, contained: a subscriber is user code, and one
+/// that panics must not take down the agent thread it runs on, nor the work
+/// that thread accepted. Used for every trace on the agent's own threads.
+pub(super) fn trace(event: impl FnOnce()) {
+    let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(event));
+    drop(traced);
+}
+
 /// Install an agent for `launch` on `config`, after the application's own
 /// hooks. The hello names the app by `config`'s title.
 pub(crate) fn install(

@@ -207,4 +207,14 @@ mod tests {
         assert_eq!(quits.load(Ordering::SeqCst), 1, "the quit was asked");
         assert!(disconnect.happened());
     }
+
+    #[test]
+    fn a_trace_on_an_agent_thread_survives_a_subscriber_that_panics() {
+        let mut after = false;
+        tracing::subscriber::with_default(Panicking, || {
+            super::served::trace(|| tracing::info!("an agent event"));
+            after = true;
+        });
+        assert!(after, "the thread went on past the trace");
+    }
 }

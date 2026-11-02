@@ -5,7 +5,7 @@
 use std::io::{self, Read as _, Write as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use flui_protocol::framing::MAX_LINE;
@@ -86,11 +86,11 @@ fn handshake(connection: &mut Connection, shared: &Shared) -> bool {
         }
     };
     let Some(hello) = parse_hello(&hello) else {
-        tracing::debug!("agent connection refused: no hello");
+        super::trace(|| tracing::debug!("agent connection refused: no hello"));
         return false;
     };
     if !same_token(hello.token.as_bytes(), shared.token.as_bytes()) {
-        tracing::debug!("agent connection refused: wrong token");
+        super::trace(|| tracing::debug!("agent connection refused: wrong token"));
         return false;
     }
     if hello.protocol != PROTOCOL_VERSION {
@@ -194,17 +194,28 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
             Next::Pending => {}
             Next::Closed => return End::Peer,
         }
-        while let Ok(answer) = answers.try_recv() {
-            busy = true;
-            queue.held = queue.held.saturating_sub(1);
-            if connection.write_value(&answer, shared).is_err() {
-                return End::Peer;
+        loop {
+            match answers.try_recv() {
+                Ok(answer) => {
+                    busy = true;
+                    queue.held = queue.held.saturating_sub(1);
+                    if connection.write_value(&answer, shared).is_err() {
+                        return End::Peer;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                // The worker is gone (it panicked): nothing the connection
+                // queued would be answered, so the connection ends and the
+                // driver sees it closed rather than waiting.
+                Err(TryRecvError::Disconnected) => return End::Peer,
             }
         }
         // Traced only once the subscriptions are let go: a subscriber is user code.
         let drained = subscriptions.lock().drain(&shared.registry);
         for (window, code) in drained.refused {
-            tracing::warn!(window = %window, code = %code, "a subscription cannot reach a window");
+            super::trace(|| {
+                tracing::warn!(window = %window, code = %code, "a subscription cannot reach a window");
+            });
         }
         let events = drained.events;
         for event in events {
@@ -262,22 +273,23 @@ fn work(
         let started = Instant::now();
         let outcome = dispatch::run(method, params, &cx);
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let failed = outcome.as_ref().err().map(|error| error.code);
         let answer = match outcome {
-            Ok(result) => {
-                tracing::debug!(method = method.name, elapsed_ms, "agent request served");
-                json!({ "id": id, "result": result })
-            }
-            Err(error) => {
-                tracing::debug!(
-                    method = method.name,
-                    code = error.code.name(),
-                    elapsed_ms,
-                    "agent request failed"
-                );
-                json!({ "id": id, "error": error })
-            }
+            Ok(result) => json!({ "id": id, "result": result }),
+            Err(error) => json!({ "id": id, "error": error }),
         };
-        if outbox.send(answer).is_err() {
+        // The answer is posted before it is traced.
+        let posted = outbox.send(answer).is_ok();
+        super::trace(|| match failed {
+            None => tracing::debug!(method = method.name, elapsed_ms, "agent request served"),
+            Some(code) => tracing::debug!(
+                method = method.name,
+                code = code.name(),
+                elapsed_ms,
+                "agent request failed"
+            ),
+        });
+        if !posted {
             return;
         }
     }
