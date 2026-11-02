@@ -56,7 +56,12 @@ const MAX_CALLS: usize = 1024;
 const KEY_CALL_TIMEOUT: Duration = ANSWER_TIMEOUT.saturating_mul(2);
 
 /// How long the daemon has to make a context before it counts as lost.
-const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The most context makings given up on whose late answer still destroys
+/// what they made. Past it the oldest is forgotten: a daemon that slow
+/// leaves its contexts to the connection's end.
+const MAX_ABANDONED: usize = 64;
 
 /// The message bus's own name, the sender of what it says about names.
 const BUS_NAME: &str = "org.freedesktop.DBus";
@@ -129,6 +134,9 @@ pub(crate) enum Heard {
     Preedit(ContextId, String, i32),
     /// Delete `chars` characters from `offset` characters past the cursor.
     Delete(ContextId, i32, u32),
+    /// The engine asks for the field's state: one attached after the field
+    /// last told it heard nothing of it.
+    StateAsked(ContextId),
     /// The daemon answered the [`Request::FocusIn`] of this fence, or will
     /// not: what it sends from here is for the field it names.
     Fenced(ContextId, u64),
@@ -146,6 +154,7 @@ impl Heard {
             | Self::Commit(context, _)
             | Self::Preedit(context, ..)
             | Self::Delete(context, ..)
+            | Self::StateAsked(context)
             | Self::Fenced(context, _)
             | Self::Lost(context) => *context,
         }
@@ -483,6 +492,9 @@ struct Session {
     /// The calls awaiting an answer, each until its deadline, at most
     /// [`MAX_CALLS`].
     calls: HashMap<NonZeroU32, (tokio::time::Instant, Awaited)>,
+    /// The calls making a context that were given up on, newest last, at most
+    /// [`MAX_ABANDONED`]: a context made late after all is destroyed.
+    abandoned: VecDeque<NonZeroU32>,
 }
 
 async fn serve(
@@ -539,6 +551,7 @@ async fn serve(
         contexts: HashMap::new(),
         paths: HashMap::new(),
         calls: HashMap::new(),
+        abandoned: VecDeque::new(),
     };
     loop {
         let due = session.next_due();
@@ -827,13 +840,20 @@ impl Session {
     /// be dropped anyway, the owner having delivered the key at its own
     /// deadline; a focus fences no longer, so the field hears the daemon
     /// again; a context the daemon did not make in time is lost, so no key
-    /// waits on it.
+    /// waits on it, and destroyed should the daemon make it late.
     fn expire(&mut self, now: tokio::time::Instant) {
         let mut overdue = Vec::new();
-        self.calls.retain(|_, (due, awaited)| {
+        let abandoned = &mut self.abandoned;
+        self.calls.retain(|serial, (due, awaited)| {
             let live = *due > now;
             if !live {
                 overdue.push(awaited.unanswered().ok_or(awaited.context()));
+                if matches!(awaited, Awaited::Create(_)) {
+                    if abandoned.len() == MAX_ABANDONED {
+                        abandoned.pop_front();
+                    }
+                    abandoned.push_back(*serial);
+                }
             }
             live
         });
@@ -882,15 +902,39 @@ impl Session {
         }
     }
 
+    /// The path of the context an answer to `CreateInputContext` made, if it
+    /// made one.
+    fn made_path(&self, message: &Message) -> Option<OwnedObjectPath> {
+        if message.message_type() == MessageType::Error {
+            return None;
+        }
+        let body = message.body();
+        match self.link.names.daemon {
+            Daemon::IBus => body.deserialize::<OwnedObjectPath>().ok(),
+            Daemon::Fcitx5 => body
+                .deserialize::<(OwnedObjectPath, Vec<u8>)>()
+                .ok()
+                .map(|(path, _)| path),
+        }
+    }
+
     /// A message from the bus: an answer to a call, or a signal of a context.
     async fn heard(&mut self, message: &Message) {
         let header = message.header();
         match message.message_type() {
             MessageType::MethodReturn | MessageType::Error => {
-                let Some((_, awaited)) = header
-                    .reply_serial()
-                    .and_then(|serial| self.calls.remove(&serial))
-                else {
+                let Some(serial) = header.reply_serial() else {
+                    return;
+                };
+                let Some((_, awaited)) = self.calls.remove(&serial) else {
+                    // A context made after it was given up on is destroyed.
+                    if let Some(index) = self.abandoned.iter().position(|late| *late == serial) {
+                        self.abandoned.remove(index);
+                        if let Some(path) = self.made_path(message) {
+                            let call = destroy(self.link.names, &path);
+                            self.send(call, None).await;
+                        }
+                    }
                     return;
                 };
                 let failed = message.message_type() == MessageType::Error;
@@ -906,21 +950,7 @@ impl Session {
                         self.inbox.post(Heard::Fenced(context, fence));
                     }
                     Awaited::Create(context) => {
-                        let path = if failed {
-                            None
-                        } else {
-                            match self.link.names.daemon {
-                                Daemon::IBus => {
-                                    message.body().deserialize::<OwnedObjectPath>().ok()
-                                }
-                                Daemon::Fcitx5 => message
-                                    .body()
-                                    .deserialize::<(OwnedObjectPath, Vec<u8>)>()
-                                    .ok()
-                                    .map(|(path, _)| path),
-                            }
-                        };
-                        if let Some(path) = path {
+                        if let Some(path) = self.made_path(message) {
                             self.made(context, path).await;
                         } else {
                             tracing::debug!("the input method refused an input context");
@@ -992,6 +1022,7 @@ impl Session {
                 let text: String = parts.into_iter().map(|(part, _)| part).collect();
                 Some(Heard::Preedit(context, text, caret))
             }
+            (Daemon::IBus, "RequireSurroundingText") => Some(Heard::StateAsked(context)),
             (_, "DeleteSurroundingText") => {
                 let (offset, chars): (i32, u32) = body.deserialize().ok()?;
                 Some(Heard::Delete(context, offset, chars))

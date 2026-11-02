@@ -602,6 +602,18 @@ impl X11Ime {
                     return;
                 };
                 failure.contain(|| client.delete_surrounding(&*wire, before, after));
+                // Both daemons count the span over the selection, which
+                // goes with it; the client's deletion keeps it, and an empty
+                // commit replaces it.
+                let told = wire.told.borrow();
+                if told.cursor != told.anchor {
+                    drop(told);
+                    failure.contain(|| client.commit_string(&*wire, Some(String::new())));
+                }
+            }
+            Heard::StateAsked(_) => {
+                failure.contain(|| client.state_asked(&*wire));
+                return;
             }
             Heard::Ready(_) | Heard::Answer(..) | Heard::Fenced(..) | Heard::Lost(_) => return,
         }

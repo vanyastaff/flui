@@ -609,6 +609,16 @@ impl TextInputClient {
         }
     }
 
+    /// The input method behind `wire` asks for the field's state (IBus's
+    /// `RequireSurroundingText`): it is sent again, a protected field's text
+    /// withheld as always.
+    #[cfg(x11_host)]
+    pub(crate) fn state_asked(&self, wire: &dyn TextInputWire) {
+        if self.serves(wire) {
+            self.resend_state();
+        }
+    }
+
     /// `done` on `wire`: apply what was sent since the last one, and send the
     /// field's state again when `serial` counted every commit sent as the
     /// `done` came. An edit the store holds until its frame ends keeps that

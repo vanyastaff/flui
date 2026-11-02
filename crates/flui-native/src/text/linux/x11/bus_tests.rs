@@ -14,11 +14,12 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_platform::WindowId;
-use flui_platform::text_store::{TextStore, TextStoreHost};
+use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text_store::{Selection, TextStore, TextStoreHost};
 use flui_testing::text_store_kit::InMemoryTextStore;
 use parking_lot::Mutex;
 use web_time::Instant;
@@ -27,7 +28,7 @@ use x11rb::protocol::xproto::{self, FocusInEvent, NotifyDetail, NotifyMode};
 use zbus::object_server::SignalEmitter;
 use zbus::{ObjectServer, OwnedObjectPath, Variant, interface};
 
-use super::bus::{Bus, Reach};
+use super::bus::{Bus, CREATE_TIMEOUT, Reach};
 use super::{WindowText, X11Ime};
 use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
 use crate::text::TextInput;
@@ -73,6 +74,8 @@ type Heard = Arc<Mutex<Vec<String>>>;
 struct StandInBus {
     heard: Heard,
     made: AtomicU32,
+    /// How long making a context takes, in milliseconds.
+    delay: Arc<AtomicU64>,
 }
 
 #[interface(name = "org.freedesktop.IBus")]
@@ -83,6 +86,10 @@ impl StandInBus {
         client: String,
     ) -> OwnedObjectPath {
         self.heard.lock().push(format!("context for {client}"));
+        let delay = self.delay.load(Ordering::SeqCst);
+        if delay > 0 {
+            async_io::Timer::after(Duration::from_millis(delay)).await;
+        }
         let number = self.made.fetch_add(1, Ordering::SeqCst);
         let path = format!("/org/freedesktop/IBus/InputContext_{number}");
         server
@@ -137,12 +144,15 @@ fn ibus_text(text: &str) -> Variant<'static> {
 /// The keysyms the stand-in's engine answers for.
 const COMMITS: u32 = 'a' as u32;
 const SLOW: u32 = 'c' as u32;
+const DELETES: u32 = 'x' as u32;
+const ASKS: u32 = 'r' as u32;
 const COMPOSES: u32 = 'p' as u32;
 const LATE: u32 = 'l' as u32;
 
 /// One input context of the stand-in: an engine that commits "あ" for `a`,
 /// lets `b` through, answers `c` after a second, composes "にほ" for `p`,
-/// and commits "遅" for `l` after 400 ms.
+/// commits "遅" for `l` after 400 ms, deletes three characters before the
+/// cursor and one after for `x`, and asks for the field for `r`.
 struct StandInContext {
     heard: Heard,
     content: (u32, u32),
@@ -187,7 +197,19 @@ impl StandInContext {
                 self.heard.lock().push("late commit".to_owned());
                 true
             }
-            COMMITS | COMPOSES => true,
+            DELETES if !release => {
+                Self::delete_surrounding_text(&emitter, -3, 4)
+                    .await
+                    .expect("the stand-in deletes");
+                true
+            }
+            ASKS if !release => {
+                Self::require_surrounding_text(&emitter)
+                    .await
+                    .expect("the stand-in asks for the field");
+                true
+            }
+            COMMITS | COMPOSES | DELETES | ASKS => true,
             _ => false,
         }
     }
@@ -246,6 +268,16 @@ impl StandInContext {
         cursor: u32,
         visible: bool,
     ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn delete_surrounding_text(
+        emitter: &SignalEmitter<'_>,
+        offset: i32,
+        chars: u32,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn require_surrounding_text(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 /// The keys delivered to the window, each with the field's text as it went.
@@ -263,6 +295,8 @@ struct Rig {
     store: Rc<InMemoryTextStore>,
     heard: Heard,
     delivered: Delivered,
+    /// How long the stand-in takes to make a context, in milliseconds.
+    create_delay: Arc<AtomicU64>,
 }
 
 impl Rig {
@@ -277,6 +311,7 @@ impl Rig {
             .build()
             .expect("a runtime");
         let heard = Heard::default();
+        let create_delay = Arc::new(AtomicU64::new(0));
         let server = runtime
             .block_on(
                 zbus::connection::Builder::address(bus.address.as_str())
@@ -286,6 +321,7 @@ impl Rig {
                         StandInBus {
                             heard: Arc::clone(&heard),
                             made: AtomicU32::new(0),
+                            delay: Arc::clone(&create_delay),
                         },
                     )
                     .build(),
@@ -316,6 +352,7 @@ impl Rig {
             store,
             heard,
             delivered: Delivered::default(),
+            create_delay,
         };
         rig.ime.event(&focus(FocusInEvent {
             response_type: xproto::FOCUS_IN_EVENT,
@@ -813,4 +850,78 @@ fn a_composition_ends_as_the_input_method_leaves_a_running_bus() {
         pressed.elapsed() < ANSWER_TIMEOUT,
         "no key waits on an input method that went"
     );
+}
+
+/// A context the input method makes after it was given up on is destroyed
+/// when it arrives, so a slow daemon keeps none it was asked for.
+#[test]
+fn a_context_made_after_it_was_given_up_on_is_destroyed() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let late = CREATE_TIMEOUT + Duration::from_millis(300);
+    rig.create_delay.store(
+        u64::try_from(late.as_millis()).expect("a short delay"),
+        Ordering::SeqCst,
+    );
+    // A key left unanswered replaces the window's context: the old one is
+    // destroyed and a new one asked for, which comes late.
+    rig.press('l');
+    rig.settle("the old context destroyed", || {
+        rig.heard_count("destroy") == 1 && rig.heard_count("context for") == 2
+    });
+    let deadline = Instant::now() + late + Duration::from_secs(2);
+    loop {
+        rig.ime.deliver(Instant::now());
+        if rig.heard_count("destroy") == 2 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the late context is never destroyed"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A deletion the input method counts over a selection takes the selected
+/// text with it.
+#[test]
+fn a_deletion_over_the_selection_takes_it_too() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.store
+        .app_replace(Utf16Range::collapsed(Utf16Offset::new(0)), "abcd");
+    rig.store.app_select(Selection {
+        anchor: Utf16Offset::new(1),
+        active: Utf16Offset::new(3),
+    });
+    rig.settle("the field told", || {
+        rig.heard_any("surrounding \"abcd\" 3 1")
+    });
+    rig.press('x');
+    rig.settle("the deletion", || rig.store.text() != "abcd");
+    assert_eq!(
+        rig.store.text(),
+        "",
+        "three before the cursor and one after"
+    );
+}
+
+/// An engine that asks for the field (attached after the field was told)
+/// is told it again.
+#[test]
+fn an_engine_asking_for_the_field_is_told_it() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.store
+        .app_replace(Utf16Range::collapsed(Utf16Offset::new(0)), "abc");
+    rig.settle("the field told", || rig.heard_any("surrounding \"abc\""));
+    let told = rig.heard_count("surrounding \"abc\"");
+    rig.press('r');
+    rig.settle("the field told again", || {
+        rig.heard_count("surrounding \"abc\"") > told
+    });
 }
