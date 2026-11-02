@@ -4,7 +4,7 @@
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); смежная —
   [persistence/tasks.md](../persistence/tasks.md) (приложение приёмки P10, реестр сброса хоста P6)
 - **Итог:** из 17 задач прежнего плана сделаны T1, T3; T5 сделана платформенной серией; T6, T15,
-  T16 устарели; T9 и T14 сделаны, T8 — в части. Осталось 11 задач, из них новые T18 (строки на
+  T16 устарели; T9 и T14 сделаны, T8 и T17 — в части. Осталось 11 задач, из них новые T18 (строки на
   приложении приёмки) и T19 (нативный прогон через лейн `os` flui-driver). Сейчас можно начинать
   T2, T4 и T7; остальное — по колонке «Зависит от».
 - **Решения 2026-10-28** (по поручению владельца решены исследованием, записаны в ADR и в
@@ -337,5 +337,5 @@ graph LR
     ни при повторном закрытии; Close without saving закрывает окно, выход роняет всё. Вето
     обработчиком и удержанием без приложения покрывает `a_vetoed_close_disposes_nothing`
     (`runner_close`).
-- [ ] T17 — README, Win32-строка R5, закрытие
+- [ ] T17 — README, Win32-строка R5, закрытие. Сделано: строка README (R24, абзац «Saving on close, except on the Web») и строка R5 `win32_close_drains_platform_map_entry` в таблице `native_window_commands` (`crates/flui-native/tests/windows_window_commands.rs`; проверка типов под `x86_64-pc-windows-msvc`, прогон на Windows — у владельца); `rg 'ignore = "contract:' crates` пуст. Остаётся закрытие спеки после T7, T12 и T18.
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)
