@@ -102,10 +102,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // node passing presses through inside a cut-out moves the window again.
         let scope = walk.scope;
         let own_box = Rect::from_origin_size(Point::ZERO, size);
+        let claimed_parts = walk.sink.take_claimed_parts();
         let child_scope = match (walk.sink.take_presses(), scope) {
             (Presses::Claimed, MoveScope::InMove) => {
                 walk.sink.add(InputRegionKind::WindowContent, own_box);
                 MoveScope::CutOut
+            }
+            (Presses::Unclaimed, MoveScope::InMove) => {
+                for part in claimed_parts {
+                    walk.sink.add(InputRegionKind::WindowContent, part);
+                }
+                scope
             }
             (Presses::PassedThrough, MoveScope::CutOut) => {
                 walk.sink.add(InputRegionKind::WindowMove, own_box);

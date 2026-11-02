@@ -9,10 +9,11 @@
   `minimize_window_label`, `maximize_window_label`, `restore_window_label` and
   `close_window_label`.
 - **Press takers leave a move area** (`flui-rendering`, `flui-objects`):
-  `InputRegionSink::claim_presses` and `pass_presses_through`; a `RenderListener` with a
-  pointer-down handler or gesture recognizers is cut out of a move area above it as
-  `WindowContent`, and `RenderPressPassThrough` keeps its subtree moving the window
-  (ADR-0286 §5). `RenderListener::set_claims_presses` says which listeners take presses.
+  `InputRegionSink::claim_presses`, `claim_presses_over` and `pass_presses_through`; a
+  `RenderListener` with a pointer-down handler or gesture recognizers is cut out of a move area
+  above it as `WindowContent`, and `RenderPressPassThrough` keeps its subtree moving the window
+  (ADR-0286 §5). `RenderListener::set_claims_presses` says which listeners take presses, and
+  a `RenderParagraph` takes them over the glyphs of its routed links.
 
 ### Changed
 

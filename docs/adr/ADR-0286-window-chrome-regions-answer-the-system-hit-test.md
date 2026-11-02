@@ -116,7 +116,9 @@ otherwise, and filters as a native host does.
 widget has a pointer-down handler or recognizers in the gesture arena, a hover-only listener does
 not. While the walk is under a node that reported a `WindowMove` region, such a node adds a
 `WindowContent` region over its box after its own regions, so a button or a field in the bar keeps
-its presses and nobody marks it by hand. A caption button or resize region between the two keeps
+its presses and nobody marks it by hand. `InputRegionSink::claim_presses_over` takes presses on
+part of the box only: `RenderParagraph` says it over the glyphs of each routed link, so a link in
+the bar is pressed and the text around it moves the window. A caption button or resize region between the two keeps
 its subtree's presses its own (the system answers them), and
 `InputRegionSink::pass_presses_through` keeps a subtree moving the window until a move area below
 it starts cutting out again: `RenderPressPassThrough` says it, and so does an ignoring

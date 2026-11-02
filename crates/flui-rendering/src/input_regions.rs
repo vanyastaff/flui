@@ -27,7 +27,8 @@
 //! over an earlier one. A node that takes presses
 //! ([`InputRegionSink::claim_presses`]) inside a [`InputRegionKind::WindowMove`] area an
 //! ancestor reported is cut out of it as [`InputRegionKind::WindowContent`]: the buttons and
-//! fields of an application's title bar are pressed, the rest of the bar moves the window.
+//! fields of an application's title bar are pressed, the rest of the bar moves the window;
+//! [`InputRegionSink::claim_presses_over`] cuts out part of the box, a routed link's glyphs.
 //! [`InputRegionSink::pass_presses_through`] keeps a subtree's presses moving the window,
 //! inside a press taker's cut-out too.
 
@@ -42,6 +43,8 @@ pub use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKi
 pub struct InputRegionSink {
     pending: SmallVec<[(InputRegionKind, Rect); 2]>,
     presses: Presses,
+    /// Parts of the node's box it takes presses on, when it does not take them on all of it.
+    claimed_parts: SmallVec<[Rect; 2]>,
 }
 
 /// What a node said about presses on its box this frame.
@@ -76,6 +79,16 @@ impl InputRegionSink {
         }
     }
 
+    /// Says the reporting node takes presses on `rect`, in its local coordinates, and not
+    /// on the rest of its box: the links of a paragraph. Inside a
+    /// [`InputRegionKind::WindowMove`] area an ancestor reported, the walk cuts `rect` out
+    /// as [`InputRegionKind::WindowContent`]; the node's descendants stay in the move area.
+    /// [`Self::claim_presses`] on the same node covers its whole box and wins. Elsewhere it
+    /// reports nothing.
+    pub fn claim_presses_over(&mut self, rect: Rect) {
+        self.claimed_parts.push(rect);
+    }
+
     /// Says presses anywhere in the reporting node's subtree move the window as the move
     /// area around it does: the press-claiming nodes below it are not cut out of the move
     /// area. A [`InputRegionKind::WindowMove`] area reported below it starts cutting out
@@ -96,6 +109,11 @@ impl InputRegionSink {
     /// What the node said about presses, forgotten for the next node.
     pub(crate) fn take_presses(&mut self) -> Presses {
         std::mem::take(&mut self.presses)
+    }
+
+    /// The parts of its box the node took presses on, forgotten for the next node.
+    pub(crate) fn take_claimed_parts(&mut self) -> SmallVec<[Rect; 2]> {
+        std::mem::take(&mut self.claimed_parts)
     }
 
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = (InputRegionKind, Rect)> + '_ {
