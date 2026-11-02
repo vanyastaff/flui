@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use flui_assets::{AssetError, AssetRegistryBuilder, LoadServices};
+use flui_platform::executor::SpawnError;
 use flui_platform::http::{HttpError, StatusCode};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 
@@ -470,4 +471,352 @@ fn a_debug_writer_may_reenter_the_client() {
         .recv_timeout(Duration::from_secs(10))
         .expect("formatting finishes instead of waiting on its own lock");
     assert!(asked > 0, "the writer was called");
+}
+
+/// Polls `load` once, without a waker to call.
+fn poll_once<F: std::future::Future + Unpin>(load: &mut F) -> std::task::Poll<F::Output> {
+    std::pin::Pin::new(load).poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+/// The URL of the `n`th image in the slot tests.
+fn nth_url(n: usize) -> String {
+    format!("https://example.test/{n}.png")
+}
+
+/// One decode thread grants four load slots.
+const LOAD_SLOTS: usize = 4;
+
+#[test]
+fn a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane() {
+    crate::cases::run_cases(&[
+        (
+            "spawned once its slot is freed",
+            spawned_once_its_slot_is_freed,
+        ),
+        (
+            "lanes with no room hand the run to the lead",
+            no_room_leads_here,
+        ),
+        (
+            "a panicking waker leaves the rest told",
+            a_panicking_waker_leaves_the_rest_told,
+        ),
+        (
+            "a panicking waker keeps its outcome",
+            a_panicking_waker_keeps_its_outcome,
+        ),
+        (
+            "lanes shutting down refuse the lead only",
+            shutting_down_refuses_the_lead,
+        ),
+        (
+            "a long queue is refused in turn",
+            shutting_down_refuses_a_long_queue_in_turn,
+        ),
+    ]);
+}
+
+/// A registry with one decode thread, and `count` held loads on `lanes`.
+fn held_loads(
+    http: &ScriptedHttp,
+    lanes: &std::sync::Arc<QueuedLanes>,
+    count: usize,
+) -> (flui_assets::AssetRegistry, Vec<flui_assets::ImageLoad>) {
+    let registry = AssetRegistryBuilder::new()
+        .with_default_capacity()
+        .with_decode_threads(std::num::NonZeroUsize::MIN)
+        .build();
+    let loads = (0..count)
+        .map(|n| {
+            http.hold(nth_url(n));
+            http.respond(nth_url(n), ScriptedResponse::ok(PNG.to_vec()));
+            registry.load_network_image(nth_url(n), lanes.services().with_http(http.handle()))
+        })
+        .collect::<Vec<flui_assets::ImageLoad>>();
+    lanes.run_io_until_idle();
+    (registry, loads)
+}
+
+/// Six cold loads take four slots: the two queued ones are not on the IO
+/// lane until a slot is freed for them, each in its turn.
+fn spawned_once_its_slot_is_freed() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let (_registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 2);
+    assert_eq!(
+        lanes.pending_io(),
+        LOAD_SLOTS,
+        "queued loads are not spawned"
+    );
+    assert_eq!(http.requests().len(), LOAD_SLOTS);
+
+    http.release(&nth_url(0));
+    lanes.run_until_idle();
+    assert!(poll_once(&mut loads[0]).is_ready());
+    assert_eq!(
+        lanes.pending_io(),
+        LOAD_SLOTS,
+        "the freed slot spawned the next load"
+    );
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1);
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS + 1)), 0);
+
+    for n in 1..LOAD_SLOTS + 2 {
+        http.release(&nth_url(n));
+    }
+    lanes.run_until_idle();
+    for load in &mut loads[1..] {
+        let std::task::Poll::Ready(image) = poll_once(load) else {
+            panic!("every load finished");
+        };
+        image.expect("every load decodes");
+    }
+    assert_eq!(lanes.pending_io(), 0);
+}
+
+/// The lanes take no more work when a slot comes free: the run is parked,
+/// and the subscriber polled first drives it where it is polled, even when
+/// the lead that queued it is never polled again.
+fn no_room_leads_here() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let (registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    http.respond(
+        nth_url(LOAD_SLOTS),
+        ScriptedResponse::Fail(HttpError::Timeout),
+    );
+    let mut joined = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    assert!(poll_once(&mut joined).is_pending());
+    lanes.refuse(SpawnError::Saturated);
+    http.release(&nth_url(0));
+    http.release(&nth_url(LOAD_SLOTS));
+    lanes.run_until_idle();
+    assert!(poll_once(&mut loads[0]).is_ready());
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 0, "not yet driven");
+
+    // The parked run keeps the slot freed for it: a load from elsewhere
+    // waits for one.
+    let spare = QueuedLanes::new();
+    let extra = registry.load_network_image(
+        nth_url(LOAD_SLOTS + 1),
+        spare.services().with_http(http.handle()),
+    );
+    assert_eq!(spare.pending_io(), 0, "every slot is held");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut joined) else {
+        panic!("the joined subscriber claimed the run and drove it to its end");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the load fails where it is polled"
+    );
+    assert_eq!(
+        spare.pending_io(),
+        1,
+        "the run's slot went to the next load"
+    );
+    let std::task::Poll::Ready(answered) = poll_once(&mut loads[LOAD_SLOTS]) else {
+        panic!("the lead hears the outcome");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the lead, told of the run after it was claimed, hears its outcome"
+    );
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
+    drop(extra);
+}
+
+/// Panics on its first wake only.
+struct PanicsOnFirstWake(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for PanicsOnFirstWake {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        assert!(
+            self.0.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "a subscriber's waker panicked"
+        );
+    }
+}
+
+/// The run is parked with no room on the lanes, and the waker of a
+/// subscriber told before the last panics: the last is still told, claims
+/// the run and drives it, and the panic is raised once every one is told.
+fn a_panicking_waker_leaves_the_rest_told() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let (registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    http.respond(
+        nth_url(LOAD_SLOTS),
+        ScriptedResponse::Fail(HttpError::Timeout),
+    );
+    let mut panicking = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
+        std::sync::atomic::AtomicBool::new(false),
+    )));
+    assert!(
+        std::pin::Pin::new(&mut panicking)
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    let mut last = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    assert!(poll_once(&mut last).is_pending());
+    lanes.refuse(SpawnError::Saturated);
+    http.release(&nth_url(0));
+    http.release(&nth_url(LOAD_SLOTS));
+    let parked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lanes.run_until_idle()));
+    assert!(parked.is_err(), "the waker's panic is raised");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut last) else {
+        panic!("the last subscriber, told past the panic, drove the run to its end");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the load fails where it is polled"
+    );
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
+    drop((loads.drain(..), panicking));
+}
+
+/// A load settles while a subscriber's waker panics on its first wake: that
+/// subscriber still hears the outcome rather than taking the load over.
+fn a_panicking_waker_keeps_its_outcome() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    http.respond(URL, ScriptedResponse::Fail(HttpError::Timeout));
+    let lead = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
+    let mut panicking = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
+    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
+        std::sync::atomic::AtomicBool::new(false),
+    )));
+    assert!(
+        std::pin::Pin::new(&mut panicking)
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    let settled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lanes.run_until_idle()));
+    assert!(settled.is_err(), "the waker's panic is raised");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut panicking) else {
+        panic!("the subscriber whose waker panicked hears the outcome");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the outcome the run settled with"
+    );
+    assert_eq!(http.requests_to(URL), 1, "one request");
+    drop(lead);
+}
+
+/// The lead's lanes shut down while it waits for a slot: the lead answers
+/// `LanesRefused`, and a subscriber on other lanes takes the load over.
+fn shutting_down_refuses_the_lead() {
+    let http = ScriptedHttp::new();
+    let busy = QueuedLanes::new();
+    let (registry, mut loads) = held_loads(&http, &busy, LOAD_SLOTS);
+    let retiring = QueuedLanes::new();
+    let other = QueuedLanes::new();
+    http.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
+    let mut lead = registry.load_network_image(URL, retiring.services().with_http(http.handle()));
+    let mut joined = registry.load_network_image(URL, other.services().with_http(http.handle()));
+    assert!(poll_once(&mut lead).is_pending());
+    assert!(poll_once(&mut joined).is_pending());
+    retiring.shut_down();
+
+    http.release(&nth_url(0));
+    busy.run_until_idle();
+    assert!(poll_once(&mut loads[0]).is_ready());
+    assert!(
+        matches!(
+            poll_once(&mut lead),
+            std::task::Poll::Ready(Err(AssetError::LanesRefused {
+                reason: SpawnError::ShuttingDown,
+                ..
+            }))
+        ),
+        "the lead's lanes refused it"
+    );
+    assert!(poll_once(&mut joined).is_pending());
+    other.run_until_idle();
+    let std::task::Poll::Ready(image) = poll_once(&mut joined) else {
+        panic!("the joined subscriber took the load over");
+    };
+    image.expect("the takeover decodes");
+    assert_eq!(http.requests_to(URL), 1);
+}
+
+/// Loads queued for slots on lanes that shut down are refused one after
+/// another as the slot passes along the queue, not each from inside the
+/// last one's refusal: on a thread with a small stack, a long queue drains
+/// without overflowing it.
+fn shutting_down_refuses_a_long_queue_in_turn() {
+    const QUEUED: usize = 2_000;
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let http = ScriptedHttp::new();
+            let busy = QueuedLanes::new();
+            let (registry, mut loads) = held_loads(&http, &busy, LOAD_SLOTS);
+            let retiring = QueuedLanes::new();
+            let mut queued = (0..QUEUED)
+                .map(|n| {
+                    registry.load_network_image(
+                        nth_url(LOAD_SLOTS + n),
+                        retiring.services().with_http(http.handle()),
+                    )
+                })
+                .collect::<Vec<flui_assets::ImageLoad>>();
+            retiring.shut_down();
+            http.release(&nth_url(0));
+            busy.run_until_idle();
+            assert!(poll_once(&mut loads[0]).is_ready());
+            for load in &mut queued {
+                assert!(
+                    matches!(
+                        poll_once(load),
+                        std::task::Poll::Ready(Err(AssetError::LanesRefused { .. }))
+                    ),
+                    "every queued load is refused"
+                );
+            }
+        })
+        .expect("BUG: the test spawns one thread")
+        .join()
+        .expect("the queue drains on a small stack");
 }
