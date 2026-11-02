@@ -1253,6 +1253,15 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // services and the pools after it may abandon the IO pool's writes.
     let exit = ExitDeadline::start(std::time::Instant::now());
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+        if APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .owner_route
+                .as_ref()
+                .is_some_and(|route| !route.is_initial())
+        }) {
+            return;
+        }
         let flush = APP_RUNTIME.with(|slot| slot.borrow().flush_host.clone());
         if let Some(flush) = flush {
             let report = flush.flush_within(exit.services());
@@ -1337,7 +1346,12 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
             let mut state = slot.borrow_mut();
             state.clear_platform_clipboard();
             // The run's providers are user code: they drop outside the borrow.
-            (state.capabilities.take(), state.clear_redraw_window())
+            (
+                state.capabilities.take(),
+                state.clear_redraw_window(),
+                state.take_service_inputs(),
+                state.take_exit_policy_notifier(),
+            )
         });
         // Ordinarily `None` already: the window-close path released this pin
         // (`release_redraw_window_for`) while the event loop was still alive,

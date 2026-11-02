@@ -451,17 +451,17 @@ where
         None
     };
 
-    // Post-frame (mid-frame loss) success arms NO repaint, unlike the
-    // pre-frame case above: the frame that just ran already had its own
-    // chance to present before the loss was noticed, so there is no
-    // known-blank backing store to force a fresh submit for. The generation
-    // re-mint above is NOT skippable the same way: the recovery rebuilt the
-    // surface either way, and the next frame must stamp the post-recovery
-    // generation.
+    // Even a successful old-surface present cannot fill the backing store
+    // created by the subsequent rebuild. After the pump's tail has settled,
+    // owe a fresh scene on the new generation without waiting for new input.
     if let Some(attempt) = post_attempt {
+        let recovered = matches!(attempt, RecoveryAttempt::Recovered);
         let post = settle_attempt(ui_runtime, backoff, attempt, now);
         settled.just_failed |= post.just_failed;
         settled.next_attempt_at = post.next_attempt_at;
+        if recovered {
+            ui_runtime.mark_primary_needs_full_repaint();
+        }
     }
     let SettledAttempt {
         just_failed,

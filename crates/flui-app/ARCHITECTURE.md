@@ -9,6 +9,47 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **Dedicated ownership is a construction boundary, under qualification (ADR-0284).**
+  `open_dedicated_window` transfers only a `Send` factory. Its `View + Clone` root,
+  configuration, providers, native loop, text services and synchronous renderer are
+  constructed and retired on the destination. Ordinary production runners refuse this
+  placement before calling the factory; the headless kit and explicit Win32 qualification
+  entry exercise the same secondary-window installer without enabling platform support.
+  `dedicated_factory_constructs_and_retires_local_captures_on_its_owner` and
+  `dedicated_provider_policy_is_explicit_and_optional_refusal_is_preserved` distinguish
+  local construction and complete registration coverage from eager optional acquisition.
+
+- **One coordinator owns application membership and shared service lifetime.** Owner and
+  quit identities are never reissued. Pending factories and local window installations
+  invalidate the owner's quit vote before admission; a final commit fences new work under
+  the same lock. Retirement releases native resources and completes thread-local destruction
+  before acknowledging membership. A non-UI helper joins each owner and passes only the
+  result to the initial coordinator; admission never joins based on `is_finished`.
+  Retirement rechecks windowless exit policy and joins outside native callbacks before
+  the initial owner stops shared executors, flush/storage inputs, font feed or reclaimers.
+  `global_quit_revalidates_windows_admitted_during_consultation`,
+  `last_owner_retirement_rechecks_windowless_application_exit_policy` and
+  `published_owner_failure_is_retained_until_application_result` cover these transitions.
+  `owner_capacity_includes_thread_local_retirement` and
+  `global_quit_keeps_initial_loop_until_full_thread_retirement` retain owner capacity and
+  the initial loop through a held TLS destructor, including an independent main-window close.
+  Local native dispatch stays local; no queued acknowledgement replaces TSF/default-input
+  handling or a raster completion. Applications with development hooks currently refuse
+  dedicated admission until their coordinated attachment path is implemented.
+
+- **Cross-owner document exchange is explicit and bounded.** `SharedDocument::bind` fixes
+  a source owner and application incarnation. Reads and conditional replacements carry
+  unique completion slots; document revisions include a private document identity.
+  Conflicts and refusals return the caller's edit. Entry and allocation budgets include
+  unread document and main-window completions, and dedicated launch capacity includes
+  unread launch receipts. Quit and retirement use independently reserved control state. Wakes and
+  receiver callbacks run after state commits and locks are released.
+  `cross_owner_document_rejects_stale_reply_without_losing_edit`,
+  `document_completion_reentry_and_panicking_wake_preserve_all_accepted_work` and
+  `completed_launch_receipts_keep_their_admission_budget_until_observed` exercise this
+  contract. `examples/multi_owner_document.rs` constructs local provider overrides and
+  demonstrates conflict recovery without sharing a reactive graph.
+
 - **The installed host owns the accepted display snapshot, and a window's display is
   derived from it.** A sample is committed before any window is told; the derived
   display travels to each followed window as an ordinary window observation, after

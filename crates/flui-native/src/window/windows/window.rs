@@ -1562,7 +1562,7 @@ impl WindowsWindow {
         }
     }
 
-    fn close_window(&self) {
+    pub(super) fn close_window(&self) {
         use crate::owner::hwnd_affinity::TeardownRoute;
         match super::proc::teardown_route(self.hwnd, self.context) {
             TeardownRoute::DestroyDirect => {

@@ -7,6 +7,24 @@ use flui_foundation::geometry::{Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 use flui_platform::{InputLatency, WindowMode, WindowOptions, WindowReveal};
 
+#[test]
+fn unsupported_owner_placement_does_not_execute_factory() {
+    let executed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let factory_executed = std::sync::Arc::clone(&executed);
+    let result = flui_app::open_dedicated_window(move || {
+        factory_executed.store(true, std::sync::atomic::Ordering::SeqCst);
+        (
+            flui_widgets::SizedBox::square(10.0),
+            flui_app::RuntimeWindowConfig::new(),
+        )
+    });
+    assert!(matches!(
+        result,
+        Err(flui_app::AppWindowError::UnsupportedPolicy { .. })
+    ));
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 fn options(config: &AppConfig) -> WindowOptions {
     WindowOptions::from(config)
 }

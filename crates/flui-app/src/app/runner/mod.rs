@@ -11,12 +11,30 @@ use super::{AppLaunch, LaunchError};
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) mod dedicated;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
 mod desktop;
+pub use crate::app::open_dedicated_window;
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) fn current_owner_route() -> Option<crate::app::application_control::OwnerRoute> {
+    host::APP_RUNTIME.with(|slot| slot.borrow().owner_route.clone())
+}
+#[cfg(all(
+    feature = "testing",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub(crate) fn owner_diagnostics() -> String {
+    let ingress = host::APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
+    ingress.map_or_else(
+        || "no coordinator".to_owned(),
+        |ingress| ingress.diagnostics(),
+    )
+}
 mod device_recovery;
 mod display_host;
 #[cfg(all(
@@ -51,6 +69,11 @@ mod owner_dispatch;
 // outcome are portable and its tests are host-run, so a
 // `cfg(target_os = "android")` here would hide the whole file from every gate
 // this host can run.
+#[cfg(all(
+    feature = "testing",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub(crate) mod native_frames;
 mod retry_backoff;
 mod secondary_window;
 #[cfg(any(

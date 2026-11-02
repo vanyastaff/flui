@@ -1,0 +1,28 @@
+error[E0277]: `Rc<String>` cannot be sent between threads safely
+ --> tests/ui/thread_boundary/dedicated_factory_cannot_capture_local_state.rs:5:41
+  |
+5 |       let _ = flui::open_dedicated_window(move || {
+  |               --------------------------- ^------
+  |               |                           |
+  |  _____________|___________________________within this `{closure@$DIR/tests/ui/thread_boundary/dedicated_factory_cannot_capture_local_state.rs:5:41: 5:48}`
+  | |             |
+  | |             required by a bound introduced by this call
+6 | |         let title = local.as_ref().clone();
+7 | |         (flui::widgets::SizedBox::square(10.0), flui::RuntimeWindowConfig::new().with_title(title))
+8 | |     });
+  | |_____^ `Rc<String>` cannot be sent between threads safely
+  |
+  = help: within `{closure@$DIR/tests/ui/thread_boundary/dedicated_factory_cannot_capture_local_state.rs:5:41: 5:48}`, the trait `Send` is not implemented for `Rc<String>`
+note: required because it's used within this closure
+ --> tests/ui/thread_boundary/dedicated_factory_cannot_capture_local_state.rs:5:41
+  |
+5 |     let _ = flui::open_dedicated_window(move || {
+  |                                         ^^^^^^^
+note: required by a bound in `open_dedicated_window`
+ --> crates/flui-app/src/app/dedicated_window.rs
+  |
+  | pub fn open_dedicated_window<V, F>(factory: F) -> Result<WindowRequest, AppWindowError>
+  |        --------------------- required by a bound in this function
+...
+  |     F: FnOnce() -> (V, RuntimeWindowConfig) + Send + 'static,
+  |                                               ^^^^ required by this bound in `open_dedicated_window`

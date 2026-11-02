@@ -17,12 +17,21 @@ fn matrix_channel(straight: vec4<f32>, weights: vec4<f32>, offset: f32) -> f32 {
     // still has f32 precision and the device's subnormal behavior.
     let magnitudes = abs(weights);
     let scale = max(1.0, max(abs(offset), max(max(magnitudes.x, magnitudes.y), max(magnitudes.z, magnitudes.w))));
-    let weighted = dot(weights / scale, straight);
+    // Split at 2^64: neither divisor exceeds 2^64, so its reciprocal
+    // stays normal even for f32::MAX. Explicit bounds keep the normalized
+    // products finite before dot, including on the Windows GPU path.
+    let split = 18446744073709551616.0;
+    let first_scale = min(scale, split);
+    let second_scale = scale / first_scale;
+    let first_weights = clamp(weights / first_scale, vec4<f32>(-split), vec4<f32>(split));
+    let weighted = dot(clamp(first_weights / second_scale, vec4<f32>(-1.0), vec4<f32>(1.0)), straight);
     if weighted == 0.0 { return clamp(offset, 0.0, 1.0); }
-    let sum = weighted + offset / scale;
+    let first_offset = clamp(offset / first_scale, -split, split);
+    let normalized_offset = clamp(first_offset / second_scale, -1.0, 1.0);
+    let sum = weighted + normalized_offset;
     if sum <= 0.0 { return 0.0; }
-    if sum >= 1.0 / scale { return 1.0; }
-    return sum * scale;
+    if sum >= (1.0 / first_scale) / second_scale { return 1.0; }
+    return (sum * second_scale) * first_scale;
 }
 
 fn filter_matrix(straight: vec4<f32>, m: mat4x4<f32>, offset: vec4<f32>) -> vec4<f32> {

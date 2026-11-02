@@ -209,6 +209,7 @@ fn text_editing() {
             ("keyboard_modifiers::source_composition_preserves_editing_and_submit", crate::keyboard_modifiers::source_composition_preserves_editing_and_submit),
             ("editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret", crate::editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret),
             ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
+            ("editable_text::native_actions::two_fields_publish_the_current_keyboard_focus", crate::editable_text::native_actions::two_fields_publish_the_current_keyboard_focus),
             ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),
             ("editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions", crate::editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions),
             ("editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it", crate::editable_text::native_actions::a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it),

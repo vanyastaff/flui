@@ -88,9 +88,64 @@ pub enum CapabilityConflict {
 #[derive(Clone, Default)]
 pub struct CapabilityRegistry {
     providers: Rc<HashMap<TypeId, RegisteredProvider>>,
+    manifest: CapabilityManifest,
+}
+
+/// Owned registration policy without owner-local provider objects. A dedicated
+/// owner reconstructs these registrations before publishing any UI runtime.
+#[derive(Clone, Debug, Default)]
+pub struct CapabilityManifest {
+    generation: Arc<()>,
+    registrations: Vec<CapabilityRegistration>,
+}
+
+/// One capability marker and the registration tier that supplied it, including
+/// a plugin hidden by a built-in or an application override.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CapabilityRegistration {
+    marker: TypeId,
+    name: &'static str,
+    tier: ProviderTier,
+}
+
+impl CapabilityRegistration {
+    /// The diagnostic capability name, not its identity.
+    pub fn name(self) -> &'static str {
+        self.name
+    }
+    /// The registration's precedence tier.
+    pub fn tier(self) -> ProviderTier {
+        self.tier
+    }
+}
+
+impl CapabilityManifest {
+    /// Whether both manifests name the same immutable registry generation.
+    pub fn same_generation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.generation, &other.generation)
+    }
+
+    /// The first application registration the reconstructed registry omitted
+    /// or placed at a different tier. Does not acquire any provider.
+    pub fn missing_application_registration(
+        &self,
+        reconstructed: &Self,
+    ) -> Option<CapabilityRegistration> {
+        self.registrations
+            .iter()
+            .find(|registration| {
+                registration.tier != ProviderTier::BuiltIn
+                    && !reconstructed.registrations.contains(registration)
+            })
+            .copied()
+    }
 }
 
 impl CapabilityRegistry {
+    /// Snapshot the immutable policy for reconstruction on another owner.
+    pub fn registration_manifest(&self) -> CapabilityManifest {
+        self.manifest.clone()
+    }
     /// A registry with no provider.
     #[must_use]
     pub fn empty() -> Self {
@@ -134,7 +189,7 @@ impl fmt::Debug for CapabilityRegistry {
         names.sort_unstable();
         f.debug_struct("CapabilityRegistry")
             .field("capabilities", &names)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -193,6 +248,7 @@ impl CapabilityRegistryBuilder {
         let mut names: HashMap<&'static str, TypeId> = HashMap::new();
         let mut registered: HashSet<(ProviderTier, TypeId)> = HashSet::new();
         let mut chosen: HashMap<TypeId, RegisteredProvider> = HashMap::new();
+        let mut manifest = CapabilityManifest::default();
         for (tier, provider) in self.registrations {
             let (capability, name) = (provider.capability(), provider.name());
             if *names.entry(name).or_insert(capability) != capability {
@@ -203,11 +259,17 @@ impl CapabilityRegistryBuilder {
             if !registered.insert((tier, capability)) {
                 return Err(CapabilityConflict::Duplicate { name, tier });
             }
+            manifest.registrations.push(CapabilityRegistration {
+                marker: capability,
+                name,
+                tier,
+            });
             // Tiers arrive in precedence order: the first one holds it.
             chosen.entry(capability).or_insert(provider);
         }
         Ok(CapabilityRegistry {
             providers: Rc::new(chosen),
+            manifest,
         })
     }
 }

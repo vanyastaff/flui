@@ -108,6 +108,14 @@ pub use app::{
 };
 // The app's font registration door (ADR-0092 §2).
 pub use app::EXIT_CODE_HUNG;
+pub use app::OwnerLimits;
+pub use app::RuntimeWindowConfig;
+pub use app::{AppWindowError, WindowRequest};
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub use app::{
+    DocumentOutcome, DocumentPort, DocumentRefusal, DocumentRequest, DocumentRevision,
+    DocumentSendError, DocumentSnapshot, SharedDocument,
+};
 pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
 #[cfg(not(target_os = "ios"))]
@@ -157,6 +165,7 @@ pub use app::{
 // `open_secondary_window` additionally needs the desktop GPU renderer path,
 // so it is narrower than the policy enums above: desktop only (matching
 // `run_desktop`'s own cfg gate).
+pub use app::open_dedicated_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -220,7 +229,4 @@ pub mod prelude {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use app::{
-    AppControlError, AppHandle, AppRunError, AppWindowError, Application, StartupWindow,
-    WindowRequest,
-};
+pub use app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};

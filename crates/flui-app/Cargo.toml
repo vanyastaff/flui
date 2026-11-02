@@ -67,7 +67,7 @@ native = []
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread. Off by default and not part of the release API;
 # this crate's tests turn it on through the dev-dependency on itself.
-testing = []
+testing = ["flui-engine/testing", "flui-native/testing", "flui-runtime/testing"]
 
 [dependencies]
 flui-platform = { workspace = true }

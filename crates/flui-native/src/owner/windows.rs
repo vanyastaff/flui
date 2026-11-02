@@ -393,6 +393,9 @@ impl host::Drag<WindowsLoop> for WindowsLoop {
 /// loop and the modal loops pace: a wake deadline's frames and the paints a
 /// modal drag-and-drop loop would otherwise hold back.
 pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
+    /// Close the remaining native windows on this owner after admission stops.
+    /// The set must release its borrow before a close runs callbacks.
+    fn close_all(&self);
     /// Asks every window for the frame a delivered wake deadline is due. A
     /// window's frame request runs user code, which may open or close
     /// windows; nothing of the set is held while it runs.
@@ -1325,6 +1328,7 @@ impl host::Loop for WindowsLoop {
                     .app
                     .quit_requested()
                     .or_contain((), "the application's quit");
+                self.0.windows.close_all();
                 self.0.app.release();
             }
         }

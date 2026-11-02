@@ -416,6 +416,11 @@ impl Default for StorageSlot {
 }
 
 impl StorageSlot {
+    /// Transfer the resolved service or its exact refusal, without local slots.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(crate) fn snapshot(&self) -> Result<Arc<dyn Storage>, Unsupported> {
+        self.storage.borrow().clone()
+    }
     /// Install the run's storage, or the reason it has none.
     pub(crate) fn install(&self, storage: Result<Arc<dyn Storage>, Unsupported>) {
         let replaced = self.storage.replace(storage);

@@ -362,7 +362,7 @@ impl MainController {
                     self.config.frame_failure_detail,
                     payload.as_ref(),
                 );
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 Err(AppWindowError::InstallerPanicked { message })
             }
         };
@@ -464,7 +464,7 @@ impl MainController {
     }
     fn cancel(&mut self) {
         let failure = self.take_pending_failure();
-        self.ingress.close();
+        self.ingress.cancel_main();
         self.cancel_pending();
         if let Some(error) = failure {
             self.report_failure(error);
@@ -493,7 +493,7 @@ impl MainController {
             match observed {
                 Ok(()) => self.error = Some(observer),
                 Err(payload) => {
-                    std::mem::forget(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     contain(|| drop(observer));
                 }
             }
@@ -559,7 +559,7 @@ pub(super) fn drive_main_window() {
             controller.config.frame_failure_detail,
             payload.as_ref(),
         );
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
         controller.fail(AppWindowError::InstallerPanicked { message });
     }
 }
@@ -574,22 +574,37 @@ pub(super) fn drive_program_quit() {
 
     let Some((ingress, router)) = APP_RUNTIME.with(|slot| {
         let runtime = slot.borrow();
-        runtime
-            .main_ingress
-            .clone()
-            .map(|ingress| (ingress, runtime.close_requests()))
+        runtime.main_ingress.clone().map(|ingress| {
+            let route = runtime
+                .owner_route
+                .clone()
+                .unwrap_or_else(|| ingress.initial_owner());
+            (route, runtime.close_requests())
+        })
     }) else {
         return;
     };
-    let registered = router.addresses();
-    for address in ingress.quit_waiting() {
-        if !registered.contains(&address) {
-            ingress.quit_consented(address);
+    let route = ingress;
+    let ingress = &route.ingress;
+    if route.is_initial() {
+        ingress.finish_threads();
+        ingress.serve_documents();
+        ingress.advance_quit();
+        if ingress.take_membership_change() {
+            super::host::with_owner_platform(|owner| {
+                owner.shared().request_exit_policy_reevaluation();
+            });
         }
     }
-    if !ingress.begin_quit_consult() {
-        return;
+    let registered = router.addresses();
+    for address in route.quit_waiting() {
+        if !registered.contains(&address) {
+            route.quit_consented(address);
+        }
     }
+    let Some(ticket) = route.begin_quit_consult() else {
+        return;
+    };
     // The router contains every handler's panic, so the consultation always
     // ends with an answer; asking every presentation, not only up to the
     // first refusal, records the close on each one that refuses.
@@ -604,16 +619,29 @@ pub(super) fn drive_program_quit() {
             }
         }
     }
-    ingress.finish_quit_consult(if cancelled {
-        QuitAnswer::Cancelled
-    } else {
-        QuitAnswer::Waiting(waiting)
-    });
+    ingress.finish_quit_consult(
+        ticket,
+        if cancelled {
+            QuitAnswer::Cancelled
+        } else {
+            QuitAnswer::Waiting(waiting)
+        },
+    );
+    if route.is_initial() {
+        ingress.advance_quit();
+    }
 }
 
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {
     let ingress = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
+        if runtime
+            .owner_route
+            .as_ref()
+            .is_some_and(|route| !route.is_initial())
+        {
+            return None;
+        }
         if !runtime.installed_host.native().contains_address(address) {
             return None;
         }
@@ -634,6 +662,13 @@ pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress)
 pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) {
     let (removed, ingress) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
+        if runtime
+            .owner_route
+            .as_ref()
+            .is_some_and(|route| !route.is_initial())
+        {
+            return (None, None);
+        }
         // Closing while a ui_runtime is checked out queues disposal. Keep its close
         // fence until the restored dispatcher has actually removed the address.
         if runtime.installed_host.native().contains_address(address) {
@@ -688,6 +723,7 @@ pub(super) fn shutdown_main_window() {
 /// holder ends the watch once the exit's outcome is known (ADR-0258 §7).
 #[derive(Default)]
 struct LoopTeardown {
+    coordinator: Rc<RefCell<Option<Arc<Ingress>>>>,
     log: Rc<RefCell<Vec<TeardownStep>>>,
     watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
 }
@@ -701,6 +737,11 @@ impl Drop for LoopTeardown {
             watchdog.reached(step);
             log.borrow_mut().push(step);
         };
+        let coordinator = self.coordinator.borrow_mut().take();
+        if let Some(coordinator) = &coordinator {
+            contain(|| coordinator.close());
+            coordinator.join_owners();
+        }
         if std::thread::panicking() {
             contain(shutdown_main_window);
             record(TeardownStep::MainWindow);
@@ -709,6 +750,11 @@ impl Drop for LoopTeardown {
             shutdown_main_window();
             record(TeardownStep::MainWindow);
             teardown_platform_ui_runtime_logged(&mut record);
+        }
+        if let Some(coordinator) = coordinator {
+            super::terminal::contain_terminal("shared service retirement", || {
+                coordinator.release_services();
+            });
         }
     }
 }
@@ -745,7 +791,14 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    start_loop(application, platform, Rc::default(), WindowRenderers::Gpu)?.finish()
+    start_loop(
+        application,
+        platform,
+        Rc::default(),
+        WindowRenderers::Gpu,
+        super::dedicated::DedicatedBackend::Unavailable,
+    )?
+    .finish()
 }
 
 /// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
@@ -783,6 +836,7 @@ impl StartedLoop {
             fatal,
             result,
         } = self;
+        let coordinator = teardown.coordinator.borrow().clone();
         drop(teardown);
         drop(owner_guard);
         drop(watchdog);
@@ -792,6 +846,9 @@ impl StartedLoop {
         let failure = fatal.borrow_mut().take();
         if let Some(error) = failure {
             return Err(error);
+        }
+        if let Some(error) = coordinator.and_then(|coordinator| coordinator.take_owner_failure()) {
+            return Err(AppRunError::DedicatedOwner(error));
         }
         result.map_err(AppRunError::from_platform)
     }
@@ -806,6 +863,7 @@ pub(crate) fn start_loop<V, F>(
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, AppRunError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: WindowRenderers,
+    dedicated_backend: super::dedicated::DedicatedBackend,
 ) -> Result<StartedLoop, AppRunError>
 where
     V: View + Clone + 'static,
@@ -830,9 +888,11 @@ where
     // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
     let teardown = LoopTeardown {
+        coordinator: Rc::default(),
         log: teardown_log,
         watchdog: Rc::clone(&watchdog),
     };
+    let coordinator = Rc::clone(&teardown.coordinator);
     // A panic out of the platform's own loop is terminal (ADR-0258 §3): held
     // for the exit's end, and the teardown runs as after any other end.
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -846,15 +906,18 @@ where
                 ..
             } = application;
             let proxy = owner.proxy();
-            let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
+            let ingress = Ingress::new(proxy, startup == StartupWindow::Open, config.owner_limits);
+            coordinator.replace(Some(Arc::clone(&ingress)));
             let handle = ingress.handle();
             install_owner_platform(owner)?;
             APP_RUNTIME.with(|slot| {
                 let mut runtime = slot.borrow_mut();
                 runtime.main_ingress = Some(Arc::clone(&ingress));
+                runtime.owner_route = Some(ingress.initial_owner());
                 runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                 runtime.window_renderers = renderers;
+                runtime.dedicated_backend = dedicated_backend;
                 if let Some(executors) = config.executors.clone() {
                     runtime.install_host_executors(executors);
                 }
@@ -862,6 +925,10 @@ where
                 runtime.ensure_execution();
             });
             super::host::install_host_storage(&config);
+            if dedicated_backend.available() {
+                let services = APP_RUNTIME.with(|slot| slot.borrow_mut().run_services(&config));
+                ingress.install_services(services);
+            }
             install_exit_policy_hook(config.exit_policy);
             install_platform_quit_hook();
             let reopen = Arc::downgrade(&ingress);
@@ -884,7 +951,7 @@ where
                                 installer_config.frame_failure_detail,
                                 payload.as_ref(),
                             );
-                            std::mem::forget(payload);
+                            flui_foundation::panic::discard_payload(payload);
                             AppWindowError::FactoryPanicked { message }
                         })?;
                 if !handle.ingress.accepting()
@@ -935,7 +1002,7 @@ where
                 && let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
             {
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 APP_RUNTIME.with(|slot| {
                     if let Some(controller) = slot.borrow().main_controller.as_ref() {
                         controller
@@ -982,7 +1049,7 @@ mod tests {
     ) -> AppHandle {
         let proxy = owner.proxy();
         install_owner_platform(owner).expect("owner signal");
-        let ingress = Ingress::new(proxy, false);
+        let ingress = Ingress::new(proxy, false, crate::app::OwnerLimits::default());
         let handle = ingress.handle();
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();

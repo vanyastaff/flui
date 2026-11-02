@@ -13,6 +13,21 @@
 pub(crate) mod capability;
 pub(crate) mod close_request;
 mod config;
+mod dedicated_window;
+mod window_request;
+pub use dedicated_window::open_dedicated_window;
+pub use window_request::{AppWindowError, WindowRequest};
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) mod owner_document;
+mod owner_limits;
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub use owner_document::{
+    DocumentOutcome, DocumentPort, DocumentRefusal, DocumentRequest, DocumentRevision,
+    DocumentSendError, DocumentSnapshot, SharedDocument,
+};
+pub use owner_limits::OwnerLimits;
+mod runtime_window_config;
+pub use runtime_window_config::RuntimeWindowConfig;
 pub(crate) mod dev_agent;
 pub mod direct;
 pub(crate) mod host_memory;
@@ -123,4 +138,4 @@ pub use application::{AppRunError, Application, StartupWindow};
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use application_control::{AppControlError, AppHandle, AppWindowError, WindowRequest};
+pub use application_control::{AppControlError, AppHandle};

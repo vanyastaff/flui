@@ -356,6 +356,7 @@ enum PendingPhase {
 ))]
 struct PendingRequestState {
     state: parking_lot::Mutex<(PendingPhase, bool)>,
+    membership: parking_lot::Mutex<Option<crate::app::application_control::LaunchReservation>>,
     count: Arc<std::sync::atomic::AtomicUsize>,
     platform: flui_native::SharedPlatform,
 }
@@ -366,6 +367,8 @@ struct PendingRequestState {
 ))]
 impl PendingRequestState {
     fn release(&self) {
+        let membership = self.membership.lock().take();
+        drop(membership);
         let previous = self.count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         debug_assert!(
             previous > 0,
@@ -447,9 +450,20 @@ fn reserve_window() -> Result<WindowReservation, AppWindowError> {
     let platform = with_owner_platform(flui_native::OwnerPlatform::shared)
         .ok_or(AppWindowError::NoOwnerLoop)?;
     let count = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
+    let route = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state.owner_route.clone().or_else(|| {
+            state
+                .main_ingress
+                .as_ref()
+                .map(super::super::application_control::Ingress::initial_owner)
+        })
+    });
+    let membership = route.map(|route| route.reserve_launch()).transpose()?;
     count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     Ok(WindowReservation(Arc::new(PendingRequestState {
         state: parking_lot::Mutex::new((PendingPhase::Waiting, true)),
+        membership: parking_lot::Mutex::new(membership),
         count,
         platform,
     })))
@@ -582,8 +596,8 @@ pub(super) fn cancel_pending_secondary_windows() {
             error,
             "cancelled window reply",
         );
-        // Settle framework liveness before retaining an opaque envelope after
-        // failure. Its installer/configuration captures may have arbitrary Drop.
+        // Settle framework liveness before retiring captures. A caught failure
+        // must not leak native resources or skip later capture destruction.
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             completion.config.reservation.0.settle();
         }))
@@ -593,17 +607,13 @@ pub(super) fn cancel_pending_secondary_windows() {
             error,
             "cancelled window reservation",
         );
-        if panic.is_some() || std::thread::panicking() {
-            std::mem::forget(completion);
-        } else {
-            let error =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut panic,
-                error,
-                "cancelled window retirement",
-            );
-        }
+        let error =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "cancelled window retirement",
+        );
     }
     if let Some(payload) = panic {
         std::panic::resume_unwind(payload);
@@ -1078,7 +1088,7 @@ fn finish_open_secondary_window(
                     super::discard_window(window.as_ref(), "an uninstalled secondary window");
                 }))
             {
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }
@@ -1529,6 +1539,7 @@ mod tests {
             .run(crate::app::runner::app_handler(|owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 let closed = Arc::new(AtomicUsize::new(0));
+                let captures = flui_testing::DropLedger::new();
                 let mut requests = Vec::new();
                 for _ in 0..2 {
                     let window = with_owner_platform(|owner| {
@@ -1546,13 +1557,17 @@ mod tests {
                     );
                     let (reply, request) = crate::app::WindowRequest::new();
                     requests.push(request);
+                    let capture = captures.plant();
                     let config = SecondaryWindowInstallConfig {
                         loop_identity: APP_RUNTIME
                             .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
                         policy: WindowPolicy::Isolated,
                         shared_with: None,
                         reservation: reserve_window().expect("reservation"),
-                        close_request_handler: None,
+                        close_request_handler: Some(CloseRequestHandler::new(move |_| {
+                            let _retained = &capture;
+                            crate::app::CloseResponse::Close
+                        })),
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
                         motion_override: AppConfig::new().motion_override,
@@ -1586,6 +1601,11 @@ mod tests {
                     2,
                     "both native windows close despite a failing receiver"
                 );
+                assert_eq!(
+                    captures.live(),
+                    0,
+                    "a caught wake panic must not leak later captures"
+                );
                 for request in &mut requests {
                     assert!(matches!(
                         request.try_result(),
@@ -1602,6 +1622,9 @@ mod tests {
                 Ok(())
             }))
             .expect("headless run");
+        if let Some(payload) = super::super::terminal::take_terminal() {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     fn receipt_wake_failure_retries_the_accepted_installation_tail() {

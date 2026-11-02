@@ -1,7 +1,9 @@
 # ADR-0284: Independent UI runtimes may have dedicated owners
 
-- **Status:** Accepted (2026-11-01). Not implemented: dedicated-owner bootstrap, coordinator,
-  runner migration and production native acceptance. Acceptance authorizes the design, not support.
+- **Status:** Accepted (2026-11-01). Implementation in progress: the bounded document transport,
+  coordinator and dedicated bootstrap are exercised through the headless testing kit and an
+  explicit Win32 qualification entry. Production native admission remains unavailable;
+  integrated native acceptance and development-tool routing are still required.
 - **Date:** 2026-11-01
 - **Supersedes:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md)
   §1's process-wide owner requirement, §2's unconditional denial of independent frame progress,
@@ -93,11 +95,13 @@ context-dependent `Unsupported` returned when acquiring an optional capability r
 capability value, not a launch failure. The owner-local registry itself never crosses threads.
 
 The accepted exception permits the launch factory's named facade `Send` position.
-When the entry is implemented, record its exact positions in the `send-positions` allowlist;
-repository guidance recognizes only this exception. No blanket reseed, additional
-UI bounds, unsafe `Send` implementation or `send_wrapper` exception is authorized. Until
-implementation, the allowlist remains unchanged. A production consumer and a
-compile-fail fixture for capturing `Rc` accompany that entry.
+The `send-positions` allowlist records exactly one new `bound` position at
+`flui_app::app::dedicated_window::open_dedicated_window`; repository guidance recognizes
+only this exception. Moving `AppWindowError` to the portable receipt module preserves its
+eight existing error-source positions. No blanket reseed, additional UI bounds, unsafe
+`Send` implementation or `send_wrapper` exception is authorized. The
+`multi_owner_document` example and a compile-fail fixture for capturing `Rc` accompany
+the entry; a compile-pass fixture constructs `Rc` inside the destination factory.
 
 ### §2. Native and UI responsibilities colocate on each Win32 owner
 
@@ -149,9 +153,14 @@ Launch progresses through reserved, starting, mounted, retiring and retired stat
 launch rolls back native and UI resources on their respective owners. Cancellation of an
 unobserved receipt does not discard admitted work. Retirement fences new work, settles
 receipts, revokes routes, releases presentation resources and drops UI captures on their
-owner. The dedicated loop drains and exits after local retirement; thread completion is
-acknowledged to the coordinator before the application's coordinator loop exits. No join blocks an active
-native callback; no shutdown timeout detaches a live owner or drops its UI on another thread.
+owner. The dedicated loop drains and exits after local retirement; full thread completion,
+including TLS destruction, is acknowledged before releasing its owner slot or ending the
+coordinator loop. `JoinHandle::is_finished` alone is not that proof. A non-UI helper joins each
+admitted owner and hands its result to the coordinator's reserved control slot without
+running application callbacks. The coordinator processes results and failures on its own
+thread. No join blocks an active native callback; no shutdown timeout detaches a live owner
+or drops its UI on another thread. `owner_capacity_includes_thread_local_retirement` and
+`global_quit_keeps_initial_loop_until_full_thread_retirement` cover these boundaries.
 
 User callbacks, wakes, logging and destruction run with transport guards released and state
 committed. A contained failure preserves the first failure while completing other owners'

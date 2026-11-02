@@ -264,6 +264,51 @@ pub(crate) mod native_actions {
         );
     }
 
+    pub(crate) fn two_fields_publish_the_current_keyboard_focus() {
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        let pipeline = Rc::new(RefCell::new(None));
+        let root = FieldHost {
+            pipeline: Rc::clone(&pipeline),
+            child: flui_widgets::Column::new(flui_widgets::column![
+                EditableText::new(
+                    TextEditingController::with_text("first"),
+                    Rc::clone(&nodes[0])
+                ),
+                EditableText::new(
+                    TextEditingController::with_text("second"),
+                    Rc::clone(&nodes[1])
+                ),
+            ])
+            .boxed(),
+        };
+        let mut host = HeadlessHost::new(HeadlessWindow::new(400, 200).with_text_input());
+        host.attach(&root).expect("mount two fields");
+        host.enable_semantics();
+        let _ = host.pump(Duration::ZERO);
+        for index in [0, 1, 0, 1] {
+            let _ = nodes[index].request_focus();
+            let _ = host.pump(Duration::ZERO);
+            let pipeline = pipeline.borrow().clone().expect("mounted pipeline");
+            let tree = A11yTree::new(pipeline.with(|owner| {
+                owner
+                    .semantics_owner()
+                    .and_then(|owner| owner.to_accesskit_tree_update(None))
+                    .expect("published tree")
+            }));
+            let fields = tree.find_all(Role::TextInput);
+            assert_eq!(fields.len(), 2);
+            assert_eq!(tree.focus().map(|node| node.id()), Some(fields[index].id()));
+            let published = host
+                .published_a11y_tree(host.primary_window())
+                .expect("adapter tree");
+            assert_eq!(
+                published.focus().map(|node| node.id()),
+                Some(fields[index].id()),
+                "adapter focus follows field {index}"
+            );
+        }
+    }
+
     pub(crate) fn native_actions_follow_the_replacement_controller_and_focus_node() {
         let mut fixture = Fixture::new();
         let id = fixture.id();

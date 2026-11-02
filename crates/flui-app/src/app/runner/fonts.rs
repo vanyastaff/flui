@@ -47,11 +47,12 @@ pub enum FontRegistrationError {
 /// app's font collection, and measures and paints with them from its first
 /// frame.
 ///
-/// The app's fonts belong to the thread that runs it. Called on another
-/// thread (a worker that downloaded the bytes, say), the bytes are held for
-/// an app that thread never runs: neither paint nor measurement gains the
-/// face, so the two never disagree, and no scan of the host's fonts runs
-/// there. Send the bytes to the app's thread and register them there.
+/// Registered owners share the application's collection and registration set;
+/// changes wake each owner and are applied to its local text on its next turn.
+/// A background thread that is not a registered UI owner still holds bytes for
+/// an app it never runs. Send those bytes to an owner before registering them.
+/// Full application teardown releases the collection and registration set;
+/// a subsequent run starts fresh.
 ///
 /// # Errors
 ///
@@ -69,8 +70,9 @@ pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
         // Held for the first ui_runtime when the services are not resolved yet:
         // whichever ui_runtime comes first is built over the collection and
         // measures with the face from the start, and nothing is announced.
-        runtime.register_font(font_bytes)
-    })?;
+        runtime.register_font(font_bytes)?;
+        Ok::<_, FontRegistrationError>(runtime.service_wake_callback())
+    })?();
     announce_font_change();
     Ok(())
 }

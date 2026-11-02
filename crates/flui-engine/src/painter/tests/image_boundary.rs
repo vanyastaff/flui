@@ -102,46 +102,66 @@ pub(super) fn filtered_image_device_limits_refuse_and_recover() {
 
 pub(super) fn filtered_image_matrix_range() {
     use flui_painting::paint::{ColorFilter, ColorMatrix};
-    for coefficient in [f32::NAN, f32::INFINITY, f32::MAX] {
-        for offset in [0.0, 0.25, 1.0] {
-            let mut matrix = ColorMatrix::identity();
-            matrix.values[..5].copy_from_slice(&[
-                coefficient,
-                coefficient,
-                -coefficient,
-                -coefficient,
-                offset,
-            ]);
-            let pixels = draw_clear(32, wgpu::Color::BLUE, |p| {
-                p.draw_image_region(
-                    &image(),
-                    Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
-                    Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
-                    None,
-                    ImageRepeat::NoRepeat,
-                    Some(ColorFilter::Matrix(matrix)),
-                    None,
+    for coefficient in [f32::NAN, f32::INFINITY, 1.0e20, f32::MAX, -f32::MAX] {
+        for source in [
+            [255, 255, 255, 255],
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [255, 255, 0, 255],
+            [0, 0, 255, 255],
+            [0, 255, 255, 255],
+        ] {
+            for offset in [0.0, 0.25, 1.0, f32::MAX, -f32::MAX] {
+                let mut matrix = ColorMatrix::identity();
+                matrix.values[..5].copy_from_slice(&[
+                    coefficient,
+                    coefficient,
+                    -coefficient,
+                    -coefficient,
+                    offset,
+                ]);
+                let pixels = draw_clear(32, wgpu::Color::BLUE, |p| {
+                    p.draw_image_region(
+                        &Image::from_rgba8(4, 4, source.repeat(16)),
+                        Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                        Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+                        None,
+                        ImageRepeat::NoRepeat,
+                        Some(ColorFilter::Matrix(matrix)),
+                        None,
+                    );
+                    p.draw_rect(
+                        Rect::from_xywh(16.0, 16.0, 8.0, 8.0),
+                        &Paint::fill(Color::RED),
+                    );
+                });
+                let expected = if coefficient.is_finite() {
+                    // The f64 oracle does not overflow when the finite f32
+                    // products cancel or saturate. Add the offset after the sum.
+                    let channels = source.map(|channel| f64::from(channel) / 255.0);
+                    let red = f64::from(coefficient)
+                        * (channels[0] + channels[1] - channels[2] - channels[3])
+                        + f64::from(offset);
+                    [
+                        (red.clamp(0.0, 1.0) * 255.0).round() as u8,
+                        source[1],
+                        source[2],
+                        source[3],
+                    ]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                assert_eq!(
+                    pixel_at(&pixels, 32, 4, 4),
+                    expected,
+                    "matrix coefficient {coefficient}, offset {offset}, source {source:?}"
                 );
-                p.draw_rect(
-                    Rect::from_xywh(16.0, 16.0, 8.0, 8.0),
-                    &Paint::fill(Color::RED),
+                assert_eq!(
+                    pixel_at(&pixels, 32, 20, 20),
+                    [255, 0, 0, 255],
+                    "a valid following draw remains deliverable"
                 );
-            });
-            let expected = if coefficient.is_finite() {
-                [(offset * 255.0).round() as u8, 255, 255, 255]
-            } else {
-                [0, 0, 255, 255]
-            };
-            assert_eq!(
-                pixel_at(&pixels, 32, 4, 4),
-                expected,
-                "matrix coefficient {coefficient}"
-            );
-            assert_eq!(
-                pixel_at(&pixels, 32, 20, 20),
-                [255, 0, 0, 255],
-                "a valid following draw remains deliverable"
-            );
+            }
         }
     }
 }

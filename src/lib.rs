@@ -313,13 +313,7 @@ pub use flui_app::android_activity;
 pub use flui_app::app::AppConfig;
 /// The errors a window request can fail with — what [`open_window`] and
 /// [`AppHandle`] report, and what an [`Application`] window-error observer
-/// receives. Re-exported from [`app`] (`flui-app`); desktop only, like the
-/// entry points that produce it.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
+/// receives. Also describes portable dedicated-placement refusal.
 pub use flui_app::app::AppWindowError;
 /// Whether an additional window joins the caller's UI runtime or gets its own.
 /// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
@@ -384,6 +378,12 @@ pub use flui_app::run_app_android;
 pub use flui_app::{
     AppCapabilities, AppLaunch, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem,
 };
+/// Versioned application document exchange between registered owners.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub use flui_app::{
+    DocumentOutcome, DocumentPort, DocumentRefusal, DocumentRequest, DocumentRevision,
+    DocumentSendError, DocumentSnapshot, SharedDocument,
+};
 /// Registers a font's faces with the app, for measurement, paint and carets.
 /// Re-exported from [`app`] (`flui-app`).
 ///
@@ -396,6 +396,9 @@ pub use flui_app::{
 /// return [`FontRegistrationError`] without adding a face. See
 /// [`app::register_font`] for the individual error variants.
 pub use flui_app::{FontRegistrationError, register_font};
+/// Dedicated construction and its owner-local options. Native admission stays
+/// unavailable until the host/backend passes ADR-0284's native acceptance.
+pub use flui_app::{OwnerLimits, RuntimeWindowConfig, WindowRequest, open_dedicated_window};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature

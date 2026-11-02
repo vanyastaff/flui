@@ -42,6 +42,12 @@ fn request_test_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
 
 #[cfg(feature = "testing")]
 fn request_device(adapter: &wgpu::Adapter, label: &str) -> (wgpu::Device, wgpu::Queue) {
+    if require_gpu() {
+        eprintln!(
+            "GPU readback device={label:?} adapter={:?}",
+            adapter.get_info()
+        );
+    }
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
         ..Default::default()

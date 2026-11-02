@@ -98,6 +98,8 @@ pub(crate) enum WindowRenderers {
     /// The test kit's stand-in, one per window, kept where the test finds it.
     #[cfg(feature = "testing")]
     StandIn(super::stand_in_renderer::StandInRenderers),
+    #[cfg(feature = "testing")]
+    Qualification(super::native_frames::NativeFrames),
 }
 
 impl WindowRenderers {
@@ -116,6 +118,15 @@ impl WindowRenderers {
             ))?),
             #[cfg(feature = "testing")]
             Self::StandIn(renderers) => Box::new(renderers.open(window.id())),
+            #[cfg(feature = "testing")]
+            Self::Qualification(frames) => {
+                let renderer = pollster::block_on(Renderer::with_surface_color(
+                    window.surface_target(),
+                    config.surface_color,
+                    super::host::display_color_of(window),
+                ))?;
+                Box::new(frames.open(window.id(), renderer))
+            }
         })
     }
 }
@@ -126,6 +137,8 @@ impl std::fmt::Debug for WindowRenderers {
             Self::Gpu => f.write_str("Gpu"),
             #[cfg(feature = "testing")]
             Self::StandIn(_) => f.write_str("StandIn"),
+            #[cfg(feature = "testing")]
+            Self::Qualification(_) => f.write_str("Qualification"),
         }
     }
 }

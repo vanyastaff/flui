@@ -22,6 +22,7 @@ pub struct StandInRenderer {
 struct StandInState {
     presented: u64,
     lost: bool,
+    lose_after_present: bool,
     failing_recoveries: u32,
     recovery_attempts: u32,
     released: bool,
@@ -38,6 +39,12 @@ impl StandInRenderer {
     /// runner rebuilds the device.
     pub fn lose_device(&self) {
         self.state.lock().lost = true;
+    }
+
+    /// Lose the device immediately after the next successful presentation.
+    /// The runner must repaint the new backing store after its post-frame rebuild.
+    pub fn lose_device_after_present(&self) {
+        self.state.lock().lose_after_present = true;
     }
 
     /// Fail the next `attempts` rebuilds of a lost device.
@@ -127,6 +134,9 @@ impl RasterBackend for StandInBackend {
             .presented
             .checked_add(1)
             .expect("BUG: a stand-in renderer presented u64::MAX frames");
+        if std::mem::take(&mut state.lose_after_present) {
+            state.lost = true;
+        }
         Ok(PresentDisposition::Presented)
     }
     fn resize(&mut self, width: u32, height: u32) {

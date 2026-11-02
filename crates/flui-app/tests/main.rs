@@ -34,6 +34,10 @@ mod runner_frame_ordering;
 mod runner_teardown;
 
 // The same kit, with a main window that renders with its stand-in renderer.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+mod multi_owner;
+#[cfg(windows)]
+mod native_multi_owner;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

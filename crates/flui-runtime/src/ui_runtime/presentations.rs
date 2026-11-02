@@ -372,6 +372,22 @@ impl UiRuntime {
         })
     }
 
+    /// Suppress semantics collection for an explicitly labelled measurement
+    /// baseline, regardless of attached platform clients. Not an accessibility
+    /// configuration: native qualification must also run without this control.
+    #[cfg(feature = "testing")]
+    pub fn suppress_semantics_for_test(&self, id: PresentationId) -> bool {
+        let Some(state) = self.presentations.get(id) else {
+            return false;
+        };
+        state
+            .semantics_host()
+            .collection_suppressed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.request_redraw_for(state);
+        true
+    }
+
     /// The primary presentation's own `FrameClock::produced_count` — for
     /// tests in a sibling module (`runner.rs`) that need to observe the
     /// clock's produce count without reaching into the private

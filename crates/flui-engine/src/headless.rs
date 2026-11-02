@@ -377,7 +377,7 @@ fn clear_to_background(
 /// `width * 4` zero) that would size the staging buffer at zero bytes and
 /// re-enter the `wgpu-core` panic, which is worth one conversion not to have
 /// to re-derive later.
-fn readback_rgba(
+pub(crate) fn readback_rgba(
     domain: &crate::device_domain::DeviceDomain,
     texture: &wgpu::Texture,
     width: u32,

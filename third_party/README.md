@@ -140,10 +140,16 @@ position slider's `RangeValue` and reads no position.
   `UIA_ScrollPatternNoScroll` keeps its position. A percentage outside 0 to 100 is
   `E_INVALIDARG`;
 - `tests::scroll::scroll_pattern`, run through the in-process UI Automation client as the
-  crate's other tests are.
+  crate's other tests are;
+- string conversion still works after its optional thread-local scratch pool is destroyed.
+  COM apartment retirement can pump a UIA property request at that point. Acquiring a new
+  buffer falls back to an allocation, and returning an outstanding lease releases it.
+  `util::tests::scratch_remains_usable_after_its_thread_local_pool_is_destroyed` checks both
+  paths; the native `ole_drag_and_drop_on_real_windows` case reproduced the original abort.
 
-**Drop it when** an `accesskit_windows` release implements `ScrollPattern`. The text for that
-upstream pull request is below; it has not been sent.
+**Drop it when** an `accesskit_windows` release implements `ScrollPattern` and tolerates UIA
+string conversion during TLS retirement. The text for the scroll-pattern upstream pull
+request is below; it has not been sent.
 
 ### Upstream pull request (not sent)
 

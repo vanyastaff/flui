@@ -19,6 +19,8 @@ impl OpenWindows for CountedWindows {
 }
 
 impl ClassWindows for CountedWindows {
+    fn close_all(&self) {}
+
     fn redraw_for_deadline(&self) {
         self.frames_asked.fetch_add(1, Ordering::Relaxed);
     }

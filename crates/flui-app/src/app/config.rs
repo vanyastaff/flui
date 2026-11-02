@@ -73,6 +73,8 @@ impl Default for DiagnosticsProfile {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct AppConfig {
+    /// Bounds for owners and queued application work (ADR-0284).
+    pub owner_limits: super::OwnerLimits,
     /// Process-level application identity used by native diagnostics sinks
     /// and the storage host.
     ///
@@ -326,6 +328,7 @@ fn build_identity() -> AppIdentity {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            owner_limits: super::OwnerLimits::default(),
             application_identity: build_identity(),
             diagnostics_profile: DiagnosticsProfile::default(),
             motion_override: MotionOverride::FollowSystem,
@@ -362,6 +365,12 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Configure admission bounds for this application run.
+    #[must_use]
+    pub fn with_owner_limits(mut self, limits: super::OwnerLimits) -> Self {
+        self.owner_limits = limits;
+        self
+    }
     /// Override the host motion preference before the first root is mounted.
     #[must_use]
     pub fn with_motion_override(mut self, preference: MotionOverride) -> Self {

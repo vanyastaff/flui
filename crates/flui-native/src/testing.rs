@@ -10,5 +10,7 @@ pub mod appkit;
 pub mod clipboard;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;
+#[cfg(windows)]
+pub mod windows;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod x11;

@@ -100,6 +100,8 @@ impl OpenWindows for NoWindows {
 }
 
 impl ClassWindows for NoWindows {
+    fn close_all(&self) {}
+
     fn redraw_for_deadline(&self) {}
 
     fn paint_invalid(&self) {}

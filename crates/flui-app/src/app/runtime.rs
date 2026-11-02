@@ -49,8 +49,9 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// start; the host's are added off the owner thread by the feed it was
 /// built with ([`FontCollection::with_host_feed`], ADR-0092 §7), so text
 /// measures, paints and places its carets in the host's faces wherever the
-/// bundled ones lack a family once that feed lands. "Per owner thread" is per app while
-/// ADR-0091 fixes one owner thread per process. Semantics state belongs
+/// bundled ones lack a family once that feed lands. The initial application owner
+/// starts the feed and follows the host's locale; dedicated owners receive the
+/// same collection without starting another feed (ADR-0284). Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each UI runtime
 /// (see `flui_runtime`'s `RuntimeServices::construct`). System settings belong
 /// to the installed host's `SystemPreferences` source (ADR-0172), independently
@@ -66,7 +67,7 @@ pub(crate) struct SharedEngineServices {
     host_feed: Cell<Option<HostFontFeed>>,
     /// Where the app asks for the fallback order of a new locale
     /// (ADR-0271 §4).
-    fallback: FallbackRescan,
+    fallback: Option<FallbackRescan>,
     /// The requests the feed's thread serves once it has run, launched with
     /// the feed.
     fallback_requests: Cell<Option<Receiver<String>>>,
@@ -75,11 +76,8 @@ pub(crate) struct SharedEngineServices {
 }
 
 impl SharedEngineServices {
-    /// Resolves the process-level services that survive a scheduler that is
-    /// no longer process-global. Called once per owner thread
-    /// (`ensure_services`'s `OnceCell::get_or_init`), the same steal-proof,
-    /// idempotent guarantee the retired `AppBinding::instance()`'s
-    /// thread-local initializer gave.
+    /// Resolves the application services once on its initial owner. Dedicated
+    /// owners adopt the resulting handles before their first runtime is built.
     fn resolve() -> Self {
         // Reached only through `AppRuntime::ensure_services()` and
         // `AppRuntime::font_collection()`, just before the first ui_runtime is
@@ -105,11 +103,28 @@ impl SharedEngineServices {
         Self {
             fonts,
             host_feed: Cell::new(Some(feed)),
-            fallback,
+            fallback: Some(fallback),
             fallback_requests: Cell::new(Some(requests)),
             ask_host,
         }
     }
+}
+
+/// Transferable services of one application. Owner-local slots/providers are
+/// reconstructed around these handles; only the initial owner shuts them down.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub(crate) struct RunServices {
+    #[cfg(feature = "testing")]
+    renderers: super::runner::window_renderer::WindowRenderers,
+    memory: Arc<super::host_memory::HostMemory>,
+    fonts: FontCollection,
+    registrations: Arc<parking_lot::Mutex<FontRegistrations>>,
+    execution: Arc<ExecutionServices>,
+    storage: Result<Arc<dyn flui_platform::Storage>, flui_platform::Unsupported>,
+    flush: Option<flui_view::__runtime::FlushHost>,
+    pub(crate) manifest: flui_runtime::capability::CapabilityManifest,
+    pub(crate) failure_detail: flui_runtime::frame_failure::FrameFailureDetail,
+    pub(crate) has_development_hooks: bool,
 }
 
 /// What identifies a registered font's bytes: a hash of them and their
@@ -126,6 +141,19 @@ struct FontRegistrations {
     /// on the collection when it is built. On a thread that never builds a
     /// UI runtime they stay here, and no collection gains them.
     pending: Vec<Vec<u8>>,
+}
+
+struct FontReservation {
+    registrations: Arc<parking_lot::Mutex<FontRegistrations>>,
+    digest: FontDigest,
+    committed: bool,
+}
+impl Drop for FontReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.registrations.lock().digests.remove(&self.digest);
+        }
+    }
 }
 
 fn font_digest(font_bytes: &[u8]) -> FontDigest {
@@ -379,6 +407,12 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(super) owner_route: Option<super::application_control::OwnerRoute>,
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(super) dedicated_backend: super::runner::dedicated::DedicatedBackend,
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(super) dedicated_launch: Option<super::runner::dedicated::PendingDedicated>,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -393,7 +427,7 @@ pub(crate) struct AppRuntime {
     services: OnceCell<SharedEngineServices>,
     /// The fonts registered through [`Self::register_font`], and those still
     /// waiting for `services`.
-    fonts: RefCell<FontRegistrations>,
+    fonts: Arc<parking_lot::Mutex<FontRegistrations>>,
     /// The collection's generation the UI runtimes were last told of
     /// ([`Self::take_font_change`]).
     fonts_announced: Cell<u64>,
@@ -567,6 +601,12 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_ingress: None,
+            #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+            owner_route: None,
+            #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+            dedicated_backend: super::runner::dedicated::DedicatedBackend::Unavailable,
+            #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+            dedicated_launch: None,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -574,7 +614,7 @@ impl AppRuntime {
             ))]
             main_host_lifecycle: flui_scheduler::AppLifecycleState::Detached,
             services: OnceCell::new(),
-            fonts: RefCell::new(FontRegistrations::default()),
+            fonts: Arc::default(),
             fonts_announced: Cell::new(0),
             fallback_locale: RefCell::new(None),
             preference_reads: Cell::new(0),
@@ -666,7 +706,7 @@ impl AppRuntime {
     /// ([`Self::take_font_change`]) even if it lands at once.
     fn resolved_services(&self) -> &SharedEngineServices {
         let services = self.services.get_or_init(SharedEngineServices::resolve);
-        let pending = std::mem::take(&mut self.fonts.borrow_mut().pending);
+        let pending = std::mem::take(&mut self.fonts.lock().pending);
         for font_bytes in pending {
             // Checked when it was accepted; a refusal now would be the two
             // sides disagreeing with the check, and refuses on both.
@@ -674,8 +714,10 @@ impl AppRuntime {
                 tracing::warn!(%error, "a font registered before the first ui_runtime was refused");
             }
         }
-        if let Some(tag) = self.fallback_locale.take() {
-            services.fallback.follow(tag);
+        if let Some(tag) = self.fallback_locale.take()
+            && let Some(fallback) = &services.fallback
+        {
+            fallback.follow(tag);
         }
         if let Some(feed) = services.host_feed.take() {
             self.fonts_announced.set(services.fonts.generation());
@@ -684,12 +726,19 @@ impl AppRuntime {
                 .take()
                 .expect("BUG: the fallback requests are launched with the feed");
             let ask = Arc::clone(&services.ask_host);
-            if let Some((order, requests)) =
-                LAUNCH_HOST_FEED(feed, requests, Arc::clone(&ask), self.frame_wake_callback())
-            {
+            if let Some((order, requests)) = LAUNCH_HOST_FEED(
+                feed,
+                requests,
+                Arc::clone(&ask),
+                self.service_wake_callback(),
+            ) {
                 // Before the first frame: the generation the change raises
                 // is announced like the feed's own.
-                services.fallback.keep_inline(order, requests, ask);
+                services
+                    .fallback
+                    .as_ref()
+                    .expect("BUG: the initial owner retains the font feed")
+                    .keep_inline(order, requests, ask);
             }
         }
         services
@@ -732,8 +781,9 @@ impl AppRuntime {
         };
         services
             .fallback
-            .follow(tag)
-            .then(|| self.frame_wake_callback())
+            .as_ref()
+            .is_some_and(|fallback| fallback.follow(tag))
+            .then(|| self.service_wake_callback())
     }
 
     /// Whether the app's font collection changed since the UI runtimes were last
@@ -762,6 +812,57 @@ impl AppRuntime {
         self.resolved_services().fonts.clone()
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(crate) fn run_services(&mut self, config: &super::AppConfig) -> RunServices {
+        RunServices {
+            #[cfg(feature = "testing")]
+            renderers: self.window_renderers.clone(),
+            memory: Arc::clone(&self.host_memory),
+            fonts: self.font_collection(),
+            registrations: Arc::clone(&self.fonts),
+            execution: Arc::clone(self.ensure_execution()),
+            storage: self.host_storage.snapshot(),
+            flush: self.flush_host.clone(),
+            manifest: self
+                .capabilities
+                .as_ref()
+                .expect("BUG: application providers installed before its services are shared")
+                .registration_manifest(),
+            failure_detail: config.frame_failure_detail,
+            has_development_hooks: config.dev_agent.is_some() || config.dev_reload.is_some(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    pub(crate) fn adopt_run_services(&mut self, services: &RunServices) {
+        #[cfg(feature = "testing")]
+        {
+            self.window_renderers = services.renderers.clone();
+        }
+        assert!(
+            self.services.get().is_none() && self.execution.get().is_none(),
+            "BUG: dedicated bootstrap has not resolved services"
+        );
+        let installed = self.services.set(SharedEngineServices {
+            fonts: services.fonts.clone(),
+            host_feed: Cell::new(None),
+            fallback: None,
+            fallback_requests: Cell::new(None),
+            ask_host: Arc::new(flui_native::fonts::system_fallback),
+        });
+        assert!(installed.is_ok(), "BUG: fresh owner's font slot is empty");
+        self.fonts = Arc::clone(&services.registrations);
+        self.host_memory = Arc::clone(&services.memory);
+        let installed = self.execution.set(Arc::clone(&services.execution));
+        assert!(
+            installed.is_ok(),
+            "BUG: fresh owner's execution slot is empty"
+        );
+        *self.execution_slot.borrow_mut() = Some(Arc::downgrade(&services.execution));
+        self.host_storage.install(services.storage.clone());
+        self.flush_host.clone_from(&services.flush);
+    }
+
     /// Registers `font_bytes` on the app's font collection, which measures,
     /// paints and places carets in text.
     ///
@@ -779,17 +880,37 @@ impl AppRuntime {
     /// way nothing changes.
     pub(super) fn register_font(&self, font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
         let digest = font_digest(font_bytes);
-        if self.fonts.borrow().digests.contains(&digest) {
+        FontCollection::check_font(font_bytes)?;
+        if !self.fonts.lock().digests.insert(digest) {
             return Err(FontRegistrationError::AlreadyRegistered);
         }
+        let mut reservation = FontReservation {
+            registrations: Arc::clone(&self.fonts),
+            digest,
+            committed: false,
+        };
         if let Some(services) = self.services.get() {
             services.fonts.register_font(font_bytes)?;
         } else {
-            FontCollection::check_font(font_bytes)?;
-            self.fonts.borrow_mut().pending.push(font_bytes.to_vec());
+            self.fonts.lock().pending.push(font_bytes.to_vec());
         }
-        self.fonts.borrow_mut().digests.insert(digest);
+        reservation.committed = true;
         Ok(())
+    }
+
+    /// Shared service changes wake every owner; each observes the collection's
+    /// generation and invalidates only its local UI runtimes on its own turn.
+    pub(super) fn service_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
+        #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+        if let Some(route) = &self.owner_route {
+            let run = Arc::downgrade(&route.ingress);
+            return Arc::new(move || {
+                if let Some(run) = run.upgrade() {
+                    run.wake_all();
+                }
+            });
+        }
+        self.frame_wake_callback()
     }
 
     /// Stash the host's executors ahead of the first UI runtime install (the
@@ -920,6 +1041,12 @@ impl AppRuntime {
         self.service_registry.exit_notifier()
     }
 
+    /// Detach the owner-lifetime callback; destruction must happen outside TLS.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn take_exit_policy_notifier(&mut self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.service_registry.take_exit_notifier()
+    }
+
     /// Reopen service admission for a loop that is (re)installing a UI runtime
     /// — the registry counterpart of the `execution` slot's second-loop
     /// reset. Running services are untouched: a mid-loop reinstall
@@ -999,8 +1126,30 @@ impl AppRuntime {
         // the next `run_*` stashes its own config's bundle if it has one.
         self.pending_host_executors = None;
         if let Some(services) = self.execution.take() {
+            #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+            if self
+                .owner_route
+                .as_ref()
+                .is_some_and(|route| !route.is_initial())
+            {
+                return;
+            }
             services.shutdown(deadline);
         }
+    }
+
+    /// Detach run-owned service inputs after the last UI transaction. The caller
+    /// drops them outside TLS; the initial owner reaches this after worker joins.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn take_service_inputs(
+        &mut self,
+    ) -> (
+        Option<SharedEngineServices>,
+        Arc<super::host_memory::HostMemory>,
+    ) {
+        self.fonts = Arc::default();
+        self.fonts_announced.set(0);
+        (self.services.take(), std::mem::take(&mut self.host_memory))
     }
 
     /// Observe the active lease, or the strongest resident scheduler phase,
@@ -1740,7 +1889,11 @@ mod font_collection_tests {
         let (ask, asked) = host_answering_ja();
         let services = runtime.ensure_services();
         assert!(
-            services.fallback.keep_inline(order, requests, ask),
+            services
+                .fallback
+                .as_ref()
+                .expect("initial owner's fallback")
+                .keep_inline(order, requests, ask),
             "the locale accepted before the launch is installed"
         );
         assert_eq!(*asked.lock(), ["ja-JP"]);

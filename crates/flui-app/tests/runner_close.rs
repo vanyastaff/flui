@@ -692,6 +692,46 @@ pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
     }
 }
 
+/// Admission from a close callback invalidates that owner's consultation.
+#[test]
+fn global_quit_revalidates_windows_admitted_during_consultation() {
+    let opened = Arc::new(AtomicBool::new(false));
+    let asked = Arc::new(AtomicBool::new(false));
+    let child_asked = Arc::clone(&asked);
+    let handler = CloseRequestHandler::new(move |request| {
+        if request.reason() == CloseReason::Program && !opened.swap(true, Ordering::SeqCst) {
+            let asked = Arc::clone(&child_asked);
+            let config =
+                AppConfig::new().with_close_request_handler(CloseRequestHandler::new(move |_| {
+                    asked.store(true, Ordering::SeqCst);
+                    CloseResponse::KeepOpen
+                }));
+            // Abandoning observation must not abandon the accepted launch.
+            drop(
+                flui_app::app::open_window(
+                    config,
+                    flui_app::app::WindowPolicy::Isolated,
+                    flui_widgets::SizedBox::square(12.0),
+                )
+                .expect("launch during consultation is admitted"),
+            );
+        }
+        CloseResponse::Close
+    });
+    let observed = Observed::default();
+    let started = start_with(&observed, Some(handler));
+    started.handle.request_quit().expect("quit admitted");
+    for _ in 0..5 {
+        started.run.run_owner_turn();
+    }
+    assert!(
+        asked.load(Ordering::SeqCst),
+        "quit skipped the newly admitted window"
+    );
+    assert!(started.run.is_running(), "the new window vetoed quit");
+    join_ok(started.run);
+}
+
 /// Sleep until `deadline` and run the turn a native loop runs when its wake
 /// deadline is due: it asks every window for a frame.
 fn wake_at(started: &Started, deadline: Instant) {
@@ -831,6 +871,36 @@ fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
     join_ok(started.run);
+}
+
+#[test]
+fn post_frame_device_recovery_repaints_the_recreated_surface_without_new_input() {
+    let run = HeadlessRun::start(Application::new(|_| flui_widgets::SizedBox::square(32.0)));
+    run.run_owner_turn();
+    let window = run.open_windows().pop().expect("initial window");
+    let renderer = run.renderer(&window).expect("initial renderer");
+    let before = renderer.frames_presented();
+    assert!(before > 0, "initial surface presented");
+    renderer.lose_device_after_present();
+    window.simulate_resize(640.0, 480.0);
+    for _ in 0..4 {
+        if let Some(deadline) = run.wake_deadline() {
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(100)),
+            );
+        }
+        run.run_owner_turn();
+    }
+    assert_eq!(renderer.recovery_attempts(), 1, "post-frame rebuild ran");
+    assert!(
+        renderer.frames_presented() >= before + 2,
+        "the newly recreated surface needs its own frame, even after a successful old-surface present"
+    );
+    window.simulate_close();
+    run.run_owner_turn();
+    join_ok(run);
 }
 
 #[test]
