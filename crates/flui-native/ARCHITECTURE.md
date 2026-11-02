@@ -3927,7 +3927,10 @@ wherever it goes, and the session takes them before the input does. The
 press is the session's from then on: at the loop's next turn the window's
 input ends its contacts as `CaptureLost` (`LoopDrag::pointers_taken`,
 `LoopInput::pointer_taken`), as a Wayland compositor's leave does, so the next
-click starts afresh. The window owns `XdndSelection`, a session starting only
+click starts afresh. Targets know the session by a window of its own,
+unmapped, made as it starts and destroyed as it ends, so a late reply to an
+ended session reaches no later one from the same window. That window owns
+`XdndSelection`, a session starting only
 once the server names it the owner, and lists the session's
 types in `XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other
 format as its media type, the private identity included). Each movement finds
@@ -3938,7 +3941,9 @@ waits for its status at a time, the newest held meanwhile, and a release while o
 one and waits for its answer, so the drop is decided where the button was let
 go. Only the release of the button the drag holds ends it, never a wheel's
 notch or another button. The release drops on a target that accepted with an
-action the runtime allows and leaves one that refused, Escape or the window
+action the runtime allows and leaves one that refused. The session grabs the
+keyboard until the drop, so Escape reaches it wherever the focus goes; where
+the grab is refused, the window losing the focus cancels it. Escape or the window
 unmapping (which ends its grab) leaves and cancels, and a drop ends at `XdndFinished` with the target's action if the
 runtime allows it, cancelled otherwise or after five seconds without one. A
 session whose `XdndSelection` another client takes ends cancelled and lets go
@@ -3980,10 +3985,13 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_session_enters_an_older_target_in_its_version`,
 `a_session_started_over_a_target_enters_it_at_once`,
 `a_session_whose_window_unmaps_ends_cancelled`,
+`a_session_without_the_keyboard_ends_as_its_window_loses_the_focus`,
+`a_late_finish_does_not_end_the_next_session`,
 `only_the_dropped_on_client_reads_the_session_data`; and in `tests/x11_input.rs`,
 with the host's own loop and window, XTest holding and moving the pointer:
 `an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
-that the window's press ends cancelled and its next click arrives whole.
+that the window's press ends cancelled and its next click arrives whole, and
+`an_xtest_escape_cancels_a_drag_after_the_focus_moved`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

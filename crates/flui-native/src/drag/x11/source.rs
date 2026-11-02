@@ -2,8 +2,13 @@
 //!
 //! The session starts when the runtime's drag leaves its window, with a
 //! button still held, so the press's implicit grab keeps the pointer's
-//! XInput 2 events coming to the window wherever it goes. The window owns
-//! `XdndSelection` and lists its types in `XdndTypeList`. Each movement finds
+//! XInput 2 events coming to the window wherever it goes. Targets know the
+//! session by a window of its own, unmapped, made as it starts and destroyed
+//! as it ends: it owns `XdndSelection`, lists the types in `XdndTypeList` and
+//! hears the targets' replies, so a late reply to an ended session reaches
+//! no later one. The session grabs the keyboard so Escape reaches it wherever
+//! the focus goes; where the grab is refused, the window's focus loss
+//! cancels it, since Escape would no longer come. Each movement finds
 //! the `XdndAware` window under the pointer, FLUI's own included, entering
 //! and leaving targets as the pointer crosses them. A position goes out once
 //! the last one is answered, the newest held meanwhile; a release while one
@@ -33,13 +38,13 @@ use flui_platform::{Unsupported, UnsupportedReason};
 use web_time::Instant;
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::Event;
-use x11rb::protocol::xinput;
+use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ConnectionExt as _, EventMask, KeyButMask, PropMode, SELECTION_NOTIFY_EVENT,
-    SelectionNotifyEvent, SelectionRequestEvent,
+    self, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, KeyButMask, PropMode,
+    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use x11rb::{CURRENT_TIME, NONE};
+use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::model::{self, Reply};
 use super::{Atoms, X11Drag};
@@ -58,8 +63,16 @@ const MAX_DEPTH: usize = 64;
 
 /// A session under way.
 pub(super) struct Session {
-    /// The window the drag started in, which owns `XdndSelection`.
+    /// The window the drag started in, whose implicit grab brings the
+    /// pointer's events.
     window: xproto::Window,
+    /// The session's own window, which owns `XdndSelection` and which every
+    /// XDND message names as the source: replies are matched to this
+    /// session by it, not by the window the next session shares.
+    source: xproto::Window,
+    /// The master keyboard the session grabbed; `None` when the grab was
+    /// refused, and a focus loss then cancels.
+    keyboard: Option<xinput::DeviceId>,
     /// Each offered type and the representation it serves.
     types: Vec<(xproto::Atom, RepresentationIndex)>,
     /// The action proposed to every target.
@@ -157,23 +170,51 @@ impl X11Drag {
         let action = self.atoms.actions.atom_of(proposed(allowed));
         let time = self.time();
         let xcb = self.connection.xcb();
+        let Ok(source) = xcb.generate_id() else {
+            tracing::debug!("no X id is left for a drag's window");
+            return Err(refused(UnsupportedReason::Unavailable));
+        };
+        // Destroy the session's window a start gave up on.
+        let abandon = || {
+            if let Err(error) = xcb.destroy_window(source) {
+                tracing::debug!(%error, "cannot destroy a drag's window");
+            }
+            self.flush();
+            Err(refused(UnsupportedReason::Unavailable))
+        };
         let atoms: Vec<xproto::Atom> = types.iter().map(|(atom, _)| *atom).collect();
         let owned = xcb
-            .change_property32(
-                PropMode::REPLACE,
-                window,
-                self.atoms.type_list,
-                AtomEnum::ATOM,
-                &atoms,
+            .create_window(
+                0,
+                source,
+                self.connection.root(),
+                -1,
+                -1,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
             )
             .map(drop)
             .and_then(|()| {
-                xcb.set_selection_owner(window, self.atoms.selection, time)
+                xcb.change_property32(
+                    PropMode::REPLACE,
+                    source,
+                    self.atoms.type_list,
+                    AtomEnum::ATOM,
+                    &atoms,
+                )
+                .map(drop)
+            })
+            .and_then(|()| {
+                xcb.set_selection_owner(source, self.atoms.selection, time)
                     .map(drop)
             });
         if let Err(error) = owned {
             tracing::debug!(%error, "cannot take XdndSelection for a drag");
-            return Err(refused(UnsupportedReason::Unavailable));
+            return abandon();
         }
         // The server ignores a claim older than the selection's last change,
         // and says nothing: a session starts only on the selection it owns,
@@ -183,18 +224,20 @@ impl X11Drag {
             .map_err(x11rb::errors::ReplyError::from)
             .and_then(x11rb::cookie::Cookie::reply);
         match owner {
-            Ok(reply) if reply.owner == window => {}
+            Ok(reply) if reply.owner == source => {}
             Ok(_) => {
                 tracing::debug!("another client holds XdndSelection past the drag's time");
-                return Err(refused(UnsupportedReason::Unavailable));
+                return abandon();
             }
             Err(error) => {
                 tracing::debug!(%error, "cannot ask who holds XdndSelection");
-                return Err(refused(UnsupportedReason::Unavailable));
+                return abandon();
             }
         }
         let session = Session {
             window,
+            source,
+            keyboard: self.grab_keyboard(window, time),
             types,
             action,
             allowed,
@@ -236,6 +279,69 @@ impl X11Drag {
         .into_iter()
         .find(|(held, _)| pointer.mask.contains(*held))
         .map(|(_, button)| (button, (pointer.root_x, pointer.root_y)))
+    }
+
+    /// Grab the master keyboard paired with the client's pointer at `time`,
+    /// its keys reported to `window`, so Escape reaches the session wherever
+    /// the focus goes. `None` when the server has no such keyboard or
+    /// refuses the grab, another client holding it.
+    fn grab_keyboard(
+        &self,
+        window: xproto::Window,
+        time: xproto::Timestamp,
+    ) -> Option<xinput::DeviceId> {
+        let xcb = self.connection.xcb();
+        let pointer = xcb
+            .xinput_xi_get_client_pointer(NONE)
+            .ok()?
+            .reply()
+            .ok()
+            .filter(|reply| reply.set)?
+            .deviceid;
+        let keyboard = xcb
+            .xinput_xi_query_device(pointer)
+            .ok()?
+            .reply()
+            .ok()?
+            .infos
+            .into_iter()
+            .find(|info| {
+                info.deviceid == pointer && info.type_ == xinput::DeviceType::MASTER_POINTER
+            })?
+            .attachment;
+        let mask = xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE;
+        let status = xcb
+            .xinput_xi_grab_device(
+                window,
+                time,
+                NONE,
+                keyboard,
+                xproto::GrabMode::ASYNC,
+                xproto::GrabMode::ASYNC,
+                xinput::GrabOwner::NO_OWNER,
+                &[u32::from(mask)],
+            )
+            .ok()?
+            .reply()
+            .ok()?
+            .status;
+        if status == xproto::GrabStatus::SUCCESS {
+            Some(keyboard)
+        } else {
+            tracing::debug!(
+                ?status,
+                "the keyboard is not the drag's: a focus loss cancels it"
+            );
+            None
+        }
+    }
+
+    /// The window the session under way is known by.
+    #[cfg(test)]
+    pub(super) fn session_source(&self) -> Option<xproto::Window> {
+        self.session
+            .with(|session| session.as_ref().map(|session| session.source))
+            .flatten()
     }
 
     /// The windows whose press a session took since the last call.
@@ -284,12 +390,17 @@ impl X11Drag {
             // The time a session takes the selection at, as ICCCM asks.
             self.saw(time);
         }
-        let Some((window, button)) = self
+        let Some((window, source, button, keyboard)) = self
             .session
             .with(|session| {
-                session
-                    .as_ref()
-                    .map(|session| (session.window, session.button))
+                session.as_ref().map(|session| {
+                    (
+                        session.window,
+                        session.source,
+                        session.button,
+                        session.keyboard.is_some(),
+                    )
+                })
             })
             .flatten()
         else {
@@ -323,7 +434,7 @@ impl X11Drag {
                 }
                 escape
             }
-            Event::ClientMessage(message) if message.format == 32 && message.window == window => {
+            Event::ClientMessage(message) if message.format == 32 && message.window == source => {
                 let version = self
                     .session
                     .with(|session| {
@@ -345,7 +456,7 @@ impl X11Drag {
                 true
             }
             Event::SelectionRequest(request)
-                if request.owner == window && request.selection == self.atoms.selection =>
+                if request.owner == source && request.selection == self.atoms.selection =>
             {
                 self.serve(request);
                 true
@@ -356,8 +467,20 @@ impl X11Drag {
                 self.cancel();
                 false
             }
+            // With the keyboard not the session's, Escape follows the focus
+            // away: losing it cancels, or the release would still drop. The
+            // window hears the loss too.
+            Event::FocusOut(focus)
+                if !keyboard
+                    && focus.event == window
+                    && focus.mode == xproto::NotifyMode::NORMAL
+                    && focus.detail != xproto::NotifyDetail::INFERIOR =>
+            {
+                self.cancel();
+                false
+            }
             Event::SelectionClear(clear)
-                if clear.owner == window && clear.selection == self.atoms.selection =>
+                if clear.owner == source && clear.selection == self.atoms.selection =>
             {
                 self.selection_cleared();
                 true
@@ -384,7 +507,7 @@ impl X11Drag {
         let Some(mut session) = self.take_session() else {
             return;
         };
-        let then = if owner == session.window {
+        let then = if owner == session.source {
             Then::Nothing
         } else {
             session.owns = false;
@@ -394,7 +517,7 @@ impl X11Drag {
                 self.send(
                     over.target,
                     self.atoms.messages.leave,
-                    model::leave(session.window),
+                    model::leave(session.source),
                 );
             }
             self.end(&mut session, OsDragEnd::Cancelled)
@@ -417,7 +540,7 @@ impl X11Drag {
                 self.send(
                     over.target,
                     self.atoms.messages.leave,
-                    model::leave(session.window),
+                    model::leave(session.source),
                 );
             }
             if session.over.is_none()
@@ -428,7 +551,7 @@ impl X11Drag {
                 self.send(
                     target,
                     self.atoms.messages.enter,
-                    model::enter(session.window, version, &types),
+                    model::enter(session.source, version, &types),
                 );
                 session.over = Some(Over {
                     target,
@@ -438,7 +561,7 @@ impl X11Drag {
                     held: None,
                 });
             }
-            let (source, action) = (session.window, session.action);
+            let (source, action) = (session.source, session.action);
             if let Some(over) = session.over.as_mut() {
                 if over.asked {
                     over.held = Some((root, time));
@@ -493,11 +616,13 @@ impl X11Drag {
                 self.send(
                     over.target,
                     self.atoms.messages.drop,
-                    model::drop_at(session.window, time),
+                    model::drop_at(session.source, time),
                 );
                 session.phase = Phase::Dropped {
                     deadline: Instant::now() + FINISH_TIMEOUT,
                 };
+                // The drop is the target's: the keys are the user's again.
+                self.let_go_of_keyboard(session);
                 self.flush();
                 Then::Nothing
             }
@@ -506,7 +631,7 @@ impl X11Drag {
                     self.send(
                         over.target,
                         self.atoms.messages.leave,
-                        model::leave(session.window),
+                        model::leave(session.source),
                     );
                 }
                 self.end(session, OsDragEnd::Cancelled)
@@ -519,7 +644,7 @@ impl X11Drag {
         let Some(mut session) = self.take_session() else {
             return;
         };
-        let source = session.window;
+        let source = session.source;
         let action = session.action;
         let then = match reply {
             Reply::Status {
@@ -614,7 +739,7 @@ impl X11Drag {
                 self.send(
                     over.target,
                     self.atoms.messages.leave,
-                    model::leave(session.window),
+                    model::leave(session.source),
                 );
             }
             self.end(&mut session, OsDragEnd::Cancelled)
@@ -629,7 +754,11 @@ impl X11Drag {
         };
         let then = if session.window == window {
             if let Some(over) = session.over.take() {
-                self.send(over.target, self.atoms.messages.leave, model::leave(window));
+                self.send(
+                    over.target,
+                    self.atoms.messages.leave,
+                    model::leave(session.source),
+                );
             }
             self.end(&mut session, OsDragEnd::Cancelled)
         } else {
@@ -663,7 +792,7 @@ impl X11Drag {
             self.send(
                 over.target,
                 self.atoms.messages.leave,
-                model::leave(session.window),
+                model::leave(session.source),
             );
         }
         let then = self.end(&mut session, OsDragEnd::Cancelled);
@@ -671,9 +800,15 @@ impl X11Drag {
     }
 
     /// End `session` with `outcome`: it lets go of `XdndSelection`, while it
-    /// still owns it, and of its type list, and its hook is to hear
-    /// `outcome`.
+    /// still owns it, and of the keyboard, its window is destroyed, and its
+    /// hook is to hear `outcome`.
     fn end(&self, session: &mut Session, outcome: OsDragEnd) -> Then {
+        session.over = None;
+        // Once ended, the session's window is gone and its grab let go.
+        let Some(on_end) = session.on_end.take() else {
+            return Then::Nothing;
+        };
+        self.let_go_of_keyboard(session);
         let xcb = self.connection.xcb();
         let released = if session.owns {
             xcb.set_selection_owner(NONE, self.atoms.selection, self.time())
@@ -681,18 +816,27 @@ impl X11Drag {
         } else {
             Ok(())
         }
-        .and_then(|()| {
-            xcb.delete_property(session.window, self.atoms.type_list)
-                .map(drop)
-        });
+        // A reply to the session written after this goes to no window: the
+        // next session has a window of its own.
+        .and_then(|()| xcb.destroy_window(session.source).map(drop));
         if let Err(error) = released {
             tracing::debug!(%error, "cannot let go of a drag's selection");
         }
         self.flush();
-        session.over = None;
-        match session.on_end.take() {
-            Some(on_end) => Then::End(on_end, outcome),
-            None => Then::Nothing,
+        Then::End(on_end, outcome)
+    }
+
+    /// Let go of the keyboard `session` grabbed, if it still holds it.
+    fn let_go_of_keyboard(&self, session: &mut Session) {
+        let Some(keyboard) = session.keyboard.take() else {
+            return;
+        };
+        if let Err(error) = self
+            .connection
+            .xcb()
+            .xinput_xi_ungrab_device(self.time(), keyboard)
+        {
+            tracing::debug!(%error, "cannot let go of a drag's keyboard");
         }
     }
 

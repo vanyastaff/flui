@@ -51,6 +51,10 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "an_xtest_drag_from_the_window_drops_on_another_client",
         an_xtest_drag_from_the_window_drops_on_another_client,
     ),
+    (
+        "an_xtest_escape_cancels_a_drag_after_the_focus_moved",
+        an_xtest_escape_cancels_a_drag_after_the_focus_moved,
+    ),
 ];
 
 /// `dead_acute` (`keysymdef.h`).
@@ -812,4 +816,74 @@ fn an_xtest_drag_from_the_window_drops_on_another_client() {
         lines.ends_with(&["down PRIMARY".to_owned(), "up PRIMARY".to_owned()]),
         "the next click reaches the window: {lines:?}"
     );
+}
+
+/// Escape cancels a drag the window started after the focus went to
+/// another window with the button still held, as Alt+Tab or a window that
+/// raises itself moves it: the session holds the keyboard, so the focus
+/// moving does not end it, and Escape still reaches it.
+fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
+    use std::cell::RefCell;
+    use std::num::NonZeroU64;
+
+    use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
+    use flui_platform::data_transfer::{
+        RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
+    };
+    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+
+    park_pointer();
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with("xtest drag and escape", Rc::clone(&handler));
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(50, 40);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+
+    let ended = Rc::new(RefCell::new(None));
+    let end = Rc::clone(&ended);
+    fixture
+        .window
+        .drag_source()
+        .expect("the window has a drag source")
+        .start(OsDragRequest {
+            key: DragSessionKey::new(
+                ProcessNonce::from_raw(NonZeroU64::MIN),
+                UiRuntimeId::new(1),
+                IdMint::<DragSessionId>::new().next().expect("fresh mint"),
+            ),
+            pointer: None,
+            representations: vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }],
+            allowed: TransferActions::COPY,
+            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            on_end: Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
+        })
+        .expect("the session starts");
+
+    focus_elsewhere(&fixture);
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    assert_eq!(
+        *ended.borrow(),
+        None,
+        "the focus moving leaves a session that holds the keyboard"
+    );
+    xtest.key(keycode::ESCAPE, true);
+    xtest.key(keycode::ESCAPE, false);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while ended.borrow().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Escape never reached the session"
+        );
+        run_for(&fixture.platform, Duration::from_millis(10)).expect("the loop turns");
+    }
+    assert_eq!(*ended.borrow(), Some(OsDragEnd::Cancelled));
+    xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
 }
