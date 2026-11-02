@@ -48,7 +48,7 @@ use windows::Win32::{
             PostMessageW, SC_MOVE, SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowWindow, TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
+            WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
             WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         },
     },
@@ -1543,8 +1543,8 @@ impl WindowFixture for Win32Fixture {
 
     /// The Win32 input table: whatever its touchpad, a Win32 window hands the
     /// system no input region.
-    fn input_regions(&self) -> flui_platform::Availability {
-        flui_native::input::availability::windows(false).input_regions()
+    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        flui_native::input::availability::windows(false)
     }
 
     /// A Win32 window's target hands out its `HWND` on any thread.
@@ -1784,6 +1784,35 @@ fn a_close_command_asks_no_veto() {
     assert_eq!(asked.load(Ordering::SeqCst), 0, "the veto was asked");
 }
 
+/// A window the user closes leaves the platform's map and is dropped: once the
+/// test lets go of its own handle, nothing keeps the wrapper alive. Runs only on
+/// a Windows host.
+fn win32_close_drains_platform_map_entry() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let closed = Arc::new(AtomicBool::new(false));
+    let heard = Arc::clone(&closed);
+    window
+        .handler
+        .react_to_close(move || heard.store(true, Ordering::SeqCst));
+    let wrapper = Rc::downgrade(&window.window);
+    let hwnd = hwnd_of(&window);
+    // SAFETY: a message posted to the live window on its creating thread, as
+    // the system's close button posts it.
+    unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+        .expect("WM_CLOSE is posted");
+    assert!(
+        pump_until(Duration::from_secs(1), || closed.load(Ordering::SeqCst)),
+        "the window closed"
+    );
+    drop(window);
+    assert!(
+        pump_until(Duration::from_secs(1), || wrapper.upgrade().is_none()),
+        "the platform still holds the closed window's wrapper"
+    );
+}
+
 #[test]
 fn native_window_commands() {
     let cases: &[(&str, fn())] = &[
@@ -1792,6 +1821,10 @@ fn native_window_commands() {
             a_window_opened_at_open_is_shown,
         ),
         ("a_close_command_asks_no_veto", a_close_command_asks_no_veto),
+        (
+            "win32_close_drains_platform_map_entry",
+            win32_close_drains_platform_map_entry,
+        ),
         (
             "an_unsupported_app_title_bar_opens_with_the_system_frame",
             an_unsupported_app_title_bar_opens_with_the_system_frame,

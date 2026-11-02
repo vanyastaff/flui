@@ -49,5 +49,5 @@ pub use session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextInputPurpose, TextStoreEdit,
     TextStoreRead, TextStoreStatus,
 };
-pub use store::{TextStore, TextStoreObserver};
+pub use store::{TextStore, TextStoreChange, TextStoreObserver};
 pub use utf16::{OffsetError, Utf16Offset, Utf16Range};

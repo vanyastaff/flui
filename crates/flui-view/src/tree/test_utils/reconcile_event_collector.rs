@@ -40,7 +40,7 @@
 //! ```
 //!
 //! The reconciler MUST NOT spawn worker threads emitting
-//! `flui::reconcile` events while a per-thread collector is
+//! `flui.tree.reconcile` events while a per-thread collector is
 //! installed; if a future optimisation requires that, switch to
 //! `tracing::dispatcher::set_default()` (global) and gate the
 //! affected tests behind `#[serial_test::serial]`. The per-thread
@@ -156,7 +156,7 @@ where
     fn enabled(&self, metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
         // Short-circuit at the metadata stage so we never pay the
         // event-construction cost for unrelated targets. The
-        // `flui::reconcile` filter is the single hot-path discriminator.
+        // `flui.tree.reconcile` filter is the single hot-path discriminator.
         metadata.target() == RECONCILE_TARGET
     }
 

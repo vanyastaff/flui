@@ -2,3 +2,4 @@
 //! as modules of one binary.
 
 mod app_id;
+mod target_aliases;

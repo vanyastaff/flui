@@ -569,7 +569,7 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
             if self.before
                 && ctx.span(id).is_some_and(|span| {
                     span.name() == "animation_sampling"
-                        && span.metadata().target() == "flui_animation"
+                        && span.metadata().target() == "flui.animation"
                 })
                 && self.armed.swap(false, Ordering::Relaxed)
             {
@@ -675,12 +675,12 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
 fn animation_phase_names_and_inclusive_extents_are_respected() {
     fn phase_span(name: &str) -> tracing::Span {
         match name {
-            "Animation tick" => tracing::debug_span!(target: "flui_animation", "animation_tick"),
+            "Animation tick" => tracing::debug_span!(target: "flui.animation", "animation_tick"),
             "Animation sampling" => {
-                tracing::debug_span!(target: "flui_animation", "animation_sampling")
+                tracing::debug_span!(target: "flui.animation", "animation_sampling")
             }
             "Animation listeners" => {
-                tracing::debug_span!(target: "flui_animation", "animation_listeners")
+                tracing::debug_span!(target: "flui.animation", "animation_listeners")
             }
             _ => unreachable!(),
         }
@@ -697,9 +697,7 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
         let subscriber =
             tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            let _frame =
-                tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame")
-                    .entered();
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             let _outer = phase_span(name).entered();
             let _nested = phase_span(name).entered();
             std::thread::sleep(Duration::from_millis(20));
@@ -716,8 +714,7 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
     let subscriber =
         tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let _frame =
-            tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame").entered();
+        let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
         let _foreign = tracing::debug_span!(target: "application", "animation_sampling").entered();
     });
     assert!(

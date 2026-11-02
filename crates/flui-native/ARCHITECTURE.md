@@ -393,8 +393,8 @@ trait depends on `flui-platform` instead.
   `NativeTextSize`) and the `Text` position's trait, `TextInput`: the handle
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
-  its caret is: AppKit, winit, headless) or `Store` (the platform reads or
-  mirrors the field's store: TSF, Android, web, Wayland's
+  its caret is: winit, headless) or `Store` (the platform reads or
+  mirrors the field's store: AppKit, UIKit, TSF, Android, web, Wayland's
   `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
   window's accessor goes through it, as do its text sizing
   (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
@@ -430,6 +430,39 @@ trait depends on `flui-platform` instead.
   `text::web::ime::tests`, `text::windows::geometry::tests`,
   `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
   the Wayland client from a real input method on sway.
+  AppKit and UIKit use `text::apple::client` over that same store; neither
+  keeps a document of its own. UIKit's before and after notices bracket the
+  store's publication, with synchronous reads seeing the old and new
+  documents respectively (`application_notices_bracket_the_document_the_keyboard_reads`).
+  Focus requests wait until publication finishes; replacement or retirement
+  of the context invalidates its remaining notices, without retargeting a
+  later notice to the new context (`a_will_notice_keeps_its_recipient_until_publication_or_retirement`).
+  Callback failures preserve the first panic while draining accepted work;
+  retirement withdraws the store and context before callbacks and still
+  delivers an accepted completion in place
+  (`retirement_delivers_a_completion_accepted_inside_a_notice`).
+  The macOS context's `SecureHold` owns its release operation, a function
+  pointer in production. Its destructor makes one final attempt after a
+  refused release, without claiming the OS must accept it
+  (`dropping_a_hold_retries_one_refused_release`,
+  `rebinding_gives_the_previous_context_its_secure_hold_back`).
+  UIKit's character-range queries keep UTF-16 surrogate pairs whole, including
+  in protected fields: offset errors precede `Protected`, so bounded probes
+  need no plaintext (`uikit_ranges_keep_supplementary_scalars_whole`). A point
+  hit-test and its scalar range share one read session. Character ranges use
+  the containing box's start; an outside point has no range, while the
+  separate closest-position query keeps nearest-caret behavior
+  (`point_derived_ranges_stay_with_the_queried_field`); read failure drains
+  accepted focus requests before resuming the first panic
+  (`a_failing_point_read_delivers_reentrant_focus_and_keeps_its_first_failure`).
+  Status, edit and composition-completion calls release their queue guard
+  and drain accepted host operations before resuming a store failure
+  (`failing_store_calls_deliver_focus_before_the_next_edit`). Queued completion
+  reads and fallback commits keep newer focus requests behind earlier ones
+  (`a_queued_completion_keeps_newer_focus_after_older_requests`). An accepted
+  deferred completion still attempts its fallback when the platform's read
+  panics, before resuming that first failure
+  (`a_queued_completion_finishes_after_its_read_panics_without_moving_focus`).
 - **`fonts` answers which system faces fall back, for a locale (ADR-0271
   §3).** `fonts::system_fallback` is the one entry; the composition root hands
   it to the font feed, which calls it on its own thread, never the owner's
@@ -3774,8 +3807,8 @@ portal of `preferences::linux` and the logind and pressure sources of
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
 AT-SPI bridge of `accessibility::linux`. `current_platform` picks the host for
 an X11 session when the winit host is not built (`choose_linux_host`).
-Text input, the clipboard and drag and drop are `Absent` in the table until
-the host's later parts fill them.
+Text input is `Absent` in the table until the host's later parts fill it; the
+clipboard is the clipboard feature's, on a connection and thread of its own.
 
 The input position is the loop's (`type Input = X11Loop`): the table makes
 the input feature's `input::linux::x11::X11Input` (`X11Host::input`) and the
@@ -3856,6 +3889,51 @@ modules' tables
 `a_frame_asked_for_on_another_thread_wakes_the_loop`,
 `the_loop_ends_with_its_last_window` and
 `a_wake_deadline_no_frame_serviced_is_delivered_once`.
+
+The drag position is the loop's too (`type Drag = X11Loop`): the table makes
+the drag feature's `drag::x11::X11Drag` (`X11Host::drag`), the platform's one
+`DataTransferSource`, and the loop holds it by the hook
+`owner::linux::x11::LoopDrag`, hands it every event before the input, and
+wakes for the deadline of the fetch it waits on. A window opening tells it
+with the same `InputTarget` and is marked `XdndAware` (version 5); closing
+ends a drag over it with nothing told, while a drop it took stays fetchable
+until concluded. Its windows are XDND targets: the offer is minted at the
+first `XdndPosition`, so `Entered` carries the pointer and the source's
+action (an `XdndActionAsk` reads the source's `XdndActionList`); each
+position is answered `XdndStatus` from the feedback the target cached while
+hearing it, asking for every movement; a drop resolves the action from that
+feedback, and a refusal answers `XdndFinished` at once while the window hears
+`Exited`. Types map to representations in the pure `drag::x11::model`: text
+once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
+every other media type as named. A request converts `XdndSelection` at the
+drag's last time into a window made for that fetch and destroyed as it ends,
+so a late answer reaches no later fetch; it is read on the owner thread as the
+loop hands over the answer, `INCR` a chunk at a time. At most four run at once
+and more wait their turn, starting as a fetch ends or its offer is retired;
+each is held to its limit before a byte is read and to five seconds between
+answers. Nothing is dispatched or completed under the transfer's lock, so a
+handler may fetch or conclude while it hears the drop, and a handler that
+panics as it hears a position still answers the source with a refusal before
+the panic goes on; the step's requests are answered whatever fails first, a
+waker's panic included, and the first failure goes on; a drop whose handler
+panics before concluding it is finished unaccepted. A drag entering while the
+last one's exit fails learns its types before that failure goes on, and a
+diagnostic found under the lock is emitted once it is let go. The drag source is not
+written yet.
+
+Tests of the drag: `drag::x11::tests` holds the model's tables
+(`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
+`bytes_make_their_payload`, …) and, against the X server CI starts, a source
+on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
+`a_refused_drop_finishes_unaccepted_and_exits`,
+`a_drag_that_leaves_retires_its_offer`,
+`a_retired_offer_frees_its_fetches_for_the_requests_waiting`,
+`a_failing_drag_handler_still_answers_the_source`,
+`requests_are_answered_though_the_handler_and_a_waker_fail`,
+`a_drop_whose_handler_fails_finishes_unaccepted`,
+`a_drag_entered_over_a_failing_exit_offers_its_types`,
+`a_diagnostic_is_emitted_with_the_lock_let_go` and
+`an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

@@ -296,7 +296,7 @@ impl WriteTarget for EventCx<'_> {
 /// application, rather than implicitly discarded into a warning log.
 pub trait EventOutcome: sealed::Sealed {
     /// Hand the outcome to the dispatch boundary: a refused write becomes a
-    /// `tracing::warn!` on the `flui::signals` target.
+    /// `tracing::warn!` on the `flui.signals` target.
     fn report(self);
 }
 
@@ -310,7 +310,7 @@ impl<T> EventOutcome for Result<T, SignalError> {
     fn report(self) {
         if let Err(error) = self {
             tracing::warn!(
-                target: "flui::signals",
+                target: "flui.signals",
                 %error,
                 "an event callback's signal write was refused"
             );
@@ -323,7 +323,7 @@ impl<T> EventOutcome for Result<T, EventContextError> {
     fn report(self) {
         if let Err(error) = self {
             tracing::warn!(
-                target: "flui::signals",
+                target: "flui.signals",
                 %error,
                 "an event callback's owner-bound operation was refused"
             );

@@ -620,7 +620,10 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
         .pen(Native)
         .precise_scroll(Native)
         .trackpad_gestures(Native)
-        .input_regions(Native)
+        .system_gesture_exclusion(Native)
+        .window_move(Native)
+        .window_resize(Native)
+        .caption_buttons(Native)
         .build()
 }
 

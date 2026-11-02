@@ -100,10 +100,12 @@ impl PipelineOwner<Semantics> {
             return Ok(());
         }
 
-        tracing::debug!(
-            "run_semantics: {} nodes",
-            self.scheduler.semantics_queue_len()
-        );
+        let _span = tracing::debug_span!(
+            target: "flui.frame",
+            "semantics",
+            dirty_nodes = self.scheduler.semantics_queue_len(),
+        )
+        .entered();
 
         self.scheduler.enter_phase(PhaseKind::Semantics);
         // Assembly runs authored code (configurations, Flow delegates). Every

@@ -75,6 +75,11 @@ impl TextStoreFixture for EditableTextFixture {
         self.harness.tick();
     }
 
+    fn application_editor(&self) -> Rc<dyn Fn(&str)> {
+        let controller = self.controller.clone();
+        Rc::new(move |text| controller.set_text(text))
+    }
+
     fn pump(&mut self) {
         self.harness.tick();
     }

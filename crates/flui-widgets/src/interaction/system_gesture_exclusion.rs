@@ -13,7 +13,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// painted; a rotated child excludes its bounding box. Each composited frame hands the
 /// window its whole set, and the backend updates the OS only when the device-pixel set,
 /// the scale or the display changed. Where the OS honours no such region the widget has
-/// no effect (`InputCapabilities::input_regions` reports which).
+/// no effect (`InputCapabilities::input_region` reports which).
 ///
 /// ```ignore
 /// SystemGestureExclusion::new().child(drawer_edge_handle)

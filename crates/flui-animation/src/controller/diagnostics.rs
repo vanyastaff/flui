@@ -145,7 +145,7 @@ impl Transition {
     }
 
     fn emit_receipt(&self) {
-        if !tracing::enabled!(target: "flui_animation::diagnostics", tracing::Level::DEBUG) {
+        if !tracing::enabled!(target: "flui.animation.diagnostics", tracing::Level::DEBUG) {
             return;
         }
         let clock = match self.state.clock {
@@ -165,7 +165,7 @@ impl Transition {
                 .map(tracing::span::Id::into_u64)
         });
         tracing::debug!(
-            target: "flui_animation::diagnostics", parent: self.trace.span().and_then(tracing::Span::id),
+            target: "flui.animation.diagnostics", parent: self.trace.span().and_then(tracing::Span::id),
             controller = controller, context_span = context,
             transition = self.kind, run_generation = self.state.generation,
             previous_generation = self.previous_generation,

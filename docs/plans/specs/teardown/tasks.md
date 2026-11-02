@@ -4,9 +4,8 @@
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); смежная —
   [persistence/tasks.md](../persistence/tasks.md) (приложение приёмки P10, реестр сброса хоста P6)
 - **Итог:** из 17 задач прежнего плана сделаны T1, T3; T5 сделана платформенной серией; T6, T15,
-  T16 устарели; T8 и T14 сделаны в части. Осталось 13 задач, из них новые T18 (строки на
-  приложении приёмки) и T19 (нативный прогон через лейн `os` flui-driver). Сейчас можно начинать
-  T2, T4 и T7; остальное — по колонке «Зависит от».
+  T16 устарели; сделаны T2, T4, T7–T14, T17 и T18. Осталась одна задача:
+  T19 (нативный прогон через лейн `os` flui-driver, ждёт FD11).
 - **Решения 2026-10-28** (по поручению владельца решены исследованием, записаны в ADR и в
   задачах, которых касаются):
   - «101 после сброса» против LY90 — ADR-0258 §4 (4b): входы ОС не меняются; приложенческая
@@ -112,10 +111,13 @@ graph LR
   `a_session_end_with_nothing_to_save_proceeds` (quit). S5 и S6: при ≥ 1 с и без извлечённых
   `Ending` сам разбирает UI-runtime (деструкторы приложения), затем отменяет сервисы и гасит пулы
   без ожидания; иначе оставляет всё системе — `session_end_tears_down_only_with_time_left`.
-  Остаток: строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
-  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
-  persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
-  байты пока нечем.
+  Строки с байтами реестра: `session_end_flushes_the_registry_within_the_framework_budget`,
+  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`,
+  `session_end_during_a_write_writes_the_latest_registry_bytes`,
+  `session_end_never_blocks_for_work_in_progress` (`runner_teardown`; `Persisted` на
+  `HeadlessPlatform::with_data_root`, пул IO — `DeterministicExecutors`, который поток теста
+  запускает через 200 мс, как занятый пул). Без сброса в `Ending` и со сбросом, который не ждёт
+  запись в полёте, байтов на диске нет; удержание работы, отказывающее `SessionEnd`, даёт `Block`.
 
 ## Устаревшие задачи
 
@@ -198,8 +200,8 @@ graph LR
   (heli r8140, 70 с).
 - [x] T4 — `flui-view`: guard, реестр, `detached()` — #1953; 12 контрактных тестов — строки `close_guard_matrix`, `flush_registry_matrix`, `lifecycle_subscription_matrix`; R3, persistence R20, R28
 - [x] T7 — строки навигации: три строки R17 в таблице `navigation_teardown` (`crates/flui-widgets/tests/contracts.rs`); характеризация, на текущем коде проходят. Зубы проверены: без `finish_all` в `HeroController::did_detach` падают строки навигатора и hero. `cargo test -p flui-widgets --test widgets_it` 2026-10-29 — 70 из 70, clippy `-p flui-widgets --all-targets -D warnings` чистый
-- [ ] T8 — остаток: откат и проводка (мера R10 — ADR-0258 §6). Откат повтора — #1975 (строки R10 в `flui-testing`; свап корня в виджетном харнессе ждёт дедлайн повтора). Проводка — следующий PR: у каждой презентации свой `CloseGuardSource`, guard лежит в возможностях её собственного `BuildOwner` (у каждой презентации свой `WidgetsBinding`), поэтому ключ — `PresentationId`, и ремаунт корня guard не теряет; `RuntimeHostServices::with_flush_registry`/`with_close_vetoes`; `UiRuntime::{close_refused, withdraw_close, settle_close_guards}`; headless `request_close`/`end_session` (`SESSION_END_BUDGET` 3 с); в `flui-app` удержанный guard оставляет закрытие до вопроса обработчику, отпущенное закрытие ставится в очередь окна, занятый хост оставляет settle на следующий ход; реестр сброса хоста пишет через I/O-пул. Тесты: таблица `close_guard_hosting` (4 строки, в т.ч. `each_window_of_one_runtime_holds_its_own_close`, `a_guard_survives_a_root_remount`), строка `a_held_guard_keeps_the_close_before_the_handler_is_asked` в `close_request_matrix`; зубы проверены (с `close_refused` = false строки падают). Временное: строки набора раннера `flui_app::testing` открывают вторичное окно `Isolated`, а не главное — headless не открывает главное окно без поверхности; offscreen-поверхность главного окна — дизайн к T10
-- [ ] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7). Сделано
+- [x] T8 — откат и проводка (мера R10 — ADR-0258 §6; строки R10 в `headless_host.rs`, `the_runner_sleeps_until_the_failure_retry_deadline` в `runner_close.rs`). Откат повтора — #1975 (строки R10 в `flui-testing`; свап корня в виджетном харнессе ждёт дедлайн повтора). Проводка — следующий PR: у каждой презентации свой `CloseGuardSource`, guard лежит в возможностях её собственного `BuildOwner` (у каждой презентации свой `WidgetsBinding`), поэтому ключ — `PresentationId`, и ремаунт корня guard не теряет; `RuntimeHostServices::with_flush_registry`/`with_close_vetoes`; `UiRuntime::{close_refused, withdraw_close, settle_close_guards}`; headless `request_close`/`end_session` (`SESSION_END_BUDGET` 3 с); в `flui-app` удержанный guard оставляет закрытие до вопроса обработчику, отпущенное закрытие ставится в очередь окна, занятый хост оставляет settle на следующий ход; реестр сброса хоста пишет через I/O-пул. Тесты: таблица `close_guard_hosting` (4 строки, в т.ч. `each_window_of_one_runtime_holds_its_own_close`, `a_guard_survives_a_root_remount`), строка `a_held_guard_keeps_the_close_before_the_handler_is_asked` в `close_request_matrix`; зубы проверены (с `close_refused` = false строки падают). Вторичное окно `Isolated` в наборе раннера снято с T10: главное окно открывается и на headless.
+- [x] T9 — граница хода в `flui-app` (входы ОС не меняются, ADR-0258 §4; срок выхода — §7). Сделано
   (один PR после T8): набор раннера `flui_app::testing` (`HeadlessRun`, `ExitReport`,
   `TeardownStep`); `ExitDeadline` (6 с; реестр сброса пишется до сервисов, шаг
   `TeardownStep::Flush`; пулы на одном сроке, `ExecutionServices::shutdown(Instant)`); сторож выхода
@@ -220,7 +222,9 @@ graph LR
   `a_failed_frame_counts_and_does_not_unwind`. Зубы проверены. Временное: строки набора
   открывают вторичное окно `Isolated` (offscreen главного окна — дизайн к T10); сброс доказан
   маркером `TeardownStep::Flush`, а не байтами на диске (`Persisted` — заглушка до persistence).
-  Остаток T9: R6 (ждёт persistence).
+  R6 `a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok`: запись, опубликованная наблюдателем
+  `Detached`, не кончается (пул IO не запускается), выход возвращает `Ok` с кодом 0 в пределах 6 с,
+  в файле целое прежнее значение; если сброс ждёт запись без срока, сторож завершает процесс с 124.
   - [x] Строки с паникой в маршрутизации `flui-app`: 11 строк `routing: …` в
     `an_application_panic_never_leaves_a_handler`, по одной на метод `AppHandler` и `WindowHandler`.
     Паника самой маршрутизации вызывается занятым заимствованием (`WindowRoutes::jam` под
@@ -313,7 +317,7 @@ graph LR
   наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
   `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
-- [ ] T14 — остаток: завершение сеанса
+- [x] T14 — завершение сеанса (строки выше, в «Сделано в части»)
 - [x] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
   - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
     `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
@@ -332,5 +336,5 @@ graph LR
     ни при повторном закрытии; Close without saving закрывает окно, выход роняет всё. Вето
     обработчиком и удержанием без приложения покрывает `a_vetoed_close_disposes_nothing`
     (`runner_close`).
-- [ ] T17 — README, Win32-строка R5, закрытие
+- [x] T17 — README, Win32-строка R5, закрытие (#2183): строка README (R24, абзац «Saving on close, except on the Web») и строка R5 `win32_close_drains_platform_map_entry` в таблице `native_window_commands` (`crates/flui-native/tests/windows_window_commands.rs`; проверка типов под `x86_64-pc-windows-msvc`, прогон на Windows — у владельца); `rg 'ignore = "contract:' crates` пуст. T7, T12 и T18 сделаны раньше.
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

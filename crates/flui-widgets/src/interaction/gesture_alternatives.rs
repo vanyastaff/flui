@@ -189,7 +189,7 @@ impl GestureCommand {
         let Some(action) = chain.and_then(|chain| resolve(chain, intent)) else {
             if chain.is_none_or(|chain| !chain.contains_key(&intent.type_id())) {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     intent = self.intent_name,
                     command = &*self.label,
                     "a gesture command's intent has no action above its GestureAlternatives; \
@@ -210,7 +210,7 @@ impl GestureCommand {
             }
             if let Some(reserved) = reserved_key(platform, activator) {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     command = &*self.label,
                     ?activator,
                     ?reserved,
@@ -425,7 +425,7 @@ impl fmt::Debug for MenuSpec {
 ///
 /// The alternatives draw no control: each command is performed by the node a
 /// registered companion publishes for it. With no companion registered the
-/// alternatives are unfulfilled, which is a `flui::a11y` warning once the frame
+/// alternatives are unfulfilled, which is a `flui.a11y` warning once the frame
 /// that mounted them has run and a failure of
 /// `flui_testing::assert_gesture_alternatives`.
 ///
@@ -1071,7 +1071,7 @@ impl GestureAlternativesState {
                 Ok(branch) => Some(Rc::new(branch)),
                 Err(error) => {
                     tracing::warn!(
-                        target: "flui::a11y",
+                        target: "flui.a11y",
                         %error,
                         "the context menu's long press could not compose as Sequenced; it joins the arena directly"
                     );
@@ -1210,7 +1210,7 @@ impl GestureAlternativesState {
                 .is_some_and(|link| !link.is_fulfilled());
             if mounted.get() && unfulfilled {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     commands = ?watch.commands,
                     "a gesture's alternatives rely on a companion, and none is registered on \
                      their CompanionLink; its commands have no single-pointer path"

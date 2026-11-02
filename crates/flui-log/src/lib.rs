@@ -64,6 +64,42 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! # Contract targets
+//!
+//! The framework emits its spans and events under `flui.<subsystem>` targets, which a directive
+//! selects by prefix (`flui.tree` also selects `flui.tree.reconcile`):
+//!
+//! | Target | What it carries |
+//! |---|---|
+//! | `flui.frame` | the `frame` span and its phases: `build`, `layout`, `compositing`, `paint`, `semantics`, `commit`, `submit` (DEBUG), and `layout_root` per relayout root (TRACE) |
+//! | `flui.tree` | `element_rebuild` per rebuilt element (TRACE), and the `flui.tree.reconcile` events |
+//! | `flui.input` | recognizer spans and the gesture observer |
+//! | `flui.animation` | animation tick, sampling and listener spans, and `flui.animation.diagnostics` |
+//! | `flui.signals`, `flui.a11y`, `flui.pace`, `flui.gpu` | reactive reads and writes, accessibility fallbacks, frame pacing, the renderer |
+//!
+//! Frame-path fields are primitives: ids are `u64` and kinds are `&'static str`.
+//! The older spellings (`flui::reconcile`, `flui_animation`, `flui::signals`, `flui::a11y`)
+//! still work in a directive for one release, through [`TARGET_ALIASES`].
+//!
+//! # Adding a profiler layer
+//!
+//! A profiler is another layer on the same registry, filtered to the targets it reads, so it
+//! costs nothing for spans it does not admit. Tracy and Chrome's trace format are third-party
+//! layers, which a tool adds beside [`PlatformLayer`]:
+//!
+//! ```rust,ignore
+//! use tracing_subscriber::{filter::Targets, layer::SubscriberExt as _, Layer as _, Registry};
+//!
+//! let frame_only = Targets::new().with_target("flui.frame", tracing::Level::DEBUG);
+//! let (chrome, _guard) = tracing_chrome::ChromeLayerBuilder::new().build();
+//! let subscriber = Registry::default()
+//!     .with(PlatformLayer::platform_default(&config).with_filter(filter))
+//!     .with(chrome.with_filter(frame_only))
+//!     .with(tracing_tracy::TracyLayer::default());
+//! ```
+//!
+//! The framework sets no `max_level_*` feature, so a release build can be profiled this way.
+//!
 //! # Platforms
 //!
 //! | Target | Backend | Viewer |
@@ -118,7 +154,7 @@ pub use backend::privacy::{
 };
 pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
-pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError};
+pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError, TARGET_ALIASES};
 pub use identity::{
     APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError,
     UNIDENTIFIED_APPLE_SUBSYSTEM,

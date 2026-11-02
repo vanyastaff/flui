@@ -300,14 +300,23 @@ fn a_stale_done_is_applied_and_sends_no_state() {
 
 #[test]
 fn an_application_edit_is_told_as_another_cause() {
-    let store = InMemoryTextStore::new("x");
-    let (_client, wire) = serving(&store);
-    let _ = wire.take();
-    store.app_replace(span(1, 1), "y");
-    let sent = wire.take();
-    assert!(sent.contains(&Sent::Surrounding(around("xy", 2, 2))));
-    assert!(sent.contains(&Sent::Cause(ChangeCause::Other)));
-    assert_eq!(sent.last(), Some(&Sent::Commit));
+    for composing in [false, true] {
+        let store = InMemoryTextStore::new("x");
+        let (client, wire) = serving(&store);
+        if composing {
+            client.preedit(&*wire, Some("y".to_owned()), 1, 1);
+            client.done(&*wire, wire.commits());
+        }
+        let _ = wire.take();
+        store.app_replace(span(1, if composing { 2 } else { 1 }), "y");
+        let sent = wire.take();
+        assert!(
+            sent.contains(&Sent::Surrounding(around("xy", 2, 2))),
+            "composing={composing}"
+        );
+        assert!(sent.contains(&Sent::Cause(ChangeCause::Other)));
+        assert_eq!(sent.last(), Some(&Sent::Commit));
+    }
 }
 
 #[test]
