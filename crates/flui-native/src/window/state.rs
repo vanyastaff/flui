@@ -71,7 +71,7 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
 /// draws no title bar of the application's
 /// ([`WindowCapabilities::app_title_bar`](WindowCapabilities::app_title_bar)
 /// `Unavailable`) has no third answer.
-#[cfg(any(windows, target_os = "macos", linux_host, winit_host, test))]
+#[cfg(any(windows, target_os = "macos", linux_host, winit_host))]
 pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::WindowFrame {
     if decorated {
         flui_platform::WindowFrame::System
