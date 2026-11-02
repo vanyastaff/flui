@@ -220,7 +220,7 @@ impl CapturedFrame {
     }
 }
 
-type FrameSink = Arc<dyn Fn(&CapturedFrame) + Send + Sync>;
+type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 
 /// What one runtime has captured.
 #[derive(Default)]
@@ -305,7 +305,13 @@ impl Capture {
 
     /// Call `sink` with every frame as it closes. It runs on the thread that closed the frame,
     /// after the frame is stored and with no lock held.
-    pub fn on_frame(&self, sink: impl Fn(&CapturedFrame) + Send + Sync + 'static) {
+    ///
+    /// The sink is handed this capture, so it never needs to own a handle: a sink that closes over
+    /// a clone of its own capture would keep the capture alive for as long as the sink exists.
+    ///
+    /// Every sink sees every frame. A sink that panics does not stop the sinks after it; the first
+    /// panic is resumed once the last has run.
+    pub fn on_frame(&self, sink: impl Fn(&Capture, &CapturedFrame) + Send + Sync + 'static) {
         self.shared.sinks.lock().push(Arc::new(sink));
     }
 
@@ -399,8 +405,23 @@ impl Capture {
         }
         // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
         let sinks: Vec<_> = self.shared.sinks.lock().clone();
+        // A sink is user code: one that panics must not take the frame from the sinks after it.
+        // The first panic is kept and resumed after the last sink has run.
+        let mut first_panic = None;
         for sink in sinks {
-            sink(&frame);
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sink(self, &frame);
+            })) {
+                if first_panic.is_none() {
+                    first_panic = Some(payload);
+                } else {
+                    // Forgotten, not dropped: its `Drop` may panic too.
+                    std::mem::forget(payload);
+                }
+            }
+        }
+        if let Some(payload) = first_panic {
+            std::panic::resume_unwind(payload);
         }
     }
 }
@@ -568,10 +589,16 @@ where
         // A reentrant visit is covered by the same span kind's enclosing extent; counting both
         // would double the work.
         let key = (metadata.target(), metadata.name());
-        let covered = span.scope().skip(1).any(|ancestor| {
-            (ancestor.metadata().target(), ancestor.metadata().name()) == key
-                && ancestor.extensions().get::<Visit_>().is_some()
-        });
+        // The search stops at the owning frame: a phase of an enclosing frame belongs to another
+        // runtime's pump and cannot stand in for this frame's own measurement.
+        let covered = span
+            .scope()
+            .skip(1)
+            .take_while(|ancestor| ancestor.extensions().get::<FrameState>().is_none())
+            .any(|ancestor| {
+                (ancestor.metadata().target(), ancestor.metadata().name()) == key
+                    && ancestor.extensions().get::<Visit_>().is_some()
+            });
         if covered {
             return;
         }
@@ -927,11 +954,11 @@ mod tests {
     fn a_frame_sink_sees_each_frame_after_it_is_stored() {
         let capture = Capture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let (sink_seen, sink_capture) = (Arc::clone(&seen), capture.clone());
-        capture.on_frame(move |frame| {
+        let sink_seen = Arc::clone(&seen);
+        capture.on_frame(move |from, frame| {
             sink_seen
                 .lock()
-                .push((frame.spans().len(), sink_capture.frames().len()));
+                .push((frame.spans().len(), from.frames().len()));
         });
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
@@ -941,6 +968,66 @@ mod tests {
             *seen.lock(),
             [(1, 1)],
             "the sink may read the capture it was called from"
+        );
+    }
+
+    /// A sink needs no handle of its own, so dropping the last handle frees the capture.
+    #[test]
+    fn a_capture_with_sinks_is_freed_with_its_last_handle() {
+        let capture = Capture::new();
+        capture.on_frame(|from, _| {
+            let _ = from.frames();
+        });
+        let weak = Arc::downgrade(&capture.shared);
+        drop(capture);
+
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn a_panicking_sink_does_not_take_the_frame_from_the_sinks_after_it() {
+        let capture = Capture::new();
+        let seen = Arc::new(Mutex::new(0_usize));
+        capture.on_frame(|_, _| panic!("a sink that fails"));
+        let counted = Arc::clone(&seen);
+        capture.on_frame(move |_, _| *counted.lock() += 1);
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+                frame_of(runtime(1), &[]);
+            });
+        }));
+
+        assert_eq!(*seen.lock(), 1, "the later sink saw the frame");
+        assert!(outcome.is_err(), "the first panic still surfaces");
+    }
+
+    /// The enclosing frame belongs to another runtime's pump: it cannot stand in for the inner
+    /// frame's own phase.
+    #[test]
+    fn a_phase_of_a_nested_frame_is_not_covered_by_the_enclosing_frames_phase() {
+        let capture = capturing(|| {
+            let _outer = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _build = tracing::debug_span!(target: "flui.frame", "build").entered();
+            let _inner = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _inner_build = tracing::debug_span!(target: "flui.frame", "build").entered();
+        });
+
+        let frames = capture.frames();
+        let inner = frames
+            .iter()
+            .find(|frame| !frame.is_outermost())
+            .expect("the nested frame");
+        assert_eq!(
+            inner
+                .spans()
+                .iter()
+                .filter_map(CapturedSpan::phase)
+                .collect::<Vec<_>>(),
+            [Phase::Build],
+            "the inner frame's build is its own"
         );
     }
 }

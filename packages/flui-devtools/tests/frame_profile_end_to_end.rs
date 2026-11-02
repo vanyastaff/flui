@@ -1026,6 +1026,23 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
             .any(|span| span.partition().presentation().is_some()),
         "layout runs inside a presentation's segment: {layouts:?}"
     );
+    // The work a presentation owns outside its pipeline segment is attributed to it too.
+    let presentation_work: Vec<_> = capture
+        .spans()
+        .into_iter()
+        .filter(|span| {
+            matches!(
+                span.phase(),
+                Some(Phase::AnimationTick | Phase::Commit | Phase::Submit)
+            )
+        })
+        .collect();
+    assert!(
+        presentation_work
+            .iter()
+            .all(|span| span.partition().presentation().is_some()),
+        "animation, commit and submit are attributed to their presentation: {presentation_work:?}"
+    );
 
     let trace: serde_json::Value =
         serde_json::from_str(&timeline.export_chrome_trace()).expect("the export is JSON");
@@ -1063,6 +1080,12 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
             .iter()
             .any(|event| event["ph"] == "C" && event["name"] == "frame_ms"),
         "every frame is a frame_ms counter"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["ph"] == "X" && event["args"]["presentation"].is_u64()),
+        "an event that ran for a presentation says which"
     );
     // Nested phases nest: on one thread, an event that starts inside another ends inside it.
     complete.sort_by_key(|&(pid, tid, ts, dur)| (pid, tid, ts, std::cmp::Reverse(dur)));

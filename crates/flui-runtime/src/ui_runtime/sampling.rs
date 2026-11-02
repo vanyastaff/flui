@@ -62,9 +62,15 @@ impl<'runtime> PresentationSampling<'runtime> {
     }
 
     fn run(&mut self, stage: SamplingStage, action: impl FnOnce(&mut RecoveryScope<'_>)) {
+        let presentation = self.presentation.id();
         self.recovery
             .scope()
-            .run_classified(FailureClass::Unknown, action);
+            .run_classified(FailureClass::Unknown, |scope| {
+                // The animation and preparation work of this stage is this presentation's: a
+                // subscriber that panics opening the span fails the stage, which is contained.
+                let _presentation = super::frame::presentation_span(presentation).entered();
+                action(scope);
+            });
         if self.first.is_none()
             && let Some(class) = self.recovery.first_failure_class()
         {

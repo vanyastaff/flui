@@ -127,6 +127,9 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
         }
     }
     args.insert("category".to_string(), json!(event.category.name()));
+    if let Some(presentation) = event.presentation {
+        args.insert("presentation".to_string(), json!(presentation));
+    }
     serde_json::Value::Object(args)
 }
 

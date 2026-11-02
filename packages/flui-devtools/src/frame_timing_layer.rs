@@ -140,7 +140,7 @@ impl FrameTimingLayer {
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
         let followed: Mutex<Option<UiRuntimeId>> = Mutex::new(None);
-        capture.on_frame(move |frame| {
+        capture.on_frame(move |_, frame| {
             if !frame.is_outermost() {
                 return;
             }
@@ -260,6 +260,28 @@ mod tests {
             frame_that_takes(None, std::time::Duration::from_millis(40)),
             "a frame that reports no period is judged at 60 Hz"
         );
+    }
+
+    #[test]
+    fn a_phase_measured_by_hand_during_a_frame_stays_in_its_stats() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("app work")));
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("app work"))
+                .is_some(),
+            "the hand-measured phase is kept: {stats:?}"
+        );
+        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
     }
 
     /// This side of the wiring contract: the names this layer maps to phases.

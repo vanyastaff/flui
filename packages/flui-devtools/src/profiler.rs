@@ -385,11 +385,11 @@ impl Profiler {
     /// Record a frame the capture closed: the clock-free path every framework frame takes.
     ///
     /// Phases that ran more than once in the frame merge into one total, as with
-    /// [`Self::profile_phase`].
+    /// [`Self::profile_phase`]. A phase the application measured by hand while the frame ran stays
+    /// beside the framework's.
     pub(crate) fn ingest(&self, frame: &crate::capture::CapturedFrame) {
         let mut inner = self.inner.lock();
         inner.frame_period = frame.period();
-        inner.current_phases.clear();
         let frame_start = frame.span().start();
         let mut phases: Vec<_> = frame
             .spans()

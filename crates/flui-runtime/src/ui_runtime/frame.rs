@@ -18,6 +18,16 @@ use flui_scheduler::{
 use flui_view::__runtime::BindingRuntime as _;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+/// The span every piece of work done for one presentation nests under, so the capture layer in
+/// `flui-devtools` can tell the presentations of one runtime apart.
+pub(super) fn presentation_span(presentation: PresentationId) -> tracing::Span {
+    tracing::debug_span!(
+        target: "flui.frame",
+        "presentation",
+        presentation = presentation.as_u64()
+    )
+}
+
 impl UiRuntime {
     // ========================================================================
     // Frame production (moved from the retired `AppBinding`)
@@ -140,15 +150,8 @@ impl UiRuntime {
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
             let attempt = catch_unwind(AssertUnwindSafe(|| {
-                // Everything the pipeline opens for this presentation nests under this span, so the
-                // capture layer in `flui-devtools` can tell the presentations of one runtime apart.
                 // A subscriber that panics here fails the segment, which is contained below.
-                let _segment = tracing::debug_span!(
-                    target: "flui.frame",
-                    "presentation",
-                    presentation = presentation.id().as_u64()
-                )
-                .entered();
+                let _segment = presentation_span(presentation.id()).entered();
                 let now = self.frame_time.get().unwrap_or(segment_start);
                 let fresh = super::text_preparation::admit(presentation, constraints, now);
                 Self::draw_prepared_frame_for_presentation(
@@ -673,11 +676,13 @@ impl UiRuntime {
         // The scene is already accepted, so the commit happens whatever a subscriber does with the
         // span: a failure to open it is held, the commit runs, and the first failure resumes after.
         let opened = catch_unwind(AssertUnwindSafe(|| {
-            tracing::debug_span!(target: "flui.frame", "commit").entered()
+            let scope = presentation_span(presentation.id()).entered();
+            let commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
+            (scope, commit)
         }));
-        let (commit_span, mut subscriber_panic) = match opened {
-            Ok(span) => (Some(span), None),
-            Err(payload) => (None, Some(payload)),
+        let ((scope_span, commit_span), mut subscriber_panic) = match opened {
+            Ok((scope, commit)) => ((Some(scope), Some(commit)), None),
+            Err(payload) => ((None, None), Some(payload)),
         };
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
@@ -693,7 +698,12 @@ impl UiRuntime {
         }))
         .err();
         super::input::preserve_first_input_panic(&mut subscriber_panic, event, "commit event");
-        let closed = catch_unwind(AssertUnwindSafe(|| drop(commit_span))).err();
+        // The commit span exits before the presentation span it nests in.
+        let closed = catch_unwind(AssertUnwindSafe(|| {
+            drop(commit_span);
+            drop(scope_span);
+        }))
+        .err();
         super::input::preserve_first_input_panic(&mut subscriber_panic, closed, "commit span");
         subscriber_panic
     }
@@ -908,6 +918,7 @@ impl UiRuntime {
             // the `submit` span exits must not lose a verdict the sink already returned.
             let mut submitted = None;
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _presentation = presentation_span(producer.id()).entered();
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
                 submitted = Some(sink.submit(scene));
             }));
