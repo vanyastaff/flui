@@ -173,8 +173,7 @@ mod x11 {
     use crate::drag::x11::X11Drag;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{
-        Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, X11Connection, X11Host,
-        X11Loop,
+        Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
     };
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
