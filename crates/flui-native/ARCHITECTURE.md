@@ -455,6 +455,14 @@ trait depends on `flui-platform` instead.
   (`point_derived_ranges_stay_with_the_queried_field`); read failure drains
   accepted focus requests before resuming the first panic
   (`a_failing_point_read_delivers_reentrant_focus_and_keeps_its_first_failure`).
+  Status, edit and composition-completion calls release their queue guard
+  and drain accepted host operations before resuming a store failure
+  (`failing_store_calls_deliver_focus_before_the_next_edit`). Queued completion
+  reads and fallback commits keep newer focus requests behind earlier ones
+  (`a_queued_completion_keeps_newer_focus_after_older_requests`). An accepted
+  deferred completion still attempts its fallback when the platform's read
+  panics, before resuming that first failure
+  (`a_queued_completion_finishes_after_its_read_panics_without_moving_focus`).
 - **`fonts` answers which system faces fall back, for a locale (ADR-0271
   §3).** `fonts::system_fallback` is the one entry; the composition root hands
   it to the font feed, which calls it on its own thread, never the owner's

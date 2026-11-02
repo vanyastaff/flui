@@ -419,23 +419,31 @@ impl TextClient {
     /// focus, the focused field's status, the window's key status, binding
     /// and retirement.
     fn sync_field(&self) {
-        let status = {
+        let store = if self.retired.get() {
+            None
+        } else {
+            self.focused()
+        };
+        let mut failure = FirstPanic::new();
+        let status = failure.contain(|| {
             // The store's `status` is application code, which may move
             // focus: a request it makes waits in the queue, and the refocus
             // the drain below runs syncs again with the focus it gives.
             let _entered = self.queue.enter();
-            if self.retired.get() {
-                None
-            } else {
-                self.focused().map(|store| store.status())
-            }
-        };
+            store.as_ref().map(|store| store.status())
+        });
         // The input method's answer may come back into the client: no
         // borrow is held.
-        if let Some(context) = self.context() {
-            self.notify_context(context, |context| context.field_changed(status));
+        if let Some(status) = status
+            && let Some(context) = self.context()
+        {
+            failure.contain(|| {
+                self.notify_context(context, |context| context.field_changed(status));
+            });
         }
-        self.drain();
+        self.drain_after(&mut failure);
+        failure.contain(|| drop(store));
+        failure.resume();
     }
 
     /// The view's window became or stopped being the key window: the keys
@@ -462,19 +470,27 @@ impl TextClient {
         match op {
             MirrorHostOp::Focus(store) => self.refocus(store),
             MirrorHostOp::Complete(store) => {
+                let _entered = self.queue.enter();
+                let mut failure = FirstPanic::new();
                 // Whoever was told `Deferred` owes nothing more: what AppKit
                 // does not commit is committed in place here.
                 let focused = self
                     .focused()
                     .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
                 let end = if focused {
-                    self.end_composition(&store)
+                    failure
+                        .contain(|| self.end_composition(&store))
+                        .unwrap_or(CompositionEnd::Abandoned)
                 } else {
                     CompositionEnd::Abandoned
                 };
                 if end != CompositionEnd::Committed {
-                    let _ = commit_composition_in_place(&*store);
+                    failure.contain(|| {
+                        let _ = commit_composition_in_place(&*store);
+                    });
                 }
+                failure.contain(|| drop(store));
+                failure.resume();
             }
         }
     }
@@ -548,13 +564,16 @@ impl TextClient {
             tracing::trace!("an input method edit with no focused field; dropped");
             return;
         };
-        {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| {
             let _entered = self.queue.enter();
             if let Err(error) = store.request_lock(LockGrant::read_write(body), LockTiming::Async) {
                 tracing::debug!(?error, "the focused store refused the input method's edit");
             }
-        }
-        self.drain();
+        });
+        self.drain_after(&mut failure);
+        failure.contain(|| drop(store));
+        failure.resume();
     }
 
     // ------------------------------------------------------------------
@@ -838,8 +857,15 @@ impl TextStoreHost for TextClient {
         {
             return Ok(CompositionEnd::Deferred);
         }
-        let end = self.end_composition(store);
-        self.drain();
+        let mut failure = FirstPanic::new();
+        let end = failure
+            .contain(|| {
+                let _entered = self.queue.enter();
+                self.end_composition(store)
+            })
+            .unwrap_or(CompositionEnd::Abandoned);
+        self.drain_after(&mut failure);
+        failure.resume();
         Ok(end)
     }
 }

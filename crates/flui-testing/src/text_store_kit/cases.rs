@@ -1113,6 +1113,11 @@ fn publication_finishes_accepted_writes_and_keeps_the_first_failure(
         let observer = PublicationObserver::new(&store, behavior);
         store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
         let result = catch_unwind(AssertUnwindSafe(|| fixture.app_replace_all("new😀")));
+        ensure_eq(
+            observer.writes_completed.get(),
+            completed,
+            "accepted writes finish before the application edit returns or raises",
+        )?;
         let actual_failure = publication_failure(result);
         fixture.set_owner_hook(None);
         store.set_observer(None);
