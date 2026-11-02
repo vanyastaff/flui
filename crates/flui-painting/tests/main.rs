@@ -365,6 +365,10 @@ fn value_contract() {
                 values::text_styles_interpolate_magnitudes_and_switch_the_rest,
             ),
             (
+                "image_transforms_refuse_what_they_cannot_invert",
+                values::image_transforms_refuse_what_they_cannot_invert,
+            ),
+            (
                 "color_matrix_checks_intermediate_overflow",
                 values::color_matrix_checks_intermediate_overflow,
             ),

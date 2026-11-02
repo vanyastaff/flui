@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"win32","epoch_ns":1000000000,"uptime_ns":0,"counter":{"count":0,"frequency":10000000},"provenance":"hand-written from the callback order IDirectManipulationViewportEventHandler documents; no precision touchpad was attached to the host that wrote it","devices":[]}
+{"flui_native_recording":2,"backend":"win32","epoch_ns":1000000000,"uptime_ns":0,"counter":{"count":0,"frequency":10000000},"provenance":"hand-written from the callback order IDirectManipulationViewportEventHandler documents; no precision touchpad was attached to the host that wrote it","devices":[]}
 {"row":"viewport","viewport":{"status":"running"},"time":{"tick_ms":{"tick":1,"observed_ms":1}},"counter":10000,"position":[300.0,240.0],"scale":1.5}
 {"row":"viewport","viewport":{"content":[1.0,0.0,-1.0]},"time":{"tick_ms":{"tick":2,"observed_ms":2}},"counter":20000,"position":[300.0,240.0],"scale":1.5}
 {"row":"viewport","viewport":{"content":[1.0,0.0,-6.0]},"time":{"tick_ms":{"tick":4,"observed_ms":4}},"counter":40000,"position":[300.0,240.0],"scale":1.5}

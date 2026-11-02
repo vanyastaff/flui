@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"web","epoch_ns":0,"uptime_ns":0,"reserved_contact":4294967297,"devices":[]}
+{"flui_native_recording":2,"backend":"web","epoch_ns":0,"uptime_ns":0,"reserved_contact":4294967297,"devices":[]}
 {"row":"reading","reading":{"contact":4294967297,"kind":"mouse","primary":true,"action":"enter","buttons":[],"time":{"epoch_ns":71099999},"position":[100.0,100.0]}}
 {"row":"batch","coalesced":[{"contact":4294967297,"kind":"mouse","primary":true,"action":"move","buttons":[],"time":{"epoch_ns":71099999},"position":[100.0,100.0]}],"current":{"contact":4294967297,"kind":"mouse","primary":true,"action":"move","buttons":[],"time":{"epoch_ns":71099999},"position":[100.0,100.0]}}
 {"row":"reading","reading":{"contact":4294967297,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"time":{"epoch_ns":217099999},"position":[100.0,100.0]}}

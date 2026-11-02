@@ -74,10 +74,11 @@ use wgsl_bindgen::{
 ///
 /// `wgsl_bindgen` defaults every float texture to `filterable: true` and every
 /// sampler to `SamplerBindingType::Filtering`.  Shaders that sample texel-aligned
-/// data (gamma / morphology / color_matrix / mode / advanced_blend) must override
+/// data (gamma / morphology / color_matrix / mode) must override
 /// both to non-filtering, or wgpu rejects the bind group at runtime (a Filtering
-/// sampler paired with a non-filterable texture is a validation error).  Blur is
-/// the sole filterable shader (bilinear composes cleanly with the Gaussian).
+/// sampler paired with a non-filterable texture is a validation error).  Blur and
+/// advanced_blend are filterable (bilinear composes with the Gaussian, and
+/// reads a resampled backdrop).
 struct BindingOverrides {
     /// Regex matching the texture binding name(s).  Use an alternation
     /// (`a|b`) for a shader with more than one sampled texture.
@@ -204,13 +205,15 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
         entry_rel: "advanced_blend.wgsl",
         out_file: "advanced_blend_generated.rs",
         // advanced_blend.wgsl and blend_helpers.wgsl share shaders/ → no scan dir.
+        // Filterable: a backdrop resampled through a transform is read
+        // bilinearly as its foreground; the rest bind a nearest sampler.
         workspace_rel: "",
         scan_rel: &[],
         overrides: BindingOverrides {
             texture_regex: "foreground_tex|backdrop_tex",
-            texture_filterable: false,
-            sampler_regex: "nearest_sampler",
-            sampler_type: SamplerType::NonFiltering,
+            texture_filterable: true,
+            sampler_regex: "blend_sampler",
+            sampler_type: SamplerType::Filtering,
         },
         // BlendUniforms.tint_rgb is a `vec3<f32>` packed tight before `mode: u32`
         // — force [f32; 3] so the generated layout matches the WGSL (see the

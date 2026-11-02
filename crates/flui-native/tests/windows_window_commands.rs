@@ -13,6 +13,7 @@
 )]
 
 use flui_platform::CommandRefusal;
+use flui_platform::WindowFrame;
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::rc::Rc;
 use std::sync::{
@@ -349,7 +350,7 @@ fn a_position_set_while_fullscreen_is_where_it_returns_to() {
     assert!(near(at.x, 310.0) && near(at.y, 260.0), "returned to {at:?}");
 }
 
-fn the_frame_follows_resizable_and_decorated_and_keeps_the_content() {
+fn the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content() {
     let platform = platform();
     let window = open(&platform, hidden().with_resizable(false));
     assert_eq!(style(&window) & (WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0), 0);
@@ -362,25 +363,50 @@ fn the_frame_follows_resizable_and_decorated_and_keeps_the_content() {
         "{state:?}"
     );
 
-    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
     let state = window.state();
-    assert!(!state.decorated, "no title bar");
+    assert!(!state.frame.has_system_title_bar(), "no title bar");
     assert!(content_is(&state, 640.0, 480.0), "{state:?}");
     assert!(
         !state.resizable,
         "a window without a frame has no sizing border"
     );
 
-    apply(&window, WindowCommand::SetDecorated(true));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::System));
     let state = window.state();
     assert!(
-        state.decorated && state.resizable,
+        state.frame.has_system_title_bar() && state.resizable,
         "the wish is kept: {state:?}"
     );
     assert!(content_is(&state, 640.0, 480.0), "{state:?}");
 
     apply(&window, WindowCommand::SetResizable(false));
     assert!(!window.state().resizable);
+}
+
+fn an_unsupported_app_title_bar_opens_with_the_system_frame() {
+    use flui_platform::{AdmissionError, AppTitleBar, CapabilityAbsence, SystemControls};
+
+    let platform = platform();
+    let requested =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().with_frame(requested));
+    let opened = window.state();
+    assert_eq!(opened.frame, WindowFrame::System);
+    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
+    assert!(content_is(&opened, 640.0, 480.0));
+    assert_eq!(
+        opened.capabilities.into_parts().app_title_bar,
+        Err(CapabilityAbsence::NotYetOnThisHost),
+    );
+    assert_eq!(
+        window.admit_and_apply(WindowCommand::SetFrame(requested)),
+        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost),
+        ))),
+    );
+    assert_eq!(window.state(), opened);
+    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
 }
 
 fn the_limits_hold_against_resizing() {
@@ -437,19 +463,19 @@ fn a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to() {
     let platform = platform();
     let window = open(&platform, options());
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
-    apply(&window, WindowCommand::SetDecorated(false));
-    apply(&window, WindowCommand::SetDecorated(true));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::System));
     apply(&window, WindowCommand::SetResizable(false));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
     assert!(content_is(&state, 640.0, 480.0), "{state:?}");
     assert!(!state.resizable);
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
-    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
     assert!(
-        !state.decorated && content_is(&state, 640.0, 480.0),
+        !state.frame.has_system_title_bar() && content_is(&state, 640.0, 480.0),
         "{state:?}"
     );
 }
@@ -470,7 +496,7 @@ fn normal_on_a_hidden_maximized_window_restores_it_without_showing() {
 
 fn a_size_set_under_limits_while_maximized_still_restores_within_them() {
     let platform = platform();
-    let window = open(&platform, options().with_decorated(false));
+    let window = open(&platform, options().with_frame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
@@ -489,17 +515,17 @@ fn a_frame_changed_while_maximized_keeps_the_content_it_restores_to() {
     let platform = platform();
     let window = open(&platform, options());
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
-    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
-    assert!(!state.decorated);
+    assert!(!state.frame.has_system_title_bar());
     assert!(content_is(&state, 640.0, 480.0), "{state:?}");
 }
 
 fn limits_set_while_maximized_hold_when_it_is_restored() {
     let platform = platform();
     // Without a sizing border the system does not ask for the limits on its own.
-    let window = open(&platform, options().with_decorated(false));
+    let window = open(&platform, options().with_frame(WindowFrame::None));
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
@@ -624,8 +650,8 @@ fn a_minimized_fullscreen_window_answers_commands_as_fullscreen() {
     let normal = window.state().outer;
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
-    apply(&window, WindowCommand::SetDecorated(false));
-    apply(&window, WindowCommand::SetDecorated(true));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::System));
     // Asking for fullscreen again brings the window back, once.
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert_eq!(window.state().mode, WindowMode::Fullscreen);
@@ -633,7 +659,7 @@ fn a_minimized_fullscreen_window_answers_commands_as_fullscreen() {
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Normal);
-    assert!(state.decorated, "the frame is back");
+    assert!(state.frame.has_system_title_bar(), "the frame is back");
     assert!(near(state.outer.size.width, normal.size.width), "{state:?}");
     assert!(
         near(state.outer.size.height, normal.size.height),
@@ -664,7 +690,7 @@ fn entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot() {
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let before = window.state().revision.get();
-    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetFrame(WindowFrame::None));
     assert_eq!(window.state().revision.get(), before + 1);
 }
 
@@ -673,7 +699,7 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
     let window = open(
         &platform,
         hidden()
-            .with_decorated(false)
+            .with_frame(WindowFrame::None)
             .with_max_size(Some(Size::new(500.0, 400.0))),
     );
     apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
@@ -1767,6 +1793,10 @@ fn native_window_commands() {
         ),
         ("a_close_command_asks_no_veto", a_close_command_asks_no_veto),
         (
+            "an_unsupported_app_title_bar_opens_with_the_system_frame",
+            an_unsupported_app_title_bar_opens_with_the_system_frame,
+        ),
+        (
             "a_deferred_window_is_hidden_until_its_first_frame",
             a_deferred_window_is_hidden_until_its_first_frame,
         ),
@@ -1823,8 +1853,8 @@ fn native_window_commands() {
             a_position_set_while_fullscreen_is_where_it_returns_to,
         ),
         (
-            "the_frame_follows_resizable_and_decorated_and_keeps_the_content",
-            the_frame_follows_resizable_and_decorated_and_keeps_the_content,
+            "the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content",
+            the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content,
         ),
         (
             "the_limits_hold_against_resizing",

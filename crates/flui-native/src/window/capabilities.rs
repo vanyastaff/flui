@@ -104,7 +104,7 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     capabilities.sets_size = Native;
     capabilities.sets_constraints = Native;
     capabilities.sets_resizable = Native;
-    capabilities.sets_decorated = Native;
+    capabilities.sets_frame = Native;
     capabilities.minimizes = Native;
     capabilities.maximizes = Native;
     capabilities.enters_fullscreen = Native;
@@ -120,7 +120,9 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     } else {
         capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
     }
-    capabilities
+    // The traffic lights over a title bar of the application's
+    // (`fullSizeContentView`) are not yet driven.
+    capabilities.without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
 }
 
 /// `NSView.displayLink` (macOS 14), whose `preferredFrameRateRange` a

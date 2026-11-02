@@ -1006,6 +1006,14 @@ Serialization preserves the existing dimensions and byte-array representation.
 `deserialized_images_validate_rgba_dimensions_and_data` in `value_contract`
 checks rejected lengths and dimensions followed by a valid round trip.
 
+`ImageTransform` deserialization uses `try_new`: every coefficient and the inverse
+must be finite, and the determinant must be finite and nonzero. Its serialized
+structure name, six coefficient fields and their order are preserved.
+`image_transforms_refuse_what_they_cannot_invert` in `value_contract` checks these
+rules through map and sequence deserializers, including NaN and infinity, and
+through a transform nested in `ImageFilter`. Affine and reflected transforms round
+trip without changing their coefficients.
+
 `Path` deserialization replays commands through its builders. A shape hint is
 retained only when the corresponding canonical constructor reproduces those
 commands exactly; submitted geometry remains authoritative. The engine uses

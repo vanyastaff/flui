@@ -11,8 +11,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowMode, WindowRevision,
-    WindowState,
+    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFrame, WindowMode,
+    WindowRevision, WindowState,
 };
 
 use crate::observation::{Observation, Phase, Subscription, WeakObservation};
@@ -122,12 +122,13 @@ impl WindowHandle {
         self.submit(WindowCommand::SetResizable(on))
     }
 
-    /// Show or remove the frame and title bar.
+    /// Frame the window: the system's frame, a title bar the application draws
+    /// inside a frame the system keeps, or none.
     ///
     /// # Errors
     /// As [`Self::set_title`].
-    pub fn set_decorated(&self, on: bool) -> Result<(), SubmitError> {
-        self.submit(WindowCommand::SetDecorated(on))
+    pub fn set_frame(&self, frame: WindowFrame) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetFrame(frame))
     }
 
     /// Enter a mode; [`WindowMode::Normal`] restores from any other.

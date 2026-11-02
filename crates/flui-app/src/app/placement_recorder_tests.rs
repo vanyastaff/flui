@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::WindowOptions;
+use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 use flui_platform::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, StorageError, StorageName,
     WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement, WindowState,
@@ -178,6 +178,42 @@ fn restore_asks_the_platform_for_what_it_can_place() {
         Size::new(800.0, 600.0),
         "but it keeps the size"
     );
+}
+
+/// The fit takes the frame the window opens with: a title bar of the
+/// application's that the platform cannot take opens as the system's frame, and
+/// no frame takes no inset.
+fn restore_fits_the_frame_the_window_opens_with() {
+    let placement = WindowPlacement::new(
+        Some("key-main".into()),
+        Some(Point::new(100.0, 80.0)),
+        Size::new(5000.0, 600.0),
+        WindowMode::Normal,
+        1.0,
+    );
+    let no_app_title_bar = WindowCapabilities::ALL
+        .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost);
+    // (case, frame asked for, content width)
+    let table = [
+        (
+            "an app title bar the platform cannot take",
+            WindowFrame::AppTitleBar(AppTitleBar::new()),
+            1904.0,
+        ),
+        ("the system frame", WindowFrame::System, 1904.0),
+        ("no frame", WindowFrame::None, 1920.0),
+    ];
+    for (case, frame, width) in table {
+        let mut options = WindowOptions::default().with_frame(frame);
+        restore_into(
+            &mut options,
+            &placement,
+            &displays(),
+            &no_app_title_bar,
+            |_| Size::new(16.0, 39.0),
+        );
+        assert_eq!(options.size.width, width, "{case}");
+    }
 }
 
 fn the_first_state_is_written_at_once() {
@@ -483,6 +519,10 @@ fn placement_recorder() {
                 "restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds",
                 restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds
                     as fn(),
+            ),
+            (
+                "restore_fits_the_frame_the_window_opens_with",
+                restore_fits_the_frame_the_window_opens_with as fn(),
             ),
             (
                 "restore_asks_the_platform_for_what_it_can_place",

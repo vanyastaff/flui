@@ -490,6 +490,20 @@ fn test_features_plan() -> Vec<Step> {
             "--test",
             "image",
         ]),
+        // Neither the default scope nor the image features exercise
+        // painting's constructor-backed serde admission rules.
+        nextest(&[
+            "-p",
+            "flui-painting",
+            "--locked",
+            "--no-fail-fast",
+            "--features",
+            "serde",
+            "--test",
+            "painting_it",
+            "-E",
+            "test(=value_contract)",
+        ]),
     ]
 }
 
