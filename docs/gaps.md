@@ -99,7 +99,7 @@ request.
 
 - 🟡 dominates every column of the parity summary.
 - Dedicated UI owners have no production runner or native acceptance run on any host.
-  [ADR-0284](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) is Proposed; its headless
+  [ADR-0284](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) is accepted but unimplemented; its headless
   CPU evidence does not close this gap or establish native input, IME, accessibility,
   presentation or shutdown correctness. Current runners retain shared-owner execution.
 - Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.

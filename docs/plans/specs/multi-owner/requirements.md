@@ -1,7 +1,7 @@
 # Multi-owner UI runtime requirements
 
-- **Status:** Draft for owner review; preparation authorized 2026-11-01. Implementation and
-  platform support are not approved or claimed by this document.
+- **Status:** Approved by the owner (2026-11-01); implementation authorized. Platform support
+  requires the native acceptance below and is not claimed by this document.
 - **Base:** `bb618a7f7f1510ff11093109094ba02c937d1970`.
 - **Decision:** [ADR-0284](../../../adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md).
 - **Design:** [design.md](design.md). **Execution and evidence:** [tasks.md](tasks.md).

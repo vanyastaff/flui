@@ -1,6 +1,7 @@
 # Multi-owner UI runtime design
 
-- **Status:** Draft for owner review; no production implementation in this change.
+- **Status:** Approved by the owner (2026-11-01); implementation starts with headless evidence
+  and native Win32 loop/TSF qualification. Dedicated production runners are not implemented.
 - **Contract:** [requirements.md](requirements.md). **Work:** [tasks.md](tasks.md).
 - **Decision:** [ADR-0284](../../../adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md).
 

@@ -1,8 +1,9 @@
 # ADR-0284: Independent UI runtimes may have dedicated owners
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-01). Not implemented: dedicated-owner bootstrap, coordinator,
+  runner migration and native qualification. Acceptance authorizes the design, not support.
 - **Date:** 2026-11-01
-- **Supersedes:** on acceptance only, [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md)
+- **Supersedes:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md)
   §1's process-wide owner requirement, §2's unconditional denial of independent frame progress,
   §4's exhaustive list of public transfer positions, and §5's requirement to express dedicated
   ownership as a `WindowPolicy` variant. Its runtime isolation and addressed telemetry remain;
@@ -55,8 +56,8 @@ independent progress without making UI state transferable?
 ## Decision
 
 Chosen option: 3. Ownership is per runtime; placement is a host capability and an explicit
-application choice. This is a proposed target, not a description of current runners.
-On Win32 the proposed dedicated owner colocates its UI runtime with its own native loop;
+application choice. This is the accepted target, not a description of current runners.
+On Win32 the dedicated owner colocates its UI runtime with its own native loop;
 option 5 is not the initial integration.
 
 ### §1. Construction establishes ownership
@@ -91,11 +92,11 @@ by the coordinator's manifest, preserving provider tiers, or launch is refused. 
 context-dependent `Unsupported` returned when acquiring an optional capability remains a
 capability value, not a launch failure. The owner-local registry itself never crosses threads.
 
-This deliberately proposes one new facade transfer position: the launch factory's `Send`
-bound. Acceptance must explicitly amend the shrinking-position policy for that named entry
-in the `send-positions` allowlist and repository guidance; no blanket reseed, additional
+The accepted exception permits the launch factory's named facade `Send` position.
+When the entry is implemented, record its exact positions in the `send-positions` allowlist;
+repository guidance recognizes only this exception. No blanket reseed, additional
 UI bounds, unsafe `Send` implementation or `send_wrapper` exception is authorized. Until
-acceptance, the existing gate and policy remain unchanged. A production consumer and a
+implementation, the allowlist remains unchanged. A production consumer and a
 compile-fail fixture for capturing `Rc` accompany that entry.
 
 ### §2. Native and UI responsibilities colocate on each Win32 owner

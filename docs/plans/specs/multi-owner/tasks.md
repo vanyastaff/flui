@@ -1,10 +1,9 @@
 # Multi-owner implementation tasks and evidence
 
-- **Status:** Draft prepared 2026-11-01; awaiting owner review. No implementation task is
-  complete and no dedicated-owner platform support is claimed.
+- **Status:** Approved by the owner (2026-11-01); implementation authorized, starting with
+  headless evidence and actual two-loop Win32/TSF qualification. No platform support is claimed.
 - **Base:** `bb618a7f7f1510ff11093109094ba02c937d1970`.
-- **Next:** review the corrected colocated Win32 design and factory transfer-position exception,
-  then execute MO-T1. Production implementation has not started.
+- **Next:** MO-T2, then MO-T5; MO-T3/MO-T4 follow the qualification evidence.
 - **Requirements:** [requirements.md](requirements.md). **Design:** [design.md](design.md).
 
 ## Work and dependency order
@@ -25,7 +24,8 @@
 
 ### Completion checklist
 
-- [ ] MO-T1 — decision and transfer-policy review.
+- [x] MO-T1 — owner accepted the corrected ADR/spec, factory exception, consumer/configuration
+  inventory and bounded-work design on 2026-11-01; no transfer allowlist entry added yet.
 - [ ] MO-T2 — reproducible public-path headless baseline and failing control.
 - [ ] MO-T3 — transport and identity contracts.
 - [ ] MO-T4 — coordinator, local runner migration and lifecycle.
