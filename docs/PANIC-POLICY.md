@@ -60,7 +60,8 @@ A container that owns user values withdraws each one and releases its borrows
 and locks before the value's destructor runs. After a caught failure in the
 same operation it keeps destroying what it withdrew, each destructor under the
 operation's containment, so a destructor that panics there is a competing
-failure and the first one stays. A destructor that panics while the thread is
+failure and the first one stays; a caught payload that is not propagated is
+destroyed the same way, with `flui_foundation::panic::discard_payload`. A destructor that panics while the thread is
 already unwinding aborts the process, as in std; FLUI does not leak values or
 panic payloads to prevent it
 ([ADR-0281](adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).

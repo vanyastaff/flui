@@ -57,6 +57,7 @@ pub enum BlurStyle {
 /// Quality levels for sampling images and scaled textures.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum FilterQuality {
     /// Nearest neighbor sampling.
     ///

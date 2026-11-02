@@ -14,7 +14,7 @@
 //! [anchor]: SemanticsAnchor
 
 mod controller;
-mod handles;
+pub(crate) mod handles;
 mod input;
 
 use std::cell::{Cell, RefCell};

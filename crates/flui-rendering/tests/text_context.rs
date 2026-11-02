@@ -34,7 +34,13 @@ fn loose() -> BoxConstraints {
 #[derive(Debug)]
 struct PanicsWithTheTextContextLent;
 
-impl flui_foundation::Diagnosticable for PanicsWithTheTextContextLent {}
+impl flui_foundation::inspect::Inspect for PanicsWithTheTextContextLent {
+    fn kind(&self) -> &'static str {
+        "PanicsWithTheTextContextLent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for PanicsWithTheTextContextLent {
     type Arity = Leaf;
@@ -84,7 +90,13 @@ fn paragraph(text: &str) -> tree::TreeNode {
 #[derive(Debug)]
 struct RawTextQueries;
 
-impl flui_foundation::Diagnosticable for RawTextQueries {}
+impl flui_foundation::inspect::Inspect for RawTextQueries {
+    fn kind(&self) -> &'static str {
+        "RawTextQueries"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderObject<BoxProtocol> for RawTextQueries {
     fn perform_layout_raw(
@@ -382,7 +394,13 @@ const PROBE_MONO: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe
 #[derive(Debug)]
 struct MeasuresThroughTheContext;
 
-impl flui_foundation::Diagnosticable for MeasuresThroughTheContext {}
+impl flui_foundation::inspect::Inspect for MeasuresThroughTheContext {
+    fn kind(&self) -> &'static str {
+        "MeasuresThroughTheContext"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for MeasuresThroughTheContext {
     type Arity = Leaf;
@@ -1098,8 +1116,8 @@ fn numeric_sizing_retains_wake_capture_across_last_owner_release() {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             retirements.load(Ordering::SeqCst),
-            usize::from(!invocation_fails),
-            "a caught invocation failure retains captures instead of entering a competing destructor"
+            1,
+            "the capture is destroyed after a caught invocation failure too"
         );
         assert!(OWNER_OBSERVER.with(|slot| {
             slot.borrow()
@@ -1191,7 +1209,13 @@ struct CorrectionTextSliver {
     input_during_measurement: Option<flui_rendering::view::ScrollPosition>,
 }
 
-impl flui_foundation::Diagnosticable for CorrectionTextSliver {}
+impl flui_foundation::inspect::Inspect for CorrectionTextSliver {
+    fn kind(&self) -> &'static str {
+        "CorrectionTextSliver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderSliver for CorrectionTextSliver {
     type Arity = Leaf;

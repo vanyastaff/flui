@@ -441,28 +441,32 @@ impl RenderContainer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderContainer {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        if let Some(alignment) = self.alignment {
-            properties.add_enum("alignment", alignment);
+impl flui_foundation::inspect::Inspect for RenderContainer {
+    fn kind(&self) -> &'static str {
+        "RenderContainer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        if let Some(alignment) = &self.alignment {
+            out.field("alignment", alignment)
+                .unit(flui_foundation::inspect::Unit::Fraction);
         }
         // Reported as its effective (zero-defaulted) value unconditionally,
-        // like `margin` — this diagnostics property predates `padding`
-        // becoming `Option` and nothing downstream (`harness_container_
-        // self_describes`, most directly) expects it to disappear when
-        // unset. `hasPadding` is not exposed the way `hasConstraints`/
-        // `hasTransform` are; add it if a consumer ever needs to
-        // distinguish "unset" from "explicitly zero" from diagnostics.
-        properties.add_enum("padding", self.effective_padding());
-        properties.add_enum("margin", self.margin);
-        if let Some(color) = self.color {
-            properties.add_enum("color", color);
-        }
+        // like `margin`: `padding` is an `Option` but nothing downstream
+        // expects the field to disappear when unset. `has_padding` is not
+        // exposed the way `hasConstraints`/`hasTransform` are; add it if a
+        // consumer ever needs to tell "unset" from "explicitly zero".
+        out.field("padding", &self.effective_padding());
+        out.field("margin", &self.margin);
+        out.field("color", &self.color);
         if let Some(decoration) = &self.decoration {
-            properties.add_enum("decoration", decoration.clone());
+            out.value(
+                "decoration",
+                flui_foundation::inspect::Value::Debug(decoration),
+            );
         }
-        properties.add("hasConstraints", self.additional_constraints.is_some());
-        properties.add("hasTransform", self.transform.is_some());
+        out.field("hasConstraints", &self.additional_constraints.is_some());
+        out.field("hasTransform", &self.transform.is_some());
     }
 }
 

@@ -650,7 +650,7 @@ fn a_panicking_grant_releases_the_lock(fixture: &mut dyn TextStoreFixture) -> Ou
                 // deliberately panicking grant released its lock.
                 std::panic::resume_unwind(payload);
             }
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         Ok(()) => return Err("a panicking grant did not unwind out of request_lock".to_owned()),
     }
@@ -949,7 +949,7 @@ fn a_grant_that_panics_after_marking_leaves_the_committed_text(
         );
     }));
     match unwound {
-        Err(payload) if marked.get() => flui_foundation::panic::retain_opaque_payload(payload),
+        Err(payload) if marked.get() => flui_foundation::panic::discard_payload(payload),
         Err(payload) => std::panic::resume_unwind(payload),
         Ok(()) => return Err("a panicking grant did not unwind out of request_lock".to_owned()),
     }

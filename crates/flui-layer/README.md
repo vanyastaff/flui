@@ -117,7 +117,7 @@ leader's anchor is clipped out (a selection handle whose end scrolled away).
 ## Features
 
 - `testing` — the `testing::inspect` walkers (`structure`, `clip_rects`, `first_picture_bounds`,
-  `diagnostics_tree`, …). `flui-rendering`'s render harness re-exports them.
+  …). `flui-rendering`'s render harness re-exports them.
 
 ```toml
 [dev-dependencies]

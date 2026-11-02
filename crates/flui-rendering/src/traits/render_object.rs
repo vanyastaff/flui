@@ -47,7 +47,7 @@ pub enum SemanticsClip {
 }
 
 use downcast_rs::{Downcast, impl_downcast};
-use flui_foundation::Diagnosticable;
+use flui_foundation::inspect::Inspect;
 
 use crate::{
     hit_testing::{CursorRequest, MouseTrackerAnnotation, PointerTarget},
@@ -183,9 +183,9 @@ impl HitTestOutcome {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a render object for the `{P}` protocol",
     label = "no `RenderObject<{P}>` for `{Self}`",
-    note = "render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::Diagnosticable`; `RenderObject<P>` then follows from a blanket impl"
+    note = "render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::inspect::Inspect`; `RenderObject<P>` then follows from a blanket impl"
 )]
-pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
+pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     // ========================================================================
     // Core Operations
     // ========================================================================

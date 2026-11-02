@@ -214,7 +214,7 @@ fn contained<R>(
                     "an OS entry panicked"
                 );
             });
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             None
         }
     }
@@ -407,10 +407,10 @@ mod tests {
     }
 
     /// An entry's answer passes through; a panic is `None` and an opaque
-    /// payload is retained, never destroyed inside the OS's call. Red-check:
-    /// drop the payload instead of retaining it.
+    /// payload is dropped inside the entry, not handed to the OS. Red-check:
+    /// retain the payload instead of dropping it.
     #[test]
-    fn an_os_entry_contains_its_panic_and_retains_its_payload() {
+    fn an_os_entry_contains_its_panic_and_drops_its_payload() {
         assert_eq!(contain_os_entry("a healthy entry", || 7), Some(7));
         assert_eq!(
             contain_os_entry("a formatted panic", || -> u8 { panic!("entry {}", 7) }),
@@ -424,8 +424,8 @@ mod tests {
         });
         assert_eq!(answered, None);
         assert!(
-            !destroyed.load(Ordering::SeqCst),
-            "the payload's destructor ran inside the entry"
+            destroyed.load(Ordering::SeqCst),
+            "the payload is dropped inside the entry"
         );
     }
 }

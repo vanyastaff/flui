@@ -161,12 +161,18 @@ impl RenderSkeleton {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSkeleton {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_color("base", format!("{:?}", self.base));
-        properties.add_double("corner_radius", self.corner_radius, None);
-        properties.add_double("width_factor", self.width_factor, None);
-        properties.add_flag("band", self.band.is_some(), "shimmering");
+impl flui_foundation::inspect::Inspect for RenderSkeleton {
+    fn kind(&self) -> &'static str {
+        "RenderSkeleton"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("base", &self.base);
+        out.field("corner_radius", &self.corner_radius)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("width_factor", &self.width_factor)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("band", &self.band.is_some()).default(&false);
     }
 }
 

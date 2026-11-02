@@ -73,10 +73,10 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     let refused =
         |reason| flui_platform::Unsupported::of::<flui_view::persist::StorageCapability>(reason);
-    let dirs = storage_dir(config)
+    let store = storage_dir(config)
         .ok_or_else(|| refused(flui_platform::UnsupportedReason::NotRegistered))
         .and_then(|dir| {
-            with_owner_platform(|owner| owner.shared().data_dirs(&dir))
+            with_owner_platform(|owner| owner.shared().data_store(&dir))
                 .flatten()
                 .ok_or_else(|| {
                     tracing::warn!(
@@ -88,7 +88,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
         });
     // Always installed, a refusal included: a run without storage must not
     // inherit the previous run's on this thread.
-    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(store));
     // The run's receivers replace the last run's, for the same reason.
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
@@ -601,7 +601,7 @@ fn deliver_session_end_close(deadline: std::time::Instant) {
             panic = flui_foundation::panic::payload_text(&*payload),
             "a Detached observer panicked at the session's end"
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -740,7 +740,7 @@ fn flush_for_session_end(deadline: std::time::Instant) {
                 panic = flui_foundation::panic::payload_text(&*payload),
                 "the session-end flush panicked"
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -769,7 +769,7 @@ fn deliver_contained_while(
             panic = flui_foundation::panic::payload_text(&*payload),
             "a session-end subscriber panicked; the session end is answered regardless"
         );
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     delivery
 }

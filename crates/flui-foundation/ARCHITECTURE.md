@@ -210,14 +210,19 @@ exists to prevent.
 
 ## Typed inspection (`inspect`)
 
-`inspect` is ADR-0242's description model, landed beside `debug`'s `Diagnosticable`, which the
-workspace migrates off and then deletes. Invariants:
+`inspect` is ADR-0242's description model; it replaced the `Diagnosticable` property builders,
+which the workspace has left. Invariants:
 
 - **Describing allocates only in the sink.** `Inspect::inspect` writes borrowed `Field`s into
   one `&mut dyn Sink`; `Value` is `Copy` and owns nothing. `inspect_allocation` (its own test
   target, because it installs a counting allocator) walks every value kind, a sequence and a
   `Debug` field with a counting sink and requires zero allocations; the snapshot sink is its
   positive control.
+- **A description says what the object holds, infinity and NaN included.** An unconstrained
+  maximum is infinity, which is meaningful, and a NaN is usually a bug worth seeing, so `Fields`
+  never turns either into an absent value. The wire carries them as a typed value
+  (`flui_protocol::InspectValue::NonFinite`), a composite holding one as its `Debug` text.
+  `a_non_finite_number_is_described_as_itself` pins it.
 - **The value set is closed.** A consumer that handles every `Value` handles every description,
   which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
   colour type lives in `flui-painting`, so a description carries `Rgba` channels.
@@ -395,15 +400,13 @@ The public subprocess table `notifier_ownership_and_recovery` checks borrowed
 non-Clone arguments, hostile payloads and self-removal captures, tracing failure
 in competition with a listener failure, chronological retirement competition
 and subsequent progress, including recursive relay retirement through the same
-channel. The common exceptional-payload operation is
-`panic::retain_opaque_payload`, used by notifications, signal reads
-and the test-table runner. This contract is recorded in
+channel. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md),
-with current delivery/propagation custody under ADR-0178.
-As refined by [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md),
-the shared operation releases exact `&'static str` and `String` payloads, whose
-destruction cannot call user code. Other dynamic payload types remain retained;
-callback snapshot retention and recovery ordering are unchanged.
+with current delivery/propagation custody under ADR-0178. Caught payloads that
+are not propagated are dropped where the decision is made
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)):
+a payload or capture whose destructor panics while the thread unwinds aborts,
+as in std.
 
 
 ## `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis

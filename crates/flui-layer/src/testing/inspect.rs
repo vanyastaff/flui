@@ -9,7 +9,6 @@
 
 use flui_foundation::geometry::{Matrix4, RRect, Rect};
 use flui_foundation::inspect::Inspect;
-use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
 use flui_painting::paint::Path;
 
 use crate::{Layer, LayerTree};
@@ -57,26 +56,6 @@ pub fn first_picture_bounds(tree: &LayerTree) -> Option<Rect> {
         Layer::Picture(picture) => picture.bounds(),
         _ => None,
     })
-}
-
-/// The whole tree as nested [`DiagnosticsNode`]s.
-///
-/// Recursive on purpose: the nested node is composed bottom-up, child before
-/// parent, which a flat pre-order visit cannot express. This is a debug
-/// dump, not one of the flat query walkers.
-#[must_use]
-pub fn diagnostics_tree(tree: &LayerTree) -> DiagnosticsNode {
-    fn subtree(tree: &LayerTree, id: LayerId) -> DiagnosticsNode {
-        let node = tree
-            .get(id)
-            .expect("BUG: a LayerTree child id is always a node of that tree");
-        let mut diagnostics = node.to_diagnostics_node();
-        for &child in node.children() {
-            diagnostics.add_child(subtree(tree, child));
-        }
-        diagnostics
-    }
-    subtree(tree, tree.root())
 }
 
 /// The alpha of the first `Opacity` layer.

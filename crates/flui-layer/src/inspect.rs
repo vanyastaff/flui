@@ -21,7 +21,6 @@ use flui_foundation::inspect::{
 use std::hash::{DefaultHasher, Hasher};
 
 use flui_painting::DisplayList;
-use flui_painting::paint::Clip;
 
 use crate::{Layer, LayerTree};
 
@@ -40,25 +39,25 @@ impl Inspect for Layer {
             }
             Layer::Opacity(layer) => {
                 out.field("alpha", &layer.alpha()).unit(Unit::Fraction);
-                out.value("blend", Value::Debug(&layer.blend()));
+                out.field("blend", &layer.blend());
                 out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
             }
             Layer::ClipRect(layer) => {
                 out.field("clip_rect", &layer.clip_rect())
                     .unit(Unit::LogicalPx);
-                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+                out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipRRect(layer) => {
                 out.value("clip_rrect", Value::Debug(layer.clip_rrect()));
-                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+                out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipPath(layer) => {
                 out.value("clip_path", Value::Debug(layer.clip_path()));
-                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+                out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipSuperellipse(layer) => {
                 out.value("clip_superellipse", Value::Debug(layer.clip_superellipse()));
-                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+                out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::Picture(layer) => {
                 out.field("commands", &layer.picture().len());
@@ -71,20 +70,17 @@ impl Inspect for Layer {
                     .level(Level::Detail);
             }
             Layer::Texture(layer) => {
-                out.value("texture_id", Value::Debug(&layer.texture_id()));
+                out.field("texture_id", &layer.texture_id().get());
                 out.field("opacity", &layer.opacity()).unit(Unit::Fraction);
                 out.field("frozen", &layer.is_frozen());
-                out.value("filter_quality", Value::Debug(&layer.filter_quality()));
+                out.field("filter_quality", &layer.filter_quality());
             }
             Layer::PlatformView(layer) => {
-                out.value("view_id", Value::Debug(&layer.view_id()));
-                out.value(
-                    "hit_test_behavior",
-                    Value::Debug(&layer.hit_test_behavior()),
-                );
+                out.field("view_id", &layer.view_id().value());
+                out.field("hit_test_behavior", &layer.hit_test_behavior());
             }
             Layer::PerformanceOverlay(layer) => {
-                out.value("options", Value::Debug(&layer.options()));
+                out.field("options", &layer.options().bits());
                 out.field("commands", &layer.readout().len());
                 out.field("content", &fingerprint(layer.readout()))
                     .level(Level::Detail);
@@ -98,11 +94,11 @@ impl Inspect for Layer {
             }
             Layer::ShaderMask(layer) => {
                 out.value("shader", Value::Debug(layer.shader()));
-                out.value("blend_mode", Value::Debug(&layer.blend_mode()));
+                out.field("blend_mode", &layer.blend_mode());
             }
             Layer::BackdropFilter(layer) => {
                 out.value("filter", Value::Debug(layer.filter()));
-                out.value("blend_mode", Value::Debug(&layer.blend_mode()));
+                out.field("blend_mode", &layer.blend_mode());
                 out.value(
                     "group",
                     layer
@@ -111,17 +107,19 @@ impl Inspect for Layer {
                 );
             }
             Layer::Leader(layer) => {
-                out.value("link", Value::Debug(&layer.link()));
+                out.field("link", &layer.link().id());
                 out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
             }
             Layer::Follower(layer) => {
-                out.value("link", Value::Debug(&layer.link()));
+                out.field("link", &layer.link().id());
                 out.field("target_offset", &layer.target_offset())
                     .unit(Unit::LogicalPx);
                 out.field("show_when_unlinked", &layer.show_when_unlinked());
-                out.value("leader_anchor", Value::Debug(&layer.leader_anchor()));
-                out.value("follower_anchor", Value::Debug(&layer.follower_anchor()));
-                out.value("leader_clip", Value::Debug(&layer.leader_clip()));
+                out.field("leader_anchor", &layer.leader_anchor())
+                    .unit(Unit::Fraction);
+                out.field("follower_anchor", &layer.follower_anchor())
+                    .unit(Unit::Fraction);
+                out.field("leader_clip", &layer.leader_clip());
                 out.field("size", &layer.size()).unit(Unit::LogicalPx);
             }
             Layer::AnnotatedRegion(layer) => {
@@ -184,19 +182,6 @@ impl InspectTree for LayerTree {
             .unwrap_or_default()
             .iter()
             .map(|&child| self.in_scene(child).into())
-    }
-}
-
-/// How a clip layer rasterises its edge, which tells clips of the same shape apart.
-fn clip_value(clip: Clip) -> Value<'static> {
-    Value::Variant {
-        ty: "Clip",
-        name: match clip {
-            Clip::None => "None",
-            Clip::HardEdge => "HardEdge",
-            Clip::AntiAlias => "AntiAlias",
-            Clip::AntiAliasWithSaveLayer => "AntiAliasWithSaveLayer",
-        },
     }
 }
 

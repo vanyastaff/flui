@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::panic::payload_text;
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,
@@ -418,7 +418,7 @@ impl<D: Document> Persisted<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 let error = PersistError::Panicked {
                     during: CodecStep::Encode,
                     message,
@@ -755,10 +755,10 @@ impl<D: Document> OpenDocument<D> {
                             self.fail(PersistError::Storage(StorageError::Cancelled));
                         }));
                         if let Err(again) = failed {
-                            retain_opaque_payload(again);
+                            flui_foundation::panic::discard_payload(again);
                         }
                         if std::thread::panicking() {
-                            retain_opaque_payload(payload);
+                            flui_foundation::panic::discard_payload(payload);
                             return;
                         }
                         resume_unwind(payload);
@@ -793,7 +793,7 @@ impl<D: Document> OpenDocument<D> {
                 let message = payload_text(&*payload)
                     .unwrap_or("a panic without a message")
                     .to_owned();
-                retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // The failure is recorded before the value's drop, which is
                 // application code and may panic in turn.
                 self.fail(PersistError::Panicked {
@@ -980,7 +980,7 @@ impl<D: Document> OpenDocument<D> {
                 Err(payload) => {
                     self.state.borrow_mut().watching = false;
                     if std::thread::panicking() {
-                        retain_opaque_payload(payload);
+                        flui_foundation::panic::discard_payload(payload);
                         return;
                     }
                     resume_unwind(payload);
@@ -1062,7 +1062,7 @@ impl<D: Document> OpenDocument<D> {
             Ok(token) => token,
             Err(payload) => {
                 if std::thread::panicking() {
-                    retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     return;
                 }
                 resume_unwind(payload);
@@ -1085,7 +1085,7 @@ fn then_retire<T>(step: impl FnOnce(), replaced: T) {
     let stepped = catch_unwind(AssertUnwindSafe(step));
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
         if let Err(first) = stepped {
-            retain_opaque_payload(first);
+            flui_foundation::panic::discard_payload(first);
         }
         resume_unwind(payload);
     }
@@ -1325,7 +1325,7 @@ fn contained_initial<D: Document>() -> Result<D, PersistError> {
         let message = payload_text(&*payload)
             .unwrap_or("a panic without a message")
             .to_owned();
-        retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         PersistError::Panicked {
             during: CodecStep::Initial,
             message,
@@ -1360,7 +1360,7 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
             let message = payload_text(&*payload)
                 .unwrap_or("a panic without a message")
                 .to_owned();
-            retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             return Err(PersistError::Panicked {
                 during: CodecStep::Decode,
                 message,

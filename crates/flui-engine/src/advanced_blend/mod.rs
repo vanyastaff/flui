@@ -39,6 +39,10 @@ mod pipeline;
 pub(crate) struct AdvancedBlendOp {
     /// Pre-rendered foreground layer content (premultiplied RGBA).
     pub(crate) foreground: PooledTexture,
+    /// How the foreground is read between texels: `Nearest` for a
+    /// pixel-aligned layer, `Linear` for a backdrop resampled through a
+    /// transform, whose texels the output does not align with.
+    pub(crate) foreground_sampling: wgpu::FilterMode,
     /// The advanced blend mode to apply.
     pub(crate) mode: BlendMode,
     /// Device-space bounds of the foreground layer (origin + size in pixels).
@@ -259,16 +263,17 @@ pub(crate) fn flush_advanced_layer(
 
     let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniforms]));
 
-    // Nearest + ClampToEdge sampler — no filtering: the backdrop copy and
-    // foreground are pixel-aligned; filtering would introduce colour error.
+    // ClampToEdge, filtered as the foreground asks. The backdrop copy is
+    // read at its texel centres (see the shader), where a linear sample
+    // equals a nearest one, so one sampler serves both textures; a
+    // pixel-aligned foreground stays unfiltered, which keeps colour exact.
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("Advanced Blend Nearest Sampler"),
+        label: Some("Advanced Blend Sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        mag_filter: op.foreground_sampling,
+        min_filter: op.foreground_sampling,
         ..Default::default()
     });
 
@@ -284,7 +289,7 @@ pub(crate) fn flush_advanced_layer(
             },
             foreground_tex: op.foreground.view(),
             backdrop_tex: backdrop.texture.view(),
-            nearest_sampler: &sampler,
+            blend_sampler: &sampler,
         }),
     );
 
@@ -760,6 +765,7 @@ mod synthetic_op_tests {
 
                 let op = AdvancedBlendOp {
                     foreground: fg_this_mode,
+                    foreground_sampling: wgpu::FilterMode::Nearest,
                     mode,
                     device_bounds: Rect::from_xywh(
                         0.0,

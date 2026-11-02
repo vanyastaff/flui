@@ -8,9 +8,9 @@ pub(crate) fn observe<T>(action: impl FnOnce() -> T) -> Option<T> {
     let mut recovery = PanicRecovery::new();
     let mut output = None;
     recovery.run(|| output = Some(action()));
-    // RecoveryFailure retires exact text and retains opaque payloads without
-    // invoking arbitrary payload destructors. Observability cannot supersede
-    // a source/listener failure or prevent accepted work from being delivered.
+    // The failure payload is dropped here.
+    // Observability cannot supersede a source/listener failure or prevent
+    // accepted work from being delivered.
     drop(recovery.into_failure());
     output
 }

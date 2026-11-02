@@ -18,6 +18,7 @@ use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 /// row's resolved height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum TableCellVerticalAlignment {
     /// Align to the top of the row.
     #[default]

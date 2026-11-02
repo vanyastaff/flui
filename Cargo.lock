@@ -1845,7 +1845,6 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
- "flui-macros",
  "flui-material",
  "flui-native",
  "flui-objects",
@@ -2173,7 +2172,6 @@ dependencies = [
 name = "flui-macros"
 version = "0.2.0-dev"
 dependencies = [
- "flui-foundation",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -2265,6 +2263,7 @@ dependencies = [
  "wayland-client",
  "wayland-cursor",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "web-sys",
  "web-time",
  "windows 0.62.2",
@@ -2486,7 +2485,13 @@ dependencies = [
  "flui-platform",
  "flui-sdk",
  "flui-testing",
+ "futures-util",
+ "libc",
+ "raw-window-handle",
+ "serde",
  "thiserror 2.0.21",
+ "zbus 6.1.0",
+ "zruntime",
 ]
 
 [[package]]
@@ -6998,6 +7003,19 @@ dependencies = [
  "bitflags 2.13.2",
  "wayland-backend",
  "wayland-client",
+ "wayland-scanner",
+]
+
+[[package]]
+name = "wayland-protocols-misc"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
+dependencies = [
+ "bitflags 2.13.2",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "wayland-scanner",
 ]
 

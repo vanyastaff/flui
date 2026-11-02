@@ -23,14 +23,14 @@ mod links;
 
 pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Value};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{
-    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition,
+    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition, TextSpan,
 };
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
@@ -634,52 +634,69 @@ fn line_of(lines: &[LineMetrics], position: TextPosition) -> Option<&LineMetrics
         })
 }
 
-impl Diagnosticable for RenderParagraph {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("text_align", self.painter.text_align());
-        properties.add(
-            "text_direction",
-            self.painter
-                .text_direction()
-                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
+impl Inspect for RenderParagraph {
+    fn kind(&self) -> &'static str {
+        "RenderParagraph"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("text_align", &self.painter.text_align());
+        out.field("text_direction", &self.painter.text_direction());
+        out.field("soft_wrap", &self.soft_wrap);
+        out.field(
+            "selection_start",
+            &self.selection.as_ref().map(|range| range.start),
         );
-        properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
-        properties.add("selection", format!("{:?}", self.selection));
-        properties.add("selection_color", format!("{:?}", self.selection_color));
-        properties.add(
-            "selection_handles",
-            format!(
-                "{:?}",
-                (
-                    self.start_handle.map(|link| link.id()),
-                    self.end_handle.map(|link| link.id()),
-                )
-            ),
+        out.field(
+            "selection_end",
+            &self.selection.as_ref().map(|range| range.end),
         );
-        properties.add(
-            "max_lines",
-            self.painter
-                .max_lines()
-                .map_or_else(|| "unlimited".to_string(), |n| n.to_string()),
-        );
-        properties.add(
-            "ellipsis",
-            self.painter
-                .ellipsis()
-                .map_or_else(|| "none".to_string(), ToString::to_string),
-        );
-        // Emit the plain text so diagnostics dumps and test finders can match on
-        // content without inspecting the full `InlineSpan` tree.
+        out.field("selection_color", &self.selection_color);
+        out.field("start_handle", &self.start_handle.map(|link| link.id()));
+        out.field("end_handle", &self.end_handle.map(|link| link.id()));
+        out.field("max_lines", &self.painter.max_lines());
+        out.field("ellipsis", &self.painter.ellipsis());
+        // The plain text lets a test find a paragraph by its content without walking the
+        // `InlineSpan` tree, and the style lets it read a resolved text color back out. The text
+        // is borrowed from the span: one run is the `text` field, several are the `text_runs`
+        // sequence in reading order, so describing a paragraph allocates only in the sink.
         if let Some(span) = self.painter.text() {
-            properties.add("text", span.to_plain_text());
-            // Lets a mounted-widget test read a resolved text color back out
-            // (e.g. a themed/cascaded color reaching the real paragraph a
-            // build produced) without downcasting or inspecting paint
-            // output — `TextStyle: Debug` is already required for the type
-            // to be usable at all, so this is a pure diagnostics read, not
-            // a new capability.
-            properties.add("style", format!("{:?}", span.style()));
+            match span {
+                InlineSpan::Text(root) if root.children.is_empty() => {
+                    if let Some(text) = root.text.as_deref() {
+                        out.field("text", text);
+                    }
+                }
+                InlineSpan::Text(root) => {
+                    out.field("text_runs", &TextRuns(root));
+                }
+                InlineSpan::Placeholder(_) => {}
+            }
+            out.value("style", Value::Debug(&span.style()));
         }
+    }
+}
+
+/// The text of every run of a span tree, in reading order.
+struct TextRuns<'a>(&'a TextSpan);
+
+impl Seq for TextRuns<'_> {
+    fn each(&self, item: &mut dyn FnMut(Value<'_>)) {
+        fn walk(span: &TextSpan, item: &mut dyn FnMut(Value<'_>)) {
+            if let Some(text) = span.text.as_deref() {
+                item(Value::Str(text));
+            }
+            for child in &span.children {
+                walk(child, item);
+            }
+        }
+        walk(self.0, item);
+    }
+}
+
+impl FieldValue for TextRuns<'_> {
+    fn payload(&self) -> Payload<'_> {
+        Payload::Seq(self)
     }
 }
 

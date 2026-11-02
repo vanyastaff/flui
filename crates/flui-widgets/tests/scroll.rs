@@ -913,14 +913,14 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             }));
             assert_eq!(
                 drops.load(Ordering::SeqCst),
-                usize::from(!(jumps && notification_fails)),
-                "jump notification failure retains opaque outgoing ownership"
+                1,
+                "the outgoing curve is dropped whatever failure the replacement reports"
             );
             assert_eq!(attempts.get(), 1, "accepted replacement is delivered");
             assert_eq!(
                 observer_drops.load(Ordering::SeqCst),
-                usize::from(!notification_fails && (jumps || !retirement_fails)),
-                "observer retirement inherits the enclosing failure custody"
+                1,
+                "the withdrawn observer is dropped whatever failure the replacement reports"
             );
             if retirement_fails || notification_fails {
                 assert_scroll_failure(

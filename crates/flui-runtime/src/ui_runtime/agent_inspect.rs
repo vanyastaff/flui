@@ -24,7 +24,7 @@ use flui_foundation::inspect::{
 use flui_layer::LayerTree;
 use flui_protocol::{
     InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
-    InspectValue, LogicalRect,
+    InspectValue, LogicalRect, NonFinite,
 };
 use flui_view::dev_agent::InspectTarget;
 
@@ -313,25 +313,36 @@ fn unit_to_wire(unit: Unit) -> Option<InspectUnit> {
     })
 }
 
-fn value_to_wire(value: &OwnedValue) -> InspectValue {
+/// A composite holding an infinite or NaN component, which JSON cannot write as numbers: its
+/// `Debug` text, so the value is neither `null` nor missing.
+fn non_finite_text(value: &impl core::fmt::Debug) -> InspectValue {
+    InspectValue::Debug(format!("{value:?}"))
+}
+
+pub(super) fn value_to_wire(value: &OwnedValue) -> InspectValue {
     match value {
         OwnedValue::Bool(value) => InspectValue::Bool(*value),
         OwnedValue::Int(value) => InspectValue::Int(*value),
         OwnedValue::Uint(value) => InspectValue::Uint(*value),
-        OwnedValue::Float(value) => InspectValue::Float(*value),
+        OwnedValue::Float(value) => {
+            NonFinite::of(*value).map_or(InspectValue::Float(*value), InspectValue::NonFinite)
+        }
         OwnedValue::Str(text) => InspectValue::Str(text.clone()),
         OwnedValue::Variant { ty, name } => InspectValue::Variant {
             ty: (*ty).to_owned(),
             name: (*name).to_owned(),
         },
+        OwnedValue::Size(size) if !size.is_finite() => non_finite_text(size),
         OwnedValue::Size(size) => InspectValue::Size {
             width: size.width,
             height: size.height,
         },
+        OwnedValue::Offset(offset) if !offset.is_finite() => non_finite_text(offset),
         OwnedValue::Offset(offset) => InspectValue::Offset {
             dx: offset.dx,
             dy: offset.dy,
         },
+        OwnedValue::Rect(rect) if !rect.is_finite() => non_finite_text(rect),
         OwnedValue::Rect(rect) => InspectValue::Rect(rect_to_wire(*rect)),
         OwnedValue::Color(color) => InspectValue::Color {
             red: color.red,
@@ -339,12 +350,22 @@ fn value_to_wire(value: &OwnedValue) -> InspectValue {
             blue: color.blue,
             alpha: color.alpha,
         },
+        OwnedValue::EdgeInsets(insets)
+            if ![insets.top, insets.right, insets.bottom, insets.left]
+                .iter()
+                .all(|edge| edge.is_finite()) =>
+        {
+            non_finite_text(insets)
+        }
         OwnedValue::EdgeInsets(insets) => InspectValue::EdgeInsets {
             top: insets.top,
             right: insets.right,
             bottom: insets.bottom,
             left: insets.left,
         },
+        OwnedValue::Matrix(matrix) if matrix.m.iter().any(|entry| !entry.is_finite()) => {
+            non_finite_text(matrix)
+        }
         OwnedValue::Matrix(matrix) => InspectValue::Matrix(matrix.m),
         OwnedValue::Duration(duration) => InspectValue::Duration {
             nanos: u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX),

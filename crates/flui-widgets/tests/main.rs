@@ -22,6 +22,7 @@ mod keyboard_modifiers;
 mod nested_scroll;
 mod pointer_vocabulary;
 mod refresh_indicator;
+mod reorderable;
 mod touchpad_pan;
 
 #[path = "absorb_pointer.rs"]
@@ -65,6 +66,8 @@ mod drag_and_drop;
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
 mod editable_text_clipboard;
+#[path = "editable_text_handles.rs"]
+mod editable_text_handles;
 #[path = "flex_parent_data.rs"]
 mod flex_parent_data;
 #[path = "focus.rs"]

@@ -493,21 +493,28 @@ impl std::fmt::Debug for RenderAnimatedTransform {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedTransform {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderAnimatedTransform {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedTransform"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         let (first, second) = self.cell.sample();
         let motion = match self.kind {
-            Kind::Slide(_) => format!("slide({first}, {second})"),
-            Kind::Scale => format!("scale({first})"),
-            Kind::Rotation => format!("rotation({first} turns)"),
-            Kind::Translate => format!("translate({first}, {second})"),
+            Kind::Slide(_) => "slide",
+            Kind::Scale => "scale",
+            Kind::Rotation => "rotation",
+            Kind::Translate => "translate",
         };
-        properties.add("motion", motion);
-        properties.add_flag(
-            "transform_hit_tests",
-            !self.transform_hit_tests,
-            "untransformed hit-testing",
-        );
+        out.field("motion", motion);
+        // `first` is the x offset, the scale or the rotation in turns; `second` is the y
+        // offset and only the two-component motions have one.
+        out.field("first", &first);
+        if matches!(self.kind, Kind::Slide(_) | Kind::Translate) {
+            out.field("second", &second);
+        }
+        out.field("transform_hit_tests", &self.transform_hit_tests)
+            .default(&true);
     }
 }
 

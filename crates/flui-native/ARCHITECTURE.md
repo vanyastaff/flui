@@ -394,18 +394,29 @@ trait depends on `flui-platform` instead.
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
   its caret is: AppKit, winit, headless) or `Store` (the platform reads or
-  mirrors the field's store: TSF, Android, web), and
-  `Absent<position::Text>` answers none; each window's accessor goes through
-  it, as do its text sizing (`capture_sizing`, `invalidate_sizing`,
-  `fence_sizing`) and its going (`detach`). Where the text feature keeps a
+  mirrors the field's store: TSF, Android, web, Wayland's
+  `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
+  window's accessor goes through it, as do its text sizing
+  (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
+  (`detach`). Where the text feature keeps a
   window's state itself the handle is a key to it: Android's input method
   keeps each window's field by `owner::android::ActivityWindowId`, and the
-  Web's text input lives in the canvas window's owner-thread slot. Beside it,
+  Web's text input lives in the canvas window's owner-thread slot. On
+  Wayland the seats' input binds each seat's `zwp_text_input_v3` through the
+  owner's `SeatText` seam, which `text::linux::wayland` implements and the
+  table hands the input, and records its events in the seats' queue in order
+  with the keys around them, a seat or manager that goes queued behind what
+  its text input reported, so that reaches the field first; a window's text
+  reaches the input as an opaque
+  `SeatWindowText`, so neither the owner nor the input names the text
+  feature's platform file. Beside it,
   one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
   answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
-  `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
+  `web.rs` (the pure `ime`, `input`), `linux/{text_input, wayland}.rs` (the
+  pure `text_input` client of `zwp_text_input_v3` over a wire trait, and its
+  Wayland objects), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
@@ -416,7 +427,9 @@ trait depends on `flui-platform` instead.
   (`input::android::keys`, `input::web::keys`), and a window's text input
   tells it whether the field composes. Tests of the model and the pure
   halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
-  `text::web::ime::tests`, `text::windows::geometry::tests`).
+  `text::web::ime::tests`, `text::windows::geometry::tests`,
+  `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
+  the Wayland client from a real input method on sway.
 - **`fonts` answers which system faces fall back, for a locale (ADR-0271
   §3).** `fonts::system_fallback` is the one entry; the composition root hands
   it to the font feed, which calls it on its own thread, never the owner's
@@ -1073,7 +1086,7 @@ trait depends on `flui-platform` instead.
   window that wants a frame draws its own (`client_frame`, see "A Wayland
   window draws its own frame on subsurfaces, not through the engine" below);
   only a compositor that draws a frame although asked not to (sway frames
-  every tiled window) makes `SetDecorated` `NotOnThisDevice`
+  every tiled window) makes `SetFrame` to the system frame or none `NotOnThisDevice`
   (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
@@ -3867,7 +3880,7 @@ The engine does not draw it, though that was the first shape asked for:
   `sctk-adwaita` draw it; a toolkit that draws its frame inside its content
   (GTK4's header bar, Chromium's views frame) draws an application's own
   title bar, which is the contract's custom title bar (gaps entry 10), not
-  the frame `decorated: true` promises;
+  the frame `WindowFrame::System` promises;
 - the engine drawing it from `flui-app` would split one host obligation over
   the host, the composition root and the raster lane, a second swapchain a
   window, and a commit order across threads, for a 37-pixel bar.
@@ -4305,6 +4318,15 @@ versions, out-of-range values and undeclared devices, and, with the feature,
 pins the capture's journal, session identity, panic containment and reentrant
 release and replacement.
 
+Its `app_title_bar_snapshots_keep_their_wire_values_and_replay` row records actual
+headless snapshots with shown, hidden and asymmetrically offset controls. It checks the
+wire fields independently, replays the exact payload and distinct frame capability
+slots, and refuses negative offsets; the format rejection row refuses both version 1
+and a future version. `window_state_contract` checks the same authored frames at open,
+after commands and after leaving fullscreen. On Windows, `native_window_commands`
+checks the system-frame fallback against the native caption style and refuses an
+unsupported app-titlebar command without changing the snapshot.
+
 ### A window's input waits behind its capability snapshot
 
 A window is opened with its handler (ADR-0254 §4), so nothing it delivers can
@@ -4652,14 +4674,30 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 
-`Platform::data_dirs` answers where an application keeps its data, so the host
+`Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
 `storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
-backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
-one record per name in the IndexedDB database `flui-storage`, keyed
-`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+backs up. Headless never touches the user's directories: it answers with a
+memory store per application that the platform owns, or with the root a test
+names with `with_data_root`, where the test reads back the bytes written.
+`DataStore` hides which of the two, with `FileStore`'s calls.
+
+`flui-app`'s `headless_storage_reaches_app_lifecycle` acquires storage from a
+mounted widget and reads and publishes through the runner's IO lane. It checks
+the configured directory's precedence over the application ID, sharing with the
+platform's store, isolation between applications and platforms, and disk readback
+after a fresh platform starts. A handle retained after the run ends refuses new
+requests, and a subsequent unconfigured run inherits no storage. The native
+`file_store_contract` covers versions, limits and copy names;
+`copies_preserve_bytes_per_name_and_scope` also checks the retained backup bytes
+after their source is replaced. `debug_releases_storage_before_calling_the_writer`
+checks that a formatter may read the store without a lock held across its call.
+
+On wasm32
+`FileStore` keeps the native methods, returning futures: one record per name in
+the IndexedDB database `flui-storage`, keyed `<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
 connection it opens and closes, so an idle connection never blocks another
 tab's upgrade. A based write reads, compares and puts inside one readwrite
 transaction; the browser runs readwrite transactions over one store one at a
@@ -4784,7 +4822,7 @@ filter `true`) while it is natively hidden. A hidden window is never sent `WM_PA
 `activate` or a mode that shows the window comes first. A mode set on a window still waiting for its
 first frame is staged in the slot, not shown early.
 
-**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `decorated` is the caption; a
+**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `WindowFrame::System` is the caption; a
 popup has neither, so a window without a frame reports `resizable: false` and gets its wish back with
 the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
 window's current DPI with the frame measured for the style the window has

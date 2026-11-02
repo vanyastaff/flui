@@ -200,7 +200,7 @@ where
                     payload.as_ref(),
                     format!("building {behavior_name}"),
                 );
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     tracing::error!(
                         behavior_name,
@@ -209,7 +209,7 @@ where
                          (no element id to record)"
                     );
                 })) {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
                 return crate::view::ErrorView::build_error_view(
                     &error,
@@ -226,7 +226,7 @@ where
                 payload.as_ref(),
                 format!("building {behavior_name}"),
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No
             // successful recovery record is published until it returns a view.

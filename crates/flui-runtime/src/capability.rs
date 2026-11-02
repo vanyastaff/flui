@@ -316,7 +316,7 @@ impl OwnerJobs {
         match (first, locals) {
             (Some(first), later) => {
                 if let Some(later) = later {
-                    flui_foundation::panic::retain_opaque_payload(later);
+                    flui_foundation::panic::discard_payload(later);
                 }
                 Some(first)
             }
@@ -331,7 +331,7 @@ impl Drop for OwnerJobs {
         // first failure; this is the backstop for a queue dropped without it.
         if let Some(payload) = self.retire() {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

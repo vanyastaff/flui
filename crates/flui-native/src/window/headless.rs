@@ -21,8 +21,9 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
     PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
-    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry,
-    WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowState,
+    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions,
+    WindowState,
 };
 use parking_lot::Mutex;
 
@@ -606,7 +607,7 @@ struct MockWindowState {
     normal_geometry: Option<WindowGeometry>,
     constraints: SizeConstraints,
     resizable: bool,
-    decorated: bool,
+    frame: WindowFrame,
     scale_factor: f64,
     focused: bool,
     visible: bool,
@@ -731,7 +732,11 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
         .with_title(Some(model.title.clone()))
         .with_constraints(model.constraints)
         .with_resizable(model.resizable)
-        .with_decorated(model.decorated && model.mode != WindowMode::Fullscreen)
+        .with_frame(if model.mode == WindowMode::Fullscreen {
+            WindowFrame::None
+        } else {
+            model.frame
+        })
         .with_display(model.display);
     // This host has no activation apart from focus.
     ReportedFacts {
@@ -809,7 +814,7 @@ impl MockWindow {
             normal_geometry: None,
             constraints: SizeConstraints::new(options.min_size, options.max_size),
             resizable: options.resizable,
-            decorated: options.decorated,
+            frame: options.frame.at_open(&capabilities),
             scale_factor: 1.0,
             focused: true,
             execution: flui_platform::WindowExecutionState::Running,
@@ -1268,7 +1273,7 @@ impl PlatformWindow for MockWindow {
                     }
                 }
                 WindowCommand::SetResizable(resizable) => state.resizable = resizable,
-                WindowCommand::SetDecorated(decorated) => state.decorated = decorated,
+                WindowCommand::SetFrame(frame) => state.frame = frame,
                 WindowCommand::SetMode(mode) => {
                     state.enter_mode(mode, &self.limits, display_bounds);
                 }

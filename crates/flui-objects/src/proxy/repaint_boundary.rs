@@ -62,7 +62,13 @@ impl RenderRepaintBoundary {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderRepaintBoundary {}
+impl flui_foundation::inspect::Inspect for RenderRepaintBoundary {
+    fn kind(&self) -> &'static str {
+        "RenderRepaintBoundary"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 // ============================================================================
 // RenderBox impl

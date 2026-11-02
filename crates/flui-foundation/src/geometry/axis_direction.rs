@@ -5,7 +5,7 @@ use crate::geometry::Axis;
 /// A direction along either the horizontal or vertical axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Default)]
+#[derive(Default, flui_foundation::inspect::Inspect)]
 pub enum AxisDirection {
     /// From left to right.
     #[default]

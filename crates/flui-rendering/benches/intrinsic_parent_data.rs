@@ -46,7 +46,6 @@ mod helpers;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderFlex};
@@ -76,7 +75,13 @@ use flui_rendering::{
 #[derive(Debug, Default)]
 struct IntrinsicQueryingDriver;
 
-impl Diagnosticable for IntrinsicQueryingDriver {}
+impl flui_foundation::inspect::Inspect for IntrinsicQueryingDriver {
+    fn kind(&self) -> &'static str {
+        "IntrinsicQueryingDriver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for IntrinsicQueryingDriver {
     type Arity = Single;

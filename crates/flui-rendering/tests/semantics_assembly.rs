@@ -57,7 +57,13 @@ pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
 pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     #[derive(Debug)]
     struct Panicking;
-    impl flui_foundation::Diagnosticable for Panicking {}
+    impl flui_foundation::inspect::Inspect for Panicking {
+        fn kind(&self) -> &'static str {
+            "Panicking"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for Panicking {
         type Arity = Leaf;
         type ParentData = BoxParentData;
@@ -139,7 +145,13 @@ impl SemanticsLeaf {
     }
 }
 
-impl flui_foundation::Diagnosticable for SemanticsLeaf {}
+impl flui_foundation::inspect::Inspect for SemanticsLeaf {
+    fn kind(&self) -> &'static str {
+        "SemanticsLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SemanticsLeaf {
     type Arity = Leaf;
@@ -248,7 +260,13 @@ impl SemanticsContainer {
     }
 }
 
-impl flui_foundation::Diagnosticable for SemanticsContainer {}
+impl flui_foundation::inspect::Inspect for SemanticsContainer {
+    fn kind(&self) -> &'static str {
+        "SemanticsContainer"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SemanticsContainer {
     type Arity = Variable;

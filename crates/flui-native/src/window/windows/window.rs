@@ -36,8 +36,8 @@ use windows::{
 
 use flui_platform::{
     AdmittedCommand, ApplyError, CapabilityAbsence, CursorError, PlatformFailure, PlatformWindow,
-    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowId,
-    WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
+    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+    WindowFrame, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -148,14 +148,15 @@ pub(crate) const fn window_capabilities(
     use flui_platform::Availability::{Emulated, Native};
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
     // does not read yet.
-    let mut capabilities =
-        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
+    let mut capabilities = WindowCapabilities::NONE
+        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
+        .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
     capabilities.sets_constraints = Native;
     capabilities.sets_resizable = Native;
-    capabilities.sets_decorated = Native;
+    capabilities.sets_frame = Native;
     capabilities.minimizes = Native;
     capabilities.maximizes = Native;
     capabilities.enters_fullscreen = Emulated;
@@ -253,7 +254,9 @@ impl WindowsWindow {
             // Always created hidden: the window is placed and put in its mode
             // first, and shown afterwards, so its first sight is the final one.
             let style = windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(frame_style(
-                options.decorated,
+                // No title bar of the application's here yet: one asked for
+                // opens with the system's frame.
+                options.frame != WindowFrame::None,
                 options.resizable,
             ));
 
@@ -1406,13 +1409,12 @@ impl PlatformWindow for WindowsWindow {
                     .unwrap_or(true);
                 self.restyle_frame(decorated, on)?;
             }
-            WindowCommand::SetDecorated(on) => {
-                let resizable =
-                    super::proc::with_window_context(self.hwnd, "set_decorated", |ctx| {
-                        ctx.resizable.get()
-                    })
-                    .unwrap_or(true);
-                self.restyle_frame(on, resizable)?;
+            WindowCommand::SetFrame(frame) => {
+                let resizable = super::proc::with_window_context(self.hwnd, "set_frame", |ctx| {
+                    ctx.resizable.get()
+                })
+                .unwrap_or(true);
+                self.restyle_frame(frame.has_system_title_bar(), resizable)?;
             }
             WindowCommand::SetMode(mode) => self.set_mode(mode)?,
             WindowCommand::Hide => self.hide_native(),

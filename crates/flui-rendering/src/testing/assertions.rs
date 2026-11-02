@@ -1,53 +1,51 @@
-//! Structured assertion helpers for diagnostics-backed harness tests.
+//! Structured assertion helpers for snapshot-backed harness tests.
 //!
 //! Prefer these over substring-matching [`crate::testing::Probe::dump`] output
 //! so CI can pin render-object contracts without visual inspection.
 
-use flui_foundation::DiagnosticsNode;
+use flui_foundation::geometry::Size;
+use flui_foundation::inspect::SnapshotNode;
 
-/// Asserts that `node` exposes every property name in `required`.
+/// Asserts that `node` writes every field name in `required`.
 #[track_caller]
-pub fn assert_properties(node: &DiagnosticsNode, required: &[&str]) {
-    let names: Vec<&str> = node
-        .properties()
-        .iter()
-        .map(flui_foundation::DiagnosticsProperty::name)
-        .collect();
+pub fn assert_properties(node: &SnapshotNode, required: &[&str]) {
+    let names: Vec<&str> = node.fields.iter().map(|field| field.name).collect();
     for &req in required {
         assert!(
             names.contains(&req),
-            "missing property {req:?} on {:?}; have {names:?}",
-            node.name(),
+            "missing field {req:?} on {:?}; have {names:?}",
+            node.kind,
         );
     }
 }
 
-/// Asserts that a descendant typed `type_name` exists and has `required` config
-/// properties on its self-description node (before counting runtime fields).
+/// Asserts that a descendant of kind `kind` exists, exactly once, and writes the `required`
+/// fields of its own description (not the tree's facts).
 #[track_caller]
-pub fn assert_descendant_properties(tree: &DiagnosticsNode, type_name: &str, required: &[&str]) {
+pub fn assert_descendant_properties(tree: &SnapshotNode, kind: &str, required: &[&str]) {
     let node = tree
-        .find_descendant(type_name)
-        .unwrap_or_else(|| panic!("no descendant named {type_name:?} in diagnostics tree"));
+        .find_by_kind(kind)
+        .unique()
+        .unwrap_or_else(|error| panic!("{error} in the render snapshot"));
     assert_properties(node, required);
 }
 
-/// Asserts the pipeline layered committed box geometry onto the node.
+/// Asserts the tree recorded committed box geometry for the node.
 #[track_caller]
-pub fn assert_has_committed_size(node: &DiagnosticsNode) {
+pub fn assert_has_committed_size(node: &SnapshotNode) {
     assert!(
-        node.get_property("size").is_some(),
+        node.get_fact::<Size>("size").is_ok(),
         "expected committed size on {:?}",
-        node.name(),
+        node.kind,
     );
 }
 
-/// Asserts the pipeline layered committed sliver geometry onto the node.
+/// Asserts the tree recorded committed sliver geometry for the node.
 #[track_caller]
-pub fn assert_has_committed_geometry(node: &DiagnosticsNode) {
+pub fn assert_has_committed_geometry(node: &SnapshotNode) {
     assert!(
-        node.get_property("geometry").is_some(),
+        node.fact("geometry").is_some(),
         "expected committed geometry on {:?}",
-        node.name(),
+        node.kind,
     );
 }

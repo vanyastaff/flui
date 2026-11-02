@@ -50,7 +50,13 @@ impl RenderSliverSemanticsAnnotations {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverSemanticsAnnotations {}
+impl flui_foundation::inspect::Inspect for RenderSliverSemanticsAnnotations {
+    fn kind(&self) -> &'static str {
+        "RenderSliverSemanticsAnnotations"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverSemanticsAnnotations {
     type Arity = Single;

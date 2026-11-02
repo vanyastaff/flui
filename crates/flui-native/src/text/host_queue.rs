@@ -17,6 +17,7 @@ use std::collections::VecDeque;
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -26,6 +27,7 @@ use std::rc::Rc;
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -119,6 +121,7 @@ impl<Op> HostQueue<Op> {
         target_os = "android",
         target_os = "ios",
         target_os = "macos",
+        wayland_host,
         target_arch = "wasm32",
         test
     ))]
@@ -134,6 +137,7 @@ impl<Op> HostQueue<Op> {
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]
@@ -151,6 +155,7 @@ pub(crate) enum MirrorHostOp {
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
+    wayland_host,
     target_arch = "wasm32",
     test
 ))]

@@ -84,10 +84,14 @@ impl RenderLeaderLayer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderLeaderLayer {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderLeaderLayer {
+    fn kind(&self) -> &'static str {
+        "RenderLeaderLayer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         // Only `link` is surfaced.
-        builder.add_enum("link", self.link);
+        out.field("link", &self.link.id());
     }
 }
 

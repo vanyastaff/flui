@@ -92,9 +92,38 @@ impl RenderContentShape {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderContentShape {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("shape", &self.shape);
+impl flui_foundation::inspect::Inspect for RenderContentShape {
+    fn kind(&self) -> &'static str {
+        "RenderContentShape"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        use flui_foundation::inspect::{Unit, Value};
+        // The variant is the shape's identity; a rounded rectangle adds its four corner radii.
+        // An arbitrary path is only named: its outline has no typed value.
+        out.value(
+            "shape",
+            Value::Variant {
+                ty: "HitShape",
+                name: match &self.shape {
+                    HitShape::Rect => "Rect",
+                    HitShape::RoundedRect(_) => "RoundedRect",
+                    HitShape::Oval => "Oval",
+                    HitShape::Path(_) => "Path",
+                },
+            },
+        );
+        if let HitShape::RoundedRect(radius) = &self.shape {
+            for (name, corner) in [
+                ("radius_top_left", radius.top_left),
+                ("radius_top_right", radius.top_right),
+                ("radius_bottom_right", radius.bottom_right),
+                ("radius_bottom_left", radius.bottom_left),
+            ] {
+                out.field(name, &Size::new(corner.x, corner.y))
+                    .unit(Unit::LogicalPx);
+            }
+        }
     }
 }
 

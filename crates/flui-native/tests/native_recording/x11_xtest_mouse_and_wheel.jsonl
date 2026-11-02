@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"x11","epoch_ns":47,"uptime_ns":16297989029682,"devices":[{"device":1,"kinds":["mouse"]}]}
+{"flui_native_recording":2,"backend":"x11","epoch_ns":47,"uptime_ns":16297989029682,"devices":[{"device":1,"kinds":["mouse"]}]}
 {"row":"add_device","device":1,"kind":"mouse","time_ns":51656}
 {"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"enter","time":{"tick_ms":{"tick":16298627,"observed_ms":16298627}},"position":[50.0,40.0]}}
 {"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"move","time":{"tick_ms":{"tick":16298627,"observed_ms":16298627}},"position":[50.0,40.0]}}

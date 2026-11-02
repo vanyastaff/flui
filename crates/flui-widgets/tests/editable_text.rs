@@ -2356,7 +2356,7 @@ pub(crate) mod text_store {
         let text = flui_foundation::panic::payload_text(&*payload)
             .unwrap_or("an opaque payload")
             .to_owned();
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         Some(text)
     }
 

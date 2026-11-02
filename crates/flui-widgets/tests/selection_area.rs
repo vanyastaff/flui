@@ -15,7 +15,8 @@ use flui_widgets::{
     Column, MergeSemantics, Row, SelectionArea, SelectionContainer, Semantics, SizedBox, Text,
 };
 
-use crate::common::{LaidOut, lay_out, loose};
+use crate::common::{LaidOut, lay_out, loose, painted_selection, rgba};
+use flui_foundation::inspect::Rgba;
 
 /// An adapter's view of the tree the presentation publishes now.
 fn consumer(laid: &LaidOut) -> accesskit_consumer::Tree {
@@ -954,18 +955,15 @@ pub(crate) fn span_overrides_read_their_override_and_hold_their_runs() {
     );
 }
 
-/// The `selection` property of every paragraph, sorted so the rows read
+/// The painted selection of every paragraph, sorted so the rows read
 /// independently of render-tree order.
-fn painted_selections(laid: &LaidOut) -> Vec<String> {
-    let mut selections: Vec<String> = laid
+fn painted_selections(laid: &LaidOut) -> Vec<Option<std::ops::Range<usize>>> {
+    let mut selections: Vec<_> = laid
         .find_all_by_render_type("RenderParagraph")
         .into_iter()
-        .map(|id| {
-            laid.render_property(id, "selection")
-                .expect("a paragraph reports its selection")
-        })
+        .map(|id| painted_selection(laid, id))
         .collect();
-    selections.sort();
+    selections.sort_by_key(|range| range.as_ref().map(|range| (range.start, range.end)));
     selections
 }
 
@@ -994,7 +992,7 @@ pub(crate) fn a_selection_highlights_the_parts_it_covers() {
     laid.tick();
     assert_eq!(
         painted_selections(&laid),
-        ["Some(0..11)", "Some(0..2)", "Some(6..10)"],
+        [Some(0..2), Some(0..11), Some(6..10)],
         "each text paints its part, the middle one whole"
     );
     laid.invoke_semantics_action(selection_request(last[0], at(last[0], 1), at(last[0], 4)))
@@ -1002,7 +1000,7 @@ pub(crate) fn a_selection_highlights_the_parts_it_covers() {
     laid.tick();
     assert_eq!(
         painted_selections(&laid),
-        ["None", "None", "Some(1..4)"],
+        [None, None, Some(1..4)],
         "the texts the selection left paint nothing"
     );
 }
@@ -1036,13 +1034,13 @@ pub(crate) fn an_edited_text_keeps_its_highlight_current() {
     laid.pump_widget(view("Alpha beta gamma", "Gamma delta epsilon"));
     assert_eq!(
         painted_selections(&laid),
-        ["Some(0..19)", "Some(0..2)", "Some(6..16)"],
+        [Some(0..2), Some(0..19), Some(6..16)],
         "the edited texts highlight their new text"
     );
     laid.pump_widget(view("Alpha", "Gamma"));
     assert_eq!(
         painted_selections(&laid),
-        ["None", "Some(0..2)", "Some(0..5)"],
+        [None, Some(0..2), Some(0..5)],
         "a text shrunk under the selection's start highlights nothing"
     );
 }
@@ -1079,8 +1077,8 @@ pub(crate) fn the_highlight_colour_follows_the_area_style() {
         laid.tick();
         let paragraph = laid.find_all_by_render_type("RenderParagraph")[0];
         assert_eq!(
-            laid.render_property(paragraph, "selection_color"),
-            Some(format!("{expected:?}")),
+            laid.render_node(paragraph).get::<Rgba>("selection_color"),
+            Ok(rgba(expected)),
             "own style {own_style}, inherited {wrap}"
         );
     }

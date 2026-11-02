@@ -51,7 +51,7 @@ fn text_of(payload: Box<dyn std::any::Any + Send>) -> String {
     let text = flui_foundation::panic::payload_text(&*payload)
         .unwrap_or("an opaque payload")
         .to_owned();
-    flui_foundation::panic::retain_opaque_payload(payload);
+    flui_foundation::panic::discard_payload(payload);
     text
 }
 
@@ -451,32 +451,6 @@ fn observer_panicking_after_a_parked_failure() {
     field.set_observer(None);
     the_field_keeps_working(&mut harness, &field);
     assert_eq!(controller.text(), "observer editz");
-}
-
-/// A failure parked in a presentation's gate whose payload panics when
-/// destroyed, and the presentation and store gone before any turn took it.
-fn gate_dropped_with_a_parked_failure() {
-    let gate = CommitGate::new();
-    let store = InMemoryTextStore::new("");
-    store.set_commit_gate(gate.clone());
-    store.set_owner_listener(Some(Rc::new(|| {
-        std::panic::panic_any(PanicsOnDrop("parked payload destroyed"));
-    })));
-    assert_eq!(
-        edit(&*store, "a"),
-        Ok(LockOutcome::Granted),
-        "the grant stands"
-    );
-    store.set_owner_listener(None);
-    assert_eq!(
-        raised(move || {
-            drop(gate);
-            drop(store);
-        }),
-        None,
-        "an untaken payload is retained, not destroyed, with its gate"
-    );
-    the_owner_keeps_working(&owner());
 }
 
 /// A presentation closes with a failure a store parked for its next turn:
@@ -1452,10 +1426,6 @@ fn editable_blur_during_preedit_push() {
 // ----------------------------------------------------------------------------
 
 const ROWS: &[(&str, fn())] = &[
-    (
-        "gate: dropped with a parked failure",
-        gate_dropped_with_a_parked_failure,
-    ),
     ("close: with a parked failure", close_with_a_parked_failure),
     (
         "observer: panicking after a parked failure",

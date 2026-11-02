@@ -6,9 +6,9 @@
 //! Sliver -> Box intrinsic bridge and derive geometry from that extent (with
 //! and without overscroll).
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
+use flui_foundation::inspect::{Fields, Inspect};
 use flui_rendering::constraints::AxisDirection::{
     BottomToTop, LeftToRight, RightToLeft, TopToBottom,
 };
@@ -48,8 +48,14 @@ impl Default for RenderSliverFillRemaining {
 }
 
 // Geometry-only fill: no configurable fields. Committed geometry is layered
-// onto the diagnostics node by the tree walk.
-impl Diagnosticable for RenderSliverFillRemaining {}
+// onto the node by the tree walk.
+impl Inspect for RenderSliverFillRemaining {
+    fn kind(&self) -> &'static str {
+        "RenderSliverFillRemaining"
+    }
+
+    fn inspect(&self, _out: &mut Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverFillRemaining {
     type Arity = Single;
@@ -127,7 +133,13 @@ impl Default for RenderSliverFillRemainingAndOverscroll {
 }
 
 // Geometry-only fill: no configurable fields (see above).
-impl Diagnosticable for RenderSliverFillRemainingAndOverscroll {}
+impl Inspect for RenderSliverFillRemainingAndOverscroll {
+    fn kind(&self) -> &'static str {
+        "RenderSliverFillRemainingAndOverscroll"
+    }
+
+    fn inspect(&self, _out: &mut Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
     type Arity = Single;
@@ -214,7 +226,13 @@ impl Default for RenderSliverFillRemainingWithScrollable {
 }
 
 // Geometry-only fill: no configurable fields (see above).
-impl Diagnosticable for RenderSliverFillRemainingWithScrollable {}
+impl Inspect for RenderSliverFillRemainingWithScrollable {
+    fn kind(&self) -> &'static str {
+        "RenderSliverFillRemainingWithScrollable"
+    }
+
+    fn inspect(&self, _out: &mut Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverFillRemainingWithScrollable {
     type Arity = Single;

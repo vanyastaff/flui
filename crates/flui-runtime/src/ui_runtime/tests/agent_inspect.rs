@@ -247,7 +247,17 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
 
     #[derive(Debug)]
     struct PanicsWhenNamedBox(Arc<AtomicBool>);
-    impl flui_foundation::Diagnosticable for PanicsWhenNamedBox {}
+    impl flui_foundation::inspect::Inspect for PanicsWhenNamedBox {
+        fn kind(&self) -> &'static str {
+            assert!(
+                !self.0.load(Ordering::SeqCst),
+                "a render object that cannot be named"
+            );
+            "PanicsWhenNamedBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for PanicsWhenNamedBox {
         type Arity = Leaf;
         type ParentData = BoxParentData;
@@ -258,13 +268,6 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
             Ok(Size::new(10.0, 10.0))
         }
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
-        fn debug_name(&self) -> &'static str {
-            assert!(
-                !self.0.load(Ordering::SeqCst),
-                "a render object that cannot be named"
-            );
-            "PanicsWhenNamed"
-        }
     }
 
     #[derive(Clone)]
@@ -663,4 +666,43 @@ fn the_first_panic_after_a_shown_scene_is_the_one_that_resumes() {
         message.contains("nobody waits for"),
         "the reply's panic came first and is the one resumed: {message}"
     );
+}
+
+#[test]
+fn an_unbounded_or_invalid_number_is_a_typed_value_that_survives_json() {
+    use crate::ui_runtime::agent_inspect::value_to_wire;
+    use flui_foundation::geometry::Size;
+    use flui_foundation::inspect::OwnedValue;
+    use flui_protocol::{InspectValue, NonFinite};
+
+    let wire = |value: OwnedValue| {
+        let wire = value_to_wire(&value);
+        let json = serde_json::to_string(&wire).expect("the value serializes");
+        let back: InspectValue = serde_json::from_str(&json).expect("the value deserializes");
+        assert_eq!(back, wire, "{json}");
+        (wire, json)
+    };
+
+    let (infinite, json) = wire(OwnedValue::Float(f64::INFINITY));
+    assert_eq!(infinite, InspectValue::NonFinite(NonFinite::PosInf));
+    assert_eq!(json, r#"{"type":"non_finite","value":"pos_inf"}"#);
+    assert_eq!(
+        wire(OwnedValue::Float(f64::NEG_INFINITY)).0,
+        InspectValue::NonFinite(NonFinite::NegInf)
+    );
+    assert_eq!(
+        wire(OwnedValue::Float(f64::NAN)).0,
+        InspectValue::NonFinite(NonFinite::NaN)
+    );
+    assert_eq!(wire(OwnedValue::Float(1.5)).0, InspectValue::Float(1.5));
+
+    // A composite with a component JSON cannot write is its text, never `null` or a gap.
+    let (size, json) = wire(OwnedValue::Size(Size::new(f64::INFINITY, 4.0)));
+    assert!(
+        matches!(&size, InspectValue::Debug(text) if text.contains("inf")),
+        "{json}"
+    );
+    assert!(!json.contains("null"), "{json}");
+    let (finite, _) = wire(OwnedValue::Size(Size::new(3.0, 4.0)));
+    assert!(matches!(finite, InspectValue::Size { .. }));
 }

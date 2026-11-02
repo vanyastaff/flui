@@ -178,14 +178,10 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             parent.tick_all(&tick);
         }));
-        let expected = if callback_failure {
-            vec!["callback finished"]
-        } else if drop_failure {
-            vec!["callback finished", "second"]
-        } else {
+        assert_eq!(
+            *events.borrow(),
             vec!["callback finished", "second", "third"]
-        };
-        assert_eq!(*events.borrow(), expected);
+        );
         if callback_failure || drop_failure {
             let payload = result.expect_err("authored failure propagates after retirement");
             assert_eq!(
@@ -204,7 +200,7 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
         assert!((owner.controller().value() - 0.5).abs() < 1e-9);
         assert_eq!(
             *events.borrow(),
-            expected,
+            vec!["callback finished", "second", "third"],
             "empty cache retains no detached captures"
         );
     }
@@ -750,8 +746,8 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"clock delivery"));
         assert_eq!(
             retired.get(),
-            0,
-            "opaque outgoing captures retain first-failure custody"
+            1,
+            "outgoing captures are dropped under the first failure"
         );
         assert_eq!(owner.is_bound(), binding == "replacement");
         if binding == "missing" {
@@ -909,16 +905,8 @@ fn disposal_registry_custody(failure: &str) {
         Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Err(_))
     ));
-    if failure == "cancellation" {
-        assert_eq!(
-            drops.get(),
-            0,
-            "outgoing registry retains first-failure custody"
-        );
-    } else {
-        assert_eq!(drops.get(), 1);
-        assert!(refused.get(), "retirement observes the closed kernel");
-    }
+    assert_eq!(drops.get(), 1);
+    assert!(refused.get(), "retirement observes the closed kernel");
     owner.dispose();
     assert_eq!(deliveries.get(), 1, "the next disposal is inert");
 }
@@ -931,7 +919,7 @@ fn failing_registry_retirement_observes_the_disposed_kernel() {
     disposal_registry_custody("registry");
 }
 
-fn cancellation_failure_retains_the_outgoing_registry() {
+fn cancellation_failure_drops_the_outgoing_registry() {
     disposal_registry_custody("cancellation");
 }
 
@@ -947,7 +935,7 @@ fn disposal_closes_the_kernel_before_retiring_the_registry() {
         ),
         (
             "cancellation and retirement competition",
-            cancellation_failure_retains_the_outgoing_registry,
+            cancellation_failure_drops_the_outgoing_registry,
         ),
     ]);
 }
@@ -1136,8 +1124,8 @@ fn reentrant_owner_retirement_joins_registry_custody() {
     }
     assert_eq!(
         observed,
-        [(false, 1), (true, 0)],
-        "registry captures retain the active controller delivery's first-failure custody"
+        [(false, 1), (true, 1)],
+        "registry captures are dropped under the active controller delivery's first failure"
     );
 }
 
@@ -1181,6 +1169,10 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
         for (callback_failure, capture_failure) in
             [(false, false), (true, false), (false, true), (true, true)]
         {
+            if matches!(delivery, Delivery::Incoming) && capture_failure {
+                // A capture that panics while the thread unwinds aborts, as in std.
+                continue;
+            }
             let root = Vsync::new();
             let child = Vsync::new();
             let independent = Vsync::new();
@@ -1321,9 +1313,7 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
                 [0, 1],
                 "healthy cancellation tail remains deliverable"
             );
-            let preserving =
-                callback_failure || matches!(delivery, Delivery::Incoming | Delivery::HeldFailure);
-            assert_eq!(retired.get(), usize::from(!preserving));
+            assert_eq!(retired.get(), 1);
             for run in &mut runs {
                 assert!(matches!(
                     Pin::new(run).poll(&mut Context::from_waker(Waker::noop())),
@@ -1958,12 +1948,12 @@ fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
     }
 }
 
-/// Every combinator's value channel keeps custody of a listener removed during
+/// Every combinator's value channel destroys a listener removed during
 /// a delivery, whichever comes first: the failure or the removal. A listener
 /// added and removed during the round is outside its snapshot, so only the
-/// channel's deferred retirement keeps its destructor off the failed path.
+/// channel's deferred retirement destroys it, outside the failed delivery.
 #[test]
-fn listener_removal_during_a_failing_delivery_retains_the_capture() {
+fn listener_removal_during_a_failing_delivery_drops_the_capture() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
@@ -2007,8 +1997,8 @@ fn listener_removal_during_a_failing_delivery_retains_the_capture() {
         );
         assert_eq!(
             drops.load(Ordering::SeqCst),
-            0,
-            "{name}: the removed capture is retained on the failed path"
+            1,
+            "{name}: the removed capture is dropped on the failed path"
         );
     }
 }
@@ -2034,7 +2024,8 @@ fn combinators() -> [(&'static str, Wrap); 5] {
 }
 
 /// A value listener removed while its combinator delivers a status waits for
-/// that round: a later status observer's failure retains the capture, and a
+/// that round: a later status observer's failure still lets the capture be
+/// destroyed once the failed round ends, and a
 /// healthy round destroys it when the round ends. Outside any round, removal
 /// destroys it at once.
 #[test]
@@ -2070,10 +2061,9 @@ fn value_listener_removed_during_a_status_round_waits_for_the_round() {
             }));
             let run = catch_unwind(AssertUnwindSafe(|| parent.forward()));
             assert_eq!(run.is_err(), fails, "{name}");
-            let expected = usize::from(!fails);
             assert_eq!(
                 drops.load(Ordering::SeqCst),
-                expected,
+                1,
                 "{name}, failing round {fails}: the removed capture waits for the round"
             );
         }
@@ -2138,14 +2128,14 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
                 Some(&"first cleanup failure")
             );
         }
-        assert_eq!(drops.get(), usize::from(case == "healthy"));
+        assert_eq!(drops.get(), 1);
         parent.set_value(0.5).expect("no build is running");
         assert_eq!(
             calls.get(),
             1,
             "withdrawal precedes outgoing capture retirement"
         );
-        assert_eq!(reentrant_calls.get(), usize::from(case == "healthy"));
+        assert_eq!(reentrant_calls.get(), 1);
 
         let (fresh_drops, fresh_capture) = drop_probe();
         let fresh_id = proxy.add_listener(Rc::new(move || {

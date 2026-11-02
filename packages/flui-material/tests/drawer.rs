@@ -1089,11 +1089,7 @@ fn constrained_drawer_drag(end: bool, viewport: f64, configured: f64, travel: f6
 fn drawer_panels(laid: &common::LaidOut) -> Vec<flui_sdk::foundation::RenderId> {
     laid.find_all_by_render_type("RenderPhysicalShape")
         .into_iter()
-        .filter(|&id| {
-            laid.render_property(id, "elevation")
-                .and_then(|text| text.parse::<f64>().ok())
-                == Some(1.0)
-        })
+        .filter(|&id| laid.render_node(id).get::<f64>("elevation") == Ok(1.0))
         .collect()
 }
 
