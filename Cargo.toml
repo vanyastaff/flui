@@ -501,7 +501,7 @@ icu_properties = { version = "2.3", default-features = false, features = ["compi
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Parley shaping and measurement (ADR-0092 §10).
 # No `system`: fontique's host scan reaches `windows`, which tier S forbids.
-parley = { version = "0.11.1", default-features = false, features = ["std"] }
+parley = { version = "0.12.0", default-features = false, features = ["std"] }
 # ICU4X grapheme and word segmentation for hit-testing and word boundaries on
 # the Parley layout (ADR-0092 §10 step 5): the copy Parley already builds and
 # marks its clusters with, so no second one, and no dictionary or LSTM data.
