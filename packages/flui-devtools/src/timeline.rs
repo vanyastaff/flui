@@ -127,6 +127,9 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
         }
     }
     args.insert("category".to_string(), json!(event.category.name()));
+    if let Some(presentation) = event.presentation {
+        args.insert("presentation".to_string(), json!(presentation));
+    }
     serde_json::Value::Object(args)
 }
 
@@ -158,6 +161,13 @@ pub struct TimelineEvent {
     /// Not serialized; restored to the deserializing thread's ID on load.
     #[serde(skip, default = "current_thread_id")]
     pub thread_id: std::thread::ThreadId,
+    /// The UI runtime that drove the frame this event is part of, as its packed id, when the
+    /// event came from a [`Capture`](crate::capture::Capture). Manual events carry none.
+    #[serde(default)]
+    pub runtime: Option<u64>,
+    /// The presentation the event ran for, as its packed id, when it ran for one.
+    #[serde(default)]
+    pub presentation: Option<u64>,
 }
 
 impl TimelineEvent {
@@ -234,16 +244,24 @@ struct TimelineInner {
     /// itself (which stays a plain, serializable value with no notion of
     /// this internal bookkeeping).
     base_event_id: u64,
+    /// Whether `start_time` is a capture's epoch, which [`TimelineInner::clear`] must keep: the
+    /// capture's spans are measured from it.
+    shared_epoch: bool,
 }
 
 impl TimelineInner {
     fn new(max_events: usize) -> Self {
+        Self::starting_at(max_events, Instant::now(), false)
+    }
+
+    fn starting_at(max_events: usize, start_time: Instant, shared_epoch: bool) -> Self {
         Self {
-            start_time: Instant::now(),
+            start_time,
             events: Vec::new(),
             max_events,
             next_event_id: 0,
             base_event_id: 0,
+            shared_epoch,
         }
     }
 
@@ -258,6 +276,8 @@ impl TimelineInner {
             category,
             args: serde_json::Value::Null,
             thread_id: std::thread::current().id(),
+            runtime: None,
+            presentation: None,
         };
 
         self.push_event(event)
@@ -314,7 +334,9 @@ impl TimelineInner {
     fn clear(&mut self) {
         self.events.clear();
         self.base_event_id = self.next_event_id;
-        self.start_time = Instant::now();
+        if !self.shared_epoch {
+            self.start_time = Instant::now();
+        }
     }
 
     fn event_count(&self) -> usize {
@@ -329,6 +351,9 @@ impl TimelineInner {
 #[derive(Clone)]
 pub struct Timeline {
     inner: Arc<Mutex<TimelineInner>>,
+    /// The capture of framework spans this timeline is a view over, if any.
+    #[cfg(feature = "profiling")]
+    capture: Option<crate::capture::Capture>,
 }
 
 impl Timeline {
@@ -347,9 +372,27 @@ impl Timeline {
     pub fn with_capacity(max_events: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TimelineInner::new(max_events))),
+            #[cfg(feature = "profiling")]
+            capture: None,
         }
     }
 
+    /// A timeline that is a view over `capture`: the frames, presentation segments and phases the
+    /// framework ran appear beside the events recorded here, on one time base, and
+    /// [`Self::clear`] clears both. The capture is the only recorder of framework spans; this
+    /// timeline keeps no copy of them.
+    #[cfg(feature = "profiling")]
+    #[must_use]
+    pub fn over(capture: &crate::capture::Capture) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(TimelineInner::starting_at(
+                10_000,
+                capture.epoch(),
+                true,
+            ))),
+            capture: Some(capture.clone()),
+        }
+    }
     /// Record an event with RAII guard
     ///
     /// Returns a guard that automatically records the event duration when
@@ -415,6 +458,8 @@ impl Timeline {
             category,
             args,
             thread_id: std::thread::current().id(),
+            runtime: None,
+            presentation: None,
         });
     }
 
@@ -472,16 +517,28 @@ impl Timeline {
         }
     }
 
-    /// Get all recorded events
+    /// Get all recorded events, oldest first. A timeline [over](Self::over) a capture includes
+    /// the framework spans the capture holds.
     pub fn get_events(&self) -> Vec<TimelineEvent> {
-        self.inner.lock().get_events()
+        let mut events = self.inner.lock().get_events();
+        #[cfg(feature = "profiling")]
+        if let Some(capture) = &self.capture {
+            for frame in capture.frames() {
+                let mut event = captured_event(frame.span());
+                if let Some(period) = frame.period() {
+                    event.args["period_us"] = json!(saturating_micros(period));
+                }
+                events.push(event);
+                events.extend(frame.spans().iter().map(captured_event));
+            }
+            events.sort_by_key(|event| event.start_micros);
+        }
+        events
     }
 
     /// Get events filtered by category
     pub fn get_events_by_category(&self, category: EventCategory) -> Vec<TimelineEvent> {
-        self.inner
-            .lock()
-            .get_events()
+        self.get_events()
             .into_iter()
             .filter(|e| e.category == category)
             .collect()
@@ -497,9 +554,7 @@ impl Timeline {
         let start_micros = (start_ms * 1000.0) as u128;
         let end_micros = (end_ms * 1000.0) as u128;
 
-        self.inner
-            .lock()
-            .get_events()
+        self.get_events()
             .into_iter()
             .filter(|e| {
                 let event_end = e.start_micros + e.duration_micros;
@@ -511,17 +566,30 @@ impl Timeline {
     /// Clear all events
     pub fn clear(&self) {
         self.inner.lock().clear();
+        #[cfg(feature = "profiling")]
+        if let Some(capture) = &self.capture {
+            capture.clear();
+        }
     }
 
     /// Get the number of recorded events
     pub fn event_count(&self) -> usize {
+        #[cfg(feature = "profiling")]
+        if self.capture.is_some() {
+            return self.get_events().len();
+        }
         self.inner.lock().event_count()
     }
 
-    /// Export events to Chrome DevTools trace format
+    /// Export events as a Chrome / Perfetto trace.
     ///
-    /// Returns a JSON string that can be loaded in chrome://tracing for
-    /// visualization.
+    /// Returns a JSON string that opens in `chrome://tracing` and `ui.perfetto.dev`. Every
+    /// event is one complete (`X`) event with its duration, so nesting is the events' own
+    /// containment; a span the capture could not close never appears half-open. Each UI runtime
+    /// is a process (named by metadata events) and each thread a thread of it. A timeline
+    /// [over](Self::over) a capture adds, for every frame, the counters `frame_ms` and `jank`
+    /// (`1` when the frame outlasted the display period it reported, 60 Hz when it reported
+    /// none).
     ///
     /// # Example
     ///
@@ -531,45 +599,92 @@ impl Timeline {
     /// let json = timeline.export_chrome_trace();
     /// // std::fs::write("trace.json", &json)?;
     /// # drop(json);
-    /// // Then open chrome://tracing and load trace.json
+    /// // Then open chrome://tracing or ui.perfetto.dev and load trace.json
     /// ```
     pub fn export_chrome_trace(&self) -> String {
-        let events = self.get_events();
+        let mut events = self.get_events();
+        // Parents first among events that start together, so a viewer nests them.
+        events.sort_by(|a, b| {
+            a.start_micros
+                .cmp(&b.start_micros)
+                .then(b.duration_micros.cmp(&a.duration_micros))
+        });
 
-        let trace_events: Vec<_> = events
-            .iter()
-            .flat_map(|event| {
-                // Chrome trace format uses "B" (begin) and "E" (end) events
-                let thread_id = format!("{:?}", event.thread_id);
+        let mut processes: Vec<Option<u64>> = Vec::new();
+        let mut threads: Vec<(i64, std::thread::ThreadId)> = Vec::new();
+        let mut trace_events: Vec<serde_json::Value> = Vec::new();
+        let mut counters: Vec<serde_json::Value> = Vec::new();
+        for event in &events {
+            let process = processes
+                .iter()
+                .position(|runtime| *runtime == event.runtime)
+                .unwrap_or_else(|| {
+                    processes.push(event.runtime);
+                    processes.len() - 1
+                });
+            let pid = process as i64 + 1;
+            let thread = threads
+                .iter()
+                .position(|(owner, thread)| *owner == pid && *thread == event.thread_id)
+                .unwrap_or_else(|| {
+                    threads.push((pid, event.thread_id));
+                    threads.len() - 1
+                });
+            let tid = thread as i64 + 1;
+            trace_events.push(json!({
+                "name": event.name,
+                "cat": event.category.name(),
+                "ph": "X",
+                "ts": saturating_micros_u128(event.start_micros),
+                "dur": saturating_micros_u128(event.duration_micros),
+                "pid": pid,
+                "tid": tid,
+                "args": begin_event_args(event),
+            }));
+            if event.category == EventCategory::Frame {
+                // A frame that reported no display period is judged against 60 Hz, as the
+                // profiler judges it.
+                let period_us = event
+                    .args
+                    .get("period_us")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let frame_us = saturating_micros_u128(event.duration_micros);
+                let end = saturating_micros_u128(event.start_micros + event.duration_micros);
+                let line_us = if period_us == 0 { 16_667 } else { period_us };
+                counters.push(json!({
+                    "name": "frame_ms", "ph": "C", "ts": end, "pid": pid,
+                    "args": { "frame_ms": frame_us as f64 / 1000.0 },
+                }));
+                counters.push(json!({
+                    "name": "jank", "ph": "C", "ts": end, "pid": pid,
+                    "args": { "jank": u8::from(frame_us > line_us) },
+                }));
+            }
+        }
 
-                vec![
-                    // Begin event
-                    json!({
-                        "name": event.name,
-                        "cat": event.category.name(),
-                        "ph": "B", // Begin
-                        "ts": event.start_micros,
-                        "pid": 1,
-                        "tid": thread_id,
-                        "args": begin_event_args(event),
-                    }),
-                    // End event
-                    json!({
-                        "name": event.name,
-                        "cat": event.category.name(),
-                        "ph": "E", // End
-                        "ts": event.start_micros + event.duration_micros,
-                        "pid": 1,
-                        "tid": thread_id,
-                    }),
-                ]
-            })
-            .collect();
+        let mut metadata: Vec<serde_json::Value> = Vec::new();
+        for (index, runtime) in processes.iter().enumerate() {
+            let name = match runtime {
+                Some(runtime) => format!("FLUI runtime {runtime:#x}"),
+                None => "FLUI".to_string(),
+            };
+            metadata.push(json!({
+                "name": "process_name", "ph": "M", "pid": index as i64 + 1, "args": { "name": name },
+            }));
+        }
+        for (index, (pid, thread)) in threads.iter().enumerate() {
+            metadata.push(json!({
+                "name": "thread_name", "ph": "M", "pid": pid, "tid": index as i64 + 1,
+                "args": { "name": format!("{thread:?}") },
+            }));
+        }
+        metadata.extend(trace_events);
+        metadata.extend(counters);
 
         json!({
-            "traceEvents": trace_events,
+            "traceEvents": metadata,
             "displayTimeUnit": "ms",
-            "systemTraceEvents": "SystemTraceData",
             "otherData": {
                 "version": "FLUI DevTools Timeline"
             }
@@ -635,6 +750,74 @@ impl std::fmt::Debug for Timeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Timeline")
             .field("event_count", &self.inner.lock().event_count())
-            .finish()
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `u128` count of microseconds as the `u64` a trace carries, saturating.
+fn saturating_micros_u128(micros: u128) -> u64 {
+    u64::try_from(micros).unwrap_or(u64::MAX)
+}
+
+/// A captured span as a timeline event.
+#[cfg(feature = "profiling")]
+fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
+    use crate::phase::Phase;
+
+    let (name, category) = match span.phase() {
+        Some(Phase::Build) => ("Build", EventCategory::Build),
+        Some(Phase::Layout) => ("Layout", EventCategory::Layout),
+        Some(Phase::Paint) => ("Paint", EventCategory::Paint),
+        Some(other) => (other.label(), EventCategory::Custom),
+        None if span.is_frame() => ("Frame", EventCategory::Frame),
+        None => ("Presentation", EventCategory::Custom),
+    };
+    TimelineEvent {
+        name: name.to_string(),
+        start_micros: span.start().as_micros(),
+        duration_micros: span.duration().as_micros(),
+        category,
+        args: json!({ "target": span.target(), "span": span.name() }),
+        thread_id: span.thread(),
+        runtime: span
+            .partition()
+            .runtime()
+            .map(flui_sdk::foundation::UiRuntimeId::as_u64),
+        presentation: span
+            .partition()
+            .presentation()
+            .map(flui_sdk::foundation::PresentationId::as_u64),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::Capture;
+    use tracing::dispatcher::Dispatch;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    /// A frame that reported no display period is still a `frame_ms` and `jank` counter.
+    #[test]
+    fn a_frame_without_a_display_period_still_gets_counters() {
+        let capture = Capture::new();
+        let timeline = Timeline::over(&capture);
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+        });
+
+        let trace: serde_json::Value =
+            serde_json::from_str(&timeline.export_chrome_trace()).expect("the export is JSON");
+        let events = trace["traceEvents"].as_array().expect("traceEvents");
+        for counter in ["frame_ms", "jank"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["ph"] == "C" && event["name"] == counter),
+                "no {counter} counter in {events:?}"
+            );
+        }
     }
 }

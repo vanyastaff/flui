@@ -1711,11 +1711,106 @@ fn deadline_query_reentry_does_not_rediscover_its_active_source() {
     assert_eq!(member.queries.get(), 2);
 }
 
+/// A subscriber that panics when the `presentation` span is created, or when it is left.
+struct FailingPresentationSpan {
+    at_exit: bool,
+}
+
+impl tracing::Subscriber for FailingPresentationSpan {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        if attrs.metadata().name() != "presentation" {
+            return tracing::span::Id::from_u64(1);
+        }
+        if !self.at_exit {
+            std::panic::panic_any("presentation span subscriber");
+        }
+        tracing::span::Id::from_u64(2)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {}
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, id: &tracing::span::Id) {
+        if self.at_exit && id.into_u64() == 2 {
+            std::panic::panic_any("presentation span subscriber at exit");
+        }
+    }
+}
+
+/// Instrumentation that fails opening a stage's span must not skip the stage's own work: the
+/// deadline discovery still runs and the frame is delivered.
+fn presentation_span_failure_case(at_exit: bool) {
+    let clock = ManualClock::new();
+    let due = clock.now() + Duration::from_secs(1);
+    let (runtime, _window) = manual_runtime(clock.clone());
+    let query_calls = Rc::new(Cell::new(0));
+    let member = Rc::new(DeadlineQuery {
+        calls: Rc::clone(&query_calls),
+        due: crate::event_at(&clock, due),
+        fail: Cell::new(false),
+    });
+    let _entry = runtime
+        .gestures()
+        .arena()
+        .add(PointerId::new(NonZeroU64::MIN), &member);
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let frame = owner.frame_dispatcher(address).expect("frame authority");
+    let effects = Rc::new(Effects {
+        query_calls: Rc::clone(&query_calls),
+        frames: Cell::new(0),
+        fail_operation: Cell::new(false),
+        probe_runtime: Cell::new(false),
+        runtime_observation: RefCell::new(None),
+    });
+    let diagnostics = crate::scoped_diagnostics(FailingPresentationSpan { at_exit });
+    let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame.deliver(crate::VSYNC, effects.as_ref())
+    }));
+    drop(diagnostics);
+    assert_eq!(
+        delivered.expect("the span failure is contained"),
+        Ok(Delivery::Driven)
+    );
+    assert!(
+        query_calls.get() > 0,
+        "the deadline discovery of the stage still ran"
+    );
+}
+
+fn a_failing_presentation_span_does_not_skip_the_sampling_stage() {
+    presentation_span_failure_case(false);
+}
+
+fn a_failing_presentation_span_exit_does_not_skip_the_sampling_stage() {
+    presentation_span_failure_case(true);
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
         "owner sampling",
         &[
+            (
+                "a failing presentation span does not skip the sampling stage",
+                a_failing_presentation_span_does_not_skip_the_sampling_stage,
+            ),
+            (
+                "a failing presentation span exit does not skip the sampling stage",
+                a_failing_presentation_span_exit_does_not_skip_the_sampling_stage,
+            ),
             (
                 "owner wake observation is inert",
                 owner_wake_uses_the_committed_scheduling_observation,

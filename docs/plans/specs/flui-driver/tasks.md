@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 is in review). FD29 and FD30 can start now.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -110,7 +110,7 @@ graph LR
 | FD26 | Self-contained: baseline review (CLI and inspector), HTML, JUnit and SARIF reports, device management moved into the lanes, `--repeat` flake triage, `--offline` and the no-network-client test | R46–R49 | FD10, FD13, FD15 | [P] | L, W, A | 6 | — |
 | FD27 | `Inspect` core (ADR-0242): trait, `Value`, `Meta`, `Sink`, `InspectTree`, `Link`, derive with SDK path, owned snapshot in `flui-protocol`, typed accessors, structural diff, tree renderer, compact geometry `Display` | R50, R51 | — | [P] | L | 6 | — |
 | FD28 | Migration: render objects, layers and the GPU profile onto `Inspect` (derive first), consumers (harness, `render_diagnostics`, layer inspection, `agent_workflow.rs`) onto typed access; `Diagnosticable` and its derive deleted; a `Value::Debug` ratchet | R50, R51 | FD27 | — | L | 6 | — |
-| FD29 | Tracing conventions: `flui.<subsystem>` targets with aliases and an `EnvFilter` test; semantics/commit/submit phase spans; primitive fields and numeric ids; `element_rebuild` at TRACE with reasons; recognizer spans fixed; one capture layer with the `(target, name)` table; `Timeline` over it; `X`-event export | R52, R53 | — | [P] | L, W | 6 | — |
+| FD29 | Tracing conventions: `flui.<subsystem>` targets and an `EnvFilter` test; semantics/commit/submit phase spans; primitive fields and numeric ids; `element_rebuild` at TRACE with reasons; recognizer spans fixed; one capture layer with the `(target, name)` table; `Timeline` over it; `X`-event export | R52, R53 | — | [P] | L, W | 6 | — |
 | FD30 | Creation sites (`CreationSite` to `flui-foundation`, `#[track_caller]` constructors and builders, widget derive, element copy at mount) and `TreeError<E>` context at the pipeline and build owners | R54, R55 | FD27 | — | L | 4 | — |
 | FD31 | Phase guard: `build` and `inspect` run inside a phase the `WidgetsBinding` and the pipeline owner own; tree entry points answer `TreeBusy` instead of deadlocking or panicking; a panicking `View::inspect` or render-object description is recorded on its node | R15 | FD4 | — | L | 2 | — |
 
@@ -849,9 +849,8 @@ graph LR
 ### FD29. Tracing conventions and one span stream
 
 - **Changes:**
-  - [x] targets renamed to `flui.<subsystem>`, with one-release aliases for `flui::reconcile` and
-    `flui_animation` (`flui_log::TARGET_ALIASES`), after an `EnvFilter` test pins prefix matching
-    (`flui-log/tests/target_aliases.rs`);
+  - [x] targets renamed to `flui.<subsystem>`; the old spellings are not kept (pre-release), after
+    an `EnvFilter` test pins prefix matching (`flui-log/tests/contract_targets.rs`);
   - [x] `semantics`, `commit` and `submit` phase spans;
   - [x] primitive fields and `u64` ids on the layout, paint and build paths (error and panic
     reports keep `Debug`);
@@ -864,10 +863,11 @@ graph LR
     `tracing::enabled!` is needed only where a field is computed outside one;
   - [x] `frame_timing_layer.rs` recognizes a phase by `(target, name)`, so an app span named
     `paint` is not a phase;
-  - [ ] a capture layer partitioned by runtime and presentation with one `(target, name) → Phase`
-    table shared by the profiler, the timeline and the driver;
-  - [ ] `Timeline` as a view over the capture;
-  - [ ] the Chrome/Perfetto export emits `X` events and counters;
+  - [x] a capture layer partitioned by runtime and presentation with one `(target, name) → Phase`
+    table shared by the profiler and the timeline (`flui-devtools::capture`, `Phase`);
+  - [x] `Timeline` as a view over the capture (`Timeline::over`);
+  - [x] the Chrome/Perfetto export emits `X` events and counters (`frame_profile_end_to_end.rs`,
+    `a_real_runtime_frame_is_partitioned_and_exported`; the driver's `perf` reads the capture in FD20);
   - [x] `flui-log`'s builder documents how to add Tracy or Chrome layers.
 - **Done when:**
   - an app span named `paint` is not counted as a phase;
