@@ -138,6 +138,56 @@ fn cancelling_transient_work_preserves_caught_failure_custody() {
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
 
+/// Cancelling A in a healthy owner turn drops a capture that cancels B, whose
+/// capture's destructor panics. That panic is the turn's first failure: the
+/// outer retirement must not read the signal the nested one just set as an
+/// earlier failure and discard it.
+fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
+    struct CancelsOnDrop {
+        scheduler: UpdateScheduler,
+        other: Rc<Cell<Option<flui_scheduler::CallbackId>>>,
+    }
+    impl Drop for CancelsOnDrop {
+        fn drop(&mut self) {
+            if let Some(other) = self.other.take() {
+                self.scheduler.cancel_frame_callback(other);
+            }
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    let other = Rc::new(Cell::new(None));
+    let outer = CancelsOnDrop {
+        scheduler: scheduler.clone(),
+        other: Rc::clone(&other),
+    };
+    let a = scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &outer;
+    }));
+    let inner = RejectedCapture;
+    other.set(Some(scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &inner;
+    }))));
+    let now = Instant::now();
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        owner.drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                scheduler.cancel_frame_callback(a);
+            },
+            || {},
+        )
+    }))
+    .expect_err("the nested destructor's failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("nested refused capture failure")
+    );
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
 fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     fn refuse(owner: &OwnerFrame, calls: &Cell<usize>) {
         let now = Instant::now();
@@ -384,6 +434,10 @@ fn owner_retirement_custody_contract() {
             (
                 "transient cancellation custody",
                 cancelling_transient_work_preserves_caught_failure_custody,
+            ),
+            (
+                "nested cancellation failure propagates from a healthy turn",
+                nested_cancellation_failure_propagates_from_a_healthy_turn,
             ),
             (
                 "nested callback and task entry",

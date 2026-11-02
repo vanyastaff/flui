@@ -108,15 +108,19 @@ impl Drop for FailureScope<'_> {
 
 /// Destroy a value refused or withdrawn under `slot` outside every guard, its
 /// destructor contained. A panic it raises is the first failure unless the
-/// thread is unwinding or the owner turn it belongs to already holds one; then
-/// it is discarded and the earlier failure stays first (ADR-0281).
+/// thread was already unwinding or the owner turn it belongs to already held
+/// one before the destructor ran; then it is discarded and the earlier failure
+/// stays first (ADR-0281). The check is taken before the destructor, so a
+/// failure that destructor's own nested retirement raised and propagated is
+/// not mistaken for an earlier one.
 pub(crate) fn retire_with_execution_custody<T>(
     slot: &RefCell<Option<Weak<FailureSignal>>>,
     value: T,
 ) {
+    let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
+    let held = std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get());
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
-        let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
-        if std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get()) {
+        if held {
             flui_foundation::panic::discard_payload(payload);
             return;
         }
