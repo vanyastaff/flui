@@ -20,9 +20,9 @@ use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, EditableText,
-    GestureCommand, HandleInfo, Intent, SelectionHandles, SelectionMenuPolicy, SizedBox, Text,
-    TextEditingController, WidgetsApp,
+    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, EditableText, Focus,
+    GestureCommand, HandleInfo, Intent, ScrollController, Scrollable, SelectionHandles,
+    SelectionMenuPolicy, SizedBox, Text, TextEditingController, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -63,8 +63,13 @@ struct Scene {
     laid: LaidOut,
     controller: TextEditingController,
     field_focus: Rc<FocusNode>,
+    /// A node outside the field, holding the focus somewhere else.
+    elsewhere: Rc<FocusNode>,
     log: Rc<RefCell<Vec<&'static str>>>,
     line_height: Rc<Cell<f64>>,
+    /// Whether the field draws [`Square`] handles, a new look each build,
+    /// rather than the app's, one look across rebuilds.
+    square: bool,
 }
 
 impl Scene {
@@ -75,21 +80,77 @@ impl Scene {
         field: impl FnOnce(EditableText) -> EditableText,
         controls: Option<fn(DefaultSelectionControls) -> DefaultSelectionControls>,
     ) -> Self {
-        let controller = TextEditingController::with_text(WORDS);
-        let field_focus = FocusNode::with_debug_label("field");
-        let log: Rc<RefCell<Vec<&'static str>>> = Rc::default();
-        let line_height: Rc<Cell<f64>> = Rc::default();
-        let editable = field(
-            EditableText::new(controller.clone(), Rc::clone(&field_focus))
-                .text_style(style())
-                .handles(Square(Rc::clone(&line_height))),
-        );
+        Self::framed(field, controls, |page| page)
+    }
+
+    /// [`Self::with`], the page put in `frame` before the app takes it.
+    fn framed(
+        field: impl FnOnce(EditableText) -> EditableText,
+        controls: Option<fn(DefaultSelectionControls) -> DefaultSelectionControls>,
+        frame: impl FnOnce(BoxedView) -> BoxedView,
+    ) -> Self {
+        Self::build(field, controls, frame, true)
+    }
+
+    /// The field with every toolbar trigger on and the app's handles, whose
+    /// look stays the same when the field rebuilds.
+    fn app_handles() -> Self {
+        Self::build(
+            |field| field.menu_policy(SelectionMenuPolicy::ALWAYS),
+            None,
+            |page| page,
+            false,
+        )
+    }
+
+    fn build(
+        field: impl FnOnce(EditableText) -> EditableText,
+        controls: Option<fn(DefaultSelectionControls) -> DefaultSelectionControls>,
+        frame: impl FnOnce(BoxedView) -> BoxedView,
+        square: bool,
+    ) -> Self {
+        let mut scene = Self {
+            laid: lay_out(SizedBox::new(0.0, 0.0), tight(400.0, 300.0)),
+            controller: TextEditingController::with_text(WORDS),
+            field_focus: FocusNode::with_debug_label("field"),
+            elsewhere: FocusNode::with_debug_label("elsewhere"),
+            log: Rc::default(),
+            line_height: Rc::default(),
+            square,
+        };
+        scene.laid = lay_out(scene.app(field, controls, frame), tight(400.0, 300.0));
+        scene.laid.enable_semantics();
+        scene.laid.pump();
+        scene
+    }
+
+    /// Builds the app again around the same controller, focus nodes and
+    /// log, with the field configured by `field`, so it updates in place.
+    fn rebuild(&mut self, field: impl FnOnce(EditableText) -> EditableText) {
+        let app = self.app(field, None, |page| page);
+        self.laid.pump_widget(app);
+        self.settle();
+    }
+
+    fn app(
+        &self,
+        field: impl FnOnce(EditableText) -> EditableText,
+        controls: Option<fn(DefaultSelectionControls) -> DefaultSelectionControls>,
+        frame: impl FnOnce(BoxedView) -> BoxedView,
+    ) -> WidgetsApp {
+        let editable = EditableText::new(self.controller.clone(), Rc::clone(&self.field_focus))
+            .text_style(style());
+        let editable = field(if self.square {
+            editable.handles(Square(Rc::clone(&self.line_height)))
+        } else {
+            editable
+        });
         let content = Column::new((SizedBox::new(400.0, 40.0).child(editable),)).boxed();
         let content = match controls {
             Some(controls) => controls(DefaultSelectionControls::new(content)).boxed(),
             None => content,
         };
-        let (shout, whisper) = (Rc::clone(&log), Rc::clone(&log));
+        let (shout, whisper) = (Rc::clone(&self.log), Rc::clone(&self.log));
         let home = Actions::new(content)
             .action(CallbackAction::new(move |_cx, _: &Shout| {
                 shout.borrow_mut().push("shout");
@@ -99,17 +160,8 @@ impl Scene {
             }));
         // The field sits a toolbar's room below the top, so the toolbar
         // goes over the line.
-        let page = Column::new((SizedBox::new(400.0, 80.0), home));
-        let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
-        laid.enable_semantics();
-        laid.pump();
-        Self {
-            laid,
-            controller,
-            field_focus,
-            log,
-            line_height,
-        }
+        let room = Focus::new(SizedBox::new(400.0, 80.0)).focus_node(Rc::clone(&self.elsewhere));
+        WidgetsApp::new(frame(Column::new((room, home)).boxed()))
     }
 
     /// The field with every toolbar trigger on, whatever the host.
@@ -341,6 +393,11 @@ pub(crate) fn the_menu_key_and_assistive_technology_open_the_popup() {
     scene.key(NamedKey::Escape);
     assert_eq!(scene.popup(), Vec::<String>::new());
 
+    // Assistive technology may open the menu of a field without the focus;
+    // the field takes it, so paste and the edits act on it.
+    let _ = scene.elsewhere.request_focus();
+    scene.settle();
+    assert!(!scene.field_focus.has_focus());
     let field = scene
         .tree()
         .nodes()
@@ -365,6 +422,69 @@ pub(crate) fn the_menu_key_and_assistive_technology_open_the_popup() {
         .expect("the field takes ShowContextMenu");
     scene.settle();
     assert_eq!(scene.popup(), strings(&EDITING));
+    // The popup holds the focus while open and gives it back on closing.
+    scene.key(NamedKey::Escape);
+    assert!(scene.field_focus.has_focus(), "the menu focused the field");
+}
+
+/// Assistive technology's click on a toolbar button performs it and takes
+/// the toolbar away, as a tap does.
+///
+/// Red-check: close the toolbar only from the button's tap (it stays).
+pub(crate) fn an_assistive_click_on_the_toolbar_takes_it_away() {
+    let mut scene = Scene::plain();
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+
+    let tree = scene.tree();
+    let copy = tree
+        .find_by_role_and_label(Role::Button, "Copy")
+        .expect("the toolbar offers Copy")
+        .id();
+    scene
+        .laid
+        .invoke_semantics_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: copy,
+            data: None,
+        })
+        .expect("the button takes Click");
+    scene.settle();
+    assert_eq!(scene.laid.clipboard().text().as_deref(), Some("beta"));
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+}
+
+/// The toolbar moves with the selection when the page scrolls under it: a
+/// tap where Copy went copies.
+///
+/// Red-check: place the toolbar once where the selection was (the tap
+/// lands over it).
+pub(crate) fn the_toolbar_follows_a_scroll() {
+    let scroll = ScrollController::new();
+    let page = scroll.clone();
+    let mut scene = Scene::framed(
+        |field| field.menu_policy(SelectionMenuPolicy::ALWAYS),
+        None,
+        move |content| {
+            // Room over the field, so the scrolled toolbar still stands
+            // over the line, and below it, so the page scrolls.
+            let room = SizedBox::new(400.0, 100.0);
+            Scrollable::new()
+                .controller(page)
+                .child(Column::new((room, content, SizedBox::new(400.0, 600.0))))
+                .boxed()
+        },
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+    let copy = scene.center_of(Role::Button, "Copy");
+
+    let rise = 60.0;
+    scroll.jump_to(rise).expect("no build is running");
+    scene.settle();
+    scene.tap(copy - Offset::new(0.0, rise));
+    assert_eq!(scene.laid.clipboard().text().as_deref(), Some("beta"));
 }
 
 /// A `DefaultSelectionControls` command and the field's own follow the
@@ -461,4 +581,62 @@ pub(crate) fn a_tap_on_the_caret_handle_toggles_the_toolbar() {
     assert_eq!(scene.toolbar(), strings(&["Paste", "Select all"]));
     scene.tap(scene.end_handle(caret));
     assert_eq!(scene.toolbar(), Vec::<String>::new());
+}
+
+/// A field rebuilt with another command while its toolbar shows offers it
+/// at once.
+///
+/// Red-check: leave a shown toolbar as the field's last build left it
+/// (Whisper is missing).
+pub(crate) fn a_rebuilt_field_refreshes_its_shown_toolbar() {
+    let mut scene = Scene::app_handles();
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+
+    scene.rebuild(|field| {
+        field
+            .menu_policy(SelectionMenuPolicy::ALWAYS)
+            .menu_command(GestureCommand::new("Whisper", Whisper))
+    });
+    assert_eq!(
+        scene.toolbar(),
+        strings(&["Cut", "Copy", "Paste", "Select all", "Whisper"])
+    );
+    scene.tap(scene.center_of(Role::Button, "Whisper"));
+    assert_eq!(*scene.log.borrow(), ["whisper"]);
+
+    scene.rebuild(|field| field.menu_policy(SelectionMenuPolicy::ALWAYS).no_menu());
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+}
+
+/// Commands wider together than the window wrap onto another row of the
+/// toolbar, so every one stays inside the window and takes a tap.
+///
+/// Red-check: lay the buttons out in one row (the last ones run past the
+/// window's right edge).
+pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
+    let mut scene = Scene::with(
+        |field| {
+            field
+                .menu_policy(SelectionMenuPolicy::ALWAYS)
+                .menu_command(GestureCommand::new("Whisper to the far corner", Whisper))
+        },
+        Some(|controls| controls.command(GestureCommand::new("Shout across the room", Shout))),
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    let labels = scene.toolbar();
+    assert_eq!(labels.len(), 6);
+    let tree = scene.tree();
+    for label in &labels {
+        let node = tree
+            .find_by_role_and_label(Role::Button, label)
+            .expect("the toolbar shows the button");
+        let bounds = tree.window_bounds(&node).expect("the button has bounds");
+        assert!(
+            bounds.x0 >= 0.0 && bounds.x1 <= 400.0,
+            "{label} is inside the window: {bounds:?}"
+        );
+    }
+    scene.tap(scene.center_of(Role::Button, "Whisper to the far corner"));
+    assert_eq!(*scene.log.borrow(), ["whisper"]);
 }

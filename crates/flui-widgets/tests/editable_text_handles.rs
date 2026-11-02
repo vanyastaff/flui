@@ -97,7 +97,9 @@ impl Scene {
     fn rebuild(&mut self, configure: impl FnOnce(EditableText) -> EditableText) {
         let field = EditableText::new(self.controller.clone(), Rc::clone(&self.field_focus))
             .text_style(style())
-            .handles(self.marked.clone());
+            .handles(self.marked.clone())
+            // The rows count the handles' followers; the toolbar would add one.
+            .no_menu();
         self.laid.pump_widget(WidgetsApp::new(Column::new((
             SizedBox::new(400.0, 40.0).child(configure(field)),
             Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&self.elsewhere)),

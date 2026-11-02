@@ -38,8 +38,8 @@ use crate::localization::Directionality;
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
 use crate::{
     Align, ColoredBox, Column, ConstrainedBox, CustomSingleChildLayout, ExcludeSemantics,
-    IntrinsicWidth, Padding, PopupOrigin, Row, SelectionMenu, SelectionPopup, Semantics,
-    SemanticsRole, Text,
+    IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, SemanticsRole,
+    Text, Wrap,
 };
 
 // ============================================================================
@@ -485,10 +485,11 @@ impl SelectionMenu for PlainSelectionMenu {
         Semantics::new()
             .container(true)
             .role(SemanticsRole::Toolbar)
-            .child(
-                ColoredBox::new(MENU_SURFACE)
-                    .child(Row::new(buttons).main_axis_size(MainAxisSize::Min)),
-            )
+            .child(ColoredBox::new(MENU_SURFACE).child(
+                // Labels wider than the room wrap onto another run, so
+                // every command stays reachable.
+                Wrap::new(buttons),
+            ))
             .boxed()
     }
 

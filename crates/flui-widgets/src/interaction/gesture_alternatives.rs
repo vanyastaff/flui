@@ -676,13 +676,19 @@ impl fmt::Debug for MenuRequest {
 pub struct MenuItem {
     command: GestureCommand,
     chain: Option<ActionChain>,
+    /// Runs once the item was chosen, whatever its command did.
+    chosen: Option<Rc<dyn Fn()>>,
 }
 
 impl MenuItem {
     /// An item performing `command` through `chain`, the bindings where the
     /// widget offering it is mounted.
     pub(crate) fn new(command: GestureCommand, chain: Option<ActionChain>) -> Self {
-        Self { command, chain }
+        Self {
+            command,
+            chain,
+            chosen: None,
+        }
     }
 
     /// Whether choosing the item would perform its command now: unless the
@@ -705,9 +711,25 @@ impl MenuItem {
         self.command.label()
     }
 
-    /// Perform the item's command, as choosing it does.
+    /// Perform the item's command, as choosing it does. A menu that hears
+    /// of the choice ([`Self::when_chosen`]) hears of it though the command
+    /// panics; the panic resumes after.
     pub fn perform(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
-        self.command.perform(cx, self.chain.as_ref())
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        let outcome = failure.contain(|| self.command.perform(cx, self.chain.as_ref()));
+        if let Some(chosen) = &self.chosen {
+            failure.contain(|| chosen());
+        }
+        failure.resume();
+        outcome.expect("BUG: a contained panic resumed above")
+    }
+
+    /// The item, running `chosen` each time it is performed: how a menu
+    /// closes after a choice however it was made, by a tap or by assistive
+    /// technology.
+    pub(crate) fn when_chosen(mut self, chosen: Rc<dyn Fn()>) -> Self {
+        self.chosen = Some(chosen);
+        self
     }
 }
 
@@ -1294,10 +1316,7 @@ impl GestureAlternatives {
                 let items: Rc<[MenuItem]> = menu
                     .items
                     .iter()
-                    .map(|command| MenuItem {
-                        command: command.clone(),
-                        chain: chain.clone(),
-                    })
+                    .map(|command| MenuItem::new(command.clone(), chain.clone()))
                     .collect();
                 let presenter = Rc::clone(&menu.presenter);
                 let opener: MenuOpener = Rc::new(move |cx, cause, position| {

@@ -2258,6 +2258,7 @@ impl ViewState<EditableText> for EditableTextState {
             crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
         let chain = self.action_chain.clone();
         (self.touch_handles.menu()).configure(ctx, &view.menu, chain, &origin);
+        self.touch_handles.menu_configured();
         let touch_handles = Rc::clone(&self.touch_handles);
 
         // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
@@ -2938,7 +2939,7 @@ fn build_field_view(
             let focus = actions.clone();
             semantics = semantics.on_focus(move |cx| focus.focus(cx));
         }
-        semantics = menu::show_menu_action(semantics, handles.menu());
+        semantics = menu::show_menu_action(semantics, handles.menu(), actions.clone());
     }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,

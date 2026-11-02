@@ -40,7 +40,7 @@ use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::text::controller::TextEditingController;
 use crate::text::selection_area::handles::{LinkFollower, Look};
 use crate::text::text_store::with_editable_global;
-use crate::{CustomSingleChildLayout, HandleInfo, HandleSide, Positioned, Stack};
+use crate::{CustomSingleChildLayout, HandleInfo, HandleSide, Positioned, SizedBox, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
 /// a drag moves, and how long it stays without a touch.
@@ -253,6 +253,18 @@ impl FieldHandles {
             .collect();
         *self.toolbar_watches.borrow_mut() = watches;
         self.refresh(failure);
+    }
+
+    /// The field's build resolved its menu again: a shown toolbar shows the
+    /// new items, follows their enablement, or goes with the look.
+    pub(super) fn menu_configured(self: &Rc<Self>) {
+        if !self.toolbar.get() {
+            return;
+        }
+        let mut failure = FirstPanic::new();
+        self.drop_toolbar();
+        self.show_toolbar(&mut failure);
+        failure.resume();
     }
 
     /// Takes the toolbar away, leaving the handles. Returns whether it
@@ -1019,12 +1031,15 @@ const TOOLBAR_BELOW_GAP: f64 = 32.0;
 
 /// The menu's toolbar centred over the selection's start (the caret while
 /// the caret's handle shows), or under its end when there is no room above,
-/// and kept inside the overlay. A touch that lifts on it takes it away after
-/// the frame, once an item it chose has performed.
+/// and kept inside the overlay. It is laid out in a box the overlay's size,
+/// pinned to the start's leader where that leader was, so the toolbar moves
+/// with the selection (a scroll) and goes while the start is clipped out.
+/// Choosing an item, by a touch or by assistive technology, takes it away
+/// after the frame, once the item has performed.
 fn toolbar(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedView> {
     let look = handles.menu.look()?;
-    let items = handles.menu.offered();
-    if items.is_empty() {
+    let offered = handles.menu.offered();
+    if offered.is_empty() {
         return None;
     }
     let (first, last) = match handles.shown.get()? {
@@ -1033,56 +1048,68 @@ fn toolbar(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedVi
     };
     let (start, start_height) = handles.end_line(first)?;
     let (end, end_height) = handles.end_line(last)?;
-    let [over, under] = handles.in_overlay([
+    let ([over, under], room) = handles.in_overlay([
         Offset::new(start.dx, start.dy - start_height / 2.0),
         Offset::new(end.dx, end.dy + end_height / 2.0),
-    ]);
+    ])?;
     let post_frame = handles
         .parts
         .borrow()
         .as_ref()
         .and_then(|parts| parts.post_frame.clone());
-    let chosen = Rc::downgrade(handles);
-    let bar = Listener::new()
-        .on_pointer_up(move |_cx, _dispatch| {
-            let chosen = chosen.clone();
-            if let Some(post_frame) = &post_frame {
-                let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
-                    if let Some(handles) = chosen.upgrade() {
-                        let mut failure = FirstPanic::new();
-                        handles.hide_toolbar(&mut failure);
-                        failure.resume();
-                    }
-                });
-            }
-        })
+    let weak = Rc::downgrade(handles);
+    let chosen: Rc<dyn Fn()> = Rc::new(move || {
+        let weak = weak.clone();
+        if let Some(post_frame) = &post_frame {
+            let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
+                if let Some(handles) = weak.upgrade() {
+                    let mut failure = FirstPanic::new();
+                    handles.hide_toolbar(&mut failure);
+                    failure.resume();
+                }
+            });
+        }
+    });
+    let items: Vec<MenuItem> = offered
+        .into_iter()
+        .map(|item| item.when_chosen(Rc::clone(&chosen)))
+        .collect();
+    let layout = CustomSingleChildLayout::new(ToolbarLayout { over, under })
         .child(look.toolbar(&items, ctx));
-    let layout = CustomSingleChildLayout::new(ToolbarLayout { over, under }).child(bar);
-    Some(Positioned::fill(layout).boxed())
+    let room = SizedBox::new(room.width, room.height).child(layout);
+    let pinned = LinkFollower::pinned(handles.links[0], Offset::new(-over.dx, -over.dy), room);
+    Some(Positioned::new(pinned).left(0.0).top(0.0).boxed())
 }
 
 impl FieldHandles {
-    /// `points` in render-root coordinates, moved into the overlay's space;
-    /// left as they are when the overlay is not laid out.
-    fn in_overlay<const N: usize>(&self, points: [Offset<f64>; N]) -> [Offset<f64>; N] {
+    /// `points` in render-root coordinates, moved into the overlay's space,
+    /// and the overlay's size; `None` while the overlay is not laid out.
+    fn in_overlay<const N: usize>(
+        &self,
+        points: [Offset<f64>; N],
+    ) -> Option<([Offset<f64>; N], Size<f64>)> {
         let overlay = self
             .overlay
             .borrow()
             .as_ref()
-            .and_then(OverlayHandle::render_id);
-        let parts = self.parts.borrow();
-        let pipeline = parts.as_ref().and_then(|parts| parts.pipeline.clone());
-        let (Some(overlay), Some(pipeline)) = (overlay, pipeline) else {
-            return points;
-        };
-        let moved = pipeline.try_with_layout(|owner| {
-            points.map(|point| {
-                owner
-                    .global_to_local(overlay, Point::new(point.dx, point.dy), None)
-                    .map_or(point, |local| Offset::new(local.x, local.y))
+            .and_then(OverlayHandle::render_id)?;
+        let pipeline = self
+            .parts
+            .borrow()
+            .as_ref()
+            .and_then(|parts| parts.pipeline.clone())?;
+        pipeline
+            .try_with_layout(|owner| {
+                let size = owner.box_size(overlay)?;
+                let mut moved = points;
+                for point in &mut moved {
+                    let local =
+                        owner.global_to_local(overlay, Point::new(point.dx, point.dy), None)?;
+                    *point = Offset::new(local.x, local.y);
+                }
+                Some((moved, size))
             })
-        });
-        moved.unwrap_or(points)
+            .flatten()
     }
 }
 
@@ -1097,7 +1124,10 @@ struct ToolbarLayout {
 
 impl SingleChildLayoutDelegate for ToolbarLayout {
     fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
-        constraints.loosen()
+        let loose = constraints.loosen();
+        // The toolbar keeps a gap from both edges; one wider scrolls.
+        let width = (loose.max_width - 2.0 * TOOLBAR_GAP).max(0.0);
+        BoxConstraints::new(0.0, width, 0.0, loose.max_height)
     }
 
     fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset<f64> {

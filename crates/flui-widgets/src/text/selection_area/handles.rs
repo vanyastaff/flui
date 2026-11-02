@@ -375,14 +375,18 @@ fn handle(
     )
 }
 
-/// Lays its child out where the leader under `link` is painted: the
-/// child's top centre at the leader's bottom-left corner, which a
+/// Lays its child out where the leader under `link` is painted: by default
+/// the child's top centre at the leader's bottom-left corner, which a
 /// paragraph puts at the bottom of an end's line. Nothing paints or takes
 /// a touch while no leader is published, or while its end is clipped out
 /// (scrolled out of a viewport).
 #[derive(Debug, Clone)]
 pub(crate) struct LinkFollower {
     link: LayerLink,
+    /// The follower's anchor at the leader's: under the end, or the
+    /// child's top-left corner at the leader's moved by an offset.
+    anchors: (Alignment, Alignment),
+    offset: Offset<f64>,
     child: Child,
 }
 
@@ -390,7 +394,19 @@ impl LinkFollower {
     pub(crate) fn new(link: LayerLink, child: impl IntoView) -> Self {
         Self {
             link,
+            anchors: (Alignment::BOTTOM_LEFT, Alignment::TOP_CENTER),
+            offset: Offset::ZERO,
             child: Child::some(child.into_view()),
+        }
+    }
+
+    /// The child's top-left corner at `offset` from the leader's top-left
+    /// corner: a child placed where the leader then was moves as it moves.
+    pub(crate) fn pinned(link: LayerLink, offset: Offset<f64>, child: impl IntoView) -> Self {
+        Self {
+            anchors: (Alignment::TOP_LEFT, Alignment::TOP_LEFT),
+            offset,
+            ..Self::new(link, child)
         }
     }
 }
@@ -405,8 +421,9 @@ impl RenderView for LinkFollower {
     ) -> Self::RenderObject {
         RenderFollowerLayer::new(self.link)
             .with_show_when_unlinked(false)
-            .with_leader_anchor(Alignment::BOTTOM_LEFT)
-            .with_follower_anchor(Alignment::TOP_CENTER)
+            .with_leader_anchor(self.anchors.0)
+            .with_follower_anchor(self.anchors.1)
+            .with_offset(self.offset)
             .with_leader_clip(LeaderClip::Hide)
     }
 
@@ -416,6 +433,9 @@ impl RenderView for LinkFollower {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         render_object.set_link(self.link)
+            | render_object.set_leader_anchor(self.anchors.0)
+            | render_object.set_follower_anchor(self.anchors.1)
+            | render_object.set_offset(self.offset)
     }
 
     flui_view::single_child_view_children!();

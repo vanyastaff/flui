@@ -227,12 +227,19 @@ fn same_menu(a: &Rc<dyn SelectionMenu>, b: &Rc<dyn SelectionMenu>) -> bool {
 
 /// `semantics` with assistive technology's `ShowContextMenu` opening the
 /// popup, while the field shows one.
-pub(super) fn show_menu_action(semantics: Semantics, menu: &Rc<FieldMenu>) -> Semantics {
+pub(super) fn show_menu_action(
+    semantics: Semantics,
+    menu: &Rc<FieldMenu>,
+    field: super::FieldSemanticsActions,
+) -> Semantics {
     if !menu.can_open() {
         return semantics;
     }
     let menu = Rc::downgrade(menu);
     semantics.on_show_context_menu(move |cx| {
+        // The field takes the focus first, as a secondary click gives it:
+        // paste and the edits the menu offers act on the focused field.
+        field.focus(cx);
         if let Some(menu) = menu.upgrade() {
             menu.open(cx, MenuCause::Assistive, None);
         }
