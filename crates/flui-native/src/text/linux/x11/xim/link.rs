@@ -6,7 +6,7 @@
 //! The connection is read on the bus task through its descriptor's
 //! readiness. A round trip (an atom, a property) waits on the server, which
 //! answers it at once; the events read meanwhile stay queued for
-//! [`Link::event`].
+//! [`Link::receive`].
 
 use std::os::fd::{AsRawFd, RawFd};
 use std::time::Duration;
