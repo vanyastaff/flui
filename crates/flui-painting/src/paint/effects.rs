@@ -750,7 +750,7 @@ impl ImageFilter {
 /// [`ImageFilter::Transform`] takes it: a point `(x, y)` maps to
 /// `(xx·x + xy·y + x0, yx·x + yy·y + y0)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ImageTransform {
     xx: f64,
     yx: f64,
@@ -758,6 +758,26 @@ pub struct ImageTransform {
     yy: f64,
     x0: f64,
     y0: f64,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for ImageTransform {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename = "ImageTransform")]
+        struct ImageTransformRepr {
+            xx: f64,
+            yx: f64,
+            xy: f64,
+            yy: f64,
+            x0: f64,
+            y0: f64,
+        }
+
+        let repr = <ImageTransformRepr as serde::Deserialize>::deserialize(deserializer)?;
+        Self::try_new(repr.xx, repr.yx, repr.xy, repr.yy, repr.x0, repr.y0)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// Why an [`ImageTransform`] could not be built.
