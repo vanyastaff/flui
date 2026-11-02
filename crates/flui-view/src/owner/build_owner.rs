@@ -1785,7 +1785,7 @@ impl BuildOwner {
             self.global_key_reservations.note_parent_rebuild(id);
 
             // A per-node span: TRACE, primitives only (the element's packed id, the reasons as a
-            // bitmask over `RebuildReason::ALL`).
+            // bitmask over the `RebuildReason` variants in declaration order).
             let rebuild_span = tracing::trace_span!(
                 target: "flui.tree",
                 "element_rebuild",
