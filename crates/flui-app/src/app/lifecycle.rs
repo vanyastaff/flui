@@ -1257,6 +1257,13 @@ impl ServiceRegistry {
         self.exit_notifier.lock().clone()
     }
 
+    /// Detach the platform callback at explicit owner teardown. The caller
+    /// releases its captures outside the runtime borrow, before TLS destruction.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_exit_notifier(&mut self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.exit_notifier.lock().take()
+    }
+
     /// Start `definition`'s future on the IO lane and take ownership of
     /// its lifetime. The service's completion travels on its own dedicated
     /// capacity-one channel — never a shared queue — so the staged

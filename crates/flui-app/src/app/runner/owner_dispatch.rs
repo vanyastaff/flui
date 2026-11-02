@@ -1350,6 +1350,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
                 state.capabilities.take(),
                 state.clear_redraw_window(),
                 state.take_service_inputs(),
+                state.take_exit_policy_notifier(),
             )
         });
         // Ordinarily `None` already: the window-close path released this pin

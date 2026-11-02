@@ -41,6 +41,9 @@
 //! # }
 //! ```
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -834,6 +837,8 @@ struct WindowedGpuStack {
 /// assert_bound::<flui_engine::Renderer>();
 /// ```
 pub struct Renderer {
+    #[cfg(feature = "testing")]
+    qualification: Option<testing::FrameObserver>,
     // `instance` and `adapter` are kept alive for the lifetime of the renderer
     // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
     // are not read post-init in production code; the `#[allow(dead_code)]`
@@ -1060,6 +1065,8 @@ impl Renderer {
         let lease = SurfaceLease::from_parts(target, stack.surface);
 
         Ok(Self {
+            #[cfg(feature = "testing")]
+            qualification: None,
             instance: stack.instance,
             adapter: stack.adapter,
             device: stack.device,
@@ -2477,6 +2484,9 @@ impl Renderer {
         #[cfg(feature = "gpu-profiler")]
         profile_frame.complete();
 
+        #[cfg(feature = "testing")]
+        testing::sample_requested_frame(self, &output.texture);
+
         // The platform's frame-pacing signal, armed strictly before the
         // present that follows (see `RasterBackend::set_pre_present_hook`).
         // The trace event is an ordering oracle: every
@@ -3222,6 +3232,8 @@ mod tests {
             painter,
             offscreen,
             supports_copy_src: false,
+            #[cfg(feature = "testing")]
+            qualification: None,
             device_lost: Arc::clone(&callback_flag),
             device_lost_hook: Arc::default(),
             frame_latency: FrameLatency::default(),

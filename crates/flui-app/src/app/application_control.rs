@@ -443,6 +443,10 @@ impl Drop for LaunchReservation {
 }
 
 impl Ingress {
+    #[cfg(feature = "testing")]
+    pub(crate) fn retained_payload_bytes(&self) -> u128 {
+        self.state.lock().membership.retained_payload_bytes()
+    }
     pub(crate) fn finish_threads(&self) {
         let finished = {
             let mut state = self.state.lock();

@@ -100,7 +100,14 @@ still require the integrated runner's native acceptance. The testing-only runner
 the dedicated factory, bounded document transport and membership-aware coordinator. Its
 `native_dedicated_factory_builds_on_two_win32_owners_and_retires` smoke test opened real GPU
 windows and built roots on separate owners; it does not measure displayed pixels or qualify
-foreground IME, assistive technology, recovery or the full shutdown matrix. No readiness count changes.
+foreground IME, assistive technology, recovery or the full shutdown matrix.
+Additional scoped Win32 runs now cover actual swapchain readback after injected recovery,
+retry exhaustion and explicit retry, minimize/restore, idle quit and application disposal
+failure. The mounted EditableText fixture exercised Japanese composition, candidate UI,
+commit/cancel and cross-owner clipboard; an independent UIA client read each field's value
+and current keyboard focus. These do not complete native load measurements, screen-reader
+traversal, drag/drop, editing geometry or the full lifecycle matrix. Physical scanout was
+not measured. Dedicated admission and readiness counts remain unchanged.
 
 ### App lifecycle
 

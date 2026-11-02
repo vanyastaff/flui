@@ -114,6 +114,8 @@ impl SharedEngineServices {
 /// reconstructed around these handles; only the initial owner shuts them down.
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(crate) struct RunServices {
+    #[cfg(feature = "testing")]
+    renderers: super::runner::window_renderer::WindowRenderers,
     memory: Arc<super::host_memory::HostMemory>,
     fonts: FontCollection,
     registrations: Arc<parking_lot::Mutex<FontRegistrations>>,
@@ -813,6 +815,8 @@ impl AppRuntime {
     #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(crate) fn run_services(&mut self, config: &super::AppConfig) -> RunServices {
         RunServices {
+            #[cfg(feature = "testing")]
+            renderers: self.window_renderers.clone(),
             memory: Arc::clone(&self.host_memory),
             fonts: self.font_collection(),
             registrations: Arc::clone(&self.fonts),
@@ -831,6 +835,10 @@ impl AppRuntime {
 
     #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(crate) fn adopt_run_services(&mut self, services: &RunServices) {
+        #[cfg(feature = "testing")]
+        {
+            self.window_renderers = services.renderers.clone();
+        }
         assert!(
             self.services.get().is_none() && self.execution.get().is_none(),
             "BUG: dedicated bootstrap has not resolved services"
@@ -1031,6 +1039,12 @@ impl AppRuntime {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn exit_policy_reevaluation_notifier(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
         self.service_registry.exit_notifier()
+    }
+
+    /// Detach the owner-lifetime callback; destruction must happen outside TLS.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn take_exit_policy_notifier(&mut self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.service_registry.take_exit_notifier()
     }
 
     /// Reopen service admission for a loop that is (re)installing a UI runtime

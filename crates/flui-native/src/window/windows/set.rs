@@ -130,6 +130,15 @@ impl OpenWindows for WindowSet {
 }
 
 impl ClassWindows for WindowSet {
+    fn close_all(&self) {
+        for window in self.snapshot() {
+            crate::owner::panic_boundary::contain_owner_callback(move || {
+                window.close_window();
+                drop(window);
+            });
+        }
+    }
+
     /// The main loop's delivery of a wake deadline, and the modal drag
     /// loop's.
     fn redraw_for_deadline(&self) {
@@ -715,6 +724,77 @@ mod open_tests {
             .admit_and_apply(WindowCommand::SetMode(WindowMode::Fullscreen))
             .expect("fullscreen");
         same_as_normal(window.state(), "a fullscreen window entered from maximized");
+    }
+
+    /// Owner retirement closes every HWND before returning and refuses a
+    /// callback's attempt to admit another window during teardown.
+    #[test]
+    fn owner_quit_closes_live_windows_and_refuses_reentrant_admission() {
+        use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, IsWindow};
+
+        {
+            let platform = crate::WindowsPlatform::try_new().expect("platform");
+            let retained = Rc::new(RefCell::new(Vec::new()));
+            let keep = Rc::clone(&retained);
+            let refused = Rc::new(Cell::new(0));
+            let refusals = Rc::clone(&refused);
+            let app = crate::testing::app::on_ready(move |owner| {
+                let owner = Rc::new(owner);
+                for _ in 0..2 {
+                    let handler = RecordingWindowHandler::new();
+                    let window = owner
+                        .open_window(
+                            WindowOptions::default().with_visible(false),
+                            handler.clone(),
+                        )
+                        .expect("open before retirement")
+                        .try_ready()
+                        .expect("synchronous bootstrap");
+                    let closing_owner = Rc::clone(&owner);
+                    let refusals = Rc::clone(&refusals);
+                    handler.react_to_close(move || {
+                        let opened = closing_owner.open_window(
+                            WindowOptions::default().with_visible(false),
+                            RecordingWindowHandler::new(),
+                        );
+                        if opened.is_err() {
+                            refusals.set(refusals.get() + 1);
+                        }
+                        assert!(
+                            opened.is_err(),
+                            "retiring owner refuses reentrant admission"
+                        );
+                    });
+                    keep.borrow_mut().push((window, handler));
+                }
+                owner.quit();
+                Ok(())
+            });
+            Box::new(platform).run(app).expect("owner loop exits");
+            let windows = retained.take();
+            let mut closed_before_return = true;
+            for (window, handler) in &windows {
+                let hwnd = HWND(window.id().0 as *mut _);
+                // SAFETY: scalar HWND from this test's live owner receipt;
+                // cleanup stays on its creating thread, including RED runs.
+                let exists = unsafe { IsWindow(Some(hwnd)) }.as_bool();
+                closed_before_return &= !exists && handler.count(&HandlerCall::Closed) == 1;
+                if exists {
+                    // SAFETY: failed-control cleanup of this test's own HWND,
+                    // before assertions unwind and leave native state behind.
+                    unsafe { DestroyWindow(hwnd) }.expect("control cleanup");
+                }
+            }
+            assert!(
+                closed_before_return,
+                "quit returned with live native windows"
+            );
+            assert_eq!(refused.get(), 2, "both callbacks observe closed admission");
+        }
     }
 
     #[test]

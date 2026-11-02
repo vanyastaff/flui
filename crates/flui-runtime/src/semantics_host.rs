@@ -64,6 +64,9 @@ impl std::fmt::Debug for SemanticsHandle {
 /// no process-wide instance and no `instance()`/`is_initialized()` accessor —
 /// a presentation always has one from construction.
 pub struct SemanticsHost {
+    /// Explicit CPU baseline control, never present in a production build.
+    #[cfg(feature = "testing")]
+    pub(crate) collection_suppressed: AtomicBool,
     /// Number of active `SemanticsHandle`s.
     handle_count: Arc<AtomicUsize>,
 
@@ -99,6 +102,8 @@ impl SemanticsHost {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "testing")]
+            collection_suppressed: AtomicBool::new(false),
             handle_count: Arc::new(AtomicUsize::new(0)),
             platform_semantics_enabled: Arc::new(AtomicBool::new(false)),
             full_republish_requested: Arc::new(AtomicBool::new(false)),
@@ -115,6 +120,10 @@ impl SemanticsHost {
     /// - There are outstanding `SemanticsHandle`s
     #[must_use]
     pub fn semantics_enabled(&self) -> bool {
+        #[cfg(feature = "testing")]
+        if self.collection_suppressed.load(Ordering::Relaxed) {
+            return false;
+        }
         // Relaxed: this flag/counter pair only gates whether semantics
         // collection runs. No semantics data is published through these
         // atomics (the tree lives behind its own locks), and the frame loop

@@ -290,6 +290,10 @@ mod gpu_backend;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
+
+/// Explicit swapchain readback controls for native qualification only.
+#[cfg(feature = "testing")]
+pub use renderer::testing;
 mod image_source_filter;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, and the gradient/shadow instances.

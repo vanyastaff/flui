@@ -301,11 +301,6 @@ where
             runtime.dedicated_backend = backend;
             runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
             runtime.adopt_run_services(&services);
-            #[cfg(feature = "testing")]
-            if matches!(backend, DedicatedBackend::Headless) {
-                runtime.window_renderers =
-                    super::WindowRenderers::StandIn(super::StandInRenderers::default());
-            }
         });
         super::host::install_exit_policy_hook(crate::app::ExitPolicy::OnLastWindowClosed);
         super::route_quit(super::owner_dispatch::request_quit_notification);

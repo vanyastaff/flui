@@ -69,6 +69,11 @@ mod owner_dispatch;
 // outcome are portable and its tests are host-run, so a
 // `cfg(target_os = "android")` here would hide the whole file from every gate
 // this host can run.
+#[cfg(all(
+    feature = "testing",
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
+pub(crate) mod native_frames;
 mod retry_backoff;
 mod secondary_window;
 #[cfg(any(

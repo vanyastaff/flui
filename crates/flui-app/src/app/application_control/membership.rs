@@ -80,6 +80,13 @@ pub(super) struct Membership {
 }
 
 impl Membership {
+    #[cfg(feature = "testing")]
+    pub(super) fn retained_payload_bytes(&self) -> u128 {
+        self.members
+            .values()
+            .map(|member| member.retained_bytes as u128)
+            .sum::<u128>()
+    }
     pub(super) fn new(proxy: PlatformProxy) -> Self {
         Self {
             run: RunId(Arc::new(())),

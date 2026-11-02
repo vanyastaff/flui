@@ -874,6 +874,36 @@ fn join_ok_after_close(started: Started) {
 }
 
 #[test]
+fn post_frame_device_recovery_repaints_the_recreated_surface_without_new_input() {
+    let run = HeadlessRun::start(Application::new(|_| flui_widgets::SizedBox::square(32.0)));
+    run.run_owner_turn();
+    let window = run.open_windows().pop().expect("initial window");
+    let renderer = run.renderer(&window).expect("initial renderer");
+    let before = renderer.frames_presented();
+    assert!(before > 0, "initial surface presented");
+    renderer.lose_device_after_present();
+    window.simulate_resize(640.0, 480.0);
+    for _ in 0..4 {
+        if let Some(deadline) = run.wake_deadline() {
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(100)),
+            );
+        }
+        run.run_owner_turn();
+    }
+    assert_eq!(renderer.recovery_attempts(), 1, "post-frame rebuild ran");
+    assert!(
+        renderer.frames_presented() >= before + 2,
+        "the newly recreated surface needs its own frame, even after a successful old-surface present"
+    );
+    window.simulate_close();
+    run.run_owner_turn();
+    join_ok(run);
+}
+
+#[test]
 fn runner_close() {
     crate::run_table(
         "runner_close",

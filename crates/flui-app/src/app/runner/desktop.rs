@@ -174,6 +174,23 @@ where
         .dev_agent
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+    #[cfg(feature = "testing")]
+    let qualification_semantics = match &renderers {
+        super::window_renderer::WindowRenderers::Qualification(frames)
+            if frames.requests_semantics() == Some(true) =>
+        {
+            ui_runtime.semantics_agent(ui_runtime.presentation_id())
+        }
+        super::window_renderer::WindowRenderers::Qualification(frames)
+            if frames.requests_semantics() == Some(false) =>
+        {
+            assert!(ui_runtime.suppress_semantics_for_test(ui_runtime.presentation_id()));
+            None
+        }
+        super::window_renderer::WindowRenderers::Gpu
+        | super::window_renderer::WindowRenderers::StandIn(_)
+        | super::window_renderer::WindowRenderers::Qualification(_) => None,
+    };
 
     // 3c. Construct the per-window owner and its bounded command inbox.
     // The wake is the existing chain: `wake_frame` sets
@@ -256,6 +273,14 @@ where
     install_input_wiring(owner_dispatch, window.as_ref());
 
     // Install frame resources once; native deliveries carry only their binding.
+    #[cfg(feature = "testing")]
+    let qualification_frame = match &renderers {
+        super::window_renderer::WindowRenderers::Qualification(frames) => {
+            frames.for_window(window.id())
+        }
+        super::window_renderer::WindowRenderers::Gpu
+        | super::window_renderer::WindowRenderers::StandIn(_) => None,
+    };
     installation.dev_agent(config.dev_agent.clone().zip(agent_window));
     let frame = installation
         .frame_driver(super::frame_driver::FrameDriver::Desktop(
@@ -265,13 +290,25 @@ where
                 deadlines,
                 reveal_window: Rc::downgrade(&window),
                 device_retry,
+                #[cfg(feature = "testing")]
+                qualification: qualification_frame.clone(),
+                #[cfg(feature = "testing")]
+                _qualification_semantics: qualification_semantics,
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
             source: Arc::new(error),
         })?;
     let binding = frame.binding;
+    #[cfg(feature = "testing")]
+    if let super::window_renderer::WindowRenderers::Qualification(frames) = &renderers {
+        frames.bind(window.id(), binding.address());
+    }
     super::window_routes::WindowRoutes::of(&*window).route_frame_requested(move |request| {
+        #[cfg(feature = "testing")]
+        if let Some(frame) = &qualification_frame {
+            frame.received(request);
+        }
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
     });
 
@@ -413,6 +450,10 @@ pub(super) struct DesktopFrameDriver {
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
     device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
+    #[cfg(feature = "testing")]
+    qualification: Option<super::native_frames::NativeFrame>,
+    #[cfg(feature = "testing")]
+    _qualification_semantics: Option<flui_runtime::ui_runtime::SemanticsAgent>,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
@@ -607,6 +648,15 @@ impl DesktopFrameDriver {
         if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
             ui_runtime.mark_primary_needs_full_repaint();
         }
+        #[cfg(feature = "testing")]
+        if let Some(frame) = &self.qualification {
+            frame.start_transaction(
+                ui_runtime
+                    .window_display(presentation)
+                    .and_then(|display| display.refresh_period)
+                    .map(flui_platform::RefreshPeriod::get),
+            );
+        }
         let outcome = if let Some(outcome) =
             pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now)
         {
@@ -621,6 +671,11 @@ impl DesktopFrameDriver {
                 next_attempt_at: None,
             }
         };
+
+        #[cfg(feature = "testing")]
+        if let Some(frame) = &self.qualification {
+            frame.finish_transaction();
+        }
 
         // Frame-pacing fallback (ADR-0058), replacing the fixed
         // 16 ms sleep this thread used to take here. A frame that

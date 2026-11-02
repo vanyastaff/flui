@@ -33,6 +33,15 @@ use crate::app::runner::{
 };
 use crate::app::{AppHandle, AppRunError, Application};
 
+pub use crate::app::runner::native_frames::{
+    NativeFrame, NativeFrameSample, NativeFrameSnapshot, NativeFrames,
+};
+
+/// Payload bytes still charged to the bounded cross-owner document transport,
+/// including unread completions. Excludes renderer/GPU memory and fixture queues.
+pub fn retained_owner_payload_bytes(app: &crate::AppHandle) -> u128 {
+    app.ingress.retained_payload_bytes()
+}
 pub use crate::app::runner::{StandInRenderer, TeardownStep};
 
 /// The process exit code of a run that ended with a panic: the code Rust's
@@ -58,6 +67,18 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    run_native_with_renderers(application, WindowRenderers::Gpu)
+}
+
+#[cfg(windows)]
+pub(crate) fn run_native_with_renderers<V, F>(
+    application: Application<V, F>,
+    renderers: WindowRenderers,
+) -> Result<(), AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
     start_loop(
         application,
         || {
@@ -66,7 +87,7 @@ where
                 .map_err(AppRunError::from_platform)
         },
         Rc::default(),
-        WindowRenderers::Gpu,
+        renderers,
         crate::app::runner::dedicated::DedicatedBackend::Win32Qualification,
     )?
     .finish()
