@@ -483,6 +483,22 @@ impl Capture {
             while ring.frames.len() > self.shared.max_frames {
                 ring.frames.pop_front();
             }
+            // The span budget bounds the retained frames' contents too, oldest first; the frame
+            // records themselves stay up to `max_frames`, and sinks below get the whole frame.
+            let mut excess = ring
+                .frames
+                .iter()
+                .map(|frame| frame.spans.len())
+                .sum::<usize>()
+                .saturating_sub(self.shared.max_spans);
+            for retained in &mut ring.frames {
+                if excess == 0 {
+                    break;
+                }
+                let dropped = excess.min(retained.spans.len());
+                retained.spans.drain(..dropped);
+                excess -= dropped;
+            }
         }
         // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
         let sinks: Vec<_> = self.shared.sinks.lock().clone();
@@ -1038,6 +1054,36 @@ mod tests {
             assert_eq!(frames[0].spans()[0].partition().runtime(), Some(r));
         }
         assert_eq!(capture.runtimes(), [Some(runtime(1)), Some(runtime(2))]);
+    }
+
+    /// The span budget bounds what the retained frames hold, not only the flat span list.
+    #[test]
+    fn the_span_capacity_bounds_the_retained_frames_contents() {
+        let capture = Capture::with_capacity(10, 2);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let delivered = Arc::clone(&delivered);
+            capture.on_frame(move |_, frame| delivered.lock().push(frame.spans().len()));
+        }
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            for _ in 0..4 {
+                frame_of(
+                    runtime(1),
+                    &[presentation(1), presentation(2), presentation(3)],
+                );
+            }
+        });
+
+        let retained: usize = capture.frames().iter().map(|f| f.spans().len()).sum();
+        assert!(retained <= 2, "retained {retained} child spans");
+        assert_eq!(capture.frames().len(), 4, "the frame records are kept");
+        assert!(
+            delivered.lock().iter().all(|&count| count > 2),
+            "a live consumer still sees every span of the frame: {:?}",
+            delivered.lock()
+        );
     }
 
     #[test]

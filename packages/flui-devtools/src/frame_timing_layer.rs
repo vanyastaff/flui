@@ -200,10 +200,14 @@ impl FrameTimingLayer {
             if !frame.is_outermost() {
                 return;
             }
-            if !take_if_equal(&opened, frame.id()) {
+            // Held through ingestion: another frame opening meanwhile must not begin over this
+            // frame's measurements.
+            let mut opened = opened.lock();
+            if *opened != Some(frame.id()) {
                 // Not the frame the profiler was reserved for.
                 return;
             }
+            let _release = Release(&mut opened);
             if accepts(frame.span().partition().runtime()) {
                 profiler.ingest(frame);
             } else {
@@ -217,16 +221,12 @@ impl FrameTimingLayer {
     }
 }
 
-/// Clears the frame the profiler began if `id` is that frame: another frame closing must not
-/// abandon it.
-#[allow(clippy::must_use_candidate)]
-fn take_if_equal(opened: &Mutex<Option<u64>>, id: u64) -> bool {
-    let mut opened = opened.lock();
-    if *opened == Some(id) {
-        *opened = None;
-        true
-    } else {
-        false
+/// Releases the profiler's reservation when the admitted frame is done with it, however that goes.
+struct Release<'a>(&'a mut Option<u64>);
+
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        *self.0 = None;
     }
 }
 
