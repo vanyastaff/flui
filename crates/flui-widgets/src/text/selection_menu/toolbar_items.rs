@@ -119,8 +119,8 @@ type ButtonBuilder = Rc<dyn Fn(&ToolbarItemsController, &dyn BuildContext) -> Bo
 
 /// A toolbar's commands in one row, as many leading ones as fit, and an
 /// overflow button when some are left over. The button shows the left-over
-/// items in a column in place of the row (more columns beside it in a short
-/// room), then takes it back.
+/// items in a column in place of the row (more columns beside it, or runs
+/// across, in a small room), then takes it back.
 ///
 /// The items and the button are laid out at their own width in the room
 /// the toolbar is given; an item left out is not painted, not hit and not

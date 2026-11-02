@@ -31,8 +31,9 @@ semantics (`visits_child_for_semantics`). An offstage child, a `RenderWrap` or
 a layout delegate cannot hide a child by what layout decides. The row keeps its
 first item even when that item and the button do not fit, laying it out again in
 what the button leaves. A short room spreads the expanded column into more
-columns, and the expanded split holds back the collapsed button's width too, so
-every command stays reachable. Each layout writes the row length to the
+columns, or into runs across the room when those are too wide, and the expanded
+split holds back the collapsed button's width too, so every command stays
+reachable. Each layout writes the row length to the
 `ToolbarItemsSplit` it holds, so the widget above can offer the left-over items
 another way after the frame. Harness row
 `harness_toolbar_items_hide_what_does_not_fit_behind_the_button` checks the

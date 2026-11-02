@@ -8117,7 +8117,8 @@ fn harness_toolbar_items_hide_what_does_not_fit_behind_the_button() {
 
 /// Every command stays reachable: a first item too wide beside the button
 /// gives up the button's room; a column taller than the room continues in
-/// another column beside it; and a back button narrower than "more" moves
+/// another column beside it, or in runs across the room when the columns
+/// are wider than it too; and a back button narrower than "more" moves
 /// no item into a row that does not show.
 fn harness_toolbar_items_keep_every_command_reachable() {
     let sized =
@@ -8175,6 +8176,28 @@ fn harness_toolbar_items_keep_every_command_reachable() {
         Offset::new(0.0, 20.0),
         "columns follow the reading direction"
     );
+
+    // Columns wider than the room as well: the expanded items run across
+    // it instead, in rows of the button and b, then c and d, then e to h.
+    let mixed = vec![
+        ("a", 60.0),
+        ("b", 40.0),
+        ("c", 60.0),
+        ("d", 40.0),
+        ("e", 60.0),
+        ("f", 10.0),
+        ("g", 10.0),
+        ("h", 10.0),
+        ("more", 20.0),
+    ];
+    let mut run = RenderTester::mount(toolbar(true, mixed))
+        .with_constraints(short)
+        .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(100.0, 60.0));
+    assert_eq!(run.dry_layout(run.root(), short), Size::new(100.0, 60.0));
+    assert_eq!(run.offset(run.id("b")), Offset::new(20.0, 0.0));
+    assert_eq!(run.offset(run.id("h")), Offset::new(80.0, 40.0));
+    assert_eq!(run.hit_first(85.0, 50.0), Some(run.id("h")));
 
     // Three 40-wide items in 100 beside a 30 "more" leave one in the row;
     // expanded with a 20 "back", the column still starts at the second.

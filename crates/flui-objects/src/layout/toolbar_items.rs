@@ -14,12 +14,14 @@
 //! Collapsed, the run and then the button (when items are left over) stand
 //! in a row in reading order, as tall as the tallest of them. Expanded, the
 //! button and then the left-over items stand in a column, and in more
-//! columns beside it, in reading order, where the maximum height runs out;
-//! each child is laid out again at its column's width so its whole row
-//! answers a touch. The expanded split holds back the wider of the button
-//! now and the button of the last collapsed layout, so a back button
-//! narrower than "more" leaves no item in a row that does not show. With
-//! nothing left over there is no button and expanding changes nothing.
+//! columns beside it, in reading order, where the maximum height runs out,
+//! or in runs across the room, as a wrap would, when those columns are
+//! wider than it too. In a column each child is laid out again at the
+//! column's width so its whole row answers a touch. The expanded split
+//! holds back the wider of the button now and the button of the last
+//! collapsed layout, so a back button narrower than "more" leaves no item
+//! in a row that does not show. With nothing left over there is no button
+//! and expanding changes nothing.
 //!
 //! # Hidden children
 //!
@@ -354,6 +356,18 @@ impl RenderToolbarItems {
                 height += child;
             }
         }
+        let natural_width = columns
+            .iter()
+            .map(|column| {
+                column
+                    .iter()
+                    .map(|&i| sizes[i].width)
+                    .fold(0.0_f64, f64::max)
+            })
+            .sum::<f64>();
+        if columns.len() > 1 && natural_width > constraints.max_width {
+            return Ok(self.runs(constraints, shown, sizes, row_len, button_width));
+        }
         let mut placed = Vec::with_capacity(shown.len());
         let mut spans = Vec::with_capacity(columns.len());
         let (mut content_width, mut content_height) = (0.0_f64, 0.0_f64);
@@ -393,6 +407,63 @@ impl RenderToolbarItems {
             clipped: content_width > size.width || content_height > size.height,
             button_width,
         })
+    }
+
+    /// The expanded toolbar where its columns are wider than the room as
+    /// well: `shown` in runs across the maximum width, each child at its own
+    /// size, starting another run under the last where the next would pass
+    /// it. Only a room smaller than the commands themselves clips them.
+    fn runs(
+        &self,
+        constraints: BoxConstraints,
+        shown: &[usize],
+        sizes: &[Size],
+        row_len: usize,
+        button_width: f64,
+    ) -> Arrangement {
+        let mut runs: Vec<Vec<usize>> = vec![Vec::new()];
+        let mut width = 0.0;
+        for &i in shown {
+            let child = sizes[i].width;
+            let run = runs.last_mut().expect("BUG: runs starts with one");
+            if !run.is_empty() && width + child > constraints.max_width {
+                runs.push(vec![i]);
+                width = child;
+            } else {
+                run.push(i);
+                width += child;
+            }
+        }
+        let mut lines = Vec::with_capacity(runs.len());
+        let (mut content_width, mut content_height) = (0.0_f64, 0.0_f64);
+        for run in &runs {
+            let run_width = run.iter().map(|&i| sizes[i].width).sum::<f64>();
+            let run_height = run.iter().map(|&i| sizes[i].height).fold(0.0_f64, f64::max);
+            lines.push((content_height, run_height));
+            content_width = content_width.max(run_width);
+            content_height += run_height;
+        }
+        let size = constraints.constrain(Size::new(content_width, content_height));
+        let mut placed = Vec::with_capacity(shown.len());
+        for (run, (y, run_height)) in runs.iter().zip(lines) {
+            let mut x = 0.0;
+            for &i in run {
+                let child = sizes[i];
+                let dx = match self.text_direction {
+                    TextDirection::Ltr => x,
+                    TextDirection::Rtl => size.width - x - child.width,
+                };
+                placed.push((i, Offset::new(dx, y + (run_height - child.height) / 2.0)));
+                x += child.width;
+            }
+        }
+        Arrangement {
+            size,
+            placed,
+            row_len,
+            clipped: content_width > size.width || content_height > size.height,
+            button_width,
+        }
     }
 
     /// The row length a layout at `width` would choose, from the children's
