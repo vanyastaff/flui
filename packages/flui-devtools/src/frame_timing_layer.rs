@@ -187,9 +187,12 @@ impl FrameTimingLayer {
                 Arc::clone(&profiler),
             );
             capture.on_frame_open(move |_, opening| {
-                if opening.is_outermost() && accepts(opening.runtime()) {
+                // One frame at a time: the profiler is reserved for the frame it began until that
+                // frame closes, so an overlapping one cannot reset or ingest its measurements.
+                let mut opened = opened.lock();
+                if opened.is_none() && opening.is_outermost() && accepts(opening.runtime()) {
                     profiler.begin_frame();
-                    *opened.lock() = Some(opening.id());
+                    *opened = Some(opening.id());
                 }
             });
         }
@@ -197,11 +200,13 @@ impl FrameTimingLayer {
             if !frame.is_outermost() {
                 return;
             }
-            let runtime = frame.span().partition().runtime();
-            if accepts(runtime) {
-                take_if_equal(&opened, frame.id());
+            if !take_if_equal(&opened, frame.id()) {
+                // Not the frame the profiler was reserved for.
+                return;
+            }
+            if accepts(frame.span().partition().runtime()) {
                 profiler.ingest(frame);
-            } else if take_if_equal(&opened, frame.id()) {
+            } else {
                 profiler.abandon_frame();
             }
         });
@@ -585,6 +590,38 @@ mod tests {
         assert!(
             stats
                 .phase(crate::profiler::FramePhase::Custom("followed work"))
+                .is_some(),
+            "{stats:?}"
+        );
+    }
+
+    /// Two frames that name no runtime and overlap on different threads: the second must not reset
+    /// the first's measurements, nor take the profiler when it closes first.
+    #[test]
+    fn an_overlapping_unnamed_frame_does_not_disturb_the_admitted_one() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        let dispatch = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("admitted work")));
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        drop(tracing::debug_span!(target: "flui.frame", "frame").entered());
+                    });
+                });
+            });
+        });
+
+        let stats = profiler
+            .frame_stats()
+            .expect("the admitted frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("admitted work"))
                 .is_some(),
             "{stats:?}"
         );

@@ -63,14 +63,19 @@ impl<'runtime> PresentationSampling<'runtime> {
 
     fn run(&mut self, stage: SamplingStage, action: impl FnOnce(&mut RecoveryScope<'_>)) {
         let presentation = self.presentation.id();
+        // The stage's work is this presentation's, so it runs inside the presentation span. Opening
+        // the span is instrumentation: a subscriber that panics doing it is a failure of its own,
+        // and the stage's recovery work still runs.
+        let mut span = None;
         self.recovery
             .scope()
-            .run_classified(FailureClass::Unknown, |scope| {
-                // The animation and preparation work of this stage is this presentation's: a
-                // subscriber that panics opening the span fails the stage, which is contained.
-                let _presentation = super::frame::presentation_span(presentation).entered();
-                action(scope);
+            .run_classified(FailureClass::Unknown, |_| {
+                span = Some(super::frame::presentation_span(presentation).entered());
             });
+        self.recovery
+            .scope()
+            .run_classified(FailureClass::Unknown, action);
+        drop(span);
         if self.first.is_none()
             && let Some(class) = self.recovery.first_failure_class()
         {
