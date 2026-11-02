@@ -263,6 +263,22 @@ fn runner_teardown() {
                 "a_session_end_handler_panic_refuses",
                 a_session_end_handler_panic_refuses,
             ),
+            (
+                "session_end_flushes_the_registry_within_the_framework_budget",
+                session_end_flushes_the_registry_within_the_framework_budget,
+            ),
+            (
+                "session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code",
+                session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code,
+            ),
+            (
+                "session_end_during_a_write_writes_the_latest_registry_bytes",
+                session_end_during_a_write_writes_the_latest_registry_bytes,
+            ),
+            (
+                "session_end_never_blocks_for_work_in_progress",
+                session_end_never_blocks_for_work_in_progress,
+            ),
         ],
     );
 }
@@ -2005,4 +2021,369 @@ fn user_panic_exit_code_matrix() {
             ),
         ],
     );
+}
+
+/// The document the session-end rows store: one line of text.
+#[derive(Debug, PartialEq)]
+struct Note(String);
+
+impl flui_view::persist::Document for Note {
+    const NAME: flui_platform::StorageName = flui_platform::StorageName::from_static("notes");
+    const VERSION: u32 = 1;
+
+    fn initial() -> Self {
+        Self(String::new())
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.clone().into_bytes()
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, flui_view::persist::DecodeError> {
+        String::from_utf8(body.to_vec())
+            .map(Self)
+            .map_err(|error| flui_view::persist::DecodeError::new(error.to_string()))
+    }
+}
+
+/// What a [`NoteView`] hands its test: the document it opened, the
+/// application code it ran and what to run from its next `build`.
+#[derive(Default)]
+struct NoteShared {
+    notes: Option<flui_view::persist::Persisted<Note>>,
+    rebuild: Option<flui_view::RebuildHandle>,
+    /// Lifecycle states and host notices the window's observers were told.
+    observed: usize,
+    /// Run once from the next `build`, while the window's UI runtime is
+    /// checked out to its frame.
+    during_build: Option<Box<dyn FnOnce()>>,
+    lifecycle: Option<flui_view::LifecycleSubscription>,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+/// A window root that opens [`Note`] and counts what its observers are told.
+#[derive(Clone)]
+struct NoteView(Rc<RefCell<NoteShared>>);
+
+struct NoteViewState(NoteView);
+
+impl flui_view::StatefulView for NoteView {
+    type State = NoteViewState;
+
+    fn create_state(&self) -> Self::State {
+        NoteViewState(self.clone())
+    }
+}
+
+impl flui_view::ViewState<NoteView> for NoteViewState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let lifecycle = ctx.lifecycle_handle().expect("a bound lifecycle");
+        let counted = Rc::clone(&self.0.0);
+        let (_, subscription) = lifecycle
+            .subscribe(move |_| counted.borrow_mut().observed += 1)
+            .expect("the lifecycle is open");
+        let counted = Rc::clone(&self.0.0);
+        let notices = lifecycle
+            .subscribe_notices(move |_| counted.borrow_mut().observed += 1)
+            .expect("the lifecycle is open");
+        let mut shared = self.0.0.borrow_mut();
+        shared.notes = Some(flui_view::persist::Persisted::<Note>::open(ctx));
+        shared.rebuild = Some(ctx.rebuild_handle());
+        shared.lifecycle = Some(subscription);
+        shared.notices = Some(notices);
+    }
+
+    fn build(
+        &self,
+        _view: &NoteView,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let during = self.0.0.borrow_mut().during_build.take();
+        if let Some(during) = during {
+            during();
+        }
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for NoteView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A run of one [`NoteView`] window whose IO runs only when the test drives
+/// `pools`, storing under `root`, with [`Note`] loaded.
+struct NoteRun {
+    run: flui_app::testing::HeadlessRunHandle,
+    events: flui_native::HeadlessHostEvents,
+    shared: Rc<RefCell<NoteShared>>,
+    pools: flui_runtime::execution::DeterministicExecutors,
+    root: tempfile::TempDir,
+}
+
+impl NoteRun {
+    fn start() -> Self {
+        let root = tempfile::tempdir().expect("a temporary data root");
+        let pools = flui_runtime::execution::DeterministicExecutors::new();
+        let shared = Rc::new(RefCell::new(NoteShared::default()));
+        let view = NoteView(Rc::clone(&shared));
+        let application = Application::new(move |_| view.clone()).with_config(
+            AppConfig::new()
+                .with_executors(pools.host_executors())
+                .with_storage_dir(
+                    flui_platform::AppDataDir::try_new("session-end")
+                        .expect("a plain name is a valid directory"),
+                )
+                .with_exit_policy(ExitPolicy::OnLastWindowClosed),
+        );
+        let platform = flui_native::HeadlessPlatform::new().with_data_root(root.path());
+        let events = platform.host_events();
+        let run = HeadlessRun::start_on(application, platform);
+        run.run_owner_turn();
+        let notes = shared
+            .borrow()
+            .notes
+            .clone()
+            .expect("the window is mounted");
+        let mut load = std::pin::pin!(notes.load());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let loaded = (0..100).find_map(|_| {
+            pools.run_until_idle();
+            run.run_owner_turn();
+            match std::future::Future::poll(load.as_mut(), &mut context) {
+                std::task::Poll::Ready(loaded) => Some(loaded),
+                std::task::Poll::Pending => None,
+            }
+        });
+        loaded
+            .expect("the load finishes once its read runs")
+            .expect("an absent file loads the initial value");
+        Self {
+            run,
+            events,
+            shared,
+            pools,
+            root,
+        }
+    }
+
+    fn notes(&self) -> flui_view::persist::Persisted<Note> {
+        self.shared.borrow().notes.clone().expect("mounted")
+    }
+
+    /// The stored bytes of [`Note`], if its file is on disk.
+    /// Whether the stored file holds `text` as its body.
+    fn stores(&self, text: &str) -> bool {
+        holds(walk_for_notes(self.root.path()), text)
+    }
+
+    /// Run the IO pool on another thread from `after` on, as a pool whose
+    /// threads are busy until then, until the returned driver is dropped.
+    fn drive_io_after(&self, after: Duration) -> IoDriver {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pools = self.pools.clone();
+        let stopped = std::sync::Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(after);
+            while !stopped.load(std::sync::atomic::Ordering::Acquire) {
+                pools.run_until_idle();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        IoDriver {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+/// Drives the IO pool on its own thread until dropped.
+struct IoDriver {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for IoDriver {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// How long the IO pool stays busy in the session-end rows: long enough that
+/// a session end that does not wait for the write returns first.
+const IO_BUSY: Duration = Duration::from_millis(200);
+
+/// The `Ending` phase writes what the documents published before it
+/// returns, waiting for a write already in flight, and the framework's share
+/// stays within `SESSION_END_BUDGET` (ADR-0260), even when the write never
+/// finishes.
+///
+/// Red-check: skip the flush in the `Ending` phase — the phase returns before
+/// the busy pool writes, and the file is not on disk.
+pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
+    let note = NoteRun::start();
+    note.notes()
+        .set(Note("written at the session end".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    let driver = note.drive_io_after(IO_BUSY);
+    assert_eq!(
+        note.run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed
+    );
+    let started = Instant::now();
+    note.run.end_session(SessionEndPhase::Ending);
+    let took = started.elapsed();
+    assert!(
+        note.stores("written at the session end"),
+        "the Ending phase returned with the published bytes on disk"
+    );
+    assert!(
+        took < flui_testing::SESSION_END_BUDGET,
+        "the flush took {took:?}"
+    );
+    note.run.run_owner_turn();
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
+
+    // A pool that never runs the write costs the session end no more than
+    // its budget: the write is left to the pool, reported unfinished.
+    let note = NoteRun::start();
+    note.notes()
+        .set(Note("never written".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    let started = Instant::now();
+    note.run.end_session(SessionEndPhase::Ending);
+    let took = started.elapsed();
+    assert!(!note.stores("never written"));
+    assert!(
+        took < flui_testing::SESSION_END_BUDGET + Duration::from_secs(1),
+        "a stuck write held the session end for {took:?}"
+    );
+}
+
+/// A session end reported while the window's UI runtime is checked out
+/// to its frame still writes the published bytes, and runs none of the
+/// window's observers while the runtime is out (ADR-0260 §3).
+///
+/// Red-check: skip the flush while a runtime is checked out — the bytes are
+/// not on disk when the phase returns.
+pub(crate) fn session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code()
+{
+    let note = NoteRun::start();
+    note.notes()
+        .set(Note("written while checked out".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    let observed_before = note.shared.borrow().observed;
+    let driver = note.drive_io_after(IO_BUSY);
+    let inside = Rc::new(RefCell::new(None));
+    let (answered, events, root) = (
+        Rc::clone(&inside),
+        note.events.clone(),
+        note.root.path().to_owned(),
+    );
+    let shared = Rc::downgrade(&note.shared);
+    note.shared.borrow_mut().during_build = Some(Box::new(move || {
+        events.session_end(SessionEndPhase::Query);
+        events.session_end(SessionEndPhase::Ending);
+        let observed = shared
+            .upgrade()
+            .and_then(|shared| shared.try_borrow().ok().map(|shared| shared.observed));
+        let stored = walk_for_notes(&root);
+        answered.replace(Some((observed, stored)));
+    }));
+    let rebuild = note.shared.borrow().rebuild.clone().expect("mounted");
+    rebuild.schedule(flui_view::RebuildReason::StateChange);
+    note.run.run_owner_turn();
+    let (observed, stored) = inside.take().expect("the build ran");
+    assert_eq!(
+        observed,
+        Some(observed_before),
+        "no observer ran while the runtime was checked out"
+    );
+    assert!(
+        holds(stored, "written while checked out"),
+        "the bytes were on disk when the Ending phase returned"
+    );
+    note.run.run_owner_turn();
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
+}
+
+/// The stored bytes of [`Note`] under `root`, if its file is there.
+fn walk_for_notes(root: &std::path::Path) -> Option<Vec<u8>> {
+    std::fs::read_dir(root).ok()?.find_map(|entry| {
+        let path = entry.ok()?.path();
+        if path.is_dir() {
+            walk_for_notes(&path)
+        } else if path.file_name()? == "notes" {
+            std::fs::read(path).ok()
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether `stored` holds `text` as the body after its header line.
+fn holds(stored: Option<Vec<u8>>, text: &str) -> bool {
+    stored.is_some_and(|bytes| bytes.ends_with(format!("\n{text}").as_bytes()))
+}
+
+/// A session end that comes while a document writes an older value stores
+/// the latest one: the flush waits for the write in flight, then writes the
+/// bytes published after it (ADR-0259 §5).
+///
+/// Red-check: let the flush skip a write in flight instead of waiting for it —
+/// the phase returns before the busy pool writes, and neither value is on disk.
+pub(crate) fn session_end_during_a_write_writes_the_latest_registry_bytes() {
+    let note = NoteRun::start();
+    let notes = note.notes();
+    notes
+        .set(Note("older".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    notes
+        .set(Note("latest".to_owned()))
+        .expect("the document takes a later value while the first writes");
+    note.run.run_owner_turn();
+    let driver = note.drive_io_after(IO_BUSY);
+    note.run.end_session(SessionEndPhase::Query);
+    note.run.end_session(SessionEndPhase::Ending);
+    assert!(note.stores("latest"), "the latest value is on disk");
+    note.run.run_owner_turn();
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
+}
+
+/// A write in flight does not hold up a session end: the query proceeds,
+/// since the flush writes the published bytes; only a failed write, which
+/// waits for the user's decision, refuses it (ADR-0259 §2).
+///
+/// Red-check: let the document's write hold refuse a session end — the query
+/// answers `Block`.
+pub(crate) fn session_end_never_blocks_for_work_in_progress() {
+    let note = NoteRun::start();
+    note.notes()
+        .set(Note("in progress".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    assert_eq!(
+        note.notes().status(),
+        flui_view::persist::SaveStatus::Saving
+    );
+    assert_eq!(
+        note.run.end_session(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed,
+        "a write in flight lets the session end"
+    );
+    note.run.end_session(SessionEndPhase::Cancelled);
+    let driver = note.drive_io_after(Duration::ZERO);
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
 }
