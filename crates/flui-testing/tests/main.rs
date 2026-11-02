@@ -49,6 +49,8 @@ mod layout_builder_seam;
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
+#[path = "memory_storage.rs"]
+mod memory_storage;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
@@ -82,6 +84,8 @@ mod timer;
 mod window_commands;
 #[path = "window_conformance.rs"]
 mod window_conformance;
+#[path = "window_insets.rs"]
+mod window_insets;
 #[path = "window_scale_factor.rs"]
 mod window_scale_factor;
 
@@ -196,6 +200,8 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
+            ("window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time", window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time as fn()),
+            ("window_insets::reported_insets_reach_their_media_query_fields", window_insets::reported_insets_reach_their_media_query_fields as fn()),
             ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
             ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
             ("multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement", multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement as fn()),
@@ -279,6 +285,10 @@ fn capability_seam() {
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),
             (
+                "capability_seam::a_concealed_write_reaches_the_host_marked",
+                capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
+            ),
+            (
                 "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
                 capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
             ),
@@ -290,6 +300,27 @@ fn capability_seam() {
             (
                 "capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped",
                 capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
+            ),
+            (
+                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
+                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
+            ),
+            (
+                "capability_seam::each_runtime_asks_for_its_own_read",
+                capability_seam::each_runtime_asks_for_its_own_read as fn(),
+            ),
+            (
+                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
+                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
+            ),
+            (
+                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
+                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
+                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
+                    as fn(),
             ),
             (
                 "capability_seam::a_dropped_handle_ends_its_subscription",
@@ -312,6 +343,11 @@ fn capability_seam() {
             (
                 "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
                 capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
+            ),
+            (
+                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
+                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
+                    as fn(),
             ),
             (
                 "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",

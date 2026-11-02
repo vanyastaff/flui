@@ -42,7 +42,7 @@ and temporary ancestor descriptions, and survives a graft-to-rebuild fallback.
 This prevents an overwritten receiver or omitted contributor from destroying
 captures before the complete pass verdict. Healthy temporary pins retire after
 publication and phase completion; no second geometry/topology cache is created.
-`harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+`harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
 checks forced merge, overwritten receiver callbacks, single and competing
 destructor risks, unchanged publication and retry.
 
@@ -1071,7 +1071,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Alternatives considered:**
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
-- Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
+- Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Inspect> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
 - Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored. Filed as future work.
 
@@ -1211,21 +1211,51 @@ today.
 
 ### A follower hit-tests at its last composited position
 
-**Rule.** `PipelineOwner` keeps `last_follower_offsets: FxHashMap<RenderId, Offset>` and
+**Rule.** `PipelineOwner` keeps `last_follower_transforms: FxHashMap<RenderId, Matrix4>` and
 `last_hidden_follower_ids`, per-frame byproducts like the retained layer tree and link registry.
 During paint the fragment composer records the `RenderId → LayerId` pair of each
-`Layer::Follower` it pushes. After paint, each follower's offset is resolved with the same
-`flui_layer::resolve_follower_offset` the GPU path uses; a follower that resolves to `None`
-(unlinked, `show_when_unlinked == false`) is recorded as hidden. The hit-test walk, gated on the
-tables being non-empty, pushes `Matrix4::translation(r)` on the result's transform stack and
-shifts the position by `-r` for a follower's subtree, and skips a hidden follower's subtree.
+`Layer::Follower` it pushes. After paint, each follower's transform is resolved with the same
+`flui_layer::resolve_follower_transform` the GPU path uses; a follower that resolves to `None`
+(unlinked with `show_when_unlinked == false`, its leader's anchor clipped out under
+`LeaderClip::Hide`, or a degenerate chain) is recorded as hidden. The hit-test walk, gated on the
+tables being non-empty, pushes the transform's inverse on the result's transform stack and maps
+the position through it for a follower's subtree, and skips a hidden follower's subtree.
 `RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
-signature is unchanged.
+signature is unchanged (`harness_follower_layer_hit_tests_under_a_scaled_leader`,
+`harness_follower_layer_hides_with_a_clipped_leader`). The subtree under a follower is recorded
+with its accumulated paint origin `o` baked in and the engine applies the resolved transform `M`
+outside it, while the walk has already subtracted `o`; the side table therefore stores
+`T(-o)·M·T(o)`, the mapping paint applies
+(`harness_follower_layer_hit_tests_where_its_offset_content_paints`).
 
-**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The offset is
+**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The transform is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
-`resolve_follower_offset`. Translation only, like the render path.
+`resolve_follower_transform`
+([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
+
+### A follower's build hears its leader's geometry after paint
+
+**Rule.** A follower whose build depends on its leader (a selection handle sized to its end's
+line) watches it: `PipelineCell::watch_leader(link, lane) -> LeaderWatch`, a `Listenable` with
+`geometry() -> Option<LeaderGeometry>`. The watches live in a registry the cell and the owner
+share, so registering never checks the owner out, and an owner replaced through `with_mut` takes
+the cell's registry. After paint commits a layer tree, the owner compares each live watch with
+`tree.leader(link)` and schedules a delivery into the watch's post-frame lane only when the value
+changed; the listeners run there, outside every render-tree borrow.
+
+**Why.** The leader's size is already in the committed layer tree, so a watch costs one lookup
+per live watch per painted frame and nothing while the value holds: a steady layout queues no
+delivery and requests no frame (`leader_watch::a_watch_hears_only_changes`). A per-frame
+post-frame check would request frames itself; a value each render object reports from
+`perform_layout` needs an opt-in per object and a flush hook beside it.
+
+**Lag and coalescing.** A change is known once paint commits, so a follower that rebuilds from it
+shows the new value one frame later; that frame paints the same value and queues nothing. The
+queued flag clears before the listeners run, so changes painted before the lane runs deliver once
+with the newest value (`changes_before_the_lane_runs_deliver_once`), and a change during a
+delivery, or after a listener panicked, queues the next
+(`a_panicking_listener_keeps_the_next_delivery`).
 
 ### Expanded hit areas are resolved after the visual walk
 
@@ -1301,7 +1331,7 @@ change or a window move, which need not composite a frame. Pinned by the widgets
 `a_degenerate_transform_drops_the_region_with_a_diagnostic`,
 `a_region_crossing_the_perspective_horizon_is_dropped`) and `harness_input_regions`.
 
-**Followers.** A follower's composite-resolved offset (`last_follower_offsets`, the shift
+**Followers.** A follower's composite-resolved transform (`last_follower_transforms`, the placement
 paint and hit-testing apply) is composed at the follower, and a follower resolved to hidden
 contributes nothing (`harness_input_regions_follow_a_follower_to_its_resolved_position`).
 Slivers report in their paint coordinates at their absolute paint size
@@ -1477,14 +1507,12 @@ recursive Box and recursive Sliver boundaries without disabling leak checking.
 Recursive rows register actual children and then lay out a healthy replacement
 after the failed subtree retires.
 
-`layout_reporting_retains_opaque_payloads` exercises an ordinary payload,
-a hostile destructor, competing field destructors, and a panicking subscriber
-alone or competing with the source aggregate. Each row then lays out a healthy
-replacement. Nonleaf rows attach actual children and use the public recursive
-layout driver. Sliver failures reach their Box host through the declared zero
-stand-in and degraded-geometry contract; replacement slivers provide their
-actual geometry. Bounded child processes isolate an old-source aggregate abort
-from the parent test runner.
+`layout_failures_are_reported_and_recovered_from` exercises an ordinary
+payload and a panicking subscriber on the leaf, Box and Sliver boundaries.
+Each row then lays out a healthy replacement. Nonleaf rows attach actual
+children and use the public recursive layout driver. Sliver failures reach their
+Box host through the declared zero stand-in and degraded-geometry contract;
+replacement slivers provide their actual geometry.
 
 ### Finite grid windows saturate index arithmetic before item bounds
 

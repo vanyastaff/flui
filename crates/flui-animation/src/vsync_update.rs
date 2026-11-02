@@ -81,7 +81,7 @@ impl Drop for VsyncPublication {
         }
         if std::thread::panicking() {
             // An intervening owner-storage failure takes precedence over a
-            // preparation failure. Its payload must not invoke user Drop.
+            // preparation failure; the preparation failure is dropped.
             let outgoing = self.recovery.replace(PanicRecovery::new());
             drop(outgoing);
         }
@@ -103,7 +103,7 @@ impl std::fmt::Debug for VsyncUpdate<'_> {
 
 impl<'owners> VsyncUpdate<'owners> {
     /// Move all staged owners, then deliver their wakes and unbound settles.
-    /// Failures in delivery retain the first failure and complete the accepted
+    /// Failures in delivery keep the first failure and complete the accepted
     /// tail before propagating. No owner stays on its former registry.
     ///
     /// # Errors

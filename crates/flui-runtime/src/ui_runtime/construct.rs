@@ -181,6 +181,7 @@ impl UiRuntime {
                 command_sender: sender_prototype.clone(),
                 capabilities: capabilities.clone(),
                 completions: owner_jobs.completions().clone(),
+                locals: owner_jobs.locals().clone(),
                 close: close.clone(),
                 clock: &clock,
                 text: text.clone(),
@@ -573,7 +574,7 @@ impl UiRuntime {
                 );
             }
         })) {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         let handler = handler.borrow().clone();
         if let Some(handler) = handler {
@@ -583,7 +584,7 @@ impl UiRuntime {
                 Ok(()) => match catch_unwind(AssertUnwindSafe(|| drop(handler))) {
                     Ok(()) => false,
                     Err(payload) => {
-                        flui_foundation::panic::retain_opaque_payload(payload);
+                        flui_foundation::panic::discard_payload(payload);
                         true
                     }
                 },
@@ -591,7 +592,7 @@ impl UiRuntime {
                     // Aggregate capture destruction is unsafe while preserving
                     // another failure; retain the opaque callback envelope.
                     std::mem::forget(handler);
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     true
                 }
             };
@@ -605,7 +606,7 @@ impl UiRuntime {
                     );
                 }))
             {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

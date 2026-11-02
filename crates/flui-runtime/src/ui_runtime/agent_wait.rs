@@ -15,7 +15,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     Condition, UnsettledCause, UnsettledReason, WaitOutcome, WaitParams, WindowId,
 };
-use flui_semantics::{Placement, WaitFacts, counts_frames, waits_on_events};
+use flui_semantics::{EventSet, Placement, WaitFacts, counts_frames};
 use web_time::Instant;
 
 use super::UiRuntime;
@@ -38,12 +38,19 @@ pub(crate) struct PendingWait {
     condition: Condition,
     /// Frames the owner presented since the wait began.
     frames: u64,
+    /// The kinds of event the window emitted since the wait began.
+    events: EventSet,
     /// On the presentation's clock.
     deadline: Instant,
     reply: ReplySender<WaitOutcome>,
 }
 
 impl PendingWait {
+    /// The window emitted an event of `kind`; the wait sees it at its next evaluation.
+    pub(crate) fn note_event(&mut self, kind: flui_protocol::EventKind) {
+        self.events.insert(kind);
+    }
+
     /// The window closed before the wait ended.
     pub(crate) fn abandon(self) {
         send_reply(&self.reply, None, Err(AgentError::PresentationGone));
@@ -69,16 +76,6 @@ impl UiRuntime {
             send_reply(&reply, None, Err(AgentError::PresentationGone));
             return false;
         };
-        if waits_on_events(&params.condition) {
-            send_reply(
-                &reply,
-                None,
-                Err(AgentError::InvalidArgument {
-                    reason: "a wait on events needs the event stream",
-                }),
-            );
-            return true;
-        }
         let timeout = params
             .timeout_ms
             .map_or(DEFAULT_WAIT, |ms| Duration::from_millis(ms).min(MAX_WAIT));
@@ -86,6 +83,7 @@ impl UiRuntime {
         let pending = PendingWait {
             condition: params.condition,
             frames: 0,
+            events: EventSet::EMPTY,
             deadline: now.checked_add(timeout).unwrap_or(now),
             reply,
         };
@@ -168,6 +166,7 @@ impl UiRuntime {
         let facts = WaitFacts {
             frames: wait.frames,
             settled: causes.is_empty(),
+            events: wait.events,
         };
         let evaluation = state.pipeline().with(|pipeline| {
             let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
@@ -187,7 +186,7 @@ impl UiRuntime {
             }
         };
         let holds = evaluation.as_ref().map_or_else(
-            || holds_without_a_tree(&wait.condition, facts),
+            || holds_without_a_tree(&wait.condition, facts, window),
             |evaluation| evaluation.holds,
         );
         let due = now >= wait.deadline;
@@ -254,12 +253,19 @@ impl UiRuntime {
 }
 
 /// Whether `condition` holds with no tree published: only frames and settledness can.
-fn holds_without_a_tree(condition: &Condition, facts: WaitFacts) -> bool {
+fn holds_without_a_tree(condition: &Condition, facts: WaitFacts, window: WindowId) -> bool {
     match condition {
         Condition::Settled => facts.settled,
         Condition::Frames(frames) => facts.frames >= u64::from(*frames),
-        Condition::All(all) => all.iter().all(|part| holds_without_a_tree(part, facts)),
-        Condition::Any(any) => any.iter().any(|part| holds_without_a_tree(part, facts)),
+        Condition::Event(filter) => {
+            filter.window.is_none_or(|named| named == window) && facts.events.contains(filter.kind)
+        }
+        Condition::All(all) => all
+            .iter()
+            .all(|part| holds_without_a_tree(part, facts, window)),
+        Condition::Any(any) => any
+            .iter()
+            .any(|part| holds_without_a_tree(part, facts, window)),
         _ => false,
     }
 }

@@ -82,7 +82,6 @@ impl HostFonts {
     }
 
     /// The locale the fallback order is picked for.
-    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn locale(&self) -> &str {
         &self.system.locale
     }

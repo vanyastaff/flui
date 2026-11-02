@@ -46,7 +46,13 @@ impl FixedHitBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for FixedHitBox {}
+impl flui_foundation::inspect::Inspect for FixedHitBox {
+    fn kind(&self) -> &'static str {
+        "FixedHitBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -72,7 +78,13 @@ struct SliverHost {
     constraints: SliverConstraints,
 }
 
-impl flui_foundation::Diagnosticable for SliverHost {}
+impl flui_foundation::inspect::Inspect for SliverHost {
+    fn kind(&self) -> &'static str {
+        "SliverHost"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SliverHost {
     type Arity = flui_foundation::Variable;

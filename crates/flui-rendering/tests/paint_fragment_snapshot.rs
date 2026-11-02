@@ -80,7 +80,13 @@ fn first_picture(tree: &LayerTree) -> &flui_painting::DisplayList {
 #[derive(Debug)]
 struct SimpleRow;
 
-impl flui_foundation::Diagnosticable for SimpleRow {}
+impl flui_foundation::inspect::Inspect for SimpleRow {
+    fn kind(&self) -> &'static str {
+        "SimpleRow"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SimpleRow {
     type Arity = Variable;

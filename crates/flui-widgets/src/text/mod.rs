@@ -18,7 +18,7 @@ mod text_store;
 pub use animated_default_text_style::AnimatedDefaultTextStyle;
 pub use controller::TextEditingController;
 pub use default_text_style::DefaultTextStyle;
-pub use editable_text::{EditableText, EditableTextState, SubmitCallback};
+pub use editable_text::{CaretHandle, EditableText, EditableTextState, SubmitCallback};
 pub use rich_text::RichText;
 pub use selection_area::{
     DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectError, SelectedText,

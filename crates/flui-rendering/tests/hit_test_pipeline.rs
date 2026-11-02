@@ -340,7 +340,13 @@ enum FailedHitScope {
 #[derive(Debug)]
 struct RecoveringHitParent(FailedHitScope);
 
-impl flui_foundation::Diagnosticable for RecoveringHitParent {}
+impl flui_foundation::inspect::Inspect for RecoveringHitParent {
+    fn kind(&self) -> &'static str {
+        "RecoveringHitParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for RecoveringHitParent {
     type Arity = flui_foundation::Variable;
@@ -458,7 +464,13 @@ fn contained_hit_path(
 
 #[derive(Debug)]
 struct PanickingHitLeaf;
-impl flui_foundation::Diagnosticable for PanickingHitLeaf {}
+impl flui_foundation::inspect::Inspect for PanickingHitLeaf {
+    fn kind(&self) -> &'static str {
+        "PanickingHitLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanickingHitLeaf {
     type Arity = flui_foundation::Leaf;
@@ -553,7 +565,13 @@ pub(crate) fn caught_zero_offset_driver_node_scope_restores_hit_coordinates() {
 /// `hit_test`.
 #[derive(Debug)]
 struct DefaultHitParent;
-impl flui_foundation::Diagnosticable for DefaultHitParent {}
+impl flui_foundation::inspect::Inspect for DefaultHitParent {
+    fn kind(&self) -> &'static str {
+        "DefaultHitParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for DefaultHitParent {
     type Arity = flui_foundation::Variable;
@@ -579,7 +597,13 @@ impl flui_rendering::traits::RenderBox for DefaultHitParent {
 /// A 40x40 leaf whose hit test panics with its message.
 #[derive(Debug)]
 struct PanicOnHit(&'static str);
-impl flui_foundation::Diagnosticable for PanicOnHit {}
+impl flui_foundation::inspect::Inspect for PanicOnHit {
+    fn kind(&self) -> &'static str {
+        "PanicOnHit"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanicOnHit {
     type Arity = flui_foundation::Leaf;
@@ -617,7 +641,13 @@ impl Drop for PanicsWhenDropped {
 /// metadata on its entry, so the entry holds the payload's last reference.
 #[derive(Debug)]
 struct BombMetadataLeaf;
-impl flui_foundation::Diagnosticable for BombMetadataLeaf {}
+impl flui_foundation::inspect::Inspect for BombMetadataLeaf {
+    fn kind(&self) -> &'static str {
+        "BombMetadataLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
     type Arity = flui_foundation::Leaf;
@@ -644,7 +674,13 @@ impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
 /// A single-child box that hit-tests its child, then panics.
 #[derive(Debug)]
 struct PanicsAfterChild;
-impl flui_foundation::Diagnosticable for PanicsAfterChild {}
+impl flui_foundation::inspect::Inspect for PanicsAfterChild {
+    fn kind(&self) -> &'static str {
+        "PanicsAfterChild"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanicsAfterChild {
     type Arity = flui_foundation::Single;
@@ -698,7 +734,13 @@ pub(crate) fn a_contained_hit_panic_retains_the_discarded_entries() {
 /// `hit_test`.
 #[derive(Debug)]
 struct PlacedParent(Vec<Offset>);
-impl flui_foundation::Diagnosticable for PlacedParent {}
+impl flui_foundation::inspect::Inspect for PlacedParent {
+    fn kind(&self) -> &'static str {
+        "PlacedParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PlacedParent {
     type Arity = flui_foundation::Variable;
@@ -727,7 +769,13 @@ impl flui_rendering::traits::RenderBox for PlacedParent {
 /// A 20x20 leaf that never takes a hit.
 #[derive(Debug)]
 struct NeverHit;
-impl flui_foundation::Diagnosticable for NeverHit {}
+impl flui_foundation::inspect::Inspect for NeverHit {
+    fn kind(&self) -> &'static str {
+        "NeverHit"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for NeverHit {
     type Arity = flui_foundation::Leaf;
@@ -941,7 +989,13 @@ pub(crate) fn nested_tiny_transforms_emit_the_correct_local_hit_point() {
 
 #[derive(Debug)]
 struct RefusalHitParent(Option<flui_foundation::geometry::Matrix4>);
-impl flui_foundation::Diagnosticable for RefusalHitParent {}
+impl flui_foundation::inspect::Inspect for RefusalHitParent {
+    fn kind(&self) -> &'static str {
+        "RefusalHitParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl flui_rendering::traits::RenderBox for RefusalHitParent {
     type Arity = flui_foundation::Variable;
     type ParentData = flui_rendering::parent_data::BoxParentData;
@@ -990,7 +1044,13 @@ struct RefusedHitLeaf {
     transform: Option<flui_foundation::geometry::Matrix4>,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
-impl flui_foundation::Diagnosticable for RefusedHitLeaf {}
+impl flui_foundation::inspect::Inspect for RefusedHitLeaf {
+    fn kind(&self) -> &'static str {
+        "RefusedHitLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl flui_rendering::traits::RenderBox for RefusedHitLeaf {
     type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;

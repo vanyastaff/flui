@@ -2,14 +2,25 @@
 //! holds, what does not, and what the evaluation saw while deciding.
 
 use flui_protocol::{Condition, Expectation, Locator, Role, StateFilter, TextMatch};
-use flui_semantics::{SemanticsRole, Toggled, WaitFacts, counts_frames, waits_on_events};
+use flui_protocol::{EventFilter, EventKind};
+use flui_semantics::{EventSet, SemanticsRole, Toggled, WaitFacts, counts_frames};
 
 use crate::fixture::{Fixture, placement};
 
 const IDLE: WaitFacts = WaitFacts {
     frames: 0,
     settled: false,
+    events: EventSet::EMPTY,
 };
+
+/// `IDLE` after the window emitted an event of each of `kinds`.
+fn emitted(kinds: &[EventKind]) -> WaitFacts {
+    let mut events = EventSet::EMPTY;
+    for kind in kinds {
+        events.insert(*kind);
+    }
+    WaitFacts { events, ..IDLE }
+}
 
 /// A window with a "Save" button, a "Notify" check box that is on, and a disabled "Later"
 /// button.
@@ -189,15 +200,47 @@ fn a_condition_holds_or_not_against_the_published_tree() {
             true,
         ),
         (
-            "an event is not seen here",
-            Condition::Event(flui_protocol::EventFilter::new(
-                flui_protocol::EventKind::Frame,
-            )),
+            "an event that was emitted",
+            Condition::Event(EventFilter::new(EventKind::Frame)),
+            emitted(&[EventKind::Input, EventKind::Frame]),
+            true,
+        ),
+        (
+            "an event of another kind",
+            Condition::Event(EventFilter::new(EventKind::Window)),
+            emitted(&[EventKind::Input, EventKind::Frame]),
+            false,
+        ),
+        (
+            "an event nobody emitted",
+            Condition::Event(EventFilter::new(EventKind::Frame)),
             WaitFacts {
                 frames: 9,
                 settled: true,
+                ..IDLE
             },
             false,
+        ),
+        (
+            "an event of another window",
+            Condition::Event(on_window(placement().window.get() + 1)),
+            emitted(&[EventKind::Frame]),
+            false,
+        ),
+        (
+            "an event of this window",
+            Condition::Event(on_window(placement().window.get())),
+            emitted(&[EventKind::Frame]),
+            true,
+        ),
+        (
+            "all of an event and a tree part",
+            Condition::All(vec![
+                Condition::Event(EventFilter::new(EventKind::Semantics)),
+                Condition::Appears(button("Save")),
+            ]),
+            emitted(&[EventKind::Semantics]),
+            true,
         ),
     ];
     for (row, condition, facts, expected) in table {
@@ -263,18 +306,19 @@ fn the_observation_names_the_revision_and_the_elements_matched() {
 #[test]
 fn a_composite_reports_what_it_needs_from_the_runtime() {
     let frames = Condition::Frames(2);
-    let event = Condition::Event(flui_protocol::EventFilter::new(
-        flui_protocol::EventKind::Input,
-    ));
     let nested = Condition::All(vec![
         Condition::Settled,
         Condition::Any(vec![frames.clone()]),
     ]);
     assert!(counts_frames(&frames) && counts_frames(&nested));
     assert!(!counts_frames(&Condition::Settled));
-    assert!(waits_on_events(&event));
-    assert!(waits_on_events(&Condition::Any(vec![event])));
-    assert!(!waits_on_events(&nested));
+}
+
+/// A filter for frames of window `window`.
+fn on_window(window: u64) -> EventFilter {
+    let mut filter = EventFilter::new(EventKind::Frame);
+    filter.window = Some(flui_protocol::WindowId::from_u64(window).expect("a window number"));
+    filter
 }
 
 /// A state filter with `set` applied (the filter is non-exhaustive).

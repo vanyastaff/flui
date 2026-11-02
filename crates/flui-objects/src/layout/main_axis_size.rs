@@ -1,7 +1,7 @@
 //! How much main-axis space a flex takes.
 
 /// How much space a flex container should occupy in its main axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisSize {
     /// Minimize the amount of space occupied by the children.

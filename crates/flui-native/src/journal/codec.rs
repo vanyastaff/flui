@@ -28,11 +28,13 @@ use flui_platform::pointer::{
 };
 use flui_platform::{
     Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts, DisplayId,
-    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, ImeEvent, InvalidPreference,
-    Locale, MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    PlatformInput, PreferenceParts, RefreshPeriod, SessionEndPhase, SizeConstraints, SystemNotice,
-    SystemPreferences, TextWeightPreference, WheelParts, WheelStep, WindowAppearance,
-    WindowExecutionState, WindowGeometry, WindowMode, WindowState, WindowStateParts,
+    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
+    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
+    SessionEndPhase, SizeConstraints, SystemNotice, SystemPreferences, TextWeightPreference,
+    Weekday, WheelParts, WheelStep, WindowAppearance, WindowExecutionState, WindowGeometry,
+    WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -362,7 +364,8 @@ pub struct RecordedWindowState {
     revision: u64,
     display: Option<u64>,
     /// The facts, with no display: `display` names it.
-    parts: WindowStateParts,
+    /// Boxed: a snapshot outweighs every other row several times over.
+    parts: Box<WindowStateParts>,
 }
 
 impl RecordedWindowState {
@@ -374,7 +377,7 @@ impl RecordedWindowState {
         Self {
             revision,
             display,
-            parts,
+            parts: Box::new(parts),
         }
     }
 
@@ -398,7 +401,7 @@ impl RecordedWindowState {
     pub fn into_parts(self, display: Option<DisplayId>) -> WindowStateParts {
         WindowStateParts {
             display,
-            ..self.parts
+            ..*self.parts
         }
     }
 
@@ -1700,6 +1703,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
         haptics,
         text_weight,
         locales,
+        regional,
         gestures:
             GestureParts {
                 double_click_interval,
@@ -1740,6 +1744,7 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
             })
             .transpose()?,
         locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        regional: regional_to_wire(regional),
         gestures: wire::Gestures {
             double_click_interval_ns: double_click_interval.map(duration_nanos).transpose()?,
             double_tap_interval_ns: double_tap_interval.map(duration_nanos).transpose()?,
@@ -1778,6 +1783,71 @@ fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
     DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
+/// `parts` in the schema, each format as its Unicode value; none when no
+/// format was observed.
+fn regional_to_wire(parts: RegionalParts) -> Option<Box<wire::Regional>> {
+    if parts == RegionalParts::default() {
+        return None;
+    }
+    let RegionalParts {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = parts;
+    Some(Box::new(wire::Regional {
+        first_weekday: first_weekday.map(|day| day.unicode_value().to_owned()),
+        hour_cycle: hour_cycle.map(|cycle| cycle.unicode_value().to_owned()),
+        measurement: measurement.map(|system| system.unicode_value().to_owned()),
+        numbering: numbering.map(|numbering| numbering.unicode_value().to_owned()),
+        region: region.map(|region| region.code().to_owned()),
+    }))
+}
+
+/// The formats `wire` names, each checked as its type checks it.
+fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> DtoResult<RegionalParts> {
+    let Some(wire) = wire else {
+        return Ok(RegionalParts::default());
+    };
+    let wire::Regional {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = *wire;
+    Ok(RegionalParts {
+        first_weekday: first_weekday
+            .map(|value| {
+                Weekday::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("first weekday {value}")))
+            })
+            .transpose()?,
+        hour_cycle: hour_cycle
+            .map(|value| {
+                HourCycle::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("hour cycle {value}")))
+            })
+            .transpose()?,
+        measurement: measurement
+            .map(|value| {
+                MeasurementSystem::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("measurement system {value}")))
+            })
+            .transpose()?,
+        numbering: numbering
+            .map(|value| {
+                NumberingSystem::try_new(&value).map_err(|error| invalid(error.to_string()))
+            })
+            .transpose()?,
+        region: region
+            .map(|value| {
+                RegionOverride::try_new(&value).map_err(|error| invalid(error.to_string()))
+            })
+            .transpose()?,
+    })
+}
 /// The preferences `wire` describes, validated as the `with_*` methods
 /// validate them.
 fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences> {
@@ -1788,6 +1858,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
         haptics,
         text_weight,
         locales,
+        regional,
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
@@ -1831,6 +1902,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
                     .collect::<DtoResult<Arc<[Locale]>>>()
             })
             .transpose()?,
+        regional: regional_from_wire(regional)?,
         gestures: GestureParts {
             double_click_interval: gestures.double_click_interval_ns.map(Duration::from_nanos),
             double_tap_interval: gestures.double_tap_interval_ns.map(Duration::from_nanos),
@@ -2155,6 +2227,8 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         closes,
         material,
         reports_presentation,
+        reports_keyboard_inset,
+        reports_system_gestures,
         observes_position,
         observes_minimized,
         places_at_open,
@@ -2176,6 +2250,8 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         closes: capability_to_wire(closes)?,
         material: capability_to_wire(material)?,
         reports_presentation: capability_to_wire(reports_presentation)?,
+        reports_keyboard_inset: capability_to_wire(reports_keyboard_inset)?,
+        reports_system_gestures: capability_to_wire(reports_system_gestures)?,
         observes_position: availability_to_wire(observes_position),
         observes_minimized: availability_to_wire(observes_minimized),
         places_at_open: availability_to_wire(places_at_open),
@@ -2200,6 +2276,8 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         closes,
         material,
         reports_presentation,
+        reports_keyboard_inset,
+        reports_system_gestures,
         observes_position,
         observes_minimized,
         places_at_open,
@@ -2221,6 +2299,8 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         closes: capability_from_wire(closes)?,
         material: capability_from_wire(material)?,
         reports_presentation: capability_from_wire(reports_presentation)?,
+        reports_keyboard_inset: capability_from_wire(reports_keyboard_inset)?,
+        reports_system_gestures: capability_from_wire(reports_system_gestures)?,
         observes_position: availability_from_wire(observes_position)?,
         observes_minimized: availability_from_wire(observes_minimized)?,
         places_at_open: availability_from_wire(places_at_open)?,
@@ -2246,12 +2326,12 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         display: _,
         metrics,
         appearance,
-        safe_area,
+        insets,
         execution,
         hovered,
         active,
         capabilities,
-    } = state.parts.clone();
+    } = (*state.parts).clone();
     Ok(wire::WindowState {
         revision: state.revision,
         outer: geometry_to_wire(outer),
@@ -2289,12 +2369,9 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
             WindowAppearance::VibrantDark => wire::Appearance::VibrantDark,
             _ => return Err(DtoError::Unmirrored("WindowAppearance")),
         },
-        safe_area: [
-            safe_area.top,
-            safe_area.right,
-            safe_area.bottom,
-            safe_area.left,
-        ],
+        safe_area: edges_to_wire(insets.safe_area()),
+        keyboard: keyboard_to_wire(insets.keyboard())?,
+        system_gestures: edges_to_wire(insets.system_gestures()),
         execution: match execution {
             WindowExecutionState::Running => wire::Execution::Running,
             WindowExecutionState::Suspended => wire::Execution::Suspended,
@@ -2305,6 +2382,70 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         active,
         capabilities: capabilities_to_wire(capabilities)?,
     })
+}
+
+/// Edges as the schema writes them: top, right, bottom, left.
+fn edges_to_wire(edges: EdgeInsets) -> [f64; 4] {
+    [edges.top, edges.right, edges.bottom, edges.left]
+}
+
+fn edges_from_wire([top, right, bottom, left]: [f64; 4]) -> EdgeInsets {
+    EdgeInsets::new(top, right, bottom, left)
+}
+
+/// `keyboard` in the schema; `None` for a hidden keyboard at rest.
+fn keyboard_to_wire(keyboard: KeyboardInset) -> DtoResult<Option<wire::KeyboardInset>> {
+    if keyboard == KeyboardInset::HIDDEN {
+        return Ok(None);
+    }
+    let motion = keyboard
+        .motion()
+        .map(|motion| {
+            Ok(wire::InsetMotion {
+                from: edges_to_wire(motion.from()),
+                start_ns: motion.start().as_nanos(),
+                duration_ns: u64::try_from(motion.duration().as_nanos())
+                    .map_err(|_| invalid("a keyboard motion longer than the timeline"))?,
+                curve: match motion.curve() {
+                    InsetCurve::Linear => wire::InsetCurve::Linear,
+                    InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+                        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 }
+                    }
+                    InsetCurve::SystemKeyboard => wire::InsetCurve::SystemKeyboard,
+                    _ => return Err(DtoError::Unmirrored("InsetCurve")),
+                },
+            })
+        })
+        .transpose()?;
+    Ok(Some(wire::KeyboardInset {
+        target: edges_to_wire(keyboard.target()),
+        motion,
+    }))
+}
+
+/// The keyboard `wire` describes, validated as its types validate it.
+fn keyboard_from_wire(wire: wire::KeyboardInset) -> DtoResult<KeyboardInset> {
+    let target = edges_from_wire(wire.target);
+    let refused = |error: flui_platform::InvalidInsets| invalid(format!("keyboard inset: {error}"));
+    let Some(motion) = wire.motion else {
+        return KeyboardInset::try_at_rest(target).map_err(refused);
+    };
+    let curve = match motion.curve {
+        wire::InsetCurve::Linear => InsetCurve::Linear,
+        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+            InsetCurve::CubicBezier { x1, y1, x2, y2 }
+        }
+        wire::InsetCurve::SystemKeyboard => InsetCurve::SystemKeyboard,
+        _ => return Err(unread("InsetCurve")),
+    };
+    let motion = InsetMotion::try_new(
+        edges_from_wire(motion.from),
+        EventTime::from_nanos(motion.start_ns),
+        Duration::from_nanos(motion.duration_ns),
+        curve,
+    )
+    .map_err(refused)?;
+    KeyboardInset::try_moving(target, motion).map_err(refused)
 }
 
 /// The snapshot `wire` describes, validated as its types validate it.
@@ -2326,6 +2467,8 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         metrics,
         appearance,
         safe_area,
+        keyboard,
+        system_gestures,
         execution,
         hovered,
         active,
@@ -2338,13 +2481,15 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
                 .map_err(|error| invalid(format!("metrics {width}x{height} at {scale}: {error}")))
         })
         .transpose()?;
-    let [top, right, bottom, left] = safe_area;
-    if ![top, right, bottom, left]
-        .iter()
-        .all(|inset| inset.is_finite())
-    {
-        return Err(invalid(format!("safe area {top},{right},{bottom},{left}")));
-    }
+    let insets = WindowInsets::try_new(
+        edges_from_wire(safe_area),
+        keyboard
+            .map(keyboard_from_wire)
+            .transpose()?
+            .unwrap_or_default(),
+        edges_from_wire(system_gestures),
+    )
+    .map_err(|error| invalid(format!("insets {safe_area:?} {system_gestures:?}: {error}")))?;
     let parts = WindowStateParts {
         outer: geometry_from_wire(outer, "outer")?,
         content_size: size_from_wire(content_size, "content size")?,
@@ -2383,7 +2528,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             wire::Appearance::VibrantDark => WindowAppearance::VibrantDark,
             other => return Err(unread(other.name())),
         },
-        safe_area: EdgeInsets::new(top, right, bottom, left),
+        insets,
         execution: match execution {
             wire::Execution::Running => WindowExecutionState::Running,
             wire::Execution::Suspended => WindowExecutionState::Suspended,
@@ -2397,6 +2542,6 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     Ok(RecordedWindowState {
         revision,
         display,
-        parts,
+        parts: Box::new(parts),
     })
 }

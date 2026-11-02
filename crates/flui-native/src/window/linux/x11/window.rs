@@ -482,7 +482,7 @@ impl X11Window {
         ReportedFacts {
             metrics,
             appearance: self.appearance(),
-            safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+            insets: flui_platform::WindowInsets::ZERO,
             execution: flui_platform::WindowExecutionState::Running,
             occluded,
             hovered: self.delivery.hovered(),

@@ -66,7 +66,13 @@ impl RenderSliverConstrainedCrossAxis {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverConstrainedCrossAxis {}
+impl flui_foundation::inspect::Inspect for RenderSliverConstrainedCrossAxis {
+    fn kind(&self) -> &'static str {
+        "RenderSliverConstrainedCrossAxis"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for RenderSliverConstrainedCrossAxis {
     type Arity = Single;

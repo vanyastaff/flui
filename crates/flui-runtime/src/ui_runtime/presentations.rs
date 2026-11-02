@@ -334,6 +334,18 @@ impl UiRuntime {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
+    /// Whether `id` has begun closing: a close was carried out, now or when
+    /// the last hold on it was released, or the UI runtime is stopping. For
+    /// the testing kit, which reports a close the platform would see. `None`
+    /// if `id` is not resident.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn presentation_closing_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.closing_requested.get())
+    }
+
     /// The device pixel ratio `id`'s render pipeline paints and publishes
     /// semantics bounds at — for the dispatcher test proving a `Resized`
     /// event rescales exactly the presentation it was addressed to. `None`
@@ -478,6 +490,46 @@ impl UiRuntime {
         self.presentations
             .get(id)
             .map(|presentation| &presentation.media_query)
+    }
+
+    /// Hold `keyboard` as presentation `id`'s soft-keyboard inset: each frame
+    /// samples it at its vsync while it moves (ADR-0277 §3); the window-state
+    /// operation that holds it asks for the first of those frames. Nothing when
+    /// this UI runtime no longer hosts `id`.
+    pub(crate) fn hold_keyboard_inset_for(
+        &self,
+        id: PresentationId,
+        keyboard: flui_platform::KeyboardInset,
+    ) {
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.keyboard.set(keyboard);
+        }
+    }
+
+    /// Write `presentation`'s moving keyboard into its `view_insets` at
+    /// `vsync`, the time of the frame being built, and ask for the next frame
+    /// until the motion ends: the frame that reaches the end publishes the
+    /// target and asks for no more.
+    pub(super) fn sample_keyboard_inset(
+        &self,
+        presentation: &PresentationState,
+        vsync: flui_platform::EventTime,
+    ) {
+        let keyboard = presentation.keyboard.get();
+        if keyboard.motion().is_none() {
+            return;
+        }
+        let occlusion = keyboard.at(vsync);
+        let settled = keyboard.settles_at().is_none_or(|end| vsync >= end);
+        if settled {
+            presentation.keyboard.set(keyboard.settled());
+        }
+        presentation
+            .media_query
+            .update(|data| data.view_insets = occlusion);
+        if !settled {
+            self.request_redraw_for(presentation);
+        }
     }
 
     /// The primary presentation's gesture binding.
@@ -786,7 +838,7 @@ impl UiRuntime {
         );
         if let Some(payload) = first_panic {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 resume_unwind(payload);
             }

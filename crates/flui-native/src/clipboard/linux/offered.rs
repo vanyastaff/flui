@@ -9,7 +9,9 @@
 
 use std::rc::Rc;
 
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardRead, capability::Resolver};
+
+use crate::host::host_text;
 
 /// What the application offers as its selection.
 pub(crate) type SelectionText = Rc<dyn Fn() -> Option<String>>;
@@ -52,13 +54,13 @@ pub(crate) fn ask(text: SelectionText) -> Option<String> {
 /// failure goes on: an owner queue that fails then is not a second panic
 /// during the unwind, which would abort, and the first failure stays the one
 /// that goes on (ADR-0127 §2).
-pub(crate) fn answer_with(text: SelectionText, answer: Resolver<Option<String>>) {
+pub(crate) fn answer_with(text: SelectionText, answer: Resolver<ClipboardRead>) {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ask(text))) {
         // An owner that retired has nobody left to answer.
-        Ok(text) => drop(answer.resolve(text)),
+        Ok(text) => drop(answer.resolve(text.map_or(Ok(None), host_text))),
         Err(failure) => {
             let settled =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| answer.resolve(None)));
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| answer.resolve(Ok(None))));
             if let Err(second) = settled {
                 // Kept, not destroyed: its destructor could fail too.
                 std::mem::forget(second);

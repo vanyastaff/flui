@@ -9,6 +9,8 @@
   `StorageError::Unsupported`, `set` refuses every value, and storage still reaches a UI runtime
   through `LifecycleContext::storage`.
 - **Date:** 2026-10-28
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  §4's retention of the codec's panic payload only: the payload is dropped.
 - **Supersedes (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
   step 8, its "stack restoration as a list of paths" only (§6 here); web history, query and
   fragment stay in step 8.
@@ -78,21 +80,27 @@ application's.
 pub trait Storage: Send + Sync + 'static {
     fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored>;
     fn publish(&self, name: &StorageName, bytes: Vec<u8>, mode: WriteMode) -> StorageFuture<StoredVersion>;
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside>;
 }
 pub enum WriteMode { Replace, IfUnchanged(StoredVersion) }
+pub struct CopiedAside { pub kept_as: String, pub version: StoredVersion }
 pub struct StorageName(/* name + scope */); // [a-z0-9][a-z0-9_-]{0,63}, no Windows device name
 impl StorageName {
     pub const fn from_static(name: &'static str) -> Self;   // roaming data
     pub const fn machine_local(name: &'static str) -> Self; // this machine and instance
 }
 #[non_exhaustive] pub enum StorageError {
-    Unsupported(Unsupported), Inaccessible { kind: std::io::ErrorKind }, Busy, Full,
+    Unsupported(Unsupported), NotFound, Inaccessible { kind: std::io::ErrorKind }, Busy, Full,
     TooLarge { len: u64, limit: u64 }, Conflict, Superseded, Cancelled,
 }
 ```
 
 `publish` accepts the bytes before it returns; a previous value of the same name not yet started is
-replaced and resolves `Superseded`. A bad name in a constant is a compile error. Storage reaches a
+replaced and resolves `Superseded`. `copy_aside` copies the stored value to the first free
+`<name>.corrupt-<n>` in its scope, claimed atomically (an exclusive create on files, one
+transaction in IndexedDB), and returns the version of the bytes it copied; `NotFound` when nothing
+is stored. A `StorageName` cannot hold `.`, so no value is ever written over a copy. A bad name in
+a constant is a compile error. Storage reaches a
 UI runtime as a built-in capability of the seam (ADR-0152), and `LifecycleContext::storage` is
 removed. The directory is `AppConfig::with_storage_dir`, else the application's identifier
 (`AppIdentity::with_app_id`), else a fixed name where the data roots belong to the application
@@ -141,9 +149,16 @@ impl<D: Document> Persisted<D> {
     pub fn load(&self) -> impl Future<Output = Result<Rc<D>, PersistError>> + 'static;
     pub fn set(&self, value: D) -> Result<Revision, PersistError>;
     pub fn committed(&self) -> Option<Revision>;
+    pub fn revision(&self) -> Option<Revision>;
     pub fn status(&self) -> SaveStatus;
     pub fn retry(&self);
     pub fn start_over(&self);
+    pub fn downgrade(&self) -> WeakPersisted<D>;
+}
+impl<D: Document> Listenable for Persisted<D> { /* status() and committed() changes */ }
+pub struct WeakPersisted<D: Document> { /* Weak: does not keep the document alive */ }
+impl<D: Document> WeakPersisted<D> {
+    pub fn upgrade(&self) -> Option<Persisted<D>>;
 }
 ```
 
@@ -152,14 +167,41 @@ application's body: the name guards against reading another document's file, the
 the decoder, and the `Revision` counts the writes across runs (`u64::MAX` makes the document
 `Exhausted` for good). A file without the header or with another name is `Corrupt`; a version above
 `D::VERSION` is read-only, never written; a body `decode` refuses is `Decode`, and the file is not
-touched. `start_over` copies the bytes to the first free `<name>-corrupt-N` before writing
-`initial()`. A load applies only its latest attempt.
+touched. `start_over` keeps the bytes with `copy_aside`, then writes `initial()` as
+`IfUnchanged(version)` of the file the failed load read, so a file another writer replaced since
+that load is a `Conflict` rather than lost; the status is `Saving` until both steps finish, and a
+failed step is `Failed` (`retry` resumes it without a second copy). A load applies only its latest
+attempt.
 
 `set` refuses until a load succeeded (there is no base to write against), encodes on the owner
 thread with no borrow of the document held, and publishes the bytes to the flush registry
 (ADR-0259 §5): there is no write loop of its own. `committed` and "Saved" follow the registry's
 confirmation, after the rename. `Busy` is retried on the UI runtime's clock, at 50, 100, 200, 400
 and 800 ms, then `Failed`; a hidden or paused application and a close request retry at once.
+
+The document is `Listenable`, so a widget rebuilds with its status. A delivery runs on a later turn
+of the UI runtime's tasks, never inside a call on the document, and tells the listeners once for
+all the changes to `status()`, `committed()` and `revision()` since they were last told. A status
+that stands tells nobody and queues nothing, so a document at rest wakes no frame. A listener may
+call any method of the document: what it changes is told in the next delivery, and a listener that
+panics leaves the next delivery to come. While it has listeners the document follows the registry,
+so a commit by another document of its name in the same runtime is told too. A frame hook that
+panics while the document queues a task leaves it retryable: nothing stays marked queued or
+watching without a task, and an interrupted fresh start is `Failed`. The listeners belong to the
+state that opened the document: its unmount hook
+([ADR-0078, amendment 2026-10-31](ADR-0078-rules-live-in-types-and-lints.md#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens))
+drops them, so one may hold a clone of the document, and one added after that is not kept. A
+`WeakPersisted` from `downgrade()` reads the document without keeping it alive.
+
+`revision()` is the revision of the value in memory only while that value is the stored one: the
+file's after a load (`Revision::NONE` when nothing was stored), a set value's once the registry
+confirms it, `None` before a load and while a write is in flight or failed. With two documents of
+one name in a runtime it is named only by the one whose bytes the storage kept: the one that wrote
+last, or one that wrote nothing while no document of its name wrote after its load issued its read.
+What the application records against it (a session's draft taken against a version of the data)
+therefore names bytes on disk: an edit lost before its write commits never matches what a later
+load reads back. With the `serde` feature a `Revision` serializes as its number for that record;
+`get()` is for display and diagnostics.
 
 ### §4. A codec panic fails one save and keeps the document
 
@@ -170,7 +212,8 @@ pub enum PersistError {
     Panicked { during: CodecStep, message: String },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodecStep { Encode, Decode }
+#[non_exhaustive]
+pub enum CodecStep { Encode, Decode, Initial }
 ```
 
 `encode` and `decode` run under `catch_unwind`, each with no borrow of the document held:
@@ -228,8 +271,20 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `older_version_decodes_or_reports_without_writing`, `oversized_file_is_refused_unread`,
   `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
   `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
-  `two_runtimes_keep_independent_documents`.
-- `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, the classification of
+  `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
+  `start_over_never_writes_over_a_file_replaced_since_the_load`,
+  `listeners_hear_each_change_once_and_nothing_while_it_stands`,
+  `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`,
+  `revision_names_only_a_value_on_disk`, `a_listener_holding_a_weak_handle_lets_the_document_go`,
+  `a_revision_round_trips_as_its_number` (with `serde`),
+  `a_frame_hook_panic_while_queueing_leaves_later_changes_told`,
+  `a_commit_by_another_document_of_its_name_is_told`,
+  `a_revision_is_named_only_by_the_document_that_stored_it`,
+  `a_reload_whose_replaced_value_panics_in_drop_is_told`,
+  `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`,
+  `unmounting_the_opening_state_drops_the_listeners`.
+- `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
+  first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
   OS errors.
 - `crates/flui-widgets/tests/contracts.rs`: `from_stack_restores_back_order`,
   `stack_reads_every_committed_edit`, `empty_stack_is_refused`.

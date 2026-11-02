@@ -8,10 +8,11 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
-    DisplayKey, DisplayRegistry, GesturePreferences, Locale, MotionPreference, SizeConstraints,
-    SystemPreferences, TextWeightPreference, WheelPreferences, WheelStep, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry, WindowMaterial,
-    WindowMode, WindowState,
+    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
+    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
+    WindowInsets, WindowMaterial, WindowMode, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -23,6 +24,14 @@ fn preferences_round_trip_through_their_parts() {
         .with_haptics(false)
         .with_text_weight(TextWeightPreference::Bold)
         .with_locales(vec![Locale::en_us()])
+        .with_regional(
+            RegionalFormats::default()
+                .with_first_weekday(Weekday::Saturday)
+                .with_hour_cycle(HourCycle::H11)
+                .with_measurement(MeasurementSystem::Imperial)
+                .with_numbering(NumberingSystem::try_new("arab").expect("valid"))
+                .with_region(RegionOverride::try_new("GB").expect("valid")),
+        )
         .with_gestures(
             GesturePreferences::default()
                 .with_double_click_interval(Duration::from_millis(400))
@@ -73,7 +82,9 @@ fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let capabilities = WindowCapabilities::ALL
         .unavailable(&material, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice);
+        .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
+        .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
+        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
@@ -90,12 +101,15 @@ fn a_window_state_round_trips_through_its_parts() {
     .with_decorated(true)
     .with_metrics(Some(metrics))
     .with_appearance(WindowAppearance::Dark)
-    .with_safe_area(EdgeInsets {
-        top: 24.0,
-        right: 0.0,
-        bottom: 34.0,
-        left: 0.0,
-    })
+    .with_insets(
+        WindowInsets::try_new(
+            EdgeInsets::new(24.0, 0.0, 34.0, 0.0),
+            KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
+                .expect("a finite keyboard inset"),
+            EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
+        )
+        .expect("finite insets"),
+    )
     .with_execution(WindowExecutionState::Suspended)
     .with_hovered(true)
     .with_active(true)
@@ -108,6 +122,17 @@ fn a_window_state_round_trips_through_its_parts() {
     assert_eq!(
         parts.capabilities.reports_presentation,
         Err(CapabilityAbsence::NotOnThisDevice)
+    );
+    assert_eq!(
+        parts.capabilities.reports_system_gestures,
+        Err(CapabilityAbsence::NotYetOnThisHost)
+    );
+    assert_eq!(
+        state
+            .capabilities
+            .keyboard_inset()
+            .map_err(|absent| absent.reason),
+        Err(flui_platform::UnsupportedReason::NotOnThisPlatform)
     );
     assert_eq!(parts.capabilities.sets_title, Ok(Availability::Native));
     assert_eq!(parts.into_state(), state);

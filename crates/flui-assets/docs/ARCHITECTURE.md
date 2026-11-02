@@ -365,15 +365,18 @@ hot-reload = ["notify"]
   ADR-0121 records this ownership contract.
 
 - Default network image loads share a lazily initialized HTTP client per registry,
-  constructed on the loading runtime. Initialization returns a typed error and
-  remains retryable. `NetworkLoader::try_new` is fallible rather than hiding external
-  initialization failures in a panic; `Default` is not a construction contract.
-  Hosts supply a client builder that creates a fresh configured pool, preserving
-  its HTTP policy through capacity transitions without changing runtime selection.
-  `network_bridge_reuses_connections_and_recovers_after_decode_errors` checks
-  real connection reuse after invalid image bytes, host injection, independent
-  registry pool ownership and replacement of an ambient runtime. Fresh configured
-  pools cannot import another runtime's existing connection drivers (ADR-0118).
+  constructed on the Tokio runtime of the IO lane that first fetches. Initialization
+  returns a typed error and remains retryable. `NetworkLoader::try_new` is fallible
+  rather than hiding external initialization failures in a panic; `Default` is not a
+  construction contract. Hosts supply a client builder that creates a fresh
+  configured pool, preserving its HTTP policy through capacity transitions. A load
+  whose IO lane has no Tokio reactor answers `AssetError::ReactorUnavailable`
+  instead of the client's panic.
+  `network_loads_reuse_connections_and_recover_after_decode_errors` checks real
+  connection reuse after invalid image bytes, a configured client, independent
+  registry pool ownership, lanes replaced between loads and the missing reactor.
+  Fresh configured pools cannot import another runtime's existing connection
+  drivers (ADR-0118).
 - Network bytes are transferred into their owned vector through `Bytes`' consuming
   conversion, allowing buffer reuse where its ownership permits. Text remains
   strict UTF-8, preserving a BOM and ignoring charset replacement decoding. HTTP
@@ -397,7 +400,7 @@ hot-reload = ["notify"]
 
 - Byte-source selection and decoding belong to `Asset::load`. File-backed image
   and font assets use `BytesFileLoader`; embedded constructors own their source
-  bytes, and the network bridge uses `NetworkLoader` before image decoding.
+  bytes, and network image loads use `NetworkLoader` before image decoding.
   `font_sources_preserve_bytes_and_recover_after_load_errors` and
   `image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions` pin
   file/embedded equivalence, invalid sources, missing sources and recovery.
@@ -408,16 +411,12 @@ hot-reload = ["notify"]
   including cache hits. Rejection preserves previously accepted cached data.
   `validation_precedes_loading_and_cache_hits_without_poisoning_accepted_data`
   pins rejection, cache preservation and the next accepted request.
-- The image bridge selects ambient multi-thread runtimes, skips ambient
-  current-thread runtimes, and honors explicit host injection. Owned runtime
-  creation returns typed errors and can retry after failure; ownership remains
-  registry-local. `load_image_bridged_completes_both_the_success_and_the_failure_path`
-  exercises real decoding and recovery while an ambient current-thread runtime
-  is entered but undriven. `the_bridge_resolves_a_live_runtime_and_survives_its_own_teardown`
-  includes the private runtime-construction failure seam, because OS resource
-  exhaustion cannot be induced reliably through the public API.
+- Image loads run on the lanes their caller hands them, and the registry starts no
+  runtime or thread of its own (ADR-0279).
+  `image_loads_run_on_their_lanes_and_survive_the_requests_that_leave` exercises
+  lanes, no lanes, refused lanes, handover and cancellation through the public API.
   [ADR-0105](../../../docs/adr/ADR-0105-asset-validation-and-bridge-progress.md)
-  records the host and asset contracts.
+  records the validation contract.
 
 ### Generic initialization is independent; font loads share work
 
@@ -461,48 +460,64 @@ matrix because the public font loader cannot deterministically suspend at each
 IO/cancellation/panic boundary. It invokes the actual private Moka helper and
 pins one accepted initializer, shared data/error, waiter restart and next hit.
 
-### Bridged images are kept, shared and cancelled by their registry
+### Decoded images are kept, shared and cancelled by their registry
 
-Bridged image loads (`load_image_bridged`, `load_network_image_bridged`) bypass
-typed caching. Each registry keeps their decoded images in its own LRU, bounded
-by pixel bytes (`with_decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and
-the web); an image larger than the budget is handed to its waiters and not kept.
+Image loads (`load_image`, `load_network_image`) bypass typed caching. Each
+registry keeps their decoded images in its own LRU, bounded by pixel bytes
+(`with_decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and the web); an
+image larger than the budget is handed to its waiters and not kept.
 `cached_image` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two registries are two
 images (ADR-0250).
 
-A request for a source already loading joins that load. Every `ImageLoad`
-waiting on it is a subscriber; when the last one is dropped the pending entry is
-removed, its ticket cancelled and its task aborted at its next await. An HTTP
-request is dropped at once. A file is read in 256 KiB chunks, one blocking read
-each, so the read stops at the next chunk; the open and a chunk already on a
-blocking thread cannot be interrupted and finish first. A decode that has not
-started never runs. The ticket's allocation is the load's identity: a
-task finishing after its entry was abandoned or replaced compares tickets and
-leaves the newer entry alone. A task that panics or is dropped by its runtime
-settles its entry from a drop guard, closing its waiters with an error.
+A load runs on the lanes its first request hands it (an
+`Arc<dyn flui_platform::executor::Executor>`, the UI runtime's for the `Image`
+widget): read on the IO lane, decoded on the compute lane. The registry starts
+no runtime or thread (ADR-0279). With no lanes, or lanes refusing it for want of
+room, the load runs inside the requesting `ImageLoad`, on the thread that polls
+it; lanes shutting down answer `AssetError::LanesRefused`.
 
-Bytes are read on the loading runtime's async workers and decoded on its
-blocking pool, at most `with_decode_threads` at once (half the cores, at most
-four). A host runtime's async workers never run a decode. At admission, on the
-calling thread and under the lock that assigns its order, a
-load reserves one of four load slots per decode thread; its task waits for
-that reservation before it reads and holds the slot until its
-decode returns, so the reads in flight and the encoded bytes waiting to decode
-are bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a
-file by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`),
-refused before more than that is buffered. Once its bytes are read
-it asks for a decode slot. Load slots are granted in admission order. A decode
-slot goes to the earliest-admitted load whose bytes are ready; a load still
-fetching holds none, so a ready load admitted later decodes first rather than
-leaving the decoder idle behind a slow response. Strict admission order would
-be head-of-line blocking: one stalled request would stop every visible image
-behind it. A load abandoned while it waited for either slot skips the decode
-and frees its load slot.
+A request for a source already loading joins that load. The load is the
+registry's: every `ImageLoad` waiting on it is a subscriber, and only when the
+last one is dropped is the pending entry removed, its ticket cancelled and its
+cancel signal sent, which the load sees before its next step. An HTTP request is
+dropped at once. A file is read in 256 KiB chunks with a yield between them, so
+the read stops at the next chunk. A load cancelled before its bytes are ready
+never asks for a decode slot, and a decode that has not started never runs. The
+ticket's allocation is the load's identity: a load finishing after its entry was
+abandoned or replaced compares tickets and leaves the newer entry alone.
 
-One mutex guards the cache and the pending map. Senders are completed, aborts
-issued, tasks spawned and evicted pixels freed after it is released: a runtime
-that has shut down drops a task inside `spawn`, and that drop settles its entry
+A load that ends without an outcome, because the request it ran in left or its
+lanes shut down and dropped it, closes its waiters, and each admits itself again:
+the first becomes the new lead, on its own lanes. A load that panics answers its
+waiters with the failure instead, from a drop guard that sees the unwind.
+
+Decodes run at most `with_decode_threads` at once (half the cores, at most four),
+never on the IO lane. A compute lane with no room hands the decode back to where
+the load runs; lanes shutting down, by refusing the decode or dropping it unrun,
+close the load unsettled for a waiter on other lanes to take over. At admission,
+on the calling thread and under the lock that assigns its order, a load reserves
+one of four load slots per decode thread. A load bound for lanes is admitted when
+it is requested; a load with no lanes runs only while its request polls it, so it
+is admitted at its first poll: loads a caller holds unpolled keep no slot from
+the one it awaits, and open no entry that a request for the same source would
+wait on with nobody driving it. A load
+waits for its slot before it reads and holds it until its decode
+returns, so the reads in flight and the encoded bytes waiting to decode are
+bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a file
+by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`), refused
+before more than that is buffered. Only a regular file is opened, so a FIFO or a
+device cannot block the shared IO lane in `open`. Once its bytes are read it asks for a decode
+slot. Load slots are granted in admission order. A decode slot goes to the
+earliest-admitted load whose bytes are ready; a load still fetching holds none,
+so a ready load admitted later decodes first rather than leaving the decoder idle
+behind a slow response. Strict admission order would be head-of-line blocking:
+one stalled request would stop every visible image behind it. A load abandoned
+while it waited for either slot skips the decode and frees its load slot.
+
+One mutex guards the cache and the pending map. Senders are completed, cancel
+signals sent, loads spawned and evicted pixels freed after it is released: lanes
+that refuse a load drop it inside `spawn_io`, and that drop settles its entry
 through the same lock.
 
 Under memory pressure the registry trims decoded images to half the budget
@@ -510,12 +525,14 @@ Under memory pressure the registry trims decoded images to half the budget
 
 `decoded_images_stay_within_their_byte_budget_and_give_back_under_pressure`
 pins byte eviction, the over-budget image and both pressure levels.
+`image_loads_run_on_their_lanes_and_survive_the_requests_that_leave` pins the
+lanes, sharing, handover and cancellation.
 `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` pins coalescing
 onto one HTTP connection, which stays open while one waiter remains and closes
 when the last is dropped. The separate `image_decode_scheduling` target, which
 registers real decoder hooks, runs
-`bridged_decodes_leave_a_host_runtimes_async_workers_free` (a decode waits for a
-task on the host runtime's only worker) and
+`decodes_leave_the_io_lane_free` (a decode waits for a task on the IO lane's only
+worker) and
 `abandoned_loads_never_decode_and_do_not_delay_a_live_one` (one decode thread:
 five loads abandoned behind a running decode never decode, and the live load
 queued after them decodes next) and
@@ -532,7 +549,7 @@ silent response after `READ_TIMEOUT`, and on any request after
 otherwise hold a load slot forever); `load_url` refuses a body over
 `MAX_BODY_BYTES`.
 
-Every image decode, typed or bridged, reads the header first and refuses an
+Every image decode, typed or registry-kept, reads the header first and refuses an
 image whose RGBA8 pixels would pass 256 MiB (128 MiB on Android, iOS and the
 web), which is also the decoder's allocation limit: an image that compresses
 small but decodes huge fails with a typed error instead of allocating. With at

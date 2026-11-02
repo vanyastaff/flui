@@ -26,7 +26,7 @@ TreeNode spec  →  RenderTester::mount  →  run_layout | run_frame
                                               ↓
                                          LayoutRun | FrameRun
                                               ↓
-                                         Probe (offset, hit, diagnostics, …)
+                                         Probe (offset, hit, render_snapshot, …)
 ```
 
 1. **Describe** a tree with [`box_node`](../src/testing/tree.rs) /
@@ -37,10 +37,9 @@ TreeNode spec  →  RenderTester::mount  →  run_layout | run_frame
    for proxy query contracts, [`BoxQueryRun`](../src/testing/queries.rs).
 4. **Animate** with multi-frame helpers on [`FrameRun`](../src/testing/harness.rs).
 
-Diagnostics dumps combine each render object's **user config** (via
-[`Diagnosticable`](../src/traits/mod.rs)) with **committed runtime** fields
-(`offset`, `size`, sliver `geometry`) layered on by the pipeline. Property names
-use **snake_case**.
+Snapshots combine each render object's **own fields** (its [`Inspect`](../../flui-foundation/src/inspect/fields.rs)
+impl) with the **committed runtime** facts (`offset`, `size`, sliver `geometry`) the tree adds.
+Field names use **snake_case**; read them by type (`node.get::<f64>("width")`).
 
 ## Core API
 
@@ -111,11 +110,9 @@ Implements [`Probe`](../src/testing/inspect.rs) and [`BoxQueryRun`](../src/testi
 | `box_geometry(id)` | Committed box size |
 | `sliver_geometry(id)` | Committed sliver geometry |
 | `hit(x, y)` / `hit_first` | Hit-test path (leaf-first) |
-| `diagnostics()` | Full render-tree diagnostics tree |
-| `property(id, "name")` | Structured property lookup |
-| `property_f64(id, "name")` | Parsed numeric property |
-| `descendant_property("RenderFlex", "direction")` | Find by type name |
-| `dump()` | Printable tree (for failure messages) |
+| `render_snapshot()` | Typed snapshot of the whole render tree |
+| `node_snapshot(id)` | Typed snapshot of one node (`get::<T>("name")`, `get_fact::<T>("size")`) |
+| `dump()` | Printable outline (for failure messages) |
 
 ### `BoxQueryRun` (intrinsics / dry probes)
 
@@ -159,10 +156,10 @@ assert_eq!(
 
 | Function | Purpose |
 |----------|---------|
-| `assert_properties(node, &[&str])` | Required config property names |
-| `assert_descendant_properties(tree, type_name, required)` | Descendant config contract |
-| `assert_has_committed_size(node)` | Runtime `size` present |
-| `assert_has_committed_geometry(node)` | Runtime sliver `geometry` present |
+| `assert_properties(node, &[&str])` | Required field names |
+| `assert_descendant_properties(tree, kind, required)` | Descendant field contract |
+| `assert_has_committed_size(node)` | `size` fact present |
+| `assert_has_committed_geometry(node)` | Sliver `geometry` fact present |
 
 ### `FrameReport`
 
@@ -239,13 +236,13 @@ assert_eq!(run.offset(child), Offset::new(55.0, 55.0));
 ### Paint-only (color / opacity)
 
 ```rust
-// Color — assert via diagnostics config
+// Color — read the typed field
 run.advance_paint::<RenderColoredBox>(leaf, |b| {
     b.set_color([0.0, 1.0, 0.0, 1.0]);
 });
 assert_eq!(
-    run.property(leaf, "color").as_deref(),
-    Some("[0.0, 1.0, 0.0, 1.0]"),
+    run.node_snapshot(leaf).get::<Rgba>("color"),
+    Ok(Rgba::new(0.0, 1.0, 0.0, 1.0)),
 );
 
 // Opacity — assert via layer tree
@@ -272,7 +269,7 @@ fails CI if a new render object lacks harness coverage.
 | Crate | Re-use |
 |-------|--------|
 | [`flui_layer::testing`](../../flui-layer/README.md) | Layer-tree walkers (`structure`, `first_picture_bounds`, `first_opacity_alpha`) |
-| [`flui_foundation`](../../flui-foundation/docs/TESTING.md) | `DiagnosticsNode` query API for structured assertions |
+| [`flui_foundation`](../../flui-foundation/docs/TESTING.md) | `inspect` snapshot query API for structured assertions |
 | [`flui_painting::testing`](../../flui-painting/src/testing/mod.rs) | Display-list recording when testing paint in isolation |
 
 ## Paint snapshots & phase pumping

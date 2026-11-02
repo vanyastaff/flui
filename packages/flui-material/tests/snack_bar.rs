@@ -237,11 +237,7 @@ fn mount_with_scaffolds(
 fn find_snack_bar_material(laid: &common::LaidOut) -> Option<RenderId> {
     laid.find_all_by_render_type("RenderPhysicalShape")
         .into_iter()
-        .find(|&id| {
-            laid.render_property(id, "elevation")
-                .and_then(|value| value.parse::<f64>().ok())
-                == Some(6.0)
-        })
+        .find(|&id| laid.render_node(id).get::<f64>("elevation") == Ok(6.0))
 }
 
 /// The number of mounted `Material` surfaces (`RenderPhysicalShape`) with
@@ -253,11 +249,7 @@ fn find_snack_bar_material(laid: &common::LaidOut) -> Option<RenderId> {
 fn snack_bar_material_count(laid: &common::LaidOut) -> usize {
     laid.find_all_by_render_type("RenderPhysicalShape")
         .into_iter()
-        .filter(|&id| {
-            laid.render_property(id, "elevation")
-                .and_then(|value| value.parse::<f64>().ok())
-                == Some(6.0)
-        })
+        .filter(|&id| laid.render_node(id).get::<f64>("elevation") == Ok(6.0))
         .count()
 }
 

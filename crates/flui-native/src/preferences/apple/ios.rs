@@ -34,7 +34,8 @@ use objc2_ui_kit::{
 
 use crate::{
     PlatformError, owner::apple::ios::UIKitPreferences, owner::signal::OwnerSignal,
-    owner::sources::SystemPreferenceSource, preferences::locales as preferred_locales,
+    owner::sources::SystemPreferenceSource, preferences::apple::regional,
+    preferences::locales as preferred_locales,
 };
 
 type ObserverToken = Retained<ProtocolObject<dyn NSObjectProtocol>>;
@@ -75,7 +76,10 @@ impl SystemPreferenceSource for IOSPreferences {
                 TextWeightPreference::NoPreference
             })
             .with_motion(motion)
-            .with_high_contrast(high_contrast);
+            .with_high_contrast(high_contrast)
+            .with_regional(regional::sample(
+                locales.as_ref().and_then(|locales| locales.first()),
+            ));
         Ok(match locales {
             Some(locales) => preferences.with_locales(locales),
             None => preferences,

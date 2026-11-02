@@ -102,6 +102,10 @@ pub(crate) struct SemanticsAttributes {
     /// A document's selection across the texts beneath it (ADR-0214),
     /// resolved to their runs when published.
     pub(crate) document_selection: Option<crate::DocumentSelection>,
+    /// The runs of the enclosing text this node publishes as its children,
+    /// as indices into that text's runs: a link region of a selectable
+    /// paragraph holds its own (ADR-0214 §2 as amended).
+    pub(crate) hosted_runs: Option<std::ops::Range<usize>>,
     /// The outline level of a header node.
     pub(crate) heading_level: Option<HeadingLevel>,
     /// Anchors naming this node as a relation target (ADR-0205).

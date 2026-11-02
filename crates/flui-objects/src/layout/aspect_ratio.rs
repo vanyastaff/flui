@@ -255,9 +255,13 @@ impl RenderAspectRatio {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAspectRatio {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_double("aspect_ratio", self.aspect_ratio.value(), None);
+impl flui_foundation::inspect::Inspect for RenderAspectRatio {
+    fn kind(&self) -> &'static str {
+        "RenderAspectRatio"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("aspect_ratio", &self.aspect_ratio.value());
     }
 }
 

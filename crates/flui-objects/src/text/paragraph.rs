@@ -23,14 +23,14 @@ mod links;
 
 pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
+use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Value};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{
-    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition,
+    InlineSpan, LineMetrics, TextAffinity, TextAlign, TextDirection, TextPosition, TextSpan,
 };
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 
@@ -301,8 +301,9 @@ impl RenderParagraph {
 
     /// The laid-out text as runs, or `None` before layout. A run the
     /// semantics model refuses is a bug in this description: it is logged
-    /// and the text publishes its label alone.
-    fn semantics_text_content(&self, text: &str) -> Option<TextContent> {
+    /// and the text publishes its label alone. No run crosses a byte of
+    /// `cuts`.
+    fn semantics_text_content(&self, text: &str, cuts: &[usize]) -> Option<TextContent> {
         if !self.painter.has_layout() {
             return None;
         }
@@ -322,6 +323,7 @@ impl RenderParagraph {
                     line.bottom,
                 )
             },
+            cuts,
         );
         match runs.and_then(TextContent::try_new) {
             Ok(content) => Some(content),
@@ -330,6 +332,33 @@ impl RenderParagraph {
                 None
             }
         }
+    }
+
+    /// The runs selectable text publishes (ADR-0214 §2 as amended): its
+    /// authored text, cut where a link or an overridden span starts or ends
+    /// so each region holds its own. `None` for text that is not selectable,
+    /// not laid out, or silenced whole: such text publishes nothing.
+    fn selectable_runs(&self) -> Option<TextContent> {
+        self.selectable.as_ref()?;
+        let span = self.painter.text()?;
+        if span.to_semantics_text().is_empty() {
+            return None;
+        }
+        let plain = span.to_plain_text();
+        let cuts = if self.reads_by_regions() {
+            self.runs.region_edges()
+        } else {
+            Vec::new()
+        };
+        self.semantics_text_content(&plain, &cuts)
+    }
+
+    /// Whether the text is read through regions of its own instead of one
+    /// label: when it routes links, or when it is selectable and a span's
+    /// accessibility override reads part of it differently from its glyphs
+    /// (ADR-0282, and its amendment for overrides).
+    fn reads_by_regions(&self) -> bool {
+        self.routes_links() || (self.selectable.is_some() && self.runs.override_count() > 0)
     }
 
     /// Names the link that holds the primary keyboard focus and the ring it
@@ -605,52 +634,69 @@ fn line_of(lines: &[LineMetrics], position: TextPosition) -> Option<&LineMetrics
         })
 }
 
-impl Diagnosticable for RenderParagraph {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("text_align", self.painter.text_align());
-        properties.add(
-            "text_direction",
-            self.painter
-                .text_direction()
-                .map_or_else(|| "unset".to_string(), |d| format!("{d:?}")),
+impl Inspect for RenderParagraph {
+    fn kind(&self) -> &'static str {
+        "RenderParagraph"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("text_align", &self.painter.text_align());
+        out.field("text_direction", &self.painter.text_direction());
+        out.field("soft_wrap", &self.soft_wrap);
+        out.field(
+            "selection_start",
+            &self.selection.as_ref().map(|range| range.start),
         );
-        properties.add_flag("soft_wrap", self.soft_wrap, "soft wrap");
-        properties.add("selection", format!("{:?}", self.selection));
-        properties.add("selection_color", format!("{:?}", self.selection_color));
-        properties.add(
-            "selection_handles",
-            format!(
-                "{:?}",
-                (
-                    self.start_handle.map(|link| link.id()),
-                    self.end_handle.map(|link| link.id()),
-                )
-            ),
+        out.field(
+            "selection_end",
+            &self.selection.as_ref().map(|range| range.end),
         );
-        properties.add(
-            "max_lines",
-            self.painter
-                .max_lines()
-                .map_or_else(|| "unlimited".to_string(), |n| n.to_string()),
-        );
-        properties.add(
-            "ellipsis",
-            self.painter
-                .ellipsis()
-                .map_or_else(|| "none".to_string(), ToString::to_string),
-        );
-        // Emit the plain text so diagnostics dumps and test finders can match on
-        // content without inspecting the full `InlineSpan` tree.
+        out.field("selection_color", &self.selection_color);
+        out.field("start_handle", &self.start_handle.map(|link| link.id()));
+        out.field("end_handle", &self.end_handle.map(|link| link.id()));
+        out.field("max_lines", &self.painter.max_lines());
+        out.field("ellipsis", &self.painter.ellipsis());
+        // The plain text lets a test find a paragraph by its content without walking the
+        // `InlineSpan` tree, and the style lets it read a resolved text color back out. The text
+        // is borrowed from the span: one run is the `text` field, several are the `text_runs`
+        // sequence in reading order, so describing a paragraph allocates only in the sink.
         if let Some(span) = self.painter.text() {
-            properties.add("text", span.to_plain_text());
-            // Lets a mounted-widget test read a resolved text color back out
-            // (e.g. a themed/cascaded color reaching the real paragraph a
-            // build produced) without downcasting or inspecting paint
-            // output — `TextStyle: Debug` is already required for the type
-            // to be usable at all, so this is a pure diagnostics read, not
-            // a new capability.
-            properties.add("style", format!("{:?}", span.style()));
+            match span {
+                InlineSpan::Text(root) if root.children.is_empty() => {
+                    if let Some(text) = root.text.as_deref() {
+                        out.field("text", text);
+                    }
+                }
+                InlineSpan::Text(root) => {
+                    out.field("text_runs", &TextRuns(root));
+                }
+                InlineSpan::Placeholder(_) => {}
+            }
+            out.value("style", Value::Debug(&span.style()));
         }
+    }
+}
+
+/// The text of every run of a span tree, in reading order.
+struct TextRuns<'a>(&'a TextSpan);
+
+impl Seq for TextRuns<'_> {
+    fn each(&self, item: &mut dyn FnMut(Value<'_>)) {
+        fn walk(span: &TextSpan, item: &mut dyn FnMut(Value<'_>)) {
+            if let Some(text) = span.text.as_deref() {
+                item(Value::Str(text));
+            }
+            for child in &span.children {
+                walk(child, item);
+            }
+        }
+        walk(self.0, item);
+    }
+}
+
+impl FieldValue for TextRuns<'_> {
+    fn payload(&self) -> Payload<'_> {
+        Payload::Seq(self)
     }
 }
 
@@ -823,11 +869,23 @@ impl RenderBox for RenderParagraph {
     }
 
     /// A paragraph with routed links publishes one region per link and per
-    /// stretch of text between them, bounded by their glyphs.
+    /// stretch of text between them, bounded by their glyphs. Selectable,
+    /// each region holds the paragraph's runs in its bytes, and each span
+    /// whose accessibility override replaces its text is a region too.
     fn semantics_regions(&self, size: Size) -> SemanticsRegions {
-        if !self.routes_links() || !self.painter.has_layout() {
+        if !self.reads_by_regions() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
+        let run_ranges: Vec<std::ops::Range<usize>> = self
+            .selectable_runs()
+            .map(|content| {
+                content
+                    .runs()
+                    .iter()
+                    .map(flui_rendering::semantics::TextRun::byte_range)
+                    .collect()
+            })
+            .unwrap_or_default();
         SemanticsRegions {
             before_children: self.runs.semantics_regions(
                 &self.painter,
@@ -835,6 +893,7 @@ impl RenderBox for RenderParagraph {
                 self.link_focus.map(|focus| focus.link),
                 self.painter.text_direction().map(semantics_text_direction),
                 flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, size.width, size.height),
+                &run_ranges,
             ),
             after_children: Vec::new(),
         }
@@ -845,9 +904,11 @@ impl RenderBox for RenderParagraph {
     /// each span's accessibility override in place of its own text,
     /// preserving children. The text direction is the paragraph's.
     ///
-    /// A paragraph with routed links is instead a boundary whose children
-    /// are its [`semantics_regions`](Self::semantics_regions): its links and
-    /// the text between them, read in order, so no text is read twice.
+    /// A paragraph with routed links, or selectable with a span's
+    /// accessibility override, is instead a boundary whose children are its
+    /// [`semantics_regions`](Self::semantics_regions): its links, overridden
+    /// spans and the text between them, read in order, so no text is read
+    /// twice.
     ///
     /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
     /// decisions"): an EMPTY plain-text span sets neither `label` nor
@@ -864,10 +925,7 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
-        let plain = span.to_plain_text();
-        // A span's accessibility override reads differently from its glyphs.
-        let overridden = text != plain;
-        if self.routes_links() {
+        if self.reads_by_regions() {
             config.set_semantics_boundary(true);
             config.set_explicit_child_nodes(true);
         } else {
@@ -875,20 +933,22 @@ impl RenderBox for RenderParagraph {
         }
         // Selectable text is a nested merger with its runs: a node of its own
         // inside any merge, read and selected by character (ADR-0214). Its
-        // runs are its authored text, so text a span's accessibility
-        // override replaces or silences keeps its label and publishes no
-        // runs until runs can carry overrides. With routed links it stays
-        // the boundary of its link regions, so each link keeps its own node
-        // and handler, and publishes no runs until links carry runs of their
-        // own. Either way it names its anchor.
+        // runs are its authored text. Read through regions (routed links, a
+        // span's accessibility override), it is a merge boundary instead, so
+        // each region keeps its own node and reading and holds the runs in
+        // its bytes (`semantics_regions`). Either way it names its anchor.
         if let Some(anchor) = &self.selectable {
             config.add_anchor(anchor.clone());
             config.set_semantics_boundary(true);
-            if !self.routes_links() && !overridden {
-                config.set_merging_semantics_of_descendants(true);
-                if let Some(content) = self.semantics_text_content(&plain) {
-                    config.set_text_content(content);
+            if let Some(content) = self.selectable_runs() {
+                if self.reads_by_regions() {
+                    // Kept out of an outer merge without merging its link
+                    // regions into it (ADR-0282).
+                    config.set_merge_boundary(true);
+                } else {
+                    config.set_merging_semantics_of_descendants(true);
                 }
+                config.set_text_content(content);
             }
         }
         if let Some(direction) = self.painter.text_direction() {

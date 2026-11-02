@@ -4,6 +4,8 @@
 - **Superseded-by:** [ADR-0109](ADR-0109-notification-channel-surface.md)
 - **Superseded-by:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   only decision 4's unconditional retention of known inert text payloads.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes.
 - **Date:** 2026-10-03
 - **Related:** [ADR-0074](ADR-0074-realm-scoped-signals.md), [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
 

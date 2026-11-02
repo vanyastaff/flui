@@ -4,9 +4,9 @@
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
-    WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry, WindowMaterial,
-    WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    CapabilityAbsence, KeyboardInset, SizeConstraints, Unsupported, UnsupportedReason,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
+    WindowInsets, WindowMaterial, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -347,7 +347,7 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE;
     honours_title.sets_title = Availability::Native;
-    let facts: [(&str, WindowState); 10] = [
+    let facts: [(&str, WindowState); 11] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
         ("occlusion", base_state().with_occluded(true)),
@@ -358,8 +358,21 @@ fn each_window_fact_advances_the_revision() {
             base_state().with_appearance(WindowAppearance::Dark),
         ),
         (
-            "safe area",
-            base_state().with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0)),
+            "insets",
+            base_state().with_insets(
+                WindowInsets::ZERO
+                    .try_with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0))
+                    .expect("a finite safe area"),
+            ),
+        ),
+        (
+            "keyboard",
+            base_state().with_insets(
+                WindowInsets::ZERO.with_keyboard(
+                    KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
+                        .expect("a finite keyboard inset"),
+                ),
+            ),
         ),
         (
             "execution",

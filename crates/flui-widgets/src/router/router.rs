@@ -9,9 +9,10 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, BuildContextExt};
+use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
@@ -260,6 +261,7 @@ impl<R: Routable> StatefulView for Router<R> {
             transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
+            announcer: StackAnnouncer::default(),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
             shared: Rc::downgrade(&shared),
@@ -326,12 +328,31 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// this router's handle, the facade, a back gesture or a barrier — reaches
     /// the stack; then seed the initial pages, which the navigator flushes
     /// once when it mounts.
-    fn init_state(&mut self, _cx: &dyn LifecycleContext) {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
         self.shared
             .navigator
             .add_observer(Arc::clone(&self.observer));
         self.seed_initial_pages();
+        // The stack it opens on is not a change.
+        let announcer = &self.shared.announcer;
+        *announcer.driver.borrow_mut() = cx.async_driver();
+        *announcer.told.borrow_mut() = self.shared.page_ids();
+        // An unmounted router tells nobody again. Its queued delivery and its
+        // listeners go at the unmount, not with the shared state: a listener
+        // that holds a handle would keep that state, and so itself, alive.
+        // The delivery goes first, so a listener capture's `Drop` that panics
+        // leaves nothing queued.
+        let shared = Rc::downgrade(&*self.shared);
+        cx.on_unmount(Box::new(move || {
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let delivery = shared.announcer.delivery.borrow_mut().take();
+            drop(delivery);
+            Listenable::remove_all_listeners(&shared.announcer.notifier);
+        }))
+        .forget();
     }
 
     fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
@@ -423,6 +444,23 @@ pub(super) struct RouterShared<R: Routable> {
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
+    /// Tells the listeners of every [`RouterHandle`] of stack changes.
+    pub(super) announcer: StackAnnouncer,
+}
+
+/// Tells a router's listeners of committed stack changes, one delivery at a
+/// time on the UI runtime's tasks.
+#[derive(Default)]
+pub(super) struct StackAnnouncer {
+    pub(super) notifier: ChangeNotifier,
+    /// The pages the listeners were last told of, bottom to top.
+    told: RefCell<Vec<RouteId>>,
+    /// Whether a delivery is queued and has not started yet.
+    queued: Cell<bool>,
+    /// Where deliveries run; set when the router mounts.
+    driver: RefCell<Option<AsyncDriver>>,
+    /// The latest delivery's task.
+    delivery: RefCell<Option<TaskToken>>,
 }
 
 impl<R: Routable> Drop for RouterShared<R> {
@@ -432,7 +470,8 @@ impl<R: Routable> Drop for RouterShared<R> {
         let stack = RetiredValues(std::mem::take(self.stack.get_mut()));
         let page = self.page.withdraw();
         let transitions = self.transitions.withdraw();
-        drop((navigator, stack, page, transitions));
+        let delivery = self.announcer.delivery.get_mut().take();
+        drop((navigator, stack, page, transitions, delivery));
     }
 }
 
@@ -502,7 +541,8 @@ impl<R: Routable> RouterShared<R> {
     }
 
     /// Drop the page `id` names, if it is one of this router's.
-    fn forget(&self, id: RouteId) {
+    fn forget(self: &Rc<Self>, id: RouteId) {
+        let _told = self.announce_on_exit();
         let retired = {
             let mut stack = self.stack.borrow_mut();
             stack
@@ -511,6 +551,102 @@ impl<R: Routable> RouterShared<R> {
                 .map(|index| stack.remove(index))
         };
         drop(RouterRetiredValues(retired.into_iter().collect()));
+    }
+
+    /// The ids of the pages on the stack, bottom to top.
+    fn page_ids(&self) -> Vec<RouteId> {
+        self.stack.borrow().iter().map(|entry| entry.id).collect()
+    }
+
+    /// Queue a delivery to the listeners if the stack is no longer the one
+    /// they were told of and none is queued. Runs no listener: they run in
+    /// the delivery, on a later turn of the runtime's tasks.
+    ///
+    /// It raises only a panic of the frame hook its spawn wakes, and never
+    /// while a panic unwinds, so it may run then: a state it cannot read now
+    /// is mid-edit, and that edit announces when it ends.
+    pub(super) fn announce(self: &Rc<Self>) {
+        let announcer = &self.announcer;
+        if announcer.queued.get() {
+            return;
+        }
+        let (Ok(told), Ok(stack)) = (announcer.told.try_borrow(), self.stack.try_borrow()) else {
+            return;
+        };
+        if told.iter().copied().eq(stack.iter().map(|entry| entry.id)) {
+            return;
+        }
+        drop((told, stack));
+        let Some(driver) = announcer
+            .driver
+            .try_borrow()
+            .ok()
+            .and_then(|driver| driver.clone())
+        else {
+            return;
+        };
+        let Ok(mut delivery) = announcer.delivery.try_borrow_mut() else {
+            return;
+        };
+        let shared = Rc::downgrade(self);
+        // Spawning wakes the frame hook, which may panic; the task is then
+        // cancelled, and nothing stays queued, so the next announcement tries
+        // again. While a panic already unwinds, the hook's is kept, not raised.
+        let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            driver.spawn_local(Box::pin(async move { deliver(&shared) }))
+        }));
+        let token = match spawned {
+            Ok(token) => token,
+            Err(payload) => {
+                drop(delivery);
+                if std::thread::panicking() {
+                    flui_foundation::panic::discard_payload(payload);
+                    return;
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        announcer.queued.set(true);
+        // The task it replaces has run, or is the delivery running now,
+        // whose cancellation is honoured once its poll returns.
+        let finished = delivery.replace(token);
+        drop(delivery);
+        drop(finished);
+    }
+
+    /// A guard that [announces](Self::announce) the stack when it drops,
+    /// whether the edit it covers returns or unwinds: an edit that commits
+    /// and then runs user code that panics (an observer, a retired route's
+    /// `Drop`) is still told.
+    pub(super) fn announce_on_exit(self: &Rc<Self>) -> AnnounceOnExit<'_, R> {
+        AnnounceOnExit(self)
+    }
+}
+
+/// See [`RouterShared::announce_on_exit`].
+pub(super) struct AnnounceOnExit<'a, R: Routable>(&'a Rc<RouterShared<R>>);
+
+impl<R: Routable> Drop for AnnounceOnExit<'_, R> {
+    fn drop(&mut self) {
+        self.0.announce();
+    }
+}
+
+/// Tell `shared`'s listeners of the stack, if it still differs from the one
+/// they were last told of.
+fn deliver<R: Routable>(shared: &Weak<RouterShared<R>>) {
+    let Some(shared) = shared.upgrade() else {
+        return;
+    };
+    let announcer = &shared.announcer;
+    announcer.queued.set(false);
+    let now = shared.page_ids();
+    let changed = *announcer.told.borrow() != now;
+    *announcer.told.borrow_mut() = now;
+    // Recorded before the listeners run: a navigation they make queues the
+    // next delivery, and a panic in one leaves the next delivery to come.
+    if changed && shared.mounted.get() {
+        announcer.notifier.notify_listeners();
     }
 }
 

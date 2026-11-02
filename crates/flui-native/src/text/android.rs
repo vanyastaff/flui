@@ -366,6 +366,101 @@ pub(crate) mod ime {
         ])
     }
 
+    /// `CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION`.
+    pub const FLAG_HAS_VISIBLE_REGION: i32 = 0x01;
+    /// `CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION`.
+    pub const FLAG_HAS_INVISIBLE_REGION: i32 = 0x02;
+
+    /// The most composing code units whose boxes go to the input method in
+    /// one update: a composition is a word or a phrase, and a longer one has
+    /// its first boxes sent rather than an update the size of the text.
+    pub const MAX_CHARACTER_BOUNDS: usize = 256;
+
+    /// The boxes of the composing text's characters for
+    /// `CursorAnchorInfo.Builder.addCharacterBounds`, in the view's physical
+    /// pixels.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct CharacterBounds {
+        /// The composing text the boxes were measured on: the view attaches
+        /// them only while it composes this same text at [`Self::start`], so
+        /// an input method edit that arrived after the measure never gets
+        /// another text's boxes.
+        pub text: String,
+        /// The UTF-16 index of the first box, where the composition starts.
+        pub start: i32,
+        /// Left, top, right and bottom of each code unit's box, in order.
+        pub rects: Vec<f32>,
+        /// `FLAG_HAS_VISIBLE_REGION`, with `FLAG_HAS_INVISIBLE_REGION` for a box
+        /// part of which lies outside the field's visible area, for each code
+        /// unit. The store says only that part is outside, so a clipped box
+        /// reads as partly visible.
+        pub flags: Vec<i32>,
+    }
+
+    /// The boxes of the composition `session` holds, one per UTF-16 code unit
+    /// as Android indexes them: both halves of a surrogate pair take the
+    /// pair's box. `None` with no composition, or when the field has no layout
+    /// for it, a box would not be finite, or the store is protected (its text
+    /// cannot be read, so the boxes could not be matched to it).
+    #[must_use]
+    pub fn character_bounds(
+        session: &(impl TextStoreRead + ?Sized),
+        scale: f64,
+    ) -> Option<CharacterBounds> {
+        let composition = session.composition()?.range;
+        let start = composition.start().get();
+        let end = composition
+            .end()
+            .get()
+            .min(start.saturating_add(MAX_CHARACTER_BOUNDS));
+        let pixel = |value: f64| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "CursorAnchorInfo takes floats; finite pixels fit"
+            )]
+            let narrowed = (value * scale) as f32;
+            narrowed.is_finite().then_some(narrowed)
+        };
+        let mut bounds = CharacterBounds {
+            text: session.text(composition).ok()?,
+            start: i32::try_from(start).ok()?,
+            rects: Vec::with_capacity((end - start) * 4),
+            flags: Vec::with_capacity(end - start),
+        };
+        let mut unit = start;
+        while unit < end {
+            let box_of = |units: usize| {
+                let range =
+                    Utf16Range::try_new(Utf16Offset::new(unit), Utf16Offset::new(unit + units))?;
+                session.rect_for_range(range).ok()
+            };
+            // One unit is a whole character unless it opens a surrogate pair,
+            // whose first half alone is no boundary.
+            let (units, rect) = match box_of(1) {
+                Some(rect) => (1, rect),
+                None => (2, box_of(2)?),
+            };
+            let area = rect.bounds;
+            let edges = [
+                pixel(area.origin.x)?,
+                pixel(area.origin.y)?,
+                pixel(area.origin.x + area.size.width)?,
+                pixel(area.origin.y + area.size.height)?,
+            ];
+            let flag = if rect.clipped {
+                FLAG_HAS_VISIBLE_REGION | FLAG_HAS_INVISIBLE_REGION
+            } else {
+                FLAG_HAS_VISIBLE_REGION
+            };
+            for _ in 0..units.min(end - unit) {
+                bounds.rects.extend_from_slice(&edges);
+                bounds.flags.push(flag);
+            }
+            unit += units;
+        }
+        Some(bounds)
+    }
+
     /// Whether a stylus press at `point` starts the input method's handwriting, on
     /// a device that has it (API 33): a pen tip down inside the focused field's
     /// bounds. Android's automatic initiation sees only the stylus events native
@@ -424,8 +519,8 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        ImeEdit, Mirror, Snapshot, cursor_anchor, editor_action_key, editor_info, replay_current,
-        starts_handwriting,
+        CharacterBounds, ImeEdit, Mirror, Snapshot, character_bounds, cursor_anchor,
+        editor_action_key, editor_info, replay_current, starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -1002,22 +1097,22 @@ mod input {
             }
         }
 
-        /// Tell the input method where the caret and the field are.
+        /// Tell the input method where the caret, the field and the composing
+        /// text's characters are.
         fn push_cursor(&self) {
             let Some(store) = self.focused() else {
                 return;
             };
-            let found: Rc<Cell<Option<[f32; 7]>>> = Rc::default();
+            type Found = Option<([f32; 7], Option<CharacterBounds>)>;
+            let found: Rc<RefCell<Found>> = Rc::default();
             let out = Rc::clone(&found);
             let scale = self.view.scale();
             let grant = LockGrant::read(move |session| {
                 let caret = session.rect_for_range(session.selection().range());
                 if let Ok(caret) = caret {
-                    out.set(cursor_anchor(
-                        caret.bounds,
-                        session.document_bounds().ok(),
-                        scale,
-                    ));
+                    let anchor = cursor_anchor(caret.bounds, session.document_bounds().ok(), scale);
+                    *out.borrow_mut() =
+                        anchor.map(|anchor| (anchor, character_bounds(session, scale)));
                 }
             });
             {
@@ -1026,15 +1121,31 @@ mod input {
                     return;
                 }
             }
-            let Some(anchor) = found.get() else {
+            let Some((anchor, characters)) = found.take() else {
                 return;
             };
             self.view.post(move |env, view| {
+                let (text, start, rects, flags) = characters
+                    .map_or((String::new(), -1, Vec::new(), Vec::new()), |bounds| {
+                        (bounds.text, bounds.start, bounds.rects, bounds.flags)
+                    });
+                let text = env.new_string(text)?;
+                let rect_array = env.new_float_array(rects.len())?;
+                rect_array.set_region(env, 0, &rects)?;
+                let flag_array = env.new_int_array(flags.len())?;
+                flag_array.set_region(env, 0, &flags)?;
+                let mut arguments = anchor.map(JValue::Float).to_vec();
+                arguments.extend([
+                    JValue::Object(&text),
+                    JValue::Int(start),
+                    JValue::Object(&rect_array),
+                    JValue::Object(&flag_array),
+                ]);
                 env.call_method(
                     view,
                     jni_str!("updateCursorAnchor"),
-                    jni_sig!("(FFFFFFF)V"),
-                    &anchor.map(JValue::Float),
+                    jni_sig!("(FFFFFFFLjava/lang/String;I[F[I)V"),
+                    &arguments,
                 )
                 .map(drop)
             });

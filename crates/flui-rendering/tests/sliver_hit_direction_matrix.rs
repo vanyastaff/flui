@@ -45,7 +45,13 @@ struct SliverHitHost {
     constraints: SliverConstraints,
 }
 
-impl flui_foundation::Diagnosticable for SliverHitHost {}
+impl flui_foundation::inspect::Inspect for SliverHitHost {
+    fn kind(&self) -> &'static str {
+        "SliverHitHost"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SliverHitHost {
     type Arity = Variable;
@@ -89,7 +95,13 @@ impl MainAxisBandSliver {
     }
 }
 
-impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
+impl flui_foundation::inspect::Inspect for MainAxisBandSliver {
+    fn kind(&self) -> &'static str {
+        "MainAxisBandSliver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;

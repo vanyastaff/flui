@@ -13,7 +13,13 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct NoopSliver;
 
-impl flui_foundation::Diagnosticable for NoopSliver {}
+impl flui_foundation::inspect::Inspect for NoopSliver {
+    fn kind(&self) -> &'static str {
+        "NoopSliver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for NoopSliver {
     type Arity = Leaf;

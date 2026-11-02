@@ -1,0 +1,2 @@
+### Fixed
+- A failing frame request no longer unwinds into the code that scheduled the rebuild (`RebuildHandle::schedule`, `BuildOwner::schedule_build_for`, a signal write). The failure is logged, the rebuild stays queued and the frame request is retried. Before, the scheduling widget stopped halfway: a `Focus` widget that lost focus never ran `on_focus_change` (a `SelectionArea` kept its handles).

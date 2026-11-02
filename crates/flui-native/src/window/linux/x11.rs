@@ -440,7 +440,11 @@ pub(crate) mod support {
             // connection of its own, and the server reports a present's
             // completion to that connection alone: no other client learns when
             // the window's frames reached the screen.
-            .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform);
+            .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform)
+            // X11 has no on-screen keyboard protocol and no system gesture
+            // edges.
+            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
+            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
         capabilities.frame_rate_hint = Availability::Unavailable;
         if !support.managed {
             capabilities =

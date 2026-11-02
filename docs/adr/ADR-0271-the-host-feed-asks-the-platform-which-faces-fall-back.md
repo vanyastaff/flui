@@ -1,6 +1,6 @@
 # ADR-0271: The host font feed asks the platform which faces fall back, and FLUI's tables follow
 
-- **Status:** Accepted (2026-10-30). Not implemented: the locale-change trigger (§4).
+- **Status:** Accepted (2026-10-30). Implemented.
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §7 only for its clause that
   FLUI's tables are the whole fallback order: the platform's answer now comes first, and the
@@ -177,10 +177,20 @@ Two installs never interleave their per-script writes. The type enforces this ra
 there is one feed per collection, and so one `FallbackOrder`, and `set_system_fallback` takes
 `&mut self`. The text path takes no FLUI lock (ADR-0092 §3).
 
-When the app's effective locale changes (the locale preference, or a per-app language), the
-platform layer asks again for the new locale and installs the answer through its `FallbackOrder`.
-Not implemented: the trigger from a locale change waits for the locale preference in the platform
-layer ([`docs/gaps.md`](../gaps.md) entry 14). Until then the host locale at start-up holds.
+The feed's thread keeps the `FallbackOrder` and serves locale requests from the owner. The app
+runtime takes the first locale of each preference snapshot it accepts and sends its BCP 47 tag
+when it differs from the tag sent last. A tag accepted before the feed launched is sent with the
+launch. Of the tags waiting, the thread asks the host for the newest only, and it skips a tag equal
+to the order's `FallbackOrder::locale()`, so the first snapshot does not ask again for the host
+locale the feed already asked with. After an install that changed the order, the thread wakes the
+owner, whose next turn announces the generation to every UI runtime. A query that panics is
+contained to its request: the lists written before the panic stay, the owner is still woken, and
+the next request is served. Where the feed ran on the owner thread (wasm32, or no thread could
+start), the order stays with the owner and each request is served there.
+
+The collection is the app's one, so the order follows the host's first preferred locale, not a
+locale a window or a paragraph resolves. A per-paragraph locale in the fallback key is the
+follow-up ([`docs/gaps.md`](../gaps.md) entry 35).
 
 ### §5 Tests stay deterministic
 
@@ -217,6 +227,12 @@ fallback order is FLUI's tables alone, as today. A test that needs a host answer
 - `a_rescan_swaps_the_fallback_order_between_frames` (same table) installs a new answer through
   `FallbackOrder`. Each change raises the generation once, the text measures in the new order, and
   an equal answer changes nothing.
+- `a_new_locale_asks_the_host_again_once`, `a_query_that_panics_leaves_later_locales_served` and
+  `the_feed_thread_asks_only_for_the_newest_locale` (flui-app, rows of `font_collection_contract`)
+  cover the rescan: a locale accepted before the launch, one ask and one announcement per new
+  locale, none for the feed's own, a contained panic, and only the newest of several waiting tags
+  on the feed's thread. `an_accepted_locale_reaches_the_host_font_feed` (a row of
+  `owner_dispatch_matrix`) sends the first locale of each accepted snapshot once per change.
 - `fonts_xml_orders_fallback_by_language` (flui-native, `pub(crate)`, runs on Linux) parses
   the `fonts.xml` of API 23 and API 28, recorded from AOSP.
 - `the_font_matcher_answers_per_script_in_the_locale` (flui-native, `pub(crate)`, runs on Linux)

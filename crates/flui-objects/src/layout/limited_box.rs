@@ -147,18 +147,16 @@ impl Default for RenderLimitedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderLimitedBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "max_width",
-            self.max_width
-                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
-        );
-        builder.add(
-            "max_height",
-            self.max_height
-                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
-        );
+impl flui_foundation::inspect::Inspect for RenderLimitedBox {
+    fn kind(&self) -> &'static str {
+        "RenderLimitedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("max_width", &self.max_width)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("max_height", &self.max_height)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 

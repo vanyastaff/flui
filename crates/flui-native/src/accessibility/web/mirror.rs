@@ -7,9 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use accesskit::{Node, NodeId, TreeId, TreeUpdate};
+use accesskit::{Action, Node, NodeId, Role, TextPosition, TextSelection, TreeId, TreeUpdate};
 
 use super::aria::{self, ElementIds, ElementSpec, ParentFrame};
+use super::selection::{self, Run};
 
 /// One change the DOM must make, in the order given.
 #[derive(Debug, PartialEq)]
@@ -17,6 +18,9 @@ pub(crate) enum Op {
     /// Create a detached element for `id`. A later [`Op::Children`] or
     /// [`Op::Root`] places it.
     Create { id: NodeId, spec: ElementSpec },
+    /// Put a new element for `id`, of `spec`, in the place of its old one,
+    /// with the old one's children.
+    Replace { id: NodeId, spec: ElementSpec },
     /// Bring `id`'s element from `old` to `new`.
     Update {
         id: NodeId,
@@ -34,6 +38,11 @@ pub(crate) enum Op {
     Remove(NodeId),
     /// The tree's focus moved to `id`.
     Focus(NodeId),
+    /// The page's selection is to show this one, published by static text
+    /// that publishes runs, or none: the text it was in is gone or holds no
+    /// selection now. Also asked when such text is written again, which
+    /// drops the page's selection in it.
+    Select(Option<TextSelection>),
 }
 
 /// Why an update was not applied; the mirror is unchanged and the
@@ -61,6 +70,9 @@ pub(crate) struct Mirror {
     nodes: HashMap<NodeId, Entry>,
     root: Option<NodeId>,
     focus: Option<NodeId>,
+    /// The node whose published selection the page shows, and that
+    /// selection.
+    selection: Option<(NodeId, TextSelection)>,
     ids: ElementIds,
 }
 
@@ -71,6 +83,7 @@ impl Mirror {
             nodes: HashMap::new(),
             root: None,
             focus: None,
+            selection: None,
             ids,
         }
     }
@@ -83,6 +96,11 @@ impl Mirror {
     /// The node mirrored as `id`, if it is in the tree.
     pub(crate) fn node(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(&id).map(|entry| &entry.node)
+    }
+
+    /// The spec `id`'s element was last brought to, if it is mirrored.
+    pub(crate) fn spec(&self, id: NodeId) -> Option<&ElementSpec> {
+        self.nodes.get(&id).and_then(|entry| entry.spec.as_ref())
     }
 
     /// The node the tree's focus is on, if it is in the tree.
@@ -111,13 +129,22 @@ impl Mirror {
         let mut structure_changed = self.root != Some(root);
         let mut placement_changed: HashSet<NodeId> = HashSet::new();
         let mut children_changed: Vec<NodeId> = Vec::new();
+        let mut selected: Vec<(NodeId, Option<TextSelection>)> = Vec::new();
         for (id, node) in update.nodes {
+            let previous = self
+                .nodes
+                .get(&id)
+                .and_then(|entry| entry.node.text_selection());
+            if node.text_selection() != previous && !aria::takes_text(&node) {
+                selected.push((id, node.text_selection().copied()));
+            }
             if let Some(entry) = self.nodes.get_mut(&id) {
                 if entry.node.children() != node.children() {
                     children_changed.push(id);
                     structure_changed = true;
                 }
-                if entry.node.bounds() != node.bounds() {
+                // Its children are placed in its box, scrolled as it is.
+                if ParentFrame::of(&entry.node) != ParentFrame::of(&node) {
                     placement_changed.insert(id);
                 }
                 entry.node = node;
@@ -179,7 +206,8 @@ impl Mirror {
         }
 
         // Specs: every node sent, and the children of a node whose bounds
-        // moved or whose children changed, since they are placed in its box.
+        // moved, whose scroll changed or whose children changed, since they
+        // are placed in its box.
         let mut dirty: Vec<NodeId> = sent
             .iter()
             .copied()
@@ -190,10 +218,18 @@ impl Mirror {
                 dirty.extend(entry.node.children().iter().copied());
             }
         }
+        // A paragraph's text is its runs'.
+        dirty.extend(
+            sent.iter()
+                .filter_map(|id| self.nodes.get(id))
+                .filter(|entry| entry.node.role() == Role::TextRun)
+                .filter_map(|entry| entry.parent),
+        );
         dirty.sort_unstable();
         dirty.dedup();
+        let mut rewritten = false;
         for id in dirty {
-            self.refresh(id, root, &mut ops);
+            rewritten |= self.refresh(id, root, &mut ops);
         }
 
         children_changed.sort_unstable();
@@ -228,7 +264,137 @@ impl Mirror {
                 ops.push(Op::Focus(focus));
             }
         }
+        // An element moved or replaced takes the page's selection in it
+        // along: shown again like text written again.
+        let moved = ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::Replace { .. } | Op::Children { .. } | Op::Root(_) | Op::Detach(_)
+            )
+        });
+        self.select(selected, rewritten || moved, &mut ops);
         Ok(ops)
+    }
+
+    /// Follow the selections `selected` names, as (node, published
+    /// selection): the last one published is the page's. The one shown is
+    /// dropped when its node left the tree or published none, and shown
+    /// again when text it may lie in was `rewritten` or moved.
+    fn select(
+        &mut self,
+        selected: Vec<(NodeId, Option<TextSelection>)>,
+        rewritten: bool,
+        ops: &mut Vec<Op>,
+    ) {
+        let before = self.selection.map(|(_, selection)| selection);
+        for (id, selection) in selected {
+            match selection {
+                Some(selection) => self.selection = Some((id, selection)),
+                None if self.selection.is_some_and(|(owner, _)| owner == id) => {
+                    self.selection = None;
+                }
+                None => {}
+            }
+        }
+        if self
+            .selection
+            .is_some_and(|(owner, _)| !self.nodes.contains_key(&owner))
+        {
+            self.selection = None;
+        }
+        let after = self.selection.map(|(_, selection)| selection);
+        if after != before || (rewritten && after.is_some()) {
+            ops.push(Op::Select(after));
+        }
+    }
+
+    /// The selection the page shows, as its node published it.
+    pub(crate) fn selection(&self) -> Option<TextSelection> {
+        self.selection.map(|(_, selection)| selection)
+    }
+
+    /// The runs of `paragraph`, in order, with their ids: its `TextRun`
+    /// children.
+    fn runs(&self, paragraph: NodeId) -> Vec<(NodeId, Run<'_>)> {
+        let Some(entry) = self.nodes.get(&paragraph) else {
+            return Vec::new();
+        };
+        entry
+            .node
+            .children()
+            .iter()
+            .filter_map(|&child| {
+                let node = &self.nodes.get(&child)?.node;
+                (node.role() == Role::TextRun).then(|| {
+                    (
+                        child,
+                        Run {
+                            text: node.value().unwrap_or_default(),
+                            lengths: node.character_lengths(),
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The text of a node that publishes runs, static text or a link inside
+    /// selectable text: the runs' text joined, so that the page's offsets in
+    /// its element are the runs'. `None` for any other node.
+    fn run_text(&self, id: NodeId) -> Option<String> {
+        let node = &self.nodes.get(&id)?.node;
+        if !matches!(node.role(), Role::Label | Role::Link) {
+            return None;
+        }
+        let runs = self.runs(id);
+        (!runs.is_empty()).then(|| runs.iter().map(|(_, run)| run.text).collect())
+    }
+
+    /// The position in `paragraph`'s runs of UTF-16 `offset` into its
+    /// element's text; see [`selection::position_at`].
+    pub(crate) fn text_position(&self, paragraph: NodeId, offset: u32) -> Option<TextPosition> {
+        self.run_text(paragraph)?;
+        let runs = self.runs(paragraph);
+        let texts: Vec<Run<'_>> = runs.iter().map(|&(_, run)| run).collect();
+        let (run, character_index) = selection::position_at(&texts, offset)?;
+        Some(TextPosition {
+            node: runs[run].0,
+            character_index,
+        })
+    }
+
+    /// Where `position` lies in the page: its run's paragraph and the
+    /// UTF-16 offset into the paragraph element's text.
+    pub(crate) fn dom_position(&self, position: TextPosition) -> Option<(NodeId, u32)> {
+        let paragraph = self.nodes.get(&position.node)?.parent?;
+        self.run_text(paragraph)?;
+        let runs = self.runs(paragraph);
+        let run = runs.iter().position(|&(id, _)| id == position.node)?;
+        let texts: Vec<Run<'_>> = runs.iter().map(|&(_, run)| run).collect();
+        let offset = selection::offset_of(&texts, run, position.character_index)?;
+        Some((paragraph, offset))
+    }
+
+    /// The node a selection from `anchor`'s text to `focus`'s is asked of:
+    /// the nearest node over both that takes `SetTextSelection`, the
+    /// paragraph itself when both ends are in it.
+    pub(crate) fn selection_target(&self, anchor: NodeId, focus: NodeId) -> Option<NodeId> {
+        let ancestors = |mut id: NodeId| {
+            let mut chain = vec![id];
+            while let Some(parent) = self.nodes.get(&id).and_then(|entry| entry.parent) {
+                chain.push(parent);
+                id = parent;
+            }
+            chain
+        };
+        let over_focus: HashSet<NodeId> = ancestors(focus).into_iter().collect();
+        ancestors(anchor).into_iter().find(|id| {
+            over_focus.contains(id)
+                && self
+                    .nodes
+                    .get(id)
+                    .is_some_and(|entry| entry.node.supports_action(Action::SetTextSelection))
+        })
     }
 
     /// Every child named by the update, and the root, is either sent or
@@ -265,34 +431,77 @@ impl Mirror {
         reachable
     }
 
-    /// Bring `id`'s spec up to date and say what changed.
-    fn refresh(&mut self, id: NodeId, root: NodeId, ops: &mut Vec<Op>) {
+    /// Bring `id`'s spec up to date and say what changed. Answers whether
+    /// the text of static text that publishes runs was written, which drops
+    /// the page's selection in it.
+    fn refresh(&mut self, id: NodeId, root: NodeId, ops: &mut Vec<Op>) -> bool {
         let Some(entry) = self.nodes.get(&id) else {
-            return;
+            return false;
         };
         if !aria::is_mirrored(&entry.node) {
-            return;
+            return false;
         }
         let frame = entry
             .parent
             .and_then(|parent| self.nodes.get(&parent))
             .map_or_else(ParentFrame::default, |parent| ParentFrame::of(&parent.node));
-        let spec = aria::describe(id, &entry.node, frame, id == root, &self.ids);
+        let mut spec = aria::describe(id, &entry.node, frame, id == root, &self.ids);
+        let run_text = self.run_text(id);
+        let runs = run_text.is_some();
+        if runs {
+            spec.text = run_text;
+            // The runs name the element: a link that holds runs is named by
+            // its content, as a leaf link is.
+            spec.attributes.retain(|&(name, _)| name != "aria-label");
+        } else if let Some(text) = spec.text.take_if(|_| {
+            entry
+                .parent
+                .is_some_and(|parent| self.run_text(parent).is_some())
+        }) {
+            // A region of a text whose runs the text kept (ADR-0282 §5): the
+            // text's element already shows its words, so the region shows
+            // none. A link is named by its words instead; static text needs
+            // no name of its own.
+            if entry.node.role() != Role::Label
+                && !spec
+                    .attributes
+                    .iter()
+                    .any(|&(name, _)| name == "aria-label")
+            {
+                spec.attributes.push(("aria-label", text));
+                spec.attributes.sort_by_key(|&(name, _)| name);
+            }
+        }
         let entry = self
             .nodes
             .get_mut(&id)
             .expect("BUG: refreshed node is mirrored");
         match entry.spec.replace(spec.clone()) {
-            None => ops.push(Op::Create { id, spec }),
-            Some(old) if old != spec => ops.push(Op::Update { id, old, new: spec }),
-            Some(_) => {}
+            None => {
+                ops.push(Op::Create { id, spec });
+                runs
+            }
+            // A node that is mirrored as another element now (a link given a
+            // URL, a slider made read-only) gets a new one in its place.
+            Some(old) if old.tag != spec.tag => {
+                ops.push(Op::Replace { id, spec });
+                runs
+            }
+            Some(old) if old != spec => {
+                let written = runs && old.text != spec.text;
+                ops.push(Op::Update { id, old, new: spec });
+                written
+            }
+            Some(_) => false,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use accesskit::{Action, Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
+    use accesskit::{
+        Action, Node, NodeId, Rect, Role, TextPosition, TextSelection, TreeId, TreeInfo, TreeUpdate,
+    };
 
     use super::{ElementIds, Mirror, Op, Refused};
 
@@ -345,6 +554,7 @@ mod tests {
             .map(|op| match op {
                 Op::Create { id, .. } => format!("create {}", id.0),
                 Op::Update { id, .. } => format!("update {}", id.0),
+                Op::Replace { id, .. } => format!("replace {}", id.0),
                 Op::Children { id, children } => format!(
                     "children {} {:?}",
                     id.0,
@@ -354,6 +564,7 @@ mod tests {
                 Op::Root(id) => format!("root {}", id.0),
                 Op::Remove(id) => format!("remove {}", id.0),
                 Op::Focus(id) => format!("focus {}", id.0),
+                Op::Select(selection) => format!("select {selection:?}"),
             })
             .collect()
     }
@@ -443,6 +654,87 @@ mod tests {
             button.map(|placement| (placement.left, placement.top)),
             Some((5.0, 5.0))
         );
+    }
+
+    /// A scroller scrolling re-places its children, as far into its content
+    /// as it is scrolled, so each stays where it is seen.
+    #[test]
+    fn a_scroller_scrolling_replaces_its_children() {
+        let scroller = |position: f64| {
+            let mut node = Node::new(Role::ScrollView);
+            node.set_bounds(Rect::new(0.0, 0.0, 400.0, 300.0));
+            node.add_action(Action::SetScrollOffset);
+            node.set_scroll_y(position);
+            node.set_scroll_y_min(0.0);
+            node.set_scroll_y_max(500.0);
+            node.set_children(vec![BUTTON]);
+            node
+        };
+        let list = NodeId(4);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[list])),
+                    (list, scroller(0.0)),
+                    (BUTTON, button()),
+                ],
+                ROOT,
+            ))
+            .expect("first tree");
+        let ops = mirror
+            .apply(partial(vec![(list, scroller(120.0))], ROOT))
+            .expect("scrolled");
+        let placed = |ops: &[Op], id| {
+            ops.iter().find_map(|op| match op {
+                Op::Update {
+                    id: updated, new, ..
+                } if *updated == id => Some(new.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            placed(&ops, list)
+                .and_then(|spec| spec.scroll)
+                .map(|scroll| (scroll.top, scroll.height)),
+            Some((120.0, 800.0)),
+            "the scroller is scrolled inside content as tall as its extent"
+        );
+        assert_eq!(
+            placed(&ops, BUTTON).map(|spec| spec.placement.top),
+            Some(130.0),
+            "the button is re-placed into the scrolled content"
+        );
+    }
+
+    /// A node mirrored as another element now gets a new element in the
+    /// place of its old one.
+    #[test]
+    fn a_link_given_a_url_is_replaced_by_an_anchor() {
+        let link = |url: Option<&str>| {
+            let mut node = Node::new(Role::Link);
+            node.set_label("Docs");
+            node.add_action(Action::Click);
+            if let Some(url) = url {
+                node.set_url(url);
+            }
+            node
+        };
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![(ROOT, root(&[BUTTON])), (BUTTON, link(None))],
+                ROOT,
+            ))
+            .expect("first tree");
+        let ops = mirror
+            .apply(partial(
+                vec![(BUTTON, link(Some("https://example.com/docs")))],
+                ROOT,
+            ))
+            .expect("given a URL");
+        assert_eq!(kinds(&ops), ["replace 2"]);
+        assert_eq!(mirror.spec(BUTTON).map(|spec| spec.tag.name()), Some("a"));
     }
 
     /// A node moving under its old descendant leaves its parent's element
@@ -547,5 +839,285 @@ mod tests {
                 "focus 1"
             ]
         );
+    }
+
+    const AREA: NodeId = NodeId(20);
+    const FIRST: NodeId = NodeId(21);
+    const SECOND: NodeId = NodeId(22);
+    const FIRST_RUN: NodeId = NodeId(31);
+    const SECOND_RUN: NodeId = NodeId(32);
+    const THIRD_RUN: NodeId = NodeId(33);
+
+    fn run(text: &str) -> Node {
+        let mut node = Node::new(Role::TextRun);
+        node.set_value(text);
+        let lengths: Vec<u8> = text
+            .chars()
+            .map(|character| u8::try_from(character.len_utf8()).expect("one character"))
+            .collect();
+        node.set_character_lengths(lengths);
+        node
+    }
+
+    fn paragraph(value: &str, runs: &[NodeId]) -> Node {
+        let mut node = Node::new(Role::Label);
+        node.set_value(value);
+        node.set_children(runs.to_vec());
+        node.add_action(Action::SetTextSelection);
+        node
+    }
+
+    fn area(selection: Option<TextSelection>) -> Node {
+        let mut node = Node::new(Role::Document);
+        node.set_children(vec![FIRST, SECOND]);
+        node.add_action(Action::SetTextSelection);
+        if let Some(selection) = selection {
+            node.set_text_selection(selection);
+        }
+        node
+    }
+
+    fn at(node: NodeId, character_index: usize) -> TextPosition {
+        TextPosition {
+            node,
+            character_index,
+        }
+    }
+
+    fn document(selection: Option<TextSelection>) -> TreeUpdate {
+        full(
+            vec![
+                (ROOT, root(&[AREA])),
+                (AREA, area(selection)),
+                (
+                    FIRST,
+                    paragraph("Greeting\nHi 😀 there", &[FIRST_RUN, SECOND_RUN]),
+                ),
+                (SECOND, paragraph("Bye", &[THIRD_RUN])),
+                (FIRST_RUN, run("Hi 😀")),
+                (SECOND_RUN, run(" there")),
+                (THIRD_RUN, run("Bye")),
+            ],
+            ROOT,
+        )
+    }
+
+    /// Static text that publishes runs shows the runs' text, and the page's
+    /// offsets in it are positions in the runs: an emoji is one character of
+    /// two offsets, and one run's end is the next one's start.
+    #[test]
+    fn a_paragraph_s_text_is_its_runs_and_its_offsets_their_positions() {
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror.apply(document(None)).expect("a document");
+        assert_eq!(
+            mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
+            Some("Hi 😀 there"),
+            "the runs' text, not the label joined to it"
+        );
+        let rows = [
+            (3, at(FIRST_RUN, 3)),
+            (4, at(FIRST_RUN, 3)),
+            (5, at(SECOND_RUN, 0)),
+            (11, at(SECOND_RUN, 6)),
+        ];
+        for (offset, position) in rows {
+            assert_eq!(
+                mirror.text_position(FIRST, offset),
+                Some(position),
+                "offset {offset}"
+            );
+        }
+        assert_eq!(mirror.text_position(FIRST, 12), None, "past the end");
+        assert_eq!(mirror.text_position(AREA, 0), None, "the area has no runs");
+        assert_eq!(mirror.dom_position(at(FIRST_RUN, 4)), Some((FIRST, 5)));
+        assert_eq!(mirror.dom_position(at(SECOND_RUN, 1)), Some((FIRST, 6)));
+        assert_eq!(mirror.dom_position(at(THIRD_RUN, 3)), Some((SECOND, 3)));
+        assert_eq!(mirror.dom_position(at(THIRD_RUN, 4)), None);
+        assert_eq!(mirror.selection_target(FIRST, FIRST), Some(FIRST));
+        assert_eq!(mirror.selection_target(FIRST, SECOND), Some(AREA));
+    }
+
+    /// The page shows the selection static text last published, again when
+    /// the text it lies in is written or moved, and none once it is cleared or its
+    /// node goes.
+    #[test]
+    fn the_page_shows_the_published_selection() {
+        let across = TextSelection {
+            anchor: at(FIRST_RUN, 1),
+            focus: at(THIRD_RUN, 2),
+        };
+        let select = |selection: Option<TextSelection>| format!("select {selection:?}");
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        let ops = mirror.apply(document(Some(across))).expect("a document");
+        assert_eq!(kinds(&ops).last(), Some(&select(Some(across))));
+        let ops = mirror
+            .apply(partial(vec![(AREA, area(Some(across)))], ROOT))
+            .expect("the same selection");
+        assert_eq!(kinds(&ops), Vec::<String>::new(), "published already");
+        let ops = mirror
+            .apply(partial(vec![(THIRD_RUN, run("Bye!"))], ROOT))
+            .expect("a run's text changes");
+        assert_eq!(
+            kinds(&ops),
+            vec!["update 22".to_owned(), select(Some(across))],
+            "the rewritten text drops the page's selection, so it is shown again"
+        );
+        let mut reordered = area(Some(across));
+        reordered.set_children(vec![SECOND, FIRST]);
+        let ops = mirror
+            .apply(partial(vec![(AREA, reordered)], ROOT))
+            .expect("the paragraphs swap");
+        assert_eq!(
+            kinds(&ops).last(),
+            Some(&select(Some(across))),
+            "moved elements drop the page's selection in them, so it is shown again"
+        );
+        let ops = mirror
+            .apply(partial(vec![(AREA, area(None))], ROOT))
+            .expect("the selection is cleared, the paragraphs back in order");
+        assert_eq!(
+            kinds(&ops),
+            vec!["children 20 [21, 22]".to_owned(), select(None)]
+        );
+        assert_eq!(mirror.selection(), None);
+
+        mirror
+            .apply(partial(vec![(AREA, area(Some(across)))], ROOT))
+            .expect("selected again");
+        let ops = mirror
+            .apply(partial(vec![(ROOT, root(&[]))], ROOT))
+            .expect("the area goes");
+        assert_eq!(kinds(&ops).last(), Some(&select(None)));
+    }
+
+    /// Selectable text with a link: the link and the text before it each
+    /// hold their runs and show their text, the paragraph, whose regions
+    /// carry its text, shows none, and the page's offsets in the link are
+    /// positions in its runs.
+    #[test]
+    fn a_link_in_selectable_text_shows_its_runs() {
+        const BEFORE: NodeId = NodeId(23);
+        const LINK: NodeId = NodeId(24);
+        // The text publishes no label of its own: its regions carry it.
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK]);
+        text.add_action(Action::SetTextSelection);
+        let mut before = Node::new(Role::Label);
+        before.set_label("Read the ");
+        before.set_value("Read the ");
+        before.set_children(vec![FIRST_RUN]);
+        let mut link = Node::new(Role::Link);
+        link.set_label("terms");
+        link.set_url("https://example.com/terms");
+        link.add_action(Action::Click);
+        link.set_children(vec![SECOND_RUN]);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[AREA])),
+                    (AREA, area(None)),
+                    (FIRST, text),
+                    (SECOND, paragraph("Bye", &[THIRD_RUN])),
+                    (BEFORE, before),
+                    (LINK, link),
+                    (FIRST_RUN, run("Read the ")),
+                    (SECOND_RUN, run("terms")),
+                    (THIRD_RUN, run("Bye")),
+                ],
+                ROOT,
+            ))
+            .expect("a document with a link");
+        let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
+        assert_eq!(text_of(FIRST), None, "the paragraph has no text of its own");
+        assert_eq!(text_of(BEFORE).as_deref(), Some("Read the "));
+        assert_eq!(text_of(LINK).as_deref(), Some("terms"));
+        assert!(
+            mirror.spec(LINK).is_some_and(|spec| spec.tag.name() == "a"
+                && spec
+                    .attributes
+                    .iter()
+                    .all(|&(name, _)| name != "aria-label")),
+            "an anchor named by its runs"
+        );
+        assert_eq!(mirror.text_position(LINK, 2), Some(at(SECOND_RUN, 2)));
+        assert_eq!(mirror.dom_position(at(SECOND_RUN, 5)), Some((LINK, 5)));
+        assert_eq!(mirror.selection_target(BEFORE, LINK), Some(FIRST));
+    }
+
+    /// A labelled wrapper over selectable text keeps its own text: it is
+    /// not its child's runs joined, so its label is still its content.
+    #[test]
+    fn a_labelled_wrapper_over_selectable_text_keeps_its_text() {
+        const WRAPPER: NodeId = NodeId(25);
+        let mut wrapper = Node::new(Role::Label);
+        wrapper.set_label("Shipping");
+        wrapper.set_value("Shipping");
+        wrapper.set_children(vec![FIRST]);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[WRAPPER])),
+                    (WRAPPER, wrapper),
+                    (FIRST, paragraph("Free delivery", &[FIRST_RUN])),
+                    (FIRST_RUN, run("Free delivery")),
+                ],
+                ROOT,
+            ))
+            .expect("a wrapper over selectable text");
+        assert_eq!(
+            mirror.spec(WRAPPER).and_then(|spec| spec.text.as_deref()),
+            Some("Shipping")
+        );
+        assert_eq!(
+            mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
+            Some("Free delivery")
+        );
+    }
+
+    /// Selectable text whose regions could not hold its runs keeps them: its
+    /// element shows its words once, its link is named by its words and
+    /// shows none, and the stretch before the link shows none.
+    #[test]
+    fn a_text_that_kept_its_runs_shows_its_words_once() {
+        const BEFORE: NodeId = NodeId(23);
+        const LINK: NodeId = NodeId(24);
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK, FIRST_RUN, SECOND_RUN]);
+        text.add_action(Action::SetTextSelection);
+        let mut before = Node::new(Role::Label);
+        before.set_label("Read the ");
+        before.set_value("Read the ");
+        let mut link = Node::new(Role::Link);
+        link.set_label("terms");
+        link.set_url("https://example.com/terms");
+        link.add_action(Action::Click);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[FIRST])),
+                    (FIRST, text),
+                    (BEFORE, before),
+                    (LINK, link),
+                    (FIRST_RUN, run("Read the ")),
+                    (SECOND_RUN, run("terms")),
+                ],
+                ROOT,
+            ))
+            .expect("a text that kept its runs");
+        let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
+        assert_eq!(text_of(FIRST).as_deref(), Some("Read the terms"));
+        assert_eq!(text_of(BEFORE), None);
+        assert_eq!(text_of(LINK), None);
+        assert!(
+            mirror.spec(LINK).is_some_and(|spec| spec
+                .attributes
+                .iter()
+                .any(|(name, value)| *name == "aria-label" && value == "terms")),
+            "the link is named by its words"
+        );
+        assert_eq!(mirror.text_position(FIRST, 10), Some(at(SECOND_RUN, 1)));
     }
 }

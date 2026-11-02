@@ -85,8 +85,12 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIntrinsicHeight {
-    fn debug_fill_properties(&self, _builder: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderIntrinsicHeight {
+    fn kind(&self) -> &'static str {
+        "RenderIntrinsicHeight"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {
         // No configuration knobs to expose.
     }
 }

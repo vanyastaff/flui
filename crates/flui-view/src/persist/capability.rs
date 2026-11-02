@@ -5,7 +5,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use flui_platform::capability::Capability;
-use flui_platform::{Storage, StorageFuture, StorageName, Stored, StoredVersion, WriteMode};
+use flui_platform::{
+    CopiedAside, Storage, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
+};
 
 /// The storage capability: `cx.capability::<StorageCapability>()` hands out
 /// a [`StorageHandle`].
@@ -60,6 +62,12 @@ impl StorageHandle {
         mode: WriteMode,
     ) -> StorageFuture<StoredVersion> {
         self.store.publish(name, bytes, mode)
+    }
+
+    /// Copy the value stored under `name` to a new name beside it; see
+    /// [`Storage::copy_aside`].
+    pub fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside> {
+        self.store.copy_aside(name)
     }
 }
 

@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardRead, ClipboardWrite, Concealment, capability::Resolver};
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
@@ -200,12 +200,18 @@ fn ring(bell: &OwnedFd) {
 }
 
 impl host::NativeClipboard for X11Clipboard {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.send(Command::Read(Name::Clipboard, answer));
     }
 
-    fn write_text(&self, text: String) {
-        self.send(Command::Write(text));
+    fn write(&self, write: ClipboardWrite) {
+        self.send(Command::Write(write));
+    }
+
+    /// A concealed write is offered with KDE's password-manager hint, which
+    /// only a clipboard manager that reads it honours.
+    fn concealment(&self) -> Concealment {
+        Concealment::HintOnly
     }
 }
 
@@ -236,7 +242,7 @@ impl host::NativePrimarySelection for X11Clipboard {
         self.current().is_some()
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         match self.current() {
             // Asked with nothing held: the closure may call back in.
             Some(text) => answer_with(text, answer),

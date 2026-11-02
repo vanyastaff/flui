@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
-use flui_foundation::{Diagnosticable, LayerId, RenderId};
+use flui_foundation::{LayerId, RenderId};
 
 use super::stamp::{BoundaryStamp, ContentToken};
 use crate::{LayerLink, layer::Layer};
@@ -40,18 +40,6 @@ pub struct LayerNode {
     /// object is itself a repaint boundary (as `RenderView` is); a plain
     /// `RenderFlex` root, as most test fixtures mount, leaves it `None`.
     boundary: Option<BoundaryStamp>,
-}
-
-impl Diagnosticable for LayerNode {
-    /// Names the node by its layer kind and merges the layer's own properties
-    /// with the boundary stamp.
-    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
-        let mut node = self.layer.to_diagnostics_node();
-        if let Some(stamp) = &self.boundary {
-            node = node.property("render_id", format!("{:?}", stamp.render_id()));
-        }
-        node
-    }
 }
 
 impl LayerNode {
@@ -276,6 +264,12 @@ impl LayerTree {
     #[inline]
     pub fn leader(&self, link: LayerLink) -> Option<LayerId> {
         self.leaders.get(&link).copied()
+    }
+
+    /// Every `LeaderLayer` registered in this frame, with its link, in no
+    /// particular order.
+    pub fn leaders(&self) -> impl Iterator<Item = (LayerLink, LayerId)> + '_ {
+        self.leaders.iter().map(|(link, id)| (*link, *id))
     }
 
     /// Whether `id` names a node of this tree.

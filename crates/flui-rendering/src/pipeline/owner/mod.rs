@@ -14,10 +14,10 @@ mod cell;
 mod compositing;
 mod construction;
 mod counters;
-mod diagnostics;
 mod hit_slop;
 mod input_regions;
 mod layout;
+mod leader_watch;
 mod paint;
 mod poison;
 mod query;
@@ -28,6 +28,8 @@ mod transform_path;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
+pub(crate) use leader_watch::LeaderWatches;
+pub use leader_watch::{LeaderGeometry, LeaderWatch};
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
@@ -41,7 +43,7 @@ use std::{
 };
 
 use flui_foundation::RenderId;
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::Matrix4;
 use flui_layer::LayerTree;
 use flui_semantics::SemanticsOwner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -236,6 +238,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// publishes nowhere (the state before a bridge is installed).
     semantics_update_callback: Option<flui_semantics::SemanticsUpdateCallback>,
 
+    /// The route-change sink for semantics owners this pipeline creates, set
+    /// where the platform bridge conveys route changes natively
+    /// ([`Self::set_semantics_route_change_sink`]); without one an owner
+    /// announces each named route.
+    semantics_route_change_sink: Option<flui_semantics::platform::RouteChangeSink>,
+
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
@@ -243,20 +251,25 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// from an earlier one is not read as a layer of the next.
     scenes_painted: u64,
 
-    /// Composite-resolved offsets for `Layer::Follower` render nodes,
+    /// Composite-resolved transforms for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
     /// `last_layer_tree`. Populated post-paint
     /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
-    /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
+    /// follower correlation via the SAME `flui_layer::resolve_follower_transform`
     /// the GPU path (flui-engine's `render_layer_recursive`) resolves
-    /// against. Present ⟹ the follower is visible this frame at the
-    /// translated offset; absent ⟹ either not a follower, or a hidden one
+    /// against. Present ⟹ the follower is visible this frame under the
+    /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
     /// hit-test walk (`accessors.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
     /// not its plain tree-relative position — cached from the last
     /// composite, one frame stale by design.
-    last_follower_offsets: FxHashMap<RenderId, Offset>,
+    last_follower_transforms: FxHashMap<RenderId, Matrix4>,
+
+    /// The live [`LeaderWatch`]es of this pipeline, checked against each
+    /// layer tree paint commits. Shared with the [`PipelineCell`], which
+    /// registers them without checking the owner out.
+    leader_watches: Rc<LeaderWatches>,
 
     /// Painted output kept per repaint boundary, reused when that boundary is
     /// clean on a later frame.
@@ -291,12 +304,13 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
-    /// `show_when_unlinked == false`) — the follower hit-test side table's companion to
-    /// `last_follower_offsets`. The hit-test walk must distinguish "not a
+    /// `show_when_unlinked == false`, a leader clipped out under
+    /// `LeaderClip::Hide`, or a degenerate chain) — the follower hit-test side table's companion to
+    /// `last_follower_transforms`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
-    /// `resolve_follower_offset -> None -> don't descend` on the render
-    /// path); `last_follower_offsets`'s absence alone conflates both
+    /// `resolve_follower_transform -> None -> don't descend` on the render
+    /// path); `last_follower_transforms`'s absence alone conflates both
     /// cases, so this set carries follower identity independent of
     /// resolution outcome.
     last_hidden_follower_ids: FxHashSet<RenderId>,
@@ -373,7 +387,10 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
                 &self.scheduler.debug_doing_semantics(),
             )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
-            .field("follower_offset_count", &self.last_follower_offsets.len())
+            .field(
+                "follower_transform_count",
+                &self.last_follower_transforms.len(),
+            )
             .field(
                 "hidden_follower_count",
                 &self.last_hidden_follower_ids.len(),
@@ -413,9 +430,11 @@ where
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
+        semantics_route_change_sink: from.semantics_route_change_sink,
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
-        last_follower_offsets: from.last_follower_offsets,
+        last_follower_transforms: from.last_follower_transforms,
+        leader_watches: from.leader_watches,
         retained_boundaries: from.retained_boundaries,
         retained_pixel_ratio: from.retained_pixel_ratio,
         root_content: from.root_content,
@@ -525,7 +544,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for SemanticBox {}
+    impl flui_foundation::inspect::Inspect for SemanticBox {
+        fn kind(&self) -> &'static str {
+            "SemanticBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     /// A leaf whose label can change between passes — what a live widget
     /// does. `SemanticBox`'s `&'static str` label is frozen at insertion,
@@ -550,7 +575,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for MutableLeaf {}
+    impl flui_foundation::inspect::Inspect for MutableLeaf {
+        fn kind(&self) -> &'static str {
+            "MutableLeaf"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for MutableLeaf {
         type Arity = Leaf;
@@ -872,7 +903,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for PanickingPaintBox {}
+    impl flui_foundation::inspect::Inspect for PanickingPaintBox {
+        fn kind(&self) -> &'static str {
+            "PanickingPaintBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingPaintBox {
         fn perform_layout_raw(
@@ -926,7 +963,13 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for PanickingLayoutBox {}
+    impl flui_foundation::inspect::Inspect for PanickingLayoutBox {
+        fn kind(&self) -> &'static str {
+            "PanickingLayoutBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for PanickingLayoutBox {
         fn perform_layout_raw(
@@ -1040,7 +1083,13 @@ mod tests {
     #[derive(Debug)]
     struct RecursiveTextBox(RecursiveLayoutPayload);
 
-    impl flui_foundation::Diagnosticable for RecursiveTextBox {}
+    impl flui_foundation::inspect::Inspect for RecursiveTextBox {
+        fn kind(&self) -> &'static str {
+            "RecursiveTextBox"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for RecursiveTextBox {
         type Arity = flui_foundation::Single;
@@ -1060,7 +1109,13 @@ mod tests {
     #[derive(Debug)]
     struct RecursiveTextSliver(RecursiveLayoutPayload);
 
-    impl flui_foundation::Diagnosticable for RecursiveTextSliver {}
+    impl flui_foundation::inspect::Inspect for RecursiveTextSliver {
+        fn kind(&self) -> &'static str {
+            "RecursiveTextSliver"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl crate::traits::RenderSliver for RecursiveTextSliver {
         type Arity = flui_foundation::Single;
@@ -1081,7 +1136,13 @@ mod tests {
     #[derive(Debug)]
     struct TextSliverHost(Rc<std::cell::Cell<crate::constraints::SliverGeometry>>);
 
-    impl flui_foundation::Diagnosticable for TextSliverHost {}
+    impl flui_foundation::inspect::Inspect for TextSliverHost {
+        fn kind(&self) -> &'static str {
+            "TextSliverHost"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for TextSliverHost {
         type Arity = flui_foundation::Single;

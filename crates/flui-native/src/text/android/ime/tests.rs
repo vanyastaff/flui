@@ -7,19 +7,20 @@
 use std::rc::Rc;
 
 use super::{
-    IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
-    IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER,
-    TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
-    TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI,
-    cursor_anchor, editor_action_key, editor_info, replay_current, starts_handwriting,
+    CharacterBounds, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE, IME_ACTION_NEXT,
+    IME_ACTION_PREVIOUS, IME_ACTION_SEARCH, IME_FLAG_NO_ENTER_ACTION, ImeEdit,
+    MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE,
+    TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE, TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+    TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI, character_bounds, cursor_anchor,
+    editor_action_key, editor_info, replay_current, starts_handwriting,
 };
 use crate::owner::android::EditorState;
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::NamedKey;
 use flui_platform::text_store::{
-    CommitGate, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore, TextStoreStatus,
-    Utf16Offset, Utf16Range,
+    CommitGate, Composition, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
+    TextStoreStatus, Utf16Offset, Utf16Range,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
@@ -373,6 +374,68 @@ fn the_cursor_anchor_is_in_physical_pixels() {
     assert_eq!(cursor_anchor(huge, None, 2.0), None);
 }
 
+/// The boxes of the characters `store` composes over `composing`, as the host
+/// sends them at a scale of 2.
+fn composing_boxes(
+    store: &InMemoryTextStore,
+    composing: Option<Utf16Range>,
+) -> Option<CharacterBounds> {
+    let _composed = store
+        .request_lock(
+            LockGrant::read_write(move |session| {
+                session
+                    .set_composition(composing.map(|range| Composition {
+                        range,
+                        hides_caret: false,
+                    }))
+                    .expect("the composition lies in the text");
+            }),
+            LockTiming::Sync,
+        )
+        .expect("a free store grants a sync edit");
+    let found = Rc::new(std::cell::RefCell::new(None));
+    let out = Rc::clone(&found);
+    let _read = store
+        .request_lock(
+            LockGrant::read(move |session| *out.borrow_mut() = character_bounds(session, 2.0)),
+            LockTiming::Sync,
+        )
+        .expect("a free store grants a sync read");
+    found.take()
+}
+
+/// The composing text's characters go to the input method one box per UTF-16
+/// index, in physical pixels: both halves of a surrogate pair take the pair's
+/// box, the boxes carry the text they were measured on, nothing goes without
+/// a composition, and a long composition sends its
+/// first boxes only.
+fn the_composing_characters_have_their_boxes() {
+    let store = InMemoryTextStore::new("xa😀b");
+    let boxes = composing_boxes(&store, Some(range(1, 5))).expect("a composition has boxes");
+    assert_eq!(boxes.start, 1);
+    assert_eq!(
+        boxes.text, "a😀b",
+        "the boxes name the text they were measured on"
+    );
+    assert_eq!(
+        boxes.rects,
+        [
+            20.0, 0.0, 40.0, 40.0, // a
+            40.0, 0.0, 60.0, 40.0, // 😀, its first half
+            40.0, 0.0, 60.0, 40.0, // and its second
+            60.0, 0.0, 80.0, 40.0, // b
+        ]
+    );
+    assert_eq!(boxes.flags, [FLAG_HAS_VISIBLE_REGION; 4]);
+    assert_eq!(composing_boxes(&store, None), None);
+
+    let long = InMemoryTextStore::new("a".repeat(MAX_CHARACTER_BOUNDS + 10));
+    let boxes = composing_boxes(&long, Some(range(0, MAX_CHARACTER_BOUNDS + 10)))
+        .expect("a composition has boxes");
+    assert_eq!(boxes.flags.len(), MAX_CHARACTER_BOUNDS);
+    assert_eq!(boxes.rects.len(), MAX_CHARACTER_BOUNDS * 4);
+}
+
 #[test]
 fn android_ime_adapter() {
     crate::table_test::run_table(
@@ -429,6 +492,10 @@ fn android_ime_adapter() {
             (
                 "the_cursor_anchor_is_in_physical_pixels",
                 the_cursor_anchor_is_in_physical_pixels,
+            ),
+            (
+                "the_composing_characters_have_their_boxes",
+                the_composing_characters_have_their_boxes,
             ),
         ],
     );

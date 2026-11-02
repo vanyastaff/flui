@@ -35,9 +35,9 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, PlatformFailure, PlatformWindow, SizeConstraints,
-    Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowId, WindowMaterial,
-    WindowMode, WindowOptions, WindowReveal, WindowState,
+    AdmittedCommand, ApplyError, CapabilityAbsence, CursorError, PlatformFailure, PlatformWindow,
+    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowId,
+    WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -146,7 +146,10 @@ pub(crate) const fn window_capabilities(
     gate: &Result<Since<SystemBackdrop>, Unsupported>,
 ) -> WindowCapabilities {
     use flui_platform::Availability::{Emulated, Native};
-    let mut capabilities = WindowCapabilities::NONE;
+    // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
+    // does not read yet.
+    let mut capabilities =
+        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;

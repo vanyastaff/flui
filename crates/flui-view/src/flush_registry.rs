@@ -492,6 +492,20 @@ impl FlushPublisher {
             .map(|write| (write.revision, write.version))
     }
 
+    /// The revision of the last confirmed write of this value when this
+    /// publisher, or a clone of it, made it; `None` when another publisher
+    /// wrote last or nothing was confirmed.
+    #[must_use]
+    pub fn committed_here(&self) -> Option<Revision> {
+        self.shared
+            .slots
+            .lock()
+            .committed
+            .get(&self.key)
+            .filter(|write| Arc::ptr_eq(&write.publisher, &self.identity))
+            .map(|write| write.revision)
+    }
+
     /// Where the bytes published for this value stand.
     #[must_use]
     pub fn state(&self) -> FlushState {

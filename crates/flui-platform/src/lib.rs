@@ -72,6 +72,8 @@
 //!     fn set_ime_cursor_area(&self, _area: Bounds) {}
 //!
 //!     fn discard_composition(&self) {}
+//!
+//!     fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {
@@ -113,6 +115,7 @@
 
 mod brightness;
 pub mod capability;
+mod clipboard;
 pub mod data_transfer;
 mod display;
 pub mod drag;
@@ -129,12 +132,14 @@ mod input;
 pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
+pub mod launch;
 mod locale;
 pub mod os_options;
 mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
+mod regional;
 mod storage;
 mod surface_target;
 mod system_chrome;
@@ -145,9 +150,11 @@ pub mod text_store;
 mod unsupported;
 mod window;
 mod window_handler;
+mod window_insets;
 mod window_state;
 
 pub use brightness::Brightness;
+pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
@@ -188,9 +195,13 @@ pub use preferences::{
     PreferenceQueryError, SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences,
     WheelStep,
 };
+pub use regional::{
+    HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
+    RegionalFormats, RegionalParts, Weekday,
+};
 pub use storage::{
-    AppDataDir, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName, Stored,
-    StoredVersion, WriteMode,
+    AppDataDir, CopiedAside, InvalidAppDataDir, Storage, StorageError, StorageFuture, StorageName,
+    Stored, StoredVersion, WriteMode,
 };
 pub use surface_target::{
     DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
@@ -205,6 +216,7 @@ pub use window::{
     WindowOptions, WindowReveal,
 };
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
+pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
     CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,

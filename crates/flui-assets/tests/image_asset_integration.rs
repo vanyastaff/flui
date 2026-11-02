@@ -49,7 +49,7 @@ fn png_declaring(width: u32, height: u32) -> Vec<u8> {
 
 /// An image whose header declares more RGBA8 pixels than the decoded-image
 /// cap is refused by size before the decoder allocates them, on both the
-/// typed and the bridged path.
+/// typed and the decoded-image path.
 #[tokio::test]
 async fn decoded_pixels_are_bounded_before_decoding() {
     let huge = png_declaring(9_000, 9_000);
@@ -78,13 +78,13 @@ async fn decoded_pixels_are_bounded_before_decoding() {
     std::fs::create_dir(&directory).expect("test directory is created");
     let path = directory.join("huge.png");
     std::fs::write(&path, &huge).expect("the oversized header is written");
-    let bridged = registry
-        .load_image_bridged(path.to_string_lossy().into_owned())
+    let decoded = registry
+        .load_image(path.to_string_lossy().into_owned(), None)
         .await;
     let _ = std::fs::remove_dir_all(&directory);
     assert!(
-        refused_by_size(&bridged),
-        "the bridged load is refused, got {bridged:?}"
+        refused_by_size(&decoded),
+        "the decoded-image load is refused, got {decoded:?}"
     );
 }
 

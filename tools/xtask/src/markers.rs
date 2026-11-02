@@ -201,7 +201,18 @@ impl fmt::Display for Marker {
 }
 
 /// Every marker in `text`, the file at `path`.
+///
+/// A file whose first line says `@generated` has none: a tool wrote it from
+/// sources the scan reads, so its text names what they name (`HourCycle::H11`
+/// is an identifier there and a string here).
 fn find(path: &str, text: &str) -> Vec<Marker> {
+    if text
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains("@generated"))
+    {
+        return Vec::new();
+    }
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(at, _)| at + 1))
         .collect();
@@ -459,7 +470,7 @@ fn seed(found: &[Marker]) -> String {
 }
 
 /// The planted files: a virtual path and the text.
-const PLANTED: [(&str, &str); 4] = [
+const PLANTED: [(&str, &str); 5] = [
     (
         "planted.rs",
         include_str!("../fixtures/markers/planted.rs.txt"),
@@ -471,6 +482,10 @@ const PLANTED: [(&str, &str); 4] = [
     (
         "planted.toml",
         include_str!("../fixtures/markers/planted.toml.txt"),
+    ),
+    (
+        "generated.rs",
+        include_str!("../fixtures/markers/generated.rs.txt"),
     ),
     ("allowlist.toml", PLANTED_ALLOWLIST),
 ];

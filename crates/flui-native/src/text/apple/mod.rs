@@ -1,8 +1,8 @@
 //! The Apple hosts' text: AppKit's text input (`macos`), the window's view
 //! serving the focused field's store to the input method through the
 //! `NSTextInputClient` verbs (`client`), UIKit's keyboard responder and
-//! Dynamic Type sizing (`ios`), and the document that responder edits
-//! (`composition`).
+//! Dynamic Type sizing (`ios`), the keyboard traits it reports (`traits`),
+//! and the document that responder edits (`composition`).
 //!
 //! Both input methods speak UTF-16, as `NSString` counts. UIKit's responder
 //! announces `flui_platform::ImeEvent`s, which speak UTF-8 bytes;
@@ -19,6 +19,8 @@ pub(crate) mod composition;
 pub(crate) mod ios;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod traits;
 
 /// The UTF-8 byte range of `text`'s UTF-16 units `from..to`, as
 /// `ImeEvent::Preedit`'s cursor carries it.

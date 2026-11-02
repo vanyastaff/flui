@@ -841,24 +841,20 @@ impl<S: ClipGeometry> Default for RenderClip<S> {
     }
 }
 
-impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
-    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
-        let mut node = flui_foundation::DiagnosticsNode::new(S::DIAGNOSTIC_NAME);
-        let mut builder = flui_foundation::DiagnosticsBuilder::new();
-        self.debug_fill_properties(&mut builder);
-        *node.properties_mut() = builder.build();
-        node
+impl<S: ClipGeometry> flui_foundation::inspect::Inspect for RenderClip<S> {
+    fn kind(&self) -> &'static str {
+        S::DIAGNOSTIC_NAME
     }
 
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("clip_behavior", self.clip_behavior);
-        builder.add_flag(
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("clip_behavior", &self.clip_behavior);
+        out.field(
             "custom_clipper",
-            self.border_radius_source.is_some()
+            &(self.border_radius_source.is_some()
                 || self.path_clip_target.is_some()
-                || self.clip_shape.is_some(),
-            "has custom clipper",
-        );
+                || self.clip_shape.is_some()),
+        )
+        .default(&false);
     }
 }
 

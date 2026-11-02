@@ -233,7 +233,7 @@ pub use test_only_global_key_registry::{
 pub use owner::{
     BuildOwner, BuildPremise, CapabilitySource, DuplicateGlobalKey, ElementOwner, FrameBuildReport,
     GlobalKeyScope, LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason,
-    RebuildReasons, RecoveredAt, RecoveredPanic,
+    RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{

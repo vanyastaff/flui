@@ -40,7 +40,7 @@ half.
 ## `RenderObject`
 
 ```rust,ignore
-pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static { /* ... */ }
+pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static { /* ... */ }
 ```
 
 *(`crates/flui-rendering/src/traits/render_object.rs`)* — performs layout and paint. Two concrete

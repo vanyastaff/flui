@@ -20,6 +20,7 @@ pub enum ClipOp {
 /// Ordered from cheapest to most expensive.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum Clip {
     /// No clipping whatsoever.
     ///

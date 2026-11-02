@@ -52,6 +52,9 @@ slab.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# `Revision` serializes as its number, for a document that records another's
+# revision.
+serde = { workspace = true, optional = true }
 
 # Trait utilities
 downcast-rs = { workspace = true }
@@ -72,6 +75,8 @@ tracing-subscriber = { workspace = true, optional = true }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 criterion = { workspace = true }
+# The `serde` round trip of `Revision`.
+serde_json = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.
@@ -117,6 +122,8 @@ testing = ["dep:tracing-subscriber"]
 # It stays only because CI's `test-features` job still passes
 # `--features flui-view/signals`; it goes with that step.
 signals = []
+# Serialization of `persist::Revision`.
+serde = ["dep:serde"]
 
 # The `legacy-downcast` feature flag was retired
 # (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside

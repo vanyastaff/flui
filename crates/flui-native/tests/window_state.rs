@@ -495,7 +495,13 @@ fn window_facts_arrive_only_in_the_snapshot() {
     let right = platform.display_snapshot().expect("displays").displays()[1].id;
     let window = open(&platform);
     let mock = mock(&window).clone();
-    let insets = EdgeInsets::new(24.0, 0.0, 48.0, 0.0);
+    let insets = flui_platform::WindowInsets::ZERO
+        .try_with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0))
+        .expect("a finite safe area")
+        .with_keyboard(
+            flui_platform::KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
+                .expect("a finite keyboard"),
+        );
     type Report = Box<dyn Fn(&MockWindow)>;
     type Holds = Box<dyn Fn(&WindowState) -> bool>;
     let rows: Vec<(&str, Report, Holds)> = vec![
@@ -520,9 +526,9 @@ fn window_facts_arrive_only_in_the_snapshot() {
             Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
         ),
         (
-            "safe area",
-            Box::new(move |mock: &MockWindow| mock.simulate_safe_area(insets)),
-            Box::new(move |state: &WindowState| state.safe_area == insets),
+            "insets",
+            Box::new(move |mock: &MockWindow| mock.simulate_insets(insets)),
+            Box::new(move |state: &WindowState| state.insets == insets),
         ),
         (
             "execution",

@@ -28,7 +28,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use flui_platform::capability::Resolver;
+use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
@@ -114,7 +114,7 @@ struct Request {
 
 /// What a read does once the state is let go of.
 enum Read {
-    Now(Option<String>),
+    Now(ClipboardRead),
     Ask(SelectionText),
     Pipe(OwnedFd, TextForm),
 }
@@ -279,7 +279,7 @@ impl super::SeatClipboard {
             .unwrap_or(false)
     }
 
-    pub(super) fn read_primary(&self, answer: Resolver<Option<String>>) {
+    pub(super) fn read_primary(&self, answer: Resolver<ClipboardRead>) {
         let last_seat = self.shared.last_input.latest().map(|input| input.seat);
         let read = self
             .shared
@@ -304,7 +304,7 @@ impl super::SeatClipboard {
                     .and_then(|device| device.selection.as_ref())
                     .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
                 else {
-                    return Read::Now(None);
+                    return Read::Now(Ok(None));
                 };
                 match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
                     Ok((reader, writer)) => {
@@ -314,11 +314,11 @@ impl super::SeatClipboard {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "no pipe for a primary selection read");
-                        Read::Now(None)
+                        Read::Now(Err(ClipboardError::Unavailable))
                     }
                 }
             })
-            .unwrap_or(Read::Now(None));
+            .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
@@ -329,7 +329,7 @@ impl super::SeatClipboard {
                     .name("flui-wayland-primary".to_owned())
                     .spawn(move || {
                         let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .map(|bytes| form.decode(bytes));
+                            .and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 if let Err(error) = spawned {

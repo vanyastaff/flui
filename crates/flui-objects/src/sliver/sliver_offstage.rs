@@ -84,9 +84,13 @@ impl Default for RenderSliverOffstage {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverOffstage {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("offstage", self.offstage, "offstage");
+impl flui_foundation::inspect::Inspect for RenderSliverOffstage {
+    fn kind(&self) -> &'static str {
+        "RenderSliverOffstage"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("offstage", &self.offstage).default(&false);
     }
 }
 

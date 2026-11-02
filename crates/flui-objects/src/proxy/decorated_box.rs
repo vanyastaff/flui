@@ -19,7 +19,7 @@ use flui_rendering::{
 };
 
 /// Where the decoration paints relative to the child.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum DecorationPosition {
     /// Behind the child (the common case).
     #[default]
@@ -120,10 +120,19 @@ impl RenderDecoratedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderDecoratedBox {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("decoration", self.decoration.clone());
-        properties.add_default_enum("position", self.position, DecorationPosition::Background);
+impl flui_foundation::inspect::Inspect for RenderDecoratedBox {
+    fn kind(&self) -> &'static str {
+        "RenderDecoratedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // `BoxDecoration` has no typed mapping; it is described by its `Debug`.
+        out.value(
+            "decoration",
+            flui_foundation::inspect::Value::Debug(&self.decoration),
+        );
+        out.field("position", &self.position)
+            .default(&DecorationPosition::Background);
     }
 }
 

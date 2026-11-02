@@ -383,10 +383,13 @@ impl HostFontFeed {
     /// [`FallbackOrder`], which installs a later answer, such as one for a
     /// new locale.
     pub fn run(self) -> FallbackOrder {
-        let mut order = FallbackOrder { fonts: self.fonts };
         if self.faces_fed {
+            let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
+            let mut order = FallbackOrder {
+                fonts: self.fonts,
+                locale: locale.clone(),
+            };
             if let Some(ask) = self.ask {
-                let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
                 order.set_system_fallback(&ask_contained(ask, &locale));
             }
             return order;
@@ -406,6 +409,10 @@ impl HostFontFeed {
         };
         #[cfg(not(any(test, feature = "testing")))]
         let host = scan(self.ask);
+        let order = FallbackOrder {
+            fonts: self.fonts,
+            locale: host.locale().to_owned(),
+        };
         let faces = host.faces();
         drop(host);
         order.fonts.feed_shared(&faces);
@@ -487,6 +494,8 @@ impl FontCollection {
 #[derive(Debug)]
 pub struct FallbackOrder {
     fonts: FontCollection,
+    /// The locale of the order installed last.
+    locale: String,
 }
 
 impl FallbackOrder {
@@ -494,6 +503,17 @@ impl FallbackOrder {
     #[must_use]
     pub fn fonts(&self) -> &FontCollection {
         &self.fonts
+    }
+
+    /// The locale the installed order is for: the host's when the feed ran,
+    /// then that of the last answer [`set_system_fallback`] installed in
+    /// full. An install that unwound leaves the locale before it, so asking
+    /// again for its locale is not skipped as already done.
+    ///
+    /// [`set_system_fallback`]: Self::set_system_fallback
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        &self.locale
     }
 
     /// Installs `system`, the host's own fallback answer for its locale,
@@ -541,6 +561,8 @@ impl FallbackOrder {
             &mut collection,
         );
         announce.announce = changed;
+        drop(announce);
+        self.locale.clone_from(&system.locale);
         changed
     }
 }

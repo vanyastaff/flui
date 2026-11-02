@@ -84,7 +84,9 @@ pub(super) enum RuntimeWork {
     ),
     WindowState(
         PresentationAddress,
-        super::presentation_dispatch::PendingWindowState,
+        // Boxed: the window-state coalescer carries a whole `WindowInsets`,
+        // several times any other work item.
+        Box<super::presentation_dispatch::PendingWindowState>,
     ),
     /// A frame and its vsync on the event timeline.
     Frame(PresentationAddress, flui_platform::FrameRequest),

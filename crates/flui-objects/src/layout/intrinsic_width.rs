@@ -202,14 +202,16 @@ impl RenderIntrinsicWidth {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIntrinsicWidth {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        if let Some(sw) = self.step_width {
-            builder.add_double("step_width", sw, None);
-        }
-        if let Some(sh) = self.step_height {
-            builder.add_double("step_height", sh, None);
-        }
+impl flui_foundation::inspect::Inspect for RenderIntrinsicWidth {
+    fn kind(&self) -> &'static str {
+        "RenderIntrinsicWidth"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("step_width", &self.step_width)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("step_height", &self.step_height)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 

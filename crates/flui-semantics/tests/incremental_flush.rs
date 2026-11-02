@@ -774,11 +774,11 @@ fn configuration_capture_retirement_preserves_first_failure_and_healthy_destruct
         } else {
             result.expect("healthy captures retire normally");
         }
-        let expected = if regular_fails { 1 } else { 2 };
+        let expected = 2;
         assert_eq!(
             retired.load(Ordering::SeqCst),
             expected,
-            "the opaque tail is retained after failure"
+            "every capture is destroyed after a failure, the tail included"
         );
 
         let mut fresh = SemanticsConfiguration::new();

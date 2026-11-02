@@ -612,7 +612,7 @@ struct MockWindowState {
     visible: bool,
     occluded: bool,
     execution: flui_platform::WindowExecutionState,
-    safe_area: flui_foundation::geometry::EdgeInsets,
+    insets: flui_platform::WindowInsets,
     closed: bool,
 
     appearance: WindowAppearance,
@@ -741,7 +741,7 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
         )
         .ok(),
         appearance: model.appearance,
-        safe_area: model.safe_area,
+        insets: model.insets,
         execution,
         occluded: model.occluded,
         hovered,
@@ -813,7 +813,7 @@ impl MockWindow {
             scale_factor: 1.0,
             focused: true,
             execution: flui_platform::WindowExecutionState::Running,
-            safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+            insets: flui_platform::WindowInsets::ZERO,
             visible: options.visible,
             occluded: false,
             closed: false,
@@ -1075,15 +1075,16 @@ impl MockWindow {
         self.delivery.report_hover(hovered);
     }
 
-    /// Simulate an owner-thread safe-area report. Closed and detached windows
+    /// Simulate an owner-thread insets report: the safe area, the keyboard
+    /// and its motion, the system-gesture edges. Closed and detached windows
     /// ignore the report.
-    pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
+    pub fn simulate_insets(&self, insets: flui_platform::WindowInsets) {
         {
             let mut state = self.state.lock();
             if state.closed || state.execution == flui_platform::WindowExecutionState::Detached {
                 return;
             }
-            state.safe_area = insets;
+            state.insets = insets;
         }
         self.publish_state();
     }

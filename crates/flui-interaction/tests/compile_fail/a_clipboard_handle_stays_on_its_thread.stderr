@@ -16,6 +16,24 @@ note: required by a bound in `assert_send`
 6 | fn assert_send<T: Send>() {}
   |                   ^^^^ required by this bound in `assert_send`
 
+error[E0277]: `Rc<text_input::clipboard::ClipboardReads>` cannot be sent between threads safely
+ --> tests/compile_fail/a_clipboard_handle_stays_on_its_thread.rs:9:19
+  |
+9 |     assert_send::<ClipboardHandle>();
+  |                   ^^^^^^^^^^^^^^^ `Rc<text_input::clipboard::ClipboardReads>` cannot be sent between threads safely
+  |
+  = help: within `ClipboardHandle`, the trait `Send` is not implemented for `Rc<text_input::clipboard::ClipboardReads>`
+note: required because it appears within the type `ClipboardHandle`
+ --> src/text_input/clipboard.rs
+  |
+  | pub struct ClipboardHandle {
+  |            ^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/a_clipboard_handle_stays_on_its_thread.rs:6:19
+  |
+6 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
 error[E0277]: `Rc<RefCell<flui_platform::capability::owner::PendingState>>` cannot be sent between threads safely
  --> tests/compile_fail/a_clipboard_handle_stays_on_its_thread.rs:9:19
   |

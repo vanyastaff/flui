@@ -61,9 +61,13 @@ impl Default for RenderIgnorePointer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIgnorePointer {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("ignoring", self.ignoring, "ignoring");
+impl flui_foundation::inspect::Inspect for RenderIgnorePointer {
+    fn kind(&self) -> &'static str {
+        "RenderIgnorePointer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("ignoring", &self.ignoring).default(&false);
     }
 }
 

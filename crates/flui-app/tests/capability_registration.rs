@@ -6,6 +6,7 @@
 use flui_app::app::{AppRunError, Application};
 use flui_app::{AppCapabilities, AppLaunch, LaunchError};
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
+use flui_platform::ClipboardRead;
 use flui_platform::capability::{
     Capability, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
 };
@@ -16,11 +17,15 @@ use flui_widgets::SizedBox;
 struct Inert;
 
 impl ClipboardBackend for Inert {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
-        let _ = answer.resolve(None);
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
+        let _ = answer.resolve(Ok(None));
     }
 
-    fn write_text(&self, _text: String) {}
+    fn write(&self, _write: flui_platform::ClipboardWrite) {}
+
+    fn concealment(&self) -> flui_platform::Concealment {
+        flui_platform::Concealment::Unavailable
+    }
 }
 
 struct ClipboardPlugin;
@@ -28,7 +33,7 @@ struct ClipboardPlugin;
 impl Plugin for ClipboardPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
         registrar.provide::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx.completions().clone()))
+            Ok(ClipboardHandle::new(Inert, cx))
         });
     }
 }
@@ -85,10 +90,10 @@ pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
 
     let two_overrides = application()
         .capability::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx.completions().clone()))
+            Ok(ClipboardHandle::new(Inert, cx))
         })
         .capability::<ClipboardCapability>(|cx: &ProviderContext<'_>| {
-            Ok(ClipboardHandle::new(Inert, cx.completions().clone()))
+            Ok(ClipboardHandle::new(Inert, cx))
         })
         .run();
     assert!(

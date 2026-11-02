@@ -271,6 +271,7 @@ fn refresh(
                 data.high_contrast = values.high_contrast().unwrap_or(false);
                 data.motion = presentation.motion_policy();
                 data.preferred_locales = values.locales().map(Into::into);
+                data.regional_formats = values.regional().clone();
             });
             if let Some(visual_update) = visual_update {
                 visual_update.notify_with(scope);

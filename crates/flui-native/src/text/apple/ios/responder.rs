@@ -18,6 +18,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::sync::Weak;
 
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::text_store::TextStoreStatus;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
@@ -29,12 +30,14 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIResponder, UITextInput, UITextInputDelegate,
-    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
-    UITextPosition, UITextRange, UITextSelectionRect, UITextStorageDirection, UIView,
+    NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UITextAutocorrectionType,
+    UITextInput, UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer,
+    UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
+    UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
 use super::super::composition::{Announcement, Composition, Edit};
+use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
 
@@ -124,6 +127,8 @@ pub(super) struct ResponderIvars {
     /// Where the focused field's caret is, in the window's logical points,
     /// which are this view's: it sits at the window view's origin.
     caret: Cell<CGRect>,
+    /// What the keyboard is told of the focused field.
+    traits: Cell<KeyboardTraits>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
     input_delegate: RefCell<Option<ObjcWeak<ProtocolObject<dyn UITextInputDelegate>>>>,
 }
@@ -145,7 +150,50 @@ define_class!(
 
     unsafe impl NSObjectProtocol for TextInputView {}
 
-    unsafe impl UITextInputTraits for TextInputView {}
+    /// The focused field's traits ([`keyboard_traits`]): UIKit reads them as
+    /// the view becomes first responder and again on `reloadInputViews`.
+    unsafe impl UITextInputTraits for TextInputView {
+        #[unsafe(method(isSecureTextEntry))]
+        fn is_secure_text_entry(&self) -> bool {
+            // A field whose traits cannot be read is taken for a password.
+            os_entry(
+                "FluiTextInputView isSecureTextEntry",
+                (),
+                AfterPanic::Answer(|()| true),
+                || self.ivars().traits.get().secure,
+            )
+        }
+
+        #[unsafe(method(keyboardType))]
+        fn keyboard_type(&self) -> UIKeyboardType {
+            os_entry(
+                "FluiTextInputView keyboardType",
+                (),
+                AfterPanic::Answer(|()| UIKeyboardType::Default),
+                || UIKeyboardType(self.ivars().traits.get().keyboard),
+            )
+        }
+
+        #[unsafe(method(autocorrectionType))]
+        fn autocorrection_type(&self) -> UITextAutocorrectionType {
+            os_entry(
+                "FluiTextInputView autocorrectionType",
+                (),
+                AfterPanic::Answer(|()| UITextAutocorrectionType::No),
+                || UITextAutocorrectionType(self.ivars().traits.get().autocorrection),
+            )
+        }
+
+        #[unsafe(method(spellCheckingType))]
+        fn spell_checking_type(&self) -> UITextSpellCheckingType {
+            os_entry(
+                "FluiTextInputView spellCheckingType",
+                (),
+                AfterPanic::Answer(|()| UITextSpellCheckingType::No),
+                || UITextSpellCheckingType(self.ivars().traits.get().spell_checking),
+            )
+        }
+    }
 
     unsafe impl UIKeyInput for TextInputView {
         /// Always yes: the field may hold text from before it took focus,
@@ -422,6 +470,7 @@ impl TextInputView {
             document: RefCell::new(Composition::default()),
             delivery,
             caret: Cell::new(CGRect::ZERO),
+            traits: Cell::new(KeyboardTraits::DEFAULT),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
         });
@@ -433,6 +482,17 @@ impl TextInputView {
     /// points.
     pub(super) fn set_caret(&self, caret: CGRect) {
         self.ivars().caret.set(caret);
+    }
+
+    /// The focused field's status: the traits the keyboard reads. UIKit
+    /// reads them only as the view becomes first responder, so a keyboard
+    /// already up is told to read them again; one that is down reads them
+    /// when the field takes it.
+    pub(super) fn set_field_status(&self, status: TextStoreStatus) {
+        let traits = keyboard_traits(status);
+        if self.ivars().traits.replace(traits) != traits && self.isFirstResponder() {
+            self.reloadInputViews();
+        }
     }
 
     /// A field took the keyboard or gave it back, or composition was turned

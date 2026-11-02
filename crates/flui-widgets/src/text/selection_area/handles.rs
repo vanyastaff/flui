@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::GestureEndReason;
 use flui_objects::RenderFollowerLayer;
@@ -15,7 +16,8 @@ use flui_painting::paint::Alignment;
 use flui_painting::styling::{BoxDecoration, Color};
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::layer::LayerLink;
+use flui_rendering::layer::{LayerLink, LeaderClip};
+use flui_rendering::pipeline::LeaderWatch;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{
@@ -26,6 +28,7 @@ use flui_view::{
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
+use crate::text::editable_text::CaretHandle;
 use crate::{Container, Positioned, Stack};
 
 /// Which end of a selection a handle moves, in reading order.
@@ -36,12 +39,12 @@ pub enum HandleSide {
     Start,
     /// The end a reader meets last.
     End,
+    /// The caret of an editable text with nothing selected, which the
+    /// handle moves.
+    Collapsed,
 }
 
 /// What a [`SelectionHandles`] builds one handle for.
-///
-/// More may come; an editable text's caret handle will be a third side,
-/// `Collapsed`, of [`HandleSide`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct HandleInfo {
@@ -98,35 +101,54 @@ impl SelectionHandles for DotHandles {
     }
 }
 
-/// Sets the [`SelectionHandles`] of the selection areas beneath it that set
-/// none of their own.
+/// Sets the [`SelectionHandles`] of the selection areas and editable texts
+/// beneath it that set none of their own, and when a tap in those texts
+/// shows a caret handle.
 #[derive(Clone)]
 pub struct DefaultSelectionHandles {
     handles: Rc<dyn SelectionHandles>,
+    caret_handle: Option<CaretHandle>,
     child: BoxedView,
 }
 
 impl std::fmt::Debug for DefaultSelectionHandles {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultSelectionHandles")
+            .field("caret_handle", &self.caret_handle)
             .field("child", &self.child)
             .finish_non_exhaustive()
     }
 }
 
 impl DefaultSelectionHandles {
-    /// `handles` for the areas in `child`.
+    /// `handles` for the areas and fields in `child`.
     pub fn new(handles: impl SelectionHandles, child: impl IntoView) -> Self {
         Self {
             handles: Rc::new(handles),
+            caret_handle: None,
             child: child.into_view().boxed(),
         }
+    }
+
+    /// Also set when a tap in an editable text beneath shows a caret
+    /// handle, in place of the platform's ([`CaretHandle::default`]).
+    #[must_use]
+    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
+        self.caret_handle = Some(caret_handle);
+        self
     }
 
     /// The handles the nearest `DefaultSelectionHandles` above `ctx` sets,
     /// registering a dependency on it.
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<dyn SelectionHandles>> {
         ctx.depend_on::<Self, _>(|scope| Rc::clone(&scope.handles))
+    }
+
+    /// The caret handle the nearest `DefaultSelectionHandles` above `ctx`
+    /// sets, if it sets one, registering a dependency on it.
+    pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
+        ctx.depend_on::<Self, _>(|scope| scope.caret_handle)
+            .flatten()
     }
 }
 
@@ -142,7 +164,7 @@ impl InheritedView for DefaultSelectionHandles {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.handles, &old.handles)
+        !Rc::ptr_eq(&self.handles, &old.handles) || self.caret_handle != old.caret_handle
     }
 }
 
@@ -151,7 +173,7 @@ impl_inherited_view!(DefaultSelectionHandles);
 /// What an area's handles look like: handles it was given, its own or a
 /// default's, else dots in its active colour.
 #[derive(Clone)]
-pub(super) enum Look {
+pub(crate) enum Look {
     /// Handles given to the area or to a `DefaultSelectionHandles` above it.
     Given(Rc<dyn SelectionHandles>),
     /// The dots an area without given handles draws.
@@ -159,7 +181,7 @@ pub(super) enum Look {
 }
 
 impl Look {
-    fn handles(&self) -> &dyn SelectionHandles {
+    pub(crate) fn handles(&self) -> &dyn SelectionHandles {
         match self {
             Self::Given(handles) => handles.as_ref(),
             Self::Dots(dots) => dots,
@@ -168,7 +190,7 @@ impl Look {
 
     /// Whether both build the same handles: the same given handles, or
     /// dots in one colour.
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Given(a), Self::Given(b)) => Rc::ptr_eq(a, b),
             (Self::Dots(a), Self::Dots(b)) => a == b,
@@ -191,11 +213,9 @@ pub(super) struct HandleState {
     entry: RefCell<Option<OverlayEntry>>,
     /// What the handles look like, resolved at the area's last build.
     look: RefCell<Option<Look>>,
-    /// The line heights the shown handles were last built for, `None`
-    /// for an end that was not laid out.
-    built: Cell<[Option<f64>; 2]>,
-    /// Whether a check of the built line heights waits for the frame.
-    check_pending: Cell<bool>,
+    /// Watches on the two ends' leaders: a leader's size is its end's line,
+    /// so a change rebuilds shown handles, a relayout without a build too.
+    watches: RefCell<Vec<LeaderWatch>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
     /// Whether the missing overlay was already reported.
@@ -210,8 +230,7 @@ impl Default for HandleState {
             overlay: RefCell::new(None),
             entry: RefCell::new(None),
             look: RefCell::new(None),
-            built: Cell::new([None; 2]),
-            check_pending: Cell::new(false),
+            watches: RefCell::new(Vec::new()),
             grip: Cell::new(None),
             warned: Cell::new(false),
         }
@@ -222,7 +241,7 @@ impl HandleState {
     /// The link `side`'s end is published under.
     pub(super) fn link(&self, side: HandleSide) -> LayerLink {
         match side {
-            HandleSide::Start => self.links[0],
+            HandleSide::Start | HandleSide::Collapsed => self.links[0],
             HandleSide::End => self.links[1],
         }
     }
@@ -313,8 +332,6 @@ impl StatelessView for HandlesView {
             .upgrade()
             .map(|model| {
                 let heights = model.end_line_heights();
-                model.handles.built.set(heights);
-                model.check_handles_after_frame();
                 [HandleSide::Start, HandleSide::End]
                     .into_iter()
                     .zip(heights)
@@ -336,33 +353,35 @@ impl SelectionModel {
         ]
     }
 
-    /// After the frame, rebuilds shown handles built for lines that have
-    /// since been laid out again: a build runs before layout, so handles
-    /// built in the frame that changes their text read the old lines, or
-    /// none. Without a post-frame lane they keep what they were built for.
-    pub(super) fn check_handles_after_frame(self: &Rc<Self>) {
-        if !self.handles.shown.get() || self.handles.check_pending.replace(true) {
-            return;
-        }
-        let Some(post_frame) = self.post_frame.borrow().clone() else {
-            self.handles.check_pending.set(false);
+    /// Watches the two ends' leaders, once: a leader's size is its end's
+    /// line, so shown handles rebuild when a line changes, a relayout no
+    /// build caused too. A change is heard after the frame that painted it,
+    /// and the handles rebuild in the next. Without a pipeline or a
+    /// post-frame lane the handles keep the lines they were built for.
+    pub(super) fn watch_handle_lines(self: &Rc<Self>) {
+        let pipeline = self.pipeline.borrow().clone();
+        let post_frame = self.post_frame.borrow().clone();
+        let (Some(pipeline), Some(post_frame)) = (pipeline, post_frame) else {
             return;
         };
-        let model = Rc::downgrade(self);
-        let scheduled = post_frame.schedule(move |_| {
-            let Some(model) = Weak::upgrade(&model) else {
-                return;
-            };
-            model.handles.check_pending.set(false);
-            if model.handles.shown.get() && model.end_line_heights() != model.handles.built.get() {
-                let mut failure = FirstPanic::new();
-                model.handles.refresh(&mut failure);
-                failure.resume();
-            }
-        });
-        if let Err(error) = scheduled {
-            self.handles.check_pending.set(false);
-            tracing::warn!(?error, "SelectionArea: the post-frame lane is closed");
+        let mut watches = self.handles.watches.borrow_mut();
+        if !watches.is_empty() {
+            return;
+        }
+        for link in self.handles.links {
+            let watch = pipeline.watch_leader(link, post_frame.clone());
+            let model = Rc::downgrade(self);
+            watch.add_listener(Rc::new(move || {
+                let Some(model) = Weak::upgrade(&model) else {
+                    return;
+                };
+                if model.handles.shown.get() {
+                    let mut failure = FirstPanic::new();
+                    model.handles.refresh(&mut failure);
+                    failure.resume();
+                }
+            }));
+            watches.push(watch);
         }
     }
 }
@@ -432,7 +451,8 @@ fn handle(
 /// Lays its child out where the leader under `link` is painted: the
 /// child's top centre at the leader's bottom-left corner, which a
 /// paragraph puts at the bottom of an end's line. Nothing paints or takes
-/// a touch while no leader is published.
+/// a touch while no leader is published, or while its end is clipped out
+/// (scrolled out of a viewport).
 #[derive(Debug, Clone)]
 pub(crate) struct LinkFollower {
     link: LayerLink,
@@ -460,6 +480,7 @@ impl RenderView for LinkFollower {
             .with_show_when_unlinked(false)
             .with_leader_anchor(Alignment::BOTTOM_LEFT)
             .with_follower_anchor(Alignment::TOP_CENTER)
+            .with_leader_clip(LeaderClip::Hide)
     }
 
     fn update_render_object(

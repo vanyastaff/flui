@@ -1,0 +1,65 @@
+[package]
+publish = ["crates-io"]
+name = "flui-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "FLUI's OS shell services: open a URI or a file, reveal it, move it to the trash, and the file dialogs"
+repository.workspace = true
+keywords = ["ui", "flui", "dialog", "launcher"]
+categories = ["gui"]
+autotests = false
+
+# A capability crate (ADR-0154 §1): the contract crate and external crates
+# only, and its own OS code. Nothing but the facade names it.
+[dependencies]
+flui-platform = { workspace = true }
+thiserror = { workspace = true }
+
+# The Linux providers: the XDG desktop portal over the session bus, on zbus's
+# own runtime (no Tokio, ADR-0154 §1).
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-util = { workspace = true }
+libc = { workspace = true }
+raw-window-handle = { workspace = true }
+serde = { workspace = true }
+zbus = { workspace = true }
+zruntime = { version = "0.2", default-features = false, features = ["runtime", "event"] }
+
+[dev-dependencies]
+flui-platform = { workspace = true, features = ["testing"] }
+flui-sdk = { workspace = true }
+flui-testing = { workspace = true }
+
+# The stand-in desktop portal the Linux providers' tests serve on a private
+# bus.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = { workspace = true }
+zbus = { workspace = true, features = ["service"] }
+zruntime = { version = "0.2", default-features = false, features = ["runtime", "helper"] }
+
+[features]
+default = []
+# The scripted providers a scenario registers instead of the OS's (ADR-0154
+# §10, ADR-0243).
+testing = ["flui-platform/testing"]
+
+[lints]
+workspace = true
+
+[[test]]
+name = "system_it"
+path = "tests/main.rs"
+harness = true
+required-features = ["testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.flui]
+layer = 6
+tier = "pkg"
+tier-kind = "capability"
+order = 5
