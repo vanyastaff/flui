@@ -459,7 +459,7 @@ mod tests {
             }
 
             fn room(&self) -> flui_runtime::execution::RoomFuture {
-                Box::pin(std::future::ready(Ok(())))
+                flui_runtime::execution::RoomFuture::ready(Ok(()))
             }
         }
         struct Refusing(Mutex<Option<During>>);
@@ -474,7 +474,7 @@ mod tests {
             }
 
             fn room(&self) -> flui_runtime::execution::RoomFuture {
-                Box::pin(std::future::pending())
+                flui_runtime::execution::RoomFuture::new(std::future::pending())
             }
         }
 

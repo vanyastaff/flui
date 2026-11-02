@@ -144,7 +144,7 @@ impl Executor for Saturated {
 
     /// Never has room.
     fn room(&self, _lane: flui_platform::executor::Lane) -> flui_platform::executor::RoomFuture {
-        Box::pin(std::future::pending())
+        flui_platform::executor::RoomFuture::new(std::future::pending())
     }
 }
 
@@ -192,7 +192,7 @@ impl Executor for Handed {
 
     /// Takes everything.
     fn room(&self, _lane: flui_platform::executor::Lane) -> flui_platform::executor::RoomFuture {
-        Box::pin(std::future::ready(Ok(())))
+        flui_platform::executor::RoomFuture::ready(Ok(()))
     }
 }
 

@@ -5,8 +5,10 @@
 //! them through an [`Executor`], so a widget runs background work inside
 //! those bounds instead of starting threads of its own.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// A pure background compute job: a boxed closure, run once on a worker
 /// thread (or inline on wasm32).
@@ -21,7 +23,34 @@ pub type IoFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 /// it taken, and waits again. Resolves `Err` when waiting cannot help: the
 /// lane is shutting down, or its workers could not start. Dropping it ends
 /// the wait and lets go of its waker.
-pub type RoomFuture = Pin<Box<dyn Future<Output = Result<(), SpawnError>> + Send + 'static>>;
+#[must_use = "a wait for room does nothing unless it is awaited"]
+pub struct RoomFuture(Pin<Box<dyn Future<Output = Result<(), SpawnError>> + Send + 'static>>);
+
+impl RoomFuture {
+    /// A wait that resolves as `wait` does.
+    pub fn new(wait: impl Future<Output = Result<(), SpawnError>> + Send + 'static) -> Self {
+        Self(Box::pin(wait))
+    }
+
+    /// A wait already over: room now, or `Err` when waiting cannot help.
+    pub fn ready(answer: Result<(), SpawnError>) -> Self {
+        Self::new(std::future::ready(answer))
+    }
+}
+
+impl Future for RoomFuture {
+    type Output = Result<(), SpawnError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.as_mut().poll(cx)
+    }
+}
+
+impl fmt::Debug for RoomFuture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RoomFuture").finish_non_exhaustive()
+    }
+}
 
 /// Why a spawn was refused.
 ///

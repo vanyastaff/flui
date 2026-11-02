@@ -108,10 +108,10 @@ impl Executor for ThreadLanes {
     fn room(&self, lane: Lane) -> RoomFuture {
         // A compute job gets a thread of its own; the IO runtime takes
         // every future until it is shut down.
-        Box::pin(std::future::ready(match lane {
+        RoomFuture::ready(match lane {
             Lane::Io if self.io.lock().is_none() => Err(SpawnError::ShuttingDown),
             _ => Ok(()),
-        }))
+        })
     }
 }
 
@@ -309,7 +309,7 @@ impl Executor for QueuedLanes {
 
     fn room(&self, lane: Lane) -> RoomFuture {
         let refusals = Arc::clone(&self.refusals);
-        Box::pin(std::future::poll_fn(move |cx| {
+        RoomFuture::new(std::future::poll_fn(move |cx| {
             let refusal = *refusals.of(lane).lock();
             match refusal {
                 None => Poll::Ready(Ok(())),

@@ -52,7 +52,7 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
         }
 
         fn room(&self) -> flui_runtime::execution::RoomFuture {
-            Box::pin(std::future::ready(Ok(())))
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     impl HostIoPool for Pool {
@@ -70,7 +70,7 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
         }
 
         fn room(&self) -> flui_runtime::execution::RoomFuture {
-            Box::pin(std::future::ready(Ok(())))
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     struct Capture(Arc<AtomicBool>);
@@ -209,7 +209,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
         }
 
         fn room(&self) -> flui_runtime::execution::RoomFuture {
-            Box::pin(std::future::ready(Ok(())))
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     impl HostIoPool for Pool {
@@ -220,7 +220,7 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
         }
 
         fn room(&self) -> flui_runtime::execution::RoomFuture {
-            Box::pin(std::future::ready(Ok(())))
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     struct Capture {

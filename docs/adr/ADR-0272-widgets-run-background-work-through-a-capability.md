@@ -194,10 +194,11 @@ path does not have.
 3. **One poll that names the lane, `poll_room(Lane, cx)`.**
    - Good: a new lane is a `Lane` variant, not a new method.
    - Bad: the same pile-up as option 2.
-4. **One wait that names the lane, `room(Lane) -> RoomFuture`.**
+4. **One wait that names the lane, `room(Lane) -> RoomFuture`, a named future type.**
    - Good: a new lane is a `Lane` variant; the wait owns its registration, so dropping it lets go
      of its waker at once; a host pool's wait and the services' shutdown compose in one future.
-   - Bad: a boxed future per wait, on a path taken only when a lane is full.
+   - Bad: a boxed future per wait, on a path taken only when a lane is full. A named type, not a
+     bare `Pin<Box<dyn Future>>`, keeps how it is held free to change.
 5. **A wait inside `flui-assets` only, on its own decode slots.**
    - Good: no API change.
    - Bad: a lane full of other work still sends the decode to the IO worker.
@@ -210,7 +211,14 @@ Chosen option: 4.
 #[non_exhaustive]
 pub enum Lane { Compute, Io }
 
-pub type RoomFuture = Pin<Box<dyn Future<Output = Result<(), SpawnError>> + Send + 'static>>;
+/// A named type, so how a wait is held can change without breaking callers.
+#[must_use]
+pub struct RoomFuture(/* Pin<Box<dyn Future<Output = Result<(), SpawnError>> + Send>> */);
+impl RoomFuture {
+    pub fn new(wait: impl Future<Output = Result<(), SpawnError>> + Send + 'static) -> Self;
+    pub fn ready(answer: Result<(), SpawnError>) -> Self;
+}
+impl Future for RoomFuture { type Output = Result<(), SpawnError>; }
 
 pub trait Executor: Send + Sync + 'static {
     fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError>;

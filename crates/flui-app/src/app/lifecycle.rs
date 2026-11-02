@@ -1931,7 +1931,7 @@ mod tests {
         }
 
         fn room(&self) -> flui_runtime::execution::RoomFuture {
-            Box::pin(std::future::ready(Ok(())))
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
 

@@ -425,7 +425,7 @@ impl Future for ServicesRoom {
             };
         }
         match &mut this.host_wait {
-            Some(waiting) => waiting.as_mut().poll(cx),
+            Some(waiting) => Pin::new(waiting).poll(cx),
             None => Poll::Ready(Ok(())),
         }
     }
@@ -779,9 +779,9 @@ impl ExecutionServices {
             (Lane::Compute, _) => (&self.compute_admission, HostPool::None),
             (Lane::Io, _) => (&self.io_admission, HostPool::None),
             // A lane these services do not run never has room.
-            _ => return Box::pin(std::future::ready(Err(SpawnError::Unavailable))),
+            _ => return RoomFuture::ready(Err(SpawnError::Unavailable)),
         };
-        Box::pin(ServicesRoom {
+        RoomFuture::new(ServicesRoom {
             lifecycle: Arc::clone(&self.lifecycle),
             registration: None,
             window: WindowRoom {
@@ -1149,7 +1149,7 @@ impl HostComputePool for DeterministicExecutors {
 
     /// Its queue is unbounded: room always.
     fn room(&self) -> RoomFuture {
-        Box::pin(std::future::ready(Ok(())))
+        RoomFuture::ready(Ok(()))
     }
 }
 
@@ -1165,7 +1165,7 @@ impl HostIoPool for DeterministicExecutors {
 
     /// Its queue is unbounded: room always.
     fn room(&self) -> RoomFuture {
-        Box::pin(std::future::ready(Ok(())))
+        RoomFuture::ready(Ok(()))
     }
 }
 
@@ -1400,7 +1400,7 @@ mod tests {
     }
 
     fn poll(wait: &mut RoomFuture, waker: &Waker) -> Poll<Result<(), SpawnError>> {
-        wait.as_mut().poll(&mut Context::from_waker(waker))
+        Pin::new(wait).poll(&mut Context::from_waker(waker))
     }
 
     /// A full lane keeps its waits pending and wakes each once work leaves
@@ -1473,7 +1473,7 @@ mod tests {
             }
 
             fn room(&self) -> RoomFuture {
-                Box::pin(std::future::pending())
+                RoomFuture::new(std::future::pending())
             }
         }
         let deterministic = DeterministicExecutors::new();

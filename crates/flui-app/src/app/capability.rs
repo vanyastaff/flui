@@ -516,7 +516,7 @@ impl Executor for LoopExecutor {
     fn room(&self, lane: Lane) -> RoomFuture {
         match self.0.upgrade() {
             Some(services) => services.room(lane),
-            None => Box::pin(std::future::ready(Err(SpawnError::ShuttingDown))),
+            None => RoomFuture::ready(Err(SpawnError::ShuttingDown)),
         }
     }
 }
