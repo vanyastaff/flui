@@ -76,9 +76,11 @@ lets a test hand every layer the same scripted client.
    default): `reqwest` on the run's IO lane, one connection pool per run. The caller's future waits
    on a channel; the exchange on the lane stops when the channel closes. On lanes an embedder
    injects, which may run no Tokio drivers, it spawns nothing and answers
-   `NotYetOnThisHost { host: EmbedderExecutors }`; Android and the
-   web answer `NotYetOnThisHost` until their providers land (`docs/gaps.md`). Without the feature
-   the capability is not registered.
+   `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
+   (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each
+   exchange holds a slot of the IO lane from the request until its body ends or is dropped, so the
+   lane admits and refuses it as on a native host. Android answers `NotYetOnThisHost` until its
+   provider lands (`docs/gaps.md`). Without the feature the capability is not registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
    with `Connect`. `HeadlessHost` registers it among its built-ins (`HeadlessHost::http`).
@@ -118,6 +120,10 @@ lets a test hand every layer the same scripted client.
 - `requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers` and
   `dropping_a_request_or_its_body_closes_the_connection` (`flui-app`): the built-in provider against
   a loopback server, polled without a runtime, the embedder-executor gap and refusal.
+- `a_request_through_fetch_answers_its_head_and_body`,
+  `a_request_left_or_past_its_deadline_aborts_the_fetch` and
+  `the_pages_fetch_answers_from_the_test_server` (`flui-native`, headless Chrome): the web's client;
+  `a_held_exchange_takes_an_io_slot_until_its_body_lets_go` (`flui-app`): its IO slot.
 - `network_loads_fetch_with_the_callers_client_and_recover_after_errors` and
   `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (`flui-assets`).
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the

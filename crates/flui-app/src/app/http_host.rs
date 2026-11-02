@@ -1,12 +1,14 @@
 //! The built-in HTTP capability (ADR-0280).
 //!
-//! A request is sent from the run's IO lane, whose default pool runs inside a
-//! Tokio runtime, so `reqwest` drives it there and its connections stay in
-//! one pool per run. The caller's future only waits on a channel: it needs
-//! no runtime of its own. Dropping it, or the response's body, closes the
-//! channel, and the exchange on the lane stops at its next step.
+//! On a native host a request is sent from the run's IO lane, whose default
+//! pool runs inside a Tokio runtime, so `reqwest` drives it there and its
+//! connections stay in one pool per run. On the web the page's `fetch` sends
+//! it, and the exchange holds a slot of the IO lane until it ends, so a full
+//! or stopping lane refuses it as it refuses a native request. Either way the
+//! caller's future only waits on a channel: it needs no runtime of its own.
+//! Dropping it, or the response's body, abandons the exchange.
 //!
-//! Where FLUI has no client yet (Android, the web, a host on its embedder's
+//! Where FLUI has no client yet (Android, a native host on its embedder's
 //! executors) a request answers [`HttpError::NotYetOnThisHost`]: a gap of
 //! FLUI's, reported as such and never skipped.
 
@@ -24,13 +26,16 @@ use super::capability::ExecutionSlot;
 /// The built-in HTTP provider over the run's lanes.
 pub(crate) struct HostHttp {
     #[cfg_attr(
-        any(target_os = "android", target_arch = "wasm32"),
-        expect(dead_code, reason = "these hosts have no HTTP client yet")
+        target_os = "android",
+        expect(dead_code, reason = "Android has no HTTP client yet")
     )]
     slot: ExecutionSlot,
     /// One connection pool per run, built on the first request.
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     client: Arc<std::sync::OnceLock<Result<reqwest::Client, String>>>,
+    /// The page's `fetch`, one authority per run.
+    #[cfg(target_arch = "wasm32")]
+    fetch: Http,
 }
 
 impl HostHttp {
@@ -39,6 +44,8 @@ impl HostHttp {
             slot,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             client: Arc::default(),
+            #[cfg(target_arch = "wasm32")]
+            fetch: Http::new(Arc::new(flui_native::http::FetchClient::new())),
         }
     }
 }
@@ -47,14 +54,18 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
     fn provide(&self, _cx: &ProviderContext<'_>) -> Result<Http, Unsupported> {
         #[cfg(target_os = "android")]
         return Ok(Http::new(Arc::new(NotYet(Arc::new(HttpHost::Android)))));
-        #[cfg(target_arch = "wasm32")]
-        return Ok(Http::new(Arc::new(NotYet(Arc::new(HttpHost::Web)))));
-        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        #[cfg(not(target_os = "android"))]
         {
             let services = self.slot.borrow().clone().ok_or_else(|| {
                 // Before the host installs a UI runtime it has no lanes.
                 Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
             })?;
+            #[cfg(target_arch = "wasm32")]
+            return Ok(Http::new(Arc::new(held::LaneHeld::new(
+                services,
+                self.fetch.clone(),
+            ))));
+            #[cfg(not(target_arch = "wasm32"))]
             Ok(Http::new(Arc::new(lanes::LaneHttp::new(
                 services,
                 Arc::clone(&self.client),
@@ -65,10 +76,10 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
 
 /// A client on a host whose FLUI has none yet.
 #[cfg_attr(
-    not(any(target_os = "android", target_arch = "wasm32")),
+    not(target_os = "android"),
     expect(
         dead_code,
-        reason = "a native host on its embedder's executors answers from the lane"
+        reason = "only Android has no client: elsewhere a gap answers from the lane"
     )
 )]
 /// Its authority is its own: it answers nothing a cache could share.
@@ -84,6 +95,97 @@ impl HttpClient for NotYet {
         Box::pin(std::future::ready(Err(HttpError::NotYetOnThisHost {
             host,
         })))
+    }
+}
+
+/// A client whose exchanges each hold a slot of the run's IO lane: the web's
+/// `fetch` runs in the page, not on the lane, and is admitted by it all the
+/// same.
+#[cfg(any(test, target_arch = "wasm32"))]
+mod held {
+    use std::pin::Pin;
+    use std::sync::Weak;
+    use std::task::{Context, Poll};
+
+    use flui_platform::executor::SpawnError;
+    use flui_platform::http::{
+        BodySource, Http, HttpAuthority, HttpClient, HttpError, HttpFuture, HttpRequest,
+        HttpResponse, ResponseBody,
+    };
+    use flui_runtime::execution::ExecutionServices;
+    use tokio::sync::oneshot;
+
+    /// Sends through `client`, each exchange holding an IO slot from the
+    /// request until its body ends, fails or is dropped.
+    pub(super) struct LaneHeld {
+        services: Weak<ExecutionServices>,
+        client: Http,
+    }
+
+    impl LaneHeld {
+        pub(super) fn new(services: Weak<ExecutionServices>, client: Http) -> Self {
+            Self { services, client }
+        }
+    }
+
+    impl HttpClient for LaneHeld {
+        fn authority(&self) -> HttpAuthority {
+            self.client.authority()
+        }
+
+        fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
+            let Some(services) = self.services.upgrade() else {
+                return refused(SpawnError::ShuttingDown);
+            };
+            // The slot is the lane's task that waits for the exchange to let
+            // go of `release`; the lane's admission refuses it as any work.
+            let (release, released) = oneshot::channel::<()>();
+            if let Err(reason) = services.spawn_io(Box::pin(async move {
+                let _ = released.await;
+            })) {
+                return refused(reason);
+            }
+            let head = self.client.send(request);
+            Box::pin(async move {
+                let response = head.await?;
+                let status = response.status();
+                let headers = response.headers().clone();
+                let body = Held {
+                    body: response.into_body(),
+                    release: Some(release),
+                };
+                // The inner body keeps the request's limit.
+                Ok(HttpResponse::new(
+                    status,
+                    headers,
+                    ResponseBody::new(body, u64::MAX),
+                ))
+            })
+        }
+    }
+
+    fn refused(reason: SpawnError) -> HttpFuture<HttpResponse> {
+        Box::pin(std::future::ready(Err(HttpError::Refused(reason))))
+    }
+
+    /// A body that holds its exchange's IO slot until it ends.
+    struct Held {
+        body: ResponseBody,
+        /// Dropped at the body's end or failure, or with the body.
+        release: Option<oneshot::Sender<()>>,
+    }
+
+    impl BodySource for Held {
+        fn poll_chunk(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
+            let chunk = std::task::ready!(self.body.poll_chunk(cx));
+            if !matches!(chunk, Some(Ok(_))) {
+                self.release = None;
+            }
+            Poll::Ready(chunk)
+        }
     }
 }
 
@@ -613,6 +715,80 @@ mod tests {
         drop(services_gone);
         assert_eq!(
             block_on(refused.send(HttpRequest::get(format!("http://{address}/b")))).map(|_| ()),
+            Err(HttpError::Refused(
+                flui_platform::executor::SpawnError::ShuttingDown
+            ))
+        );
+    }
+
+    /// The web's exchanges each hold a slot of the IO lane from the request
+    /// until the body ends, fails or is dropped, so a full lane refuses the
+    /// next request as it refuses any work, and a stopped lane refuses all.
+    #[test]
+    fn a_held_exchange_takes_an_io_slot_until_its_body_lets_go() {
+        use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
+
+        let scripted = ScriptedHttp::new();
+        scripted.respond(
+            "https://example.test/a",
+            ScriptedResponse::ok(b"abc".to_vec()),
+        );
+        scripted.respond(
+            "https://example.test/gone",
+            ScriptedResponse::Fail(HttpError::Connect {
+                detail: "refused".to_owned(),
+            }),
+        );
+        let embedder = DeterministicExecutors::new();
+        let services = Arc::new(ExecutionServices::with_limits(
+            Some(embedder.host_executors()),
+            1,
+            1,
+        ));
+        let http = Http::new(Arc::new(held::LaneHeld::new(
+            Arc::downgrade(&services),
+            scripted.handle(),
+        )));
+        assert_eq!(http.authority(), scripted.handle().authority());
+        let saturated = || {
+            block_on(http.send(HttpRequest::get("https://example.test/a"))).map(|_| ())
+                == Err(HttpError::Refused(
+                    flui_platform::executor::SpawnError::Saturated,
+                ))
+        };
+
+        let response = block_on(http.send(HttpRequest::get("https://example.test/a")))
+            .expect("the scripted response");
+        embedder.run_until_idle();
+        assert!(saturated(), "an answered body holds the lane's one slot");
+        drop(response);
+        embedder.run_until_idle();
+        assert!(!saturated(), "a dropped body gives its slot back");
+        embedder.run_until_idle();
+
+        let read = block_on(http.send(HttpRequest::get("https://example.test/a")))
+            .expect("the scripted response");
+        let mut body = read.into_body();
+        let chunk = block_on(body.next_chunk());
+        assert_eq!(chunk, Some(Ok(b"abc".to_vec())));
+        assert_eq!(block_on(body.next_chunk()), None);
+        embedder.run_until_idle();
+        assert!(!saturated(), "a body read to its end gives its slot back");
+        embedder.run_until_idle();
+
+        assert_eq!(
+            block_on(http.send(HttpRequest::get("https://example.test/gone"))).map(|_| ()),
+            Err(HttpError::Connect {
+                detail: "refused".to_owned()
+            })
+        );
+        embedder.run_until_idle();
+        assert!(!saturated(), "a failed request gives its slot back");
+        embedder.run_until_idle();
+
+        drop(services);
+        assert_eq!(
+            block_on(http.send(HttpRequest::get("https://example.test/a"))).map(|_| ()),
             Err(HttpError::Refused(
                 flui_platform::executor::SpawnError::ShuttingDown
             ))
