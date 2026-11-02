@@ -1,4 +1,4 @@
-//! The kit's cases, versions 1 and 2.
+//! Versioned text-store lock, editing and publication checks.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -6,9 +6,10 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::text_store::{
-    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OffsetError, PointMode, Selection,
-    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, DEFERRED_LOCK_CAPACITY, LockGrant, LockOutcome, LockTiming,
+    OffsetError, OwnerCalls, PointMode, Selection, TextChange, TextStore, TextStoreChange,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, Utf16Offset, Utf16Range,
+    utf16,
 };
 
 use super::{Case, TextStoreFixture};
@@ -69,6 +70,13 @@ pub(super) const CASES: &[Case] = &[
     case!(narrowing_a_reconversion_keeps_the_committed_text, since 2),
     case!(marking_part_of_new_text_leaves_the_rest_new, since 2),
     case!(index_at_point_reads_its_two_choices_apart, since 3),
+    case!(application_publication_brackets_old_and_new_documents, since 4),
+    case!(composition_only_application_changes_are_published, since 4),
+    case!(publication_finishes_accepted_writes_and_keeps_the_first_failure, since 4),
+    case!(publication_keeps_reentrant_application_edits_before_platform_writes, since 4),
+    case!(publication_finishes_with_its_captured_observer, since 4),
+    case!(publication_respects_the_queue_bound_and_a_closed_commit_gate, since 4),
+    case!(publication_reports_app_edits_from_failed_queued_work, since 4),
 ];
 
 // ============================================================================
@@ -275,8 +283,14 @@ fn text_reads_utf16_ranges(fixture: &mut dyn TextStoreFixture) -> Outcome {
 fn offset_inside_a_surrogate_pair_is_refused(fixture: &mut dyn TextStoreFixture) -> Outcome {
     let store = fresh(fixture, CORPUS);
     let split = Some(TextStoreError::Offset(OffsetError::SplitsSurrogatePair(2)));
-    let read_result = read(&store, |session| session.text(range(0, 2)))?;
-    ensure_eq(read_result.err(), split, "text(0..2)")?;
+    for (start, end) in [(0, 2), (1, 2), (2, 3), (2, 2)] {
+        let read_result = read(&store, move |session| session.text(range(start, end)))?;
+        ensure_eq(
+            read_result.err(),
+            split,
+            "a text range splitting the supplementary scalar, protected stores included",
+        )?;
+    }
     let (replaced, selected) = edit(&store, |session| {
         (
             session.replace(range(2, 2), "x").err(),
@@ -685,6 +699,695 @@ fn platform_edits_are_not_echoed_to_the_observer(fixture: &mut dyn TextStoreFixt
         0,
         "selection changes echoed back for the platform's own edits",
     )
+}
+
+enum PublicationBehavior {
+    Normal,
+    Omit,
+    Repeat,
+    QueueWrite,
+    QueueCapacity,
+    CloseGate(CommitGate),
+    CloseGateOnWill(CommitGate),
+    EditApplication(Rc<dyn Fn(&str)>),
+    FailBefore,
+    FailAfter,
+    FailBeforeAndDid,
+    FailDidAndAfter,
+    QueuedGrantFailure,
+    QueuedSettleFailure,
+    QueuedGrantClosesGate(CommitGate),
+    QueuedGrantAppEdit(Rc<dyn Fn(&str)>),
+    QueuedSettleAppEdit,
+    ReplaceObserver(Rc<PublicationObserver>),
+}
+
+type PublicationRead = (&'static str, Utf16Offset, Selection, Option<Composition>);
+
+struct PublicationObserver {
+    store: Weak<dyn TextStore>,
+    events: RefCell<Vec<PublicationRead>>,
+    delivered: RefCell<Vec<&'static str>>,
+    behavior: PublicationBehavior,
+    acted: Cell<bool>,
+    writes_completed: Rc<Cell<usize>>,
+    completed_before_return: Cell<Option<usize>>,
+}
+
+impl PublicationObserver {
+    fn new(store: &Rc<dyn TextStore>, behavior: PublicationBehavior) -> Rc<Self> {
+        Rc::new(Self {
+            store: Rc::downgrade(store),
+            events: RefCell::new(Vec::new()),
+            delivered: RefCell::new(Vec::new()),
+            behavior,
+            acted: Cell::new(false),
+            writes_completed: Rc::new(Cell::new(0)),
+            completed_before_return: Cell::new(None),
+        })
+    }
+
+    fn record(&self, phase: &'static str) {
+        self.delivered.borrow_mut().push(phase);
+        let store = self
+            .store
+            .upgrade()
+            .expect("the fixture keeps its store alive");
+        if let PublicationBehavior::CloseGateOnWill(gate) = &self.behavior
+            && !gate.is_open()
+        {
+            assert_eq!(
+                store.request_lock(
+                    LockGrant::read(|_| panic!("a closed publication gate granted a read")),
+                    LockTiming::Sync
+                ),
+                Err(TextStoreError::SyncLockUnavailable)
+            );
+            return;
+        }
+        let nested = Rc::clone(&store);
+        let (len, selection, composition) = read(&store, move |session| {
+            assert_eq!(
+                nested.request_lock(
+                    LockGrant::read(|_| panic!("a nested publication read ran")),
+                    LockTiming::Sync
+                ),
+                Err(TextStoreError::SyncLockUnavailable)
+            );
+            (
+                session.document_len(),
+                session.selection(),
+                session.composition(),
+            )
+        })
+        .expect("a publication callback can synchronously read its document");
+        self.events
+            .borrow_mut()
+            .push((phase, len, selection, composition));
+    }
+
+    fn queue_write(&self) {
+        let store = self
+            .store
+            .upgrade()
+            .expect("the fixture keeps its store alive");
+        assert_eq!(
+            store.request_lock(
+                LockGrant::read_write(|_| panic!("a synchronous publication write ran")),
+                LockTiming::Sync
+            ),
+            Err(TextStoreError::SyncLockUnavailable)
+        );
+        let completed = Rc::clone(&self.writes_completed);
+        assert_eq!(
+            store.request_lock(
+                LockGrant::read_write(move |session| {
+                    session
+                        .insert_at_selection("!")
+                        .expect("the caret is a valid insertion point");
+                    completed.set(completed.get() + 1);
+                }),
+                LockTiming::Async
+            ),
+            Ok(LockOutcome::Deferred)
+        );
+    }
+}
+
+impl TextStoreObserver for PublicationObserver {
+    fn publish_change(
+        &self,
+        change: TextStoreChange,
+        publish: &mut dyn FnMut(&mut OwnerCalls),
+        calls: &mut OwnerCalls,
+    ) {
+        assert!(matches!(
+            change,
+            TextStoreChange::Text(_) | TextStoreChange::Composition
+        ));
+        self.record("will");
+        let first = !self.acted.replace(true);
+        if first {
+            match &self.behavior {
+                PublicationBehavior::QueuedGrantFailure
+                | PublicationBehavior::QueuedGrantClosesGate(_)
+                | PublicationBehavior::QueuedGrantAppEdit(_) => {
+                    let gate =
+                        if let PublicationBehavior::QueuedGrantClosesGate(gate) = &self.behavior {
+                            Some(gate.clone())
+                        } else {
+                            None
+                        };
+                    let edit = if let PublicationBehavior::QueuedGrantAppEdit(edit) = &self.behavior
+                    {
+                        Some(Rc::clone(edit))
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        self.store.upgrade().expect("live fixture").request_lock(
+                            LockGrant::read_write(move |_| {
+                                if let Some(edit) = edit {
+                                    edit("latest");
+                                }
+                                if let Some(gate) = gate {
+                                    gate.set_open(false);
+                                }
+                                panic!("queued grant failure");
+                            }),
+                            LockTiming::Async
+                        ),
+                        Ok(LockOutcome::Deferred)
+                    );
+                    self.queue_write();
+                }
+                PublicationBehavior::QueuedSettleFailure
+                | PublicationBehavior::QueuedSettleAppEdit => {
+                    self.queue_write();
+                    self.queue_write();
+                }
+                PublicationBehavior::EditApplication(edit) => {
+                    edit("latest");
+                    self.queue_write();
+                }
+                PublicationBehavior::QueueWrite
+                | PublicationBehavior::CloseGate(_)
+                | PublicationBehavior::FailBefore
+                | PublicationBehavior::FailAfter
+                | PublicationBehavior::FailBeforeAndDid
+                | PublicationBehavior::FailDidAndAfter => self.queue_write(),
+                PublicationBehavior::CloseGateOnWill(gate) => {
+                    self.queue_write();
+                    gate.set_open(false);
+                }
+                PublicationBehavior::QueueCapacity => {
+                    for _ in 0..DEFERRED_LOCK_CAPACITY {
+                        self.queue_write();
+                    }
+                    assert_eq!(
+                        self.store.upgrade().expect("live fixture").request_lock(
+                            LockGrant::read_write(|_| panic!(
+                                "an overflowing publication write ran"
+                            )),
+                            LockTiming::Async
+                        ),
+                        Err(TextStoreError::DeferredQueueFull)
+                    );
+                }
+                PublicationBehavior::ReplaceObserver(observer) => self
+                    .store
+                    .upgrade()
+                    .expect("live fixture")
+                    .set_observer(Some(Rc::clone(observer) as Rc<dyn TextStoreObserver>)),
+                _ => {}
+            }
+        }
+        if matches!(self.behavior, PublicationBehavior::FailBefore) {
+            panic!("publication before");
+        }
+        if matches!(self.behavior, PublicationBehavior::FailBeforeAndDid) {
+            calls.run(|| panic!("publication before"));
+        }
+        if matches!(self.behavior, PublicationBehavior::Omit) {
+            return;
+        }
+        publish(calls);
+        if first {
+            // Record this before assertions: an expected earlier failure
+            // must not hide a later oracle panic in the shared ledger.
+            self.completed_before_return
+                .set(Some(self.writes_completed.get()));
+            let queued = match &self.behavior {
+                PublicationBehavior::QueuedSettleFailure
+                | PublicationBehavior::QueuedSettleAppEdit => Some(2),
+                PublicationBehavior::QueueCapacity => Some(DEFERRED_LOCK_CAPACITY),
+                PublicationBehavior::QueueWrite
+                | PublicationBehavior::QueuedGrantFailure
+                | PublicationBehavior::QueuedGrantAppEdit(_)
+                | PublicationBehavior::EditApplication(_)
+                | PublicationBehavior::FailAfter
+                | PublicationBehavior::FailBeforeAndDid
+                | PublicationBehavior::FailDidAndAfter => Some(1),
+                _ => None,
+            };
+            if let Some(queued) = queued {
+                // A read can itself run queued grants. Count first, so it
+                // cannot mask a write the publication failed to finish.
+                assert_eq!(
+                    self.writes_completed.get(),
+                    queued,
+                    "accepted writes finish before publish returns"
+                );
+                let store = self
+                    .store
+                    .upgrade()
+                    .expect("the fixture keeps its store alive");
+                let len = read(&store, |session| session.document_len())
+                    .expect("the finished publication is readable");
+                let expected_len = if matches!(
+                    self.behavior,
+                    PublicationBehavior::QueuedGrantAppEdit(_)
+                        | PublicationBehavior::QueuedSettleAppEdit
+                ) {
+                    7
+                } else if matches!(self.behavior, PublicationBehavior::EditApplication(_)) {
+                    6 + queued
+                } else {
+                    5 + queued
+                };
+                assert_eq!(
+                    len,
+                    at(expected_len),
+                    "the completed writes are visible before the observer returns"
+                );
+            }
+        }
+        if matches!(self.behavior, PublicationBehavior::Repeat) {
+            publish(calls);
+        }
+        if matches!(
+            self.behavior,
+            PublicationBehavior::FailAfter | PublicationBehavior::FailDidAndAfter
+        ) {
+            panic!("publication after");
+        }
+    }
+
+    fn text_changed(&self, _change: TextChange) {
+        self.record("text did");
+        if matches!(
+            self.behavior,
+            PublicationBehavior::FailBeforeAndDid | PublicationBehavior::FailDidAndAfter
+        ) {
+            panic!("publication did");
+        }
+    }
+
+    fn selection_changed(&self) {
+        self.record("selection did");
+        if let PublicationBehavior::CloseGate(gate) = &self.behavior {
+            gate.set_open(false);
+        }
+    }
+
+    fn composition_changed(&self) {
+        self.record("composition did");
+    }
+
+    fn layout_changed(&self) {}
+    fn status_changed(&self) {}
+}
+
+fn application_publication_brackets_old_and_new_documents(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    for (gated, behavior) in [
+        (false, PublicationBehavior::Normal),
+        (true, PublicationBehavior::Normal),
+        (false, PublicationBehavior::Omit),
+        (false, PublicationBehavior::Repeat),
+    ] {
+        let store = fresh(fixture, "old");
+        let observer = PublicationObserver::new(&store, behavior);
+        store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+        if gated {
+            within_transaction(&store, || {
+                fixture.app_replace_all("intermediate");
+                fixture.app_replace_all("new😀");
+                assert!(observer.events.borrow().is_empty());
+            });
+            fixture.pump();
+        } else {
+            fixture.app_replace_all("new😀");
+        }
+        store.set_observer(None);
+        ensure_eq(
+            observer.events.take(),
+            vec![
+                ("will", at(3), Selection::collapsed(at(3)), None),
+                ("text did", at(5), Selection::collapsed(at(5)), None),
+                ("selection did", at(5), Selection::collapsed(at(5)), None),
+            ],
+            "before/after reads of the application publication",
+        )?;
+    }
+    Ok(())
+}
+
+fn composition_only_application_changes_are_published(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "old");
+    let composition = Composition {
+        range: range(0, 3),
+        hides_caret: false,
+    };
+    edit(&store, move |session| {
+        session.set_composition(Some(composition))
+    })?
+    .map_err(|error| format!("marking the existing text: {error}"))?;
+    let observer = PublicationObserver::new(&store, PublicationBehavior::Normal);
+    store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+    within_transaction(&store, || {
+        fixture.app_replace_all("");
+        fixture.app_replace_all("old");
+    });
+    fixture.pump();
+    store.set_observer(None);
+    ensure_eq(
+        observer.events.take(),
+        vec![
+            (
+                "will",
+                at(3),
+                Selection::collapsed(at(3)),
+                Some(composition),
+            ),
+            ("composition did", at(3), Selection::collapsed(at(3)), None),
+            ("selection did", at(3), Selection::collapsed(at(3)), None),
+        ],
+        "composition-only publication with unchanged text and selection",
+    )
+}
+
+fn publication_finishes_accepted_writes_and_keeps_the_first_failure(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    for (behavior, expected_failure, completed) in [
+        (PublicationBehavior::QueueWrite, None, 1),
+        (
+            PublicationBehavior::FailBefore,
+            Some("publication before"),
+            1,
+        ),
+        (PublicationBehavior::FailAfter, Some("publication after"), 1),
+        (
+            PublicationBehavior::FailBeforeAndDid,
+            Some("publication before"),
+            1,
+        ),
+        (
+            PublicationBehavior::FailDidAndAfter,
+            Some("publication did"),
+            1,
+        ),
+        (
+            PublicationBehavior::QueuedSettleFailure,
+            Some("queued settle failure"),
+            2,
+        ),
+        (
+            PublicationBehavior::QueuedGrantFailure,
+            Some("queued grant failure"),
+            1,
+        ),
+    ] {
+        let store = fresh(fixture, "old");
+        if matches!(behavior, PublicationBehavior::QueuedSettleFailure) {
+            let failed = Cell::new(false);
+            fixture.set_owner_hook(Some(Rc::new(move || {
+                assert!(failed.replace(true), "queued settle failure");
+            })));
+        }
+        let records_return = !matches!(behavior, PublicationBehavior::FailBefore);
+        let observer = PublicationObserver::new(&store, behavior);
+        store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+        let result = catch_unwind(AssertUnwindSafe(|| fixture.app_replace_all("new😀")));
+        ensure_eq(
+            observer.writes_completed.get(),
+            completed,
+            "accepted writes finish before the application edit returns or raises",
+        )?;
+        let actual_failure = publication_failure(result);
+        fixture.set_owner_hook(None);
+        store.set_observer(None);
+        ensure_eq(
+            actual_failure.as_deref(),
+            expected_failure,
+            "first publication failure",
+        )?;
+        ensure_eq(
+            observer.completed_before_return.get(),
+            records_return.then_some(completed),
+            "completion witnessed before publish returns, outside any caught failure",
+        )?;
+        ensure_eq(
+            read(&store, |session| session.document_len())?,
+            at(5 + completed),
+            "accepted write completed without a manual pump",
+        )?;
+        ensure_eq(
+            observer.events.borrow().len(),
+            3,
+            "one Will and both Did notices despite failures",
+        )?;
+        fixture.app_replace_all("next");
+        ensure_eq(
+            read(&store, |session| session.document_len())?,
+            at(4),
+            "the next application operation after containment",
+        )?;
+    }
+    Ok(())
+}
+
+fn publication_failure(result: std::thread::Result<()>) -> Option<String> {
+    match result {
+        Ok(()) => None,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .map(str::to_owned)
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a non-string publication failure".to_owned());
+            flui_foundation::panic::discard_payload(payload);
+            Some(message)
+        }
+    }
+}
+
+fn publication_keeps_reentrant_application_edits_before_platform_writes(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "old");
+    let observer = PublicationObserver::new(
+        &store,
+        PublicationBehavior::EditApplication(fixture.application_editor()),
+    );
+    store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+    fixture.app_replace_all("new😀");
+    store.set_observer(None);
+    let lengths: Vec<(&str, usize)> = observer
+        .events
+        .borrow()
+        .iter()
+        .map(|(phase, len, _, _)| (*phase, len.get()))
+        .collect();
+    ensure_eq(
+        lengths,
+        vec![
+            ("will", 3),
+            ("text did", 5),
+            ("selection did", 5),
+            ("will", 5),
+            ("text did", 6),
+            ("selection did", 6),
+        ],
+        "a reentrant application edit is published before a platform write",
+    )?;
+    ensure_eq(
+        read(&store, |session| session.document_len())?,
+        at(7),
+        "the platform write follows the newer application edit",
+    )
+}
+
+fn publication_finishes_with_its_captured_observer(fixture: &mut dyn TextStoreFixture) -> Outcome {
+    let store = fresh(fixture, "old");
+    let next = PublicationObserver::new(&store, PublicationBehavior::Normal);
+    let first = PublicationObserver::new(
+        &store,
+        PublicationBehavior::ReplaceObserver(Rc::clone(&next)),
+    );
+    store.set_observer(Some(Rc::clone(&first) as Rc<dyn TextStoreObserver>));
+    fixture.app_replace_all("new😀");
+    ensure_eq(
+        first.events.borrow().len(),
+        3,
+        "the old observer receives its entire transaction",
+    )?;
+    ensure_eq(
+        next.events.borrow().len(),
+        0,
+        "the new observer receives no old transaction tail",
+    )?;
+    fixture.app_replace_all("next");
+    store.set_observer(None);
+    ensure_eq(
+        next.events.borrow().len(),
+        3,
+        "the new observer receives the next transaction",
+    )
+}
+
+fn publication_respects_the_queue_bound_and_a_closed_commit_gate(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, "old");
+    let observer = PublicationObserver::new(&store, PublicationBehavior::QueueCapacity);
+    store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+    fixture.app_replace_all("new😀");
+    store.set_observer(None);
+    ensure_eq(
+        observer.writes_completed.get(),
+        DEFERRED_LOCK_CAPACITY,
+        "every accepted bounded publication write completed",
+    )?;
+    ensure_eq(
+        read(&store, |session| session.document_len())?,
+        at(5 + DEFERRED_LOCK_CAPACITY),
+        "the full bounded queue's writes",
+    )?;
+
+    enum GateClosure {
+        Will,
+        Did,
+        FailingGrant,
+    }
+    for closes in [
+        GateClosure::Will,
+        GateClosure::Did,
+        GateClosure::FailingGrant,
+    ] {
+        let store = fresh(fixture, "old");
+        let gate = CommitGate::new();
+        store.set_commit_gate(gate.clone());
+        let behavior = match closes {
+            GateClosure::Will => PublicationBehavior::CloseGateOnWill(gate.clone()),
+            GateClosure::Did => PublicationBehavior::CloseGate(gate.clone()),
+            GateClosure::FailingGrant => PublicationBehavior::QueuedGrantClosesGate(gate.clone()),
+        };
+        let observer = PublicationObserver::new(&store, behavior);
+        store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+        let failure = publication_failure(catch_unwind(AssertUnwindSafe(|| {
+            fixture.app_replace_all("new😀");
+        })));
+        ensure_eq(
+            failure.as_deref(),
+            matches!(closes, GateClosure::FailingGrant).then_some("queued grant failure"),
+            "the failure before the gate closed",
+        )?;
+        ensure_eq(
+            observer.completed_before_return.get(),
+            Some(0),
+            "the closed-gate boundary is witnessed without an implicit pump",
+        )?;
+        ensure_eq(
+            observer.delivered.borrow().clone(),
+            vec!["will", "text did", "selection did"],
+            "an admitted publication finishes its matched notices after gate closure",
+        )?;
+        ensure_eq(
+            observer.writes_completed.get(),
+            0,
+            "a gate closed by Did prevents the queued write",
+        )?;
+        ensure_eq(
+            store.request_lock(
+                LockGrant::read(|_| panic!("a closed gate granted a read")),
+                LockTiming::Sync,
+            ),
+            Err(TextStoreError::SyncLockUnavailable),
+            "a read after the gate closed",
+        )?;
+        gate.set_open(true);
+        fixture.pump();
+        store.set_observer(None);
+        ensure_eq(
+            observer.writes_completed.get(),
+            1,
+            "the next real owner anchor delivers the accepted write",
+        )?;
+        ensure_eq(
+            read(&store, |session| session.document_len())?,
+            at(6),
+            "the write after its gate reopened",
+        )?;
+    }
+    Ok(())
+}
+
+fn publication_reports_app_edits_from_failed_queued_work(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let mut failures = Vec::new();
+    for in_settle in [false, true] {
+        if let Err(failure) = queued_work_app_edit(fixture, in_settle) {
+            failures.push(format!(
+                "{}: {failure}",
+                if in_settle { "settle" } else { "grant body" }
+            ));
+        }
+    }
+    ensure(failures.is_empty(), || failures.join("; "))
+}
+
+fn queued_work_app_edit(fixture: &mut dyn TextStoreFixture, in_settle: bool) -> Outcome {
+    let store = fresh(fixture, "old");
+    let edit = fixture.application_editor();
+    let behavior = if in_settle {
+        let failed = Cell::new(false);
+        fixture.set_owner_hook(Some(Rc::new(move || {
+            if !failed.replace(true) {
+                edit("latest");
+                panic!("queued settle failure");
+            }
+        })));
+        PublicationBehavior::QueuedSettleAppEdit
+    } else {
+        PublicationBehavior::QueuedGrantAppEdit(edit)
+    };
+    let observer = PublicationObserver::new(&store, behavior);
+    store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+    let failure = publication_failure(catch_unwind(AssertUnwindSafe(|| {
+        fixture.app_replace_all("new😀");
+    })));
+    fixture.set_owner_hook(None);
+    store.set_observer(None);
+    ensure_eq(
+        failure.as_deref(),
+        Some(if in_settle {
+            "queued settle failure"
+        } else {
+            "queued grant failure"
+        }),
+        "the first queued failure after an application edit",
+    )?;
+    ensure_eq(
+        observer.completed_before_return.get(),
+        Some(if in_settle { 2 } else { 1 }),
+        "healthy tail completion before publication returns",
+    )?;
+    let lengths: Vec<(&str, usize)> = observer
+        .events
+        .borrow()
+        .iter()
+        .map(|(phase, len, _, _)| (*phase, len.get()))
+        .collect();
+    ensure_eq(
+        lengths,
+        vec![
+            ("will", 3),
+            ("text did", 5),
+            ("selection did", 5),
+            ("will", if in_settle { 6 } else { 5 }),
+            ("text did", 6),
+            ("selection did", 6),
+        ],
+        "the newer application document is announced before the healthy platform write",
+    )?;
+    expect_text(fixture, &store, range(0, 7), "latest!")
 }
 
 fn app_edits_reach_the_observer_with_utf16_ranges(fixture: &mut dyn TextStoreFixture) -> Outcome {

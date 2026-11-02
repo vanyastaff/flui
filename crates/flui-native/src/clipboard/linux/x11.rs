@@ -120,10 +120,9 @@ impl X11Clipboard {
 
     /// The application's closure, while its offer is the primary selection.
     fn current(&self) -> Option<SelectionText> {
-        let lost = self.notice.lost();
         self.offer
             .with(|offer| match &offer.current {
-                Some((made, text)) if *made > lost => Some(Rc::clone(text)),
+                Some((made, text)) if self.notice.holds(*made) => Some(Rc::clone(text)),
                 _ => None,
             })
             .flatten()
@@ -136,14 +135,13 @@ impl LoopClipboard for X11Clipboard {
     /// the selection from, then answer the thread's request for the current
     /// offer's text, asking the closure with nothing held.
     fn deliver(&self) {
-        let lost = self.notice.lost();
         let retired = self
             .offer
             .with(|offer| {
                 if offer
                     .current
                     .as_ref()
-                    .is_some_and(|(made, _)| *made <= lost)
+                    .is_some_and(|(made, _)| !self.notice.holds(*made))
                     && let Some((_, text)) = offer.current.take()
                 {
                     offer.retired.push(text);

@@ -16,16 +16,16 @@
 
 use std::cell::{Cell, RefCell};
 
-use std::panic::resume_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    utf16,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range, utf16,
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
@@ -39,6 +39,8 @@ use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committe
 /// as a field's store drops a session it never wrote back.
 pub struct InMemoryTextStore {
     doc: RefCell<Document>,
+    reported: RefCell<Document>,
+    publication: RefCell<Publication>,
     arbiter: LockArbiter,
     observer: RefCell<Option<Rc<dyn TextStoreObserver>>>,
     /// App-side changes the observer has not heard of yet, because a lock
@@ -56,10 +58,16 @@ pub struct InMemoryTextStore {
     owner_listener: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
+enum Publication {
+    Idle,
+    Snapshot(Document),
+    Settling,
+}
+
 /// One notification an [`InMemoryTextStore`] owes its observer.
 #[derive(Debug)]
 enum Notice {
-    Text(TextChange),
+    Text,
     Selection,
     Status,
     Layout,
@@ -106,13 +114,16 @@ impl InMemoryTextStore {
     pub fn new(text: impl Into<String>) -> Rc<Self> {
         let text = text.into();
         let end = utf16::utf16_len(&text);
+        let doc = Document {
+            text,
+            selection: Selection::collapsed(end),
+            composition: None,
+            origin: String::new(),
+        };
         Rc::new(Self {
-            doc: RefCell::new(Document {
-                text,
-                selection: Selection::collapsed(end),
-                composition: None,
-                origin: String::new(),
-            }),
+            reported: RefCell::new(doc.clone()),
+            doc: RefCell::new(doc),
+            publication: RefCell::new(Publication::Idle),
             arbiter: LockArbiter::new(),
             observer: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
@@ -169,7 +180,7 @@ impl InMemoryTextStore {
     /// When `range` does not name a range of the text: the calling test's
     /// bug.
     pub fn app_replace(&self, range: Utf16Range, text: &str) {
-        let change = self
+        let _change = self
             .doc
             .borrow_mut()
             .replace(range, text)
@@ -179,7 +190,7 @@ impl InMemoryTextStore {
         let mut generation = self.generation.get();
         generation.advance();
         self.generation.set(generation);
-        self.pending.borrow_mut().push(Notice::Text(change));
+        self.pending.borrow_mut().push(Notice::Text);
         self.report(Notice::Selection);
     }
 
@@ -254,6 +265,14 @@ impl InMemoryTextStore {
     fn flush_now(&self) {
         let mut calls = OwnerCalls::new();
         self.flush_notifications(&mut calls);
+        if matches!(*self.publication.borrow(), Publication::Idle) {
+            calls.run(|| {
+                self.arbiter
+                    .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                        self.settle(calls);
+                    })
+            });
+        }
         calls.resume();
     }
 
@@ -262,23 +281,88 @@ impl InMemoryTextStore {
     /// (a TSF sink) must be granted it. Each notice is delivered though an
     /// earlier one panicked.
     fn flush_notifications(&self, calls: &mut OwnerCalls) {
-        if self.arbiter.is_locked() || !self.arbiter.may_commit() {
+        if !matches!(*self.publication.borrow(), Publication::Idle)
+            || self.arbiter.is_locked()
+            || !self.arbiter.may_commit()
+        {
             return;
         }
         let notices = std::mem::take(&mut *self.pending.borrow_mut());
+        let doc = self.doc.borrow().clone();
+        let old = self.reported.borrow().clone();
+        let changed = old.text != doc.text;
+        let moved = changed || old.selection != doc.selection;
+        let composition_changed = old.composition != doc.composition || old.origin != doc.origin;
         let observer = self.observer.borrow().clone();
-        let Some(observer) = observer else {
-            return;
-        };
-        for notice in notices {
-            calls.run(|| match notice {
-                Notice::Text(change) => observer.text_changed(change),
-                Notice::Selection => observer.selection_changed(),
-                Notice::Status => observer.status_changed(),
-                Notice::Layout => observer.layout_changed(),
-            });
+        if let Some(observer) = &observer {
+            if moved || composition_changed {
+                let change = if changed {
+                    TextStoreChange::Text(text_change(&old.text, &doc.text))
+                } else if composition_changed {
+                    TextStoreChange::Composition
+                } else {
+                    TextStoreChange::Selection
+                };
+                *self.publication.borrow_mut() = Publication::Snapshot(old);
+                let mut published = false;
+                let mut publish = |calls: &mut OwnerCalls| {
+                    if published {
+                        return;
+                    }
+                    published = true;
+                    *self.reported.borrow_mut() = doc.clone();
+                    *self.publication.borrow_mut() = Publication::Snapshot(doc.clone());
+                    if let TextStoreChange::Text(change) = change {
+                        calls.run(|| observer.text_changed(change));
+                    }
+                    if matches!(change, TextStoreChange::Composition) {
+                        calls.run(|| observer.composition_changed());
+                    }
+                    calls.run(|| observer.selection_changed());
+                    *self.publication.borrow_mut() = Publication::Idle;
+                    if self.arbiter.pending() > 0 {
+                        self.flush_notifications(calls);
+                    }
+                    *self.publication.borrow_mut() = Publication::Settling;
+                    self.arbiter.run_deferred_contained(
+                        calls,
+                        &mut |calls| {
+                            *self.publication.borrow_mut() = Publication::Idle;
+                            let prepared =
+                                catch_unwind(AssertUnwindSafe(|| self.flush_notifications(calls)));
+                            *self.publication.borrow_mut() = Publication::Settling;
+                            if let Err(payload) = prepared {
+                                calls.keep(payload);
+                            }
+                        },
+                        &mut |grant| self.open(grant),
+                        &mut |calls| {
+                            self.settle(calls);
+                        },
+                    );
+                };
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    observer.publish_change(change, &mut publish, calls);
+                }));
+                if let Err(payload) = result {
+                    calls.keep(payload);
+                }
+                publish(calls);
+                *self.publication.borrow_mut() = Publication::Idle;
+            } else {
+                *self.reported.borrow_mut() = doc;
+            }
+            for notice in notices {
+                calls.run(|| match notice {
+                    Notice::Text | Notice::Selection => {}
+                    Notice::Status => observer.status_changed(),
+                    Notice::Layout => observer.layout_changed(),
+                });
+            }
+        } else {
+            *self.reported.borrow_mut() = doc;
         }
-        calls.retire(observer);
+        calls.run(|| drop(observer));
     }
 
     fn open(&self, grant: LockGrant) {
@@ -286,7 +370,10 @@ impl InMemoryTextStore {
         // A session works on a snapshot, with no borrow of the store held
         // while the grant's body runs: the body may read the store, or edit
         // it as the application.
-        let snapshot = self.doc.borrow().clone();
+        let snapshot = match &*self.publication.borrow() {
+            Publication::Snapshot(doc) => doc.clone(),
+            Publication::Idle | Publication::Settling => self.doc.borrow().clone(),
+        };
         match grant {
             LockGrant::Read(body) => {
                 body(&ReadSession {
@@ -317,6 +404,7 @@ impl InMemoryTextStore {
                 if work.committed() != committed {
                     self.owner_owed.set(true);
                 }
+                *self.reported.borrow_mut() = work.clone();
                 *self.doc.borrow_mut() = work;
             }
         }
@@ -335,6 +423,15 @@ impl TextStore for InMemoryTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
+        if !matches!(*self.publication.borrow(), Publication::Idle) {
+            return match (grant, timing) {
+                (LockGrant::Read(body), LockTiming::Sync) => self
+                    .arbiter
+                    .read_snapshot(|| self.open(LockGrant::Read(body)))
+                    .map(|()| LockOutcome::Granted),
+                (grant, timing) => self.arbiter.defer(grant, timing),
+            };
+        }
         // An app edit still owed is reported before the platform's session
         // can see it, and one made from inside the grant once it ends. A
         // failure there refuses the request: the grant, not yet accepted, is
@@ -364,14 +461,22 @@ impl TextStore for InMemoryTextStore {
     /// Also where notifications held back by the frame transaction are
     /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
-        self.flush_now();
+        if !matches!(*self.publication.borrow(), Publication::Idle) {
+            return 0;
+        }
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
         let mut settled_under = self.arbiter.owner_gate();
-        let ran = self
-            .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
-                settled_under = calls.parking_gate().cloned();
-                self.settle(calls);
-            });
+        let mut ran = 0;
+        before.run(|| {
+            ran = self
+                .arbiter
+                .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                    settled_under = calls.parking_gate().cloned();
+                    self.settle(calls);
+                });
+        });
+        before.resume();
         let mut calls = OwnerCalls::new();
         calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
         calls.resume();
@@ -392,6 +497,31 @@ impl TextStore for InMemoryTextStore {
 
     fn screen_moved(&self) {
         self.report(Notice::Layout);
+    }
+}
+
+/// The net application change across a publication, in UTF-16 units.
+fn text_change(old: &str, new: &str) -> TextChange {
+    let prefix: usize = old
+        .chars()
+        .zip(new.chars())
+        .take_while(|(old, new)| old == new)
+        .map(|(character, _)| character.len_utf8())
+        .sum();
+    let suffix: usize = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(old, new)| old == new)
+        .map(|(character, _)| character.len_utf8())
+        .sum();
+    let units = |text: &str, byte: usize| {
+        utf16::utf16_offset(text, byte).expect("BUG: a whole-scalar prefix ends on a boundary")
+    };
+    TextChange {
+        start: units(old, prefix),
+        old_end: units(old, old.len() - suffix),
+        new_end: units(new, new.len() - suffix),
     }
 }
 

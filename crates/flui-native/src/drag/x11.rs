@@ -1561,26 +1561,30 @@ impl X11Drag {
         limit: u64,
     ) -> Result<Read, TransferError> {
         let first = held.is_none();
+        let held = held.unwrap_or_default();
         let xcb = self.connection.xcb();
         let property = self.atoms.property;
         let failed = |error: &dyn std::fmt::Display| {
             tracing::debug!(%error, "cannot read the XDND source's data");
             TransferError::SourceGone
         };
-        // Its size first, read without its value or deleting it.
-        let size = xcb
-            .get_property(false, requestor, property, AtomEnum::ANY, 0, 0)
+        // One read, deleting what it takes: at most a byte past what the
+        // fetch has left, so a value past the limit says so in
+        // `bytes_after` and is measured without being held. The server
+        // sends only what the property holds.
+        let room = limit.saturating_sub(u64::try_from(held).unwrap_or(u64::MAX));
+        let words = u32::try_from(room / 4 + 1).unwrap_or(u32::MAX);
+        let reply = xcb
+            .get_property(true, requestor, property, AtomEnum::ANY, 0, words)
             .map_err(|error| failed(&error))?
             .reply()
             .map_err(|error| failed(&error))?;
-        if first && size.type_ == self.atoms.incr {
-            // The announcement is one word, whatever else the source wrote;
-            // deleting it asks for the first chunk.
-            let reply = xcb
-                .get_property(true, requestor, property, AtomEnum::ANY, 0, 1)
-                .map_err(|error| failed(&error))?
-                .reply()
-                .map_err(|error| failed(&error))?;
+        if first && reply.type_ == self.atoms.incr {
+            // The announcement is its first word, whatever else the source
+            // wrote; deleting it asked for the first chunk.
+            if reply.bytes_after != 0 {
+                drop(xcb.delete_property(requestor, property));
+            }
             let announced = reply
                 .value32()
                 .and_then(|mut words| words.next())
@@ -1589,26 +1593,16 @@ impl X11Drag {
                 usize::try_from(announced).unwrap_or(usize::MAX),
             ));
         }
-        let len = usize::try_from(size.bytes_after)
+        let len = usize::try_from(reply.bytes_after)
             .unwrap_or(usize::MAX)
-            .saturating_add(held.unwrap_or_default());
-        if let Some(error) = model::too_large(len, limit) {
+            .saturating_add(reply.value.len())
+            .saturating_add(held);
+        if reply.bytes_after != 0 || model::too_large(len, limit).is_some() {
+            // The server deletes a property only once it is read whole.
             drop(xcb.delete_property(requestor, property));
-            return Err(error);
+            return Err(model::too_large(len, limit).unwrap_or(TransferError::SourceGone));
         }
-        let bytes = xcb
-            .get_property(
-                true,
-                requestor,
-                property,
-                AtomEnum::ANY,
-                0,
-                size.bytes_after.div_ceil(4),
-            )
-            .map_err(|error| failed(&error))?
-            .reply()
-            .map_err(|error| failed(&error))?
-            .value;
+        let bytes = reply.value;
         Ok(if first || bytes.is_empty() {
             Read::Done(bytes)
         } else {

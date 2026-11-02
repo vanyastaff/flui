@@ -157,6 +157,9 @@ struct NoticeState {
     /// The newest offer another client took the selection from, or that
     /// never became the selection.
     lost: Generation,
+    /// The thread ended: its connection closed, and with it every
+    /// selection it owned, so no offer is the selection any more.
+    ended: bool,
 }
 
 impl Notice {
@@ -183,14 +186,26 @@ impl Notice {
         (self.wake)();
     }
 
+    /// The thread ended: no offer, made or to come, is the selection.
+    fn end(&self) {
+        {
+            let mut state = self.state.lock();
+            state.ended = true;
+            state.asked = None;
+        }
+        (self.wake)();
+    }
+
     /// The offer a requestor waits for, once.
     pub(super) fn take_asked(&self) -> Option<Generation> {
         self.state.lock().asked.take()
     }
 
-    /// The newest offer that is not the selection.
-    pub(super) fn lost(&self) -> Generation {
-        self.state.lock().lost
+    /// Whether `offer` may still be the selection: no client took it, and
+    /// the thread that owns it still runs.
+    pub(super) fn holds(&self, offer: Generation) -> bool {
+        let state = self.state.lock();
+        !state.ended && offer > state.lost
     }
 }
 
@@ -747,7 +762,11 @@ impl Selections {
         let atoms = Atoms::intern(&connection)?;
         let [clipboard] = intern(&connection, [b"CLIPBOARD"])?;
         let clipboard = Selection::try_new(&connection, clipboard, "CLIPBOARD")?;
-        let primary = Selection::try_new(&connection, AtomEnum::PRIMARY.into(), "PRIMARY")?;
+        let primary = Selection::try_new(
+            &connection,
+            xproto::Atom::from(AtomEnum::PRIMARY),
+            "PRIMARY",
+        )?;
         let chunk = connection
             .maximum_request_bytes()
             .saturating_sub(64)
@@ -1356,6 +1375,9 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
     let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut failure = FirstPanic::new();
         failure.contain(|| selections.abandon());
+        // The connection closes with the thread, and the selections it
+        // owned with it: the owner's turn retires the offers.
+        failure.contain(|| selections.notice.end());
         while let Ok(command) = commands.try_recv() {
             failure.contain(|| drop(command));
         }

@@ -975,6 +975,8 @@ impl TextStoreObserver for SinkObserver {
         });
     }
 
+    // Composition-only publications also refresh selection. TSF's sink has
+    // no composition-change verb; no artificial OnTextChange is reported.
     fn selection_changed(&self) {
         // SAFETY: a plain COM call on the advised sink.
         self.notify(TS_AS_SEL_CHANGE, "OnSelectionChange", |sink| unsafe {

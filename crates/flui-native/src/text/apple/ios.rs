@@ -1,5 +1,6 @@
 //! The iOS text input: the invisible responder the system keyboard types
-//! into ([`responder`]), and a window's text size, captured from its view's
+//! into ([`responder`]), which serves the focused field's store as the
+//! window's store host, and a window's text size, captured from its view's
 //! traits. Frozen traits map a regular system reference font to a numeric
 //! point size.
 
@@ -11,6 +12,7 @@
 mod responder;
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,6 +20,7 @@ use crate::TextSizingCaptureError as Error;
 use crate::owner::apple::ios::{NativeOwner, ViewRef};
 use crate::owner::signal::OwnerSignal;
 use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+use flui_platform::text_store::TextStoreHost;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_ui_kit::{
@@ -42,9 +45,7 @@ impl crate::host::Text<ViewRef> for IosTextSizing {
         window.view.addSubview(&responder);
         Arc::new(WindowText {
             view: NativeOwner::new(window.view.clone(), window.marker),
-            keyboard: Arc::new(Keyboard {
-                responder: NativeOwner::new(responder, window.marker),
-            }),
+            responder: NativeOwner::new(responder, window.marker),
             captured: NativeOwner::new(RefCell::new(None), window.marker),
             authority: parking_lot::Mutex::new(Arc::new(AtomicBool::new(true))),
             signal: window.signal.clone(),
@@ -52,76 +53,13 @@ impl crate::host::Text<ViewRef> for IosTextSizing {
     }
 }
 
-/// A window's keyboard: the responder the focused field hands the system
-/// keyboard to (ADR-0255 decision 11).
-struct Keyboard {
-    responder: NativeOwner<Retained<responder::TextInputView>>,
-}
-
-impl Keyboard {
-    /// The responder, on the main thread, which is the owner thread on iOS;
-    /// `None` from any other thread, which UIKit's keyboard never reaches.
-    fn responder(&self) -> Option<&responder::TextInputView> {
-        let Some(marker) = MainThreadMarker::new() else {
-            tracing::warn!("iOS text input asked for off the main thread; ignored");
-            return None;
-        };
-        Some(self.responder.get(marker))
-    }
-}
-
-impl flui_platform::PlatformTextInput for Keyboard {
-    /// The focused field takes the keyboard (the responder becomes first
-    /// responder) or gives it back. Either way the document starts empty and
-    /// a composition in progress ends uncommitted: what a previous field
-    /// composed never carries into this one, even with no `false` between
-    /// the two.
-    fn set_ime_allowed(&self, allowed: bool) {
-        let Some(responder) = self.responder() else {
-            return;
-        };
-        responder.reset();
-        if allowed {
-            if !responder.isFirstResponder() {
-                responder.becomeFirstResponder();
-            }
-        } else if responder.isFirstResponder() {
-            responder.resignFirstResponder();
-        }
-    }
-
-    /// The responder's document empties, and with it the keyboard's marked
-    /// text, uncommitted.
-    fn discard_composition(&self) {
-        if let Some(responder) = self.responder() {
-            responder.reset();
-        }
-    }
-
-    /// The keyboard shows, suggests and learns as the field's status says: a
-    /// protected field's keyboard is secure (`isSecureTextEntry`).
-    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
-        if let Some(responder) = self.responder() {
-            responder.set_field_status(status);
-        }
-    }
-
-    fn set_ime_cursor_area(&self, area: flui_foundation::geometry::Bounds<f64>) {
-        if let Some(responder) = self.responder() {
-            responder.set_caret(objc2_foundation::NSRect::new(
-                objc2_foundation::NSPoint::new(area.origin.x, area.origin.y),
-                objc2_foundation::NSSize::new(area.size.width, area.size.height),
-            ));
-        }
-    }
-}
-
-/// One window's text: its keyboard, and its text size, with the view it is
-/// read from, the capture it handed out last, and the authority that capture
-/// stays current under.
+/// One window's text: the responder the focused field hands the system
+/// keyboard to (ADR-0255 decision 11), and its text size, with the view it
+/// is read from, the capture it handed out last, and the authority that
+/// capture stays current under.
 struct WindowText {
     view: NativeOwner<Retained<UIView>>,
-    keyboard: Arc<Keyboard>,
+    responder: NativeOwner<Retained<responder::TextInputView>>,
     captured: NativeOwner<RefCell<Option<crate::CapturedTextSizing>>>,
     /// Cleared when the view's traits change, the window closes or the
     /// platform fences captures; a capture made under it is current while it
@@ -132,9 +70,13 @@ struct WindowText {
 }
 
 impl crate::text::TextInput for WindowText {
+    /// The responder's client, the window's store host, on the main thread,
+    /// which is the owner thread on iOS; `None` from any other thread.
     fn window_text_input(&self) -> Option<crate::text::WindowTextInput> {
-        Some(crate::text::WindowTextInput::Ime(
-            Arc::clone(&self.keyboard) as _,
+        let marker = MainThreadMarker::new()?;
+        let client = Rc::clone(self.responder.get(marker).client());
+        Some(crate::text::WindowTextInput::Store(
+            client as Rc<dyn TextStoreHost>,
         ))
     }
 
@@ -189,17 +131,21 @@ impl crate::text::TextInput for WindowText {
         self.authority.lock().store(false, Ordering::Release);
     }
 
-    /// The window closed: no capture of it stays current, and the keyboard
-    /// leaves with it.
+    /// The window closed: no capture of it stays current, the client lets
+    /// the focused field go, and the keyboard leaves with the responder.
     fn detach(&self) {
         self.fence_sizing();
-        if let Some(responder) = self.keyboard.responder() {
-            responder.reset();
-            if responder.isFirstResponder() {
-                responder.resignFirstResponder();
-            }
-            responder.removeFromSuperview();
+        let Some(marker) = MainThreadMarker::new() else {
+            tracing::warn!("iOS text input detached off the main thread; ignored");
+            return;
+        };
+        let responder = self.responder.get(marker);
+        // Retiring tells the keyboard no field is served: it goes down.
+        responder.client().retire();
+        if responder.isFirstResponder() {
+            responder.resignFirstResponder();
         }
+        responder.removeFromSuperview();
     }
 }
 

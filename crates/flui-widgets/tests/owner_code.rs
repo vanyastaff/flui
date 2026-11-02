@@ -1998,8 +1998,8 @@ fn in_memory_settle_retiring_after_the_listener_failed() {
     assert_eq!(parked(&gate).as_deref(), Some("listener failure"));
     assert_eq!(
         drops.get(),
-        0,
-        "after the settle failed, the observer it released is retained, not destroyed"
+        1,
+        "the withdrawn observer is destroyed after the caught failure (ADR-0281)"
     );
     store.set_protected(false);
     the_next_edit_runs_behind(&store, &gate);
@@ -2507,7 +2507,8 @@ fn dispatch_whose_diagnostic_panics() {
 }
 
 /// A settle in EditableText whose `on_changed` failed and whose observer then
-/// clears itself: the observer it released is retained, not destroyed.
+/// clears itself: its withdrawn capture is destroyed after the caught
+/// failure, with the first failure kept (ADR-0281).
 fn editable_settle_retiring_after_on_changed_failed() {
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("settle retirement");
@@ -2530,8 +2531,8 @@ fn editable_settle_retiring_after_on_changed_failed() {
     assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
     assert_eq!(
         drops.get(),
-        0,
-        "after the settle failed, the observer it released is retained, not destroyed"
+        1,
+        "the withdrawn observer is destroyed after the caught failure (ADR-0281)"
     );
     assert_eq!(
         raised(|| harness.tick()).as_deref(),
