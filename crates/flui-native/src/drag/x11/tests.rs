@@ -2066,4 +2066,117 @@ fn only_the_dropped_on_client_reads_the_session_data() {
         atoms.utf8,
         "the target reads the drop"
     );
+/// A drag that enters again while the window still hears the last one is
+/// offered with its types, though the window's handler panics as it hears
+/// the last one end: the failure goes on once the new drag is set up.
+#[test]
+fn a_drag_entered_over_a_failing_exit_offers_its_types() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.handler.react_to_input(|input| {
+        if let PlatformInput::DragDrop(DragDropEvent::Exited { .. }) = input {
+            panic!("the handler fails as the drag exits");
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (21, 30), 11, atoms.copy);
+    let deadline = Instant::now() + STEP;
+    let mut failed = false;
+    loop {
+        failed |= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            target.deliver_events();
+        }))
+        .is_err();
+        if let Some(Event::ClientMessage(message)) = source.poll()
+            && message.type_ == atoms.status
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the source heard no status");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(failed, "the handler's panic went on");
+    let offers: Vec<usize> = target
+        .heard()
+        .iter()
+        .filter_map(|event| match event {
+            DragDropEvent::Entered { offer, .. } => Some(offer.representations().len()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(offers, [1, 1], "each drag offers its text");
+}
+
+/// Records whether the transfer's lock was held as a diagnostic was
+/// emitted: a subscriber that reached the transfer then would deadlock.
+struct LockedAtDiagnostic {
+    drag: Arc<X11Drag>,
+    events: Arc<AtomicUsize>,
+    locked: Arc<AtomicUsize>,
+}
+
+impl tracing::Subscriber for LockedAtDiagnostic {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.events.fetch_add(1, Ordering::SeqCst);
+        if self.drag.state.try_lock().is_none() {
+            self.locked.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// The diagnostic for a source too old to answer is emitted with the
+/// transfer's lock let go: a subscriber is user code and may reach the
+/// transfer.
+#[test]
+fn a_diagnostic_is_emitted_with_the_lock_let_go() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.send(
+        target.xid,
+        atoms.enter,
+        [source.window, 2 << 24, atoms.utf8, NONE, NONE],
+    );
+    let events = Arc::new(AtomicUsize::new(0));
+    let locked = Arc::new(AtomicUsize::new(0));
+    let subscriber = LockedAtDiagnostic {
+        drag: Arc::clone(&target.drag),
+        events: Arc::clone(&events),
+        locked: Arc::clone(&locked),
+    };
+    let deadline = Instant::now() + STEP;
+    tracing::subscriber::with_default(subscriber, || {
+        while events.load(Ordering::SeqCst) == 0 {
+            target.deliver_events();
+            assert!(Instant::now() < deadline, "no diagnostic was emitted");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    assert_eq!(locked.load(Ordering::SeqCst), 0, "emitted under the lock");
 }

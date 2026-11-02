@@ -69,6 +69,7 @@ use flui_platform::{DragDropEvent, PlatformInput};
 use parking_lot::Mutex;
 use web_time::Instant;
 use x11rb::connection::Connection as _;
+use x11rb::errors::{ConnectionError, ReplyOrIdError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     self, AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, PropMode,
@@ -732,13 +733,49 @@ struct State {
     names: HashMap<xproto::Atom, Option<String>>,
 }
 
-/// What a step leaves to do once the lock is let go: completers to resolve
-/// and an event for a window, and whether a fetch started.
+/// What a step leaves to do once the lock is let go: diagnostics to emit,
+/// completers to resolve and an event for a window, and whether a fetch
+/// started.
 #[derive(Default)]
 struct After {
+    notes: Vec<Note>,
     completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)>,
     started: bool,
     dispatch: Option<(InputTarget, DragDropEvent)>,
+}
+
+/// A diagnostic a step found with the lock held, emitted once it is let go:
+/// a tracing subscriber is user code, and may reach the transfer again.
+enum Note {
+    /// A source older than [`model::OLDEST`] entered a window.
+    OldSource(u32),
+    /// A fetch's requestor could not be made or asked to convert; the fetch
+    /// times out.
+    Unopened(ConnectionError),
+    /// A fetch's requestor could not be destroyed.
+    Unclosed(ConnectionError),
+    /// No X id was left for a fetch's requestor.
+    NoId(ReplyOrIdError),
+}
+
+impl Note {
+    fn emit(&self) {
+        match self {
+            Self::OldSource(version) => {
+                tracing::debug!(
+                    version,
+                    "an XDND source older than version 3 is not answered"
+                );
+            }
+            Self::Unopened(error) => {
+                tracing::debug!(%error, "cannot ask the XDND source for its data");
+            }
+            Self::Unclosed(error) => {
+                tracing::debug!(%error, "cannot destroy an XDND requestor");
+            }
+            Self::NoId(error) => tracing::debug!(%error, "no X id for an XDND requestor"),
+        }
+    }
 }
 
 impl After {
@@ -754,7 +791,9 @@ impl After {
         fetch: Fetch,
         outcome: Result<TransferPayload, TransferError>,
     ) {
-        wire.close(fetch.requestor);
+        if let Err(error) = wire.close(fetch.requestor) {
+            self.notes.push(Note::Unclosed(error));
+        }
         self.completions.push((fetch.wanted.completer, outcome));
     }
 }
@@ -772,38 +811,36 @@ struct Wire<'a> {
 
 impl Wire<'_> {
     /// Make `requestor` and ask the source to convert into it.
-    fn open(&self, requestor: xproto::Window, target: xproto::Atom, time: xproto::Timestamp) {
+    fn open(
+        &self,
+        requestor: xproto::Window,
+        target: xproto::Atom,
+        time: xproto::Timestamp,
+    ) -> Result<(), ConnectionError> {
         let xcb = self.connection.xcb();
-        let started = xcb
-            .create_window(
-                0,
-                requestor,
-                self.connection.root(),
-                -1,
-                -1,
-                1,
-                1,
-                0,
-                WindowClass::INPUT_ONLY,
-                COPY_FROM_PARENT,
-                &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-            )
-            .map(drop)
-            .and_then(|()| {
-                xcb.convert_selection(requestor, self.selection, target, self.property, time)
-                    .map(drop)
-            });
-        if let Err(error) = started {
-            // The fetch times out.
-            tracing::debug!(%error, "cannot ask the XDND source for its data");
-        }
+        xcb.create_window(
+            0,
+            requestor,
+            self.connection.root(),
+            -1,
+            -1,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )
+        .map(drop)
+        .and_then(|()| {
+            xcb.convert_selection(requestor, self.selection, target, self.property, time)
+                .map(drop)
+        })
     }
 
     /// Destroy `requestor`: what a source writes to it late goes nowhere.
-    fn close(&self, requestor: xproto::Window) {
-        if let Err(error) = self.connection.xcb().destroy_window(requestor) {
-            tracing::debug!(%error, "cannot destroy an XDND requestor");
-        }
+    fn close(&self, requestor: xproto::Window) -> Result<(), ConnectionError> {
+        self.connection.xcb().destroy_window(requestor).map(drop)
     }
 }
 
@@ -862,12 +899,15 @@ impl State {
             let requestor = match wire.connection.xcb().generate_id() {
                 Ok(requestor) => requestor,
                 Err(error) => {
-                    tracing::debug!(%error, "no X id for an XDND requestor");
+                    after.notes.push(Note::NoId(error));
                     after.gone(wanted.completer);
                     continue;
                 }
             };
-            wire.open(requestor, wanted.target, wanted.time);
+            if let Err(error) = wire.open(requestor, wanted.target, wanted.time) {
+                // The fetch times out.
+                after.notes.push(Note::Unopened(error));
+            }
             after.started = true;
             self.fetches.push(Fetch {
                 requestor,
@@ -974,9 +1014,7 @@ impl X11Drag {
     /// [`Self::finish`], handing back the handler's panic, so a step that
     /// owes the source an answer sends it before the panic goes on.
     fn try_finish(&self, after: After) -> std::thread::Result<()> {
-        if let Err(error) = self.connection.xcb().flush() {
-            tracing::debug!(%error, "cannot send the XDND transfer's requests");
-        }
+        let flushed = self.connection.xcb().flush();
         if after.started {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
@@ -991,19 +1029,31 @@ impl X11Drag {
         // A request accepted before the handler failed is still answered,
         // each in its own containment: a waker that panics leaves the rest
         // answered, and the first failure goes on; a later one is retained
-        // rather than dropped (ADR-0127 §2).
+        // rather than dropped (ADR-0127 §2). The diagnostics go last, each
+        // contained too: a subscriber is user code.
         let mut failure = dispatched.err();
-        for (completer, result) in after.completions {
-            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                completer.complete(result);
-            }));
-            if let Err(payload) = completed {
+        let mut contain = |step: &mut dyn FnMut()| {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
                 if failure.is_none() {
                     failure = Some(payload);
                 } else {
                     std::mem::forget(payload);
                 }
             }
+        };
+        for (completer, result) in after.completions {
+            let mut answer = Some((completer, result));
+            contain(&mut || {
+                if let Some((completer, result)) = answer.take() {
+                    completer.complete(result);
+                }
+            });
+        }
+        for note in &after.notes {
+            contain(&mut || note.emit());
+        }
+        if let Err(error) = flushed {
+            contain(&mut || tracing::debug!(%error, "cannot send the XDND transfer's requests"));
         }
         failure.map_or(Ok(()), Err)
     }
@@ -1104,19 +1154,26 @@ impl X11Drag {
                     true
                 }
                 Some(_) => {
-                    tracing::debug!(
-                        version,
-                        "an XDND source older than version 3 is not answered"
-                    );
+                    after.notes.push(Note::OldSource(version));
                     false
                 }
                 None => false,
             }
         };
-        self.finish(after);
-        if !entered {
-            return;
+        // The new hover learns its types before a failure of the hover it
+        // replaced goes on: the next position must not offer a drag with
+        // none.
+        let finished = self.try_finish(after);
+        if entered {
+            self.learn_types(source, listed, types);
         }
+        if let Err(failure) = finished {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
+    /// The hover `source` entered offers the types it lists, or `types`.
+    fn learn_types(&self, source: xproto::Window, listed: bool, types: Vec<xproto::Atom>) {
         let types = if listed {
             self.atoms_of(source, self.atoms.type_list, MAX_TYPES)
         } else {

@@ -3883,7 +3883,9 @@ handler may fetch or conclude while it hears the drop, and a handler that
 panics as it hears a position still answers the source with a refusal before
 the panic goes on; the step's requests are answered whatever fails first, a
 waker's panic included, and the first failure goes on; a drop whose handler
-panics before concluding it is finished unaccepted.
+panics before concluding it is finished unaccepted. A drag entering while the
+last one's exit fails learns its types before that failure goes on, and a
+diagnostic found under the lock is emitted once it is let go.
 
 A window is a source too: its `drag_source` starts the runtime's OS session
 (`drag::x11::source`) when the drag leaves it with a button held, so the
@@ -3928,6 +3930,8 @@ on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_failing_drag_handler_still_answers_the_source`,
 `requests_are_answered_though_the_handler_and_a_waker_fail`,
 `a_drop_whose_handler_fails_finishes_unaccepted`,
+`a_drag_entered_over_a_failing_exit_offers_its_types`,
+`a_diagnostic_is_emitted_with_the_lock_let_go`,
 `an_incr_answer_is_read_in_chunks_and_held_to_its_limit` and
 `a_type_unnamed_or_named_past_a_media_type_is_refused_once`; a session from the window to
 another connection's window: `a_session_drops_on_a_target_that_accepts`,
