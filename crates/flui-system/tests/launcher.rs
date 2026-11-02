@@ -188,13 +188,17 @@ fn a_held_request_answers_when_released() {
 }
 
 #[test]
-fn the_system_plugin_refuses_until_a_host_provides_the_services() {
+fn the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere() {
     let (_host, launcher) = acquire::<LauncherCapability>(&SystemPlugin::new());
-    let refusal = launcher.expect_err("no host provides a launcher yet");
-    assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
-
     let (_host, dialogs) =
         acquire::<flui_system::dialog::FileDialogCapability>(&SystemPlugin::new());
-    let refusal = dialogs.expect_err("no host provides file dialogs yet");
-    assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
+    if cfg!(target_os = "linux") {
+        assert!(launcher.is_ok(), "the portal backs the launcher on Linux");
+        assert!(dialogs.is_ok(), "the portal backs the dialogs on Linux");
+    } else {
+        let refusal = launcher.expect_err("no provider yet off Linux");
+        assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
+        let refusal = dialogs.expect_err("no provider yet off Linux");
+        assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
+    }
 }

@@ -275,6 +275,10 @@ mod measured {
         PageIndicator as _, PageIndicatorState as _, PageIndicatorStyle as _,
         PageIndicatorStyleError as _,
     };
+    use flui_sdk::widgets::{
+        Reorder as _, ReorderCause as _, ReorderHandles as _, ReorderIntent as _,
+        ReorderPreview as _, ReorderableItem as _, ReorderableList as _, ReorderableListState as _,
+    };
     use flui_sdk::{
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,

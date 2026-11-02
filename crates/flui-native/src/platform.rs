@@ -22,7 +22,7 @@ use crate::host::{
 };
 use crate::host_window::HostWindow;
 use crate::owner::{OpenWindowError, OwnerPlatform};
-use crate::storage::DataDirs;
+use crate::storage::DataStore;
 use crate::task::Task;
 
 /// What the platform tells and asks the application it runs, passed once to
@@ -427,10 +427,12 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.
     ///
-    /// Every host but Android answers with the current user's data directories
-    /// ([`crate::storage::data_dirs`]); Android's process has no such
-    /// directories, so it answers with its own.
-    fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs>;
+    /// Every host but Android and headless answers with the current user's data
+    /// directories ([`crate::storage::data_dirs`]); Android's process has no
+    /// such directories, so it answers with its own; headless keeps the values
+    /// in memory unless a test gives it a root
+    /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)).
+    fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore>;
 }
 
 /// Platform executor trait for async task execution
@@ -704,7 +706,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         self.owner.app_path()
     }
 
-    fn data_dirs(&self, app: &AppDataDir) -> Option<DataDirs> {
-        H::Storage::data_dirs(&self.owner, app)
+    fn data_store(&self, app: &AppDataDir) -> Option<DataStore> {
+        H::Storage::data_store(&self.owner, app)
     }
 }
