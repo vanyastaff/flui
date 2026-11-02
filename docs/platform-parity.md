@@ -90,6 +90,11 @@ secrets).
 
 ## Core
 
+Dedicated UI owners are not available in any production runner. The accepted, unimplemented
+[ownership decision](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) requires separate
+host-specific native evidence before availability changes. The 2026-11-01 headless CPU
+experiment is not a native run and changes no cell or readiness count in this document.
+
 ### App lifecycle
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |

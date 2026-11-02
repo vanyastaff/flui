@@ -2,6 +2,10 @@
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
+- **Superseded-by:** [ADR-0284](ADR-0284-ui-runtimes-may-have-dedicated-owners.md)
+  (accepted 2026-11-01): §1's mandatory process-wide owner, §2's unconditional
+  frame-time limitation, §4's exhaustive transfer-position list and §5's policy-variant
+  requirement. The remaining decisions stand; dedicated runners are not yet implemented.
 - **Supersedes:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md), the verdict's sentence "Multiple
   UI runtimes may execute concurrently" and §1's sentence on runtime count per owner thread only
   (the ownership levels, the `!Send` model and the rest of §1 stand);
