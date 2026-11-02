@@ -50,6 +50,13 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             job();
             Ok(())
         }
+
+        fn poll_room(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), SpawnError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
     }
     impl HostIoPool for Pool {
         fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError> {
@@ -63,6 +70,13 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             ));
             drop(future);
             Err(SpawnError::Saturated)
+        }
+
+        fn poll_room(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), SpawnError>> {
+            std::task::Poll::Ready(Ok(()))
         }
     }
     struct Capture(Arc<AtomicBool>);
@@ -199,12 +213,26 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
             job();
             Ok(())
         }
+
+        fn poll_room(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), SpawnError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
     }
     impl HostIoPool for Pool {
         fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             drop(future);
             Ok(())
+        }
+
+        fn poll_room(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), SpawnError>> {
+            std::task::Poll::Ready(Ok(()))
         }
     }
     struct Capture {

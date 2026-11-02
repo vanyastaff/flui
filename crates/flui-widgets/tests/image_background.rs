@@ -156,6 +156,15 @@ impl flui_platform::executor::Executor for Saturated {
     ) -> Result<(), flui_platform::executor::SpawnError> {
         Err(flui_platform::executor::SpawnError::Saturated)
     }
+
+    /// Never has room.
+    fn poll_room(
+        &self,
+        _lane: flui_platform::executor::Lane,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), flui_platform::executor::SpawnError>> {
+        std::task::Poll::Pending
+    }
 }
 
 /// A lane too full to take the decode does not leave the image blank: the

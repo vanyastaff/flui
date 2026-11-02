@@ -141,6 +141,15 @@ impl Executor for Saturated {
     fn spawn_io(&self, _future: IoFuture) -> Result<(), SpawnError> {
         Err(SpawnError::Saturated)
     }
+
+    /// Never has room.
+    fn poll_room(
+        &self,
+        _lane: flui_platform::executor::Lane,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), flui_platform::executor::SpawnError>> {
+        std::task::Poll::Pending
+    }
 }
 
 pub(crate) fn a_refused_spawn_answers_refused_at_the_next_pump() {
@@ -183,6 +192,15 @@ impl Executor for Handed {
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
         self.futures.lock().expect("BUG: test lock").push(future);
         Ok(())
+    }
+
+    /// Takes everything.
+    fn poll_room(
+        &self,
+        _lane: flui_platform::executor::Lane,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), SpawnError>> {
+        std::task::Poll::Ready(Ok(()))
     }
 }
 

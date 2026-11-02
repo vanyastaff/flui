@@ -457,6 +457,13 @@ mod tests {
                 job();
                 Ok(())
             }
+
+            fn poll_room(
+                &self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), SpawnError>> {
+                std::task::Poll::Ready(Ok(()))
+            }
         }
         struct Refusing(Mutex<Option<During>>);
         impl HostIoPool for Refusing {
@@ -467,6 +474,13 @@ mod tests {
                 }
                 drop(future);
                 Err(SpawnError::Saturated)
+            }
+
+            fn poll_room(
+                &self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), SpawnError>> {
+                std::task::Poll::Ready(Ok(()))
             }
         }
 

@@ -7,6 +7,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// A pure background compute job: a boxed closure, run once on a worker
 /// thread (or inline on wasm32).
@@ -42,11 +43,23 @@ pub enum SpawnError {
     Unavailable,
 }
 
+/// One of the host's background lanes.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Lane {
+    /// CPU jobs ([`Executor::spawn_compute`]).
+    Compute,
+    /// Await-heavy futures ([`Executor::spawn_io`]).
+    Io,
+}
+
 /// The host's two background lanes: compute for CPU jobs, IO for
 /// await-heavy futures.
 ///
 /// Implementations run each job and drive each future at most once, on any
 /// thread, and refuse with a [`SpawnError`] rather than queue without bound.
+/// A caller refused with [`SpawnError::Saturated`] waits for room with
+/// [`poll_room`](Self::poll_room) and spawns again.
 pub trait Executor: Send + Sync + 'static {
     /// Run `job` on the compute lane.
     ///
@@ -62,4 +75,13 @@ pub trait Executor: Send + Sync + 'static {
     /// The [`SpawnError`] the lane refused `future` with; `future` is
     /// dropped.
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError>;
+
+    /// Whether `lane` has room for one more unit of work.
+    ///
+    /// `Ready(Ok(()))` when it has room now; a spawn that follows may still
+    /// find it taken by another caller, and then waits again. `Pending` when
+    /// it is full: `cx`'s waker is woken once room frees, or once the lane
+    /// stops admitting work. `Ready(Err(_))` when waiting cannot help: the
+    /// lane is shutting down, or its workers could not start.
+    fn poll_room(&self, lane: Lane, cx: &mut Context<'_>) -> Poll<Result<(), SpawnError>>;
 }

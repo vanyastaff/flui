@@ -1929,6 +1929,13 @@ mod tests {
                 None => self.queue.spawn_job(job),
             }
         }
+
+        fn poll_room(
+            &self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), SpawnError>> {
+            std::task::Poll::Ready(Ok(()))
+        }
     }
 
     fn idle_worker_handoff_cannot_execute_refused_input() {
