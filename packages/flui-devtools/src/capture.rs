@@ -282,9 +282,22 @@ fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Op
     first_panic
 }
 
+/// Calls every sink with `value`. A sink is user code, and the callback runs inside a tracing
+/// layer: unwinding out of it would stop the layers after this one from seeing the span exit, so
+/// the first failure is reported as an error event and not raised.
 fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
     if let Some(payload) = deliver_contained(capture, sinks, value) {
-        std::panic::resume_unwind(payload);
+        let text = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a non-text panic payload".to_owned());
+        // A subscriber is user code too.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::error!(target: "flui.devtools", "a capture sink panicked: {text}");
+        }));
+        // Forgotten, not dropped: its `Drop` may panic too.
+        std::mem::forget(payload);
     }
 }
 
@@ -516,7 +529,6 @@ struct FrameState {
     outermost: bool,
     ended: Vec<Ended>,
     id: u64,
-    opener_panic: Mutex<Option<Payload>>,
 }
 
 /// A phase or segment that ended inside a frame, until the frame closes and names its runtime.
@@ -710,7 +722,6 @@ where
                     outermost,
                     ended: Vec::new(),
                     id: id.into_u64(),
-                    opener_panic: Mutex::new(None),
                 },
             );
         } else if is_segment(metadata) {
@@ -757,21 +768,7 @@ where
             if let Some(opening) = opening {
                 // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
                 let openers: Vec<_> = self.capture.shared.openers.lock().clone();
-                // An opener is user code. A panic here would unwind out of `enter` before the
-                // registry has handed back its guard and leave the frame entered for good, so the
-                // first failure is kept and raised when the frame closes.
-                if let Some(payload) = deliver_contained(&self.capture, openers, &opening) {
-                    let mut payload = Some(payload);
-                    slot_modify(&span, owner, |state: &mut FrameState| {
-                        let mut kept = state.opener_panic.lock();
-                        if kept.is_none() {
-                            *kept = payload.take();
-                        }
-                    });
-                    if let Some(lost) = payload {
-                        std::mem::forget(lost);
-                    }
-                }
+                deliver(&self.capture, openers, &opening);
             }
             return;
         }
@@ -830,21 +827,7 @@ where
             })
             .unwrap_or(false);
             if last && let Some(state) = slot_take::<FrameState, S>(&span, owner) {
-                let opener_panic = state.opener_panic.lock().take();
-                let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.finish_frame(state);
-                }));
-                // The first failure wins: an opener ran before any sink did.
-                match (opener_panic, finished) {
-                    (Some(first), later) => {
-                        if let Err(later) = later {
-                            std::mem::forget(later);
-                        }
-                        std::panic::resume_unwind(first);
-                    }
-                    (None, Err(payload)) => std::panic::resume_unwind(payload),
-                    (None, Ok(())) => {}
-                }
+                self.finish_frame(state);
             }
             return;
         }
@@ -1258,14 +1241,11 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
 
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-                frame_of(runtime(1), &[]);
-            });
-        }));
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(runtime(1), &[]);
+        });
 
         assert_eq!(*seen.lock(), 1, "the later sink saw the frame");
-        assert!(outcome.is_err(), "the first panic still surfaces");
     }
 
     /// The enclosing frame belongs to another runtime's pump: it cannot stand in for the inner
@@ -1296,10 +1276,10 @@ mod tests {
     }
 
     /// An opener runs while the outermost frame is still open, knowing the runtime that drives it.
-    /// One that panics does not stop the ones after it, and its failure surfaces when the frame
-    /// closes, so entering the frame stays balanced and the next frame is outermost again.
+    /// One that panics does not stop the ones after it, and nothing unwinds out of the layer: the
+    /// frame is entered and left in balance, so the next frame is outermost again.
     #[test]
-    fn a_panicking_frame_opener_is_raised_at_close_and_leaves_the_next_frame_outermost() {
+    fn a_panicking_frame_opener_is_contained_and_leaves_the_next_frame_outermost() {
         let capture = Capture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let closed = Arc::new(Mutex::new(Vec::new()));
@@ -1328,12 +1308,7 @@ mod tests {
                     "frame",
                     runtime = runtime(7).as_u64()
                 );
-                let entered =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame.enter()));
-                let guard = entered.expect("entering the frame does not unwind");
-                let closing =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(guard)));
-                assert!(closing.is_err(), "the opener's panic is raised at close");
+                drop(frame.entered());
             });
         }
         assert_eq!(
@@ -1341,6 +1316,28 @@ mod tests {
             [(Some(runtime(7)), true, 0), (Some(runtime(7)), true, 1)]
         );
         assert_eq!(*closed.lock(), [true, true], "both frames were captured");
+    }
+
+    /// A failing sink of one capture must not stop the capture layers after it from closing the
+    /// frame: nothing unwinds through the registry.
+    #[test]
+    fn a_panicking_sink_does_not_stop_another_capture_on_the_registry() {
+        let (first, second) = (Capture::new(), Capture::new());
+        first.on_frame(|_, _| panic!("a sink that fails"));
+        let subscriber = tracing_subscriber::registry()
+            .with(first.layer())
+            .with(second.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(runtime(1), &[]);
+        });
+
+        assert_eq!(first.frames().len(), 1);
+        assert_eq!(
+            second.frames().len(),
+            1,
+            "the other capture closed the frame"
+        );
     }
 
     /// Two captures on one registry see the same spans; neither may disturb the other's state.
