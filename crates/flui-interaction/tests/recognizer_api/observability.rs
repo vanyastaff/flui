@@ -47,9 +47,7 @@ impl RecognizerEvents {
 
 impl tracing::Subscriber for RecognizerEvents {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata
-            .target()
-            .starts_with("flui_interaction::gesture::recognizers")
+        metadata.target().starts_with("flui.input")
     }
 
     fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {

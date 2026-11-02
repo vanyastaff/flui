@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     wayland_host,
     target_arch = "wasm32",
@@ -24,6 +25,7 @@ use std::rc::Rc;
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     wayland_host,
     target_arch = "wasm32",
@@ -115,13 +117,7 @@ impl<Op> HostQueue<Op> {
     }
 
     /// Forget every queued request: the host retired with its window.
-    #[cfg(any(
-        target_os = "android",
-        target_os = "macos",
-        wayland_host,
-        target_arch = "wasm32",
-        test
-    ))]
+    #[cfg(any(target_os = "android", wayland_host, target_arch = "wasm32", test))]
     pub(crate) fn clear(&self) {
         // Taken out before dropping, so a store a request held cannot reach
         // the queue from its destructor while it is borrowed.
@@ -132,6 +128,7 @@ impl<Op> HostQueue<Op> {
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     wayland_host,
     target_arch = "wasm32",
@@ -149,6 +146,7 @@ pub(crate) enum MirrorHostOp {
 
 #[cfg(any(
     target_os = "android",
+    target_os = "ios",
     target_os = "macos",
     wayland_host,
     target_arch = "wasm32",

@@ -1241,6 +1241,8 @@ mod input {
             }
         }
 
+        // Composition-only publications also send this notice. The snapshot
+        // carries both the selection and composing bounds to updateSelection.
         fn selection_changed(&self) {
             if let Some(input) = self.input.upgrade() {
                 input.publish_now(Publish::Selection);

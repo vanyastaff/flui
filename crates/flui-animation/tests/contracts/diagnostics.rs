@@ -120,28 +120,28 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observer {
         _: &tracing::span::Id,
         _: Context<'_, S>,
     ) {
-        if attrs.metadata().target().starts_with("flui_animation") {
+        if attrs.metadata().target().starts_with("flui.animation") {
             self.optional_spans.fetch_add(1, Ordering::Relaxed);
             self.touch(Hook::New, attrs.metadata().name());
         }
     }
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id)
-            && span.metadata().target().starts_with("flui_animation")
+            && span.metadata().target().starts_with("flui.animation")
         {
             self.touch(Hook::Enter, span.name());
         }
     }
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id)
-            && span.metadata().target().starts_with("flui_animation")
+            && span.metadata().target().starts_with("flui.animation")
         {
             self.touch(Hook::Exit, span.name());
         }
     }
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(&id)
-            && span.metadata().target().starts_with("flui_animation")
+            && span.metadata().target().starts_with("flui.animation")
         {
             self.touch(Hook::Close, span.name());
         }
@@ -149,7 +149,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observer {
     fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
         let mut fields = Fields::default();
         event.record(&mut fields);
-        if event.metadata().target() == "flui_animation::diagnostics" {
+        if event.metadata().target() == "flui.animation.diagnostics" {
             self.touch(Hook::Event, "animation transition");
         }
         self.records.lock().expect("observer records").push(fields);
@@ -907,7 +907,7 @@ fn controller_events_keep_their_owning_dispatcher() {
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
         fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
             let target = event.metadata().target();
-            if target == "flui_animation::diagnostics"
+            if target == "flui.animation.diagnostics"
                 || target == REFUSAL_TARGET
                 || target == flui_animation::NEVER_SETTLES_TARGET
             {

@@ -521,11 +521,13 @@ impl GestureRecognizer for TapGestureRecognizer {
     }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let pointer = dispatch.local.pointer_id();
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "tap.add_pointer",
-            pointer = ?pointer,
-            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
-        );
+            pointer = pointer.map_or(0, |id| id.get().get()),
+            event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
+        )
+        .entered();
         let PointerEvent::Down(_) = dispatch.local else {
             return;
         };
@@ -592,11 +594,13 @@ impl GestureRecognizer for TapGestureRecognizer {
         }
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "tap.handle_event",
-            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
-            event = %crate::gesture::observability::GestureEvent::EventReceived,
-        );
+            kind = crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = crate::gesture::observability::GestureEvent::EventReceived.as_str(),
+        )
+        .entered();
         let Some(member) = self.current_member() else {
             return;
         };

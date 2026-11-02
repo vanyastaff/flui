@@ -161,8 +161,8 @@ this one path (ADR-0151 §9).
   the input regions stay verbs, because they are sent every frame and
   commands apply at the owner's next turn (ADR-0254 §3): each returns
   `Result<(), Unsupported>` exactly when its capability
-  (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::input_regions`)
-  is `Unavailable`, has no default body, and the window conformance checks
+  (`WindowCapabilities::frame_rate_hint`, `InputCapabilities::honours_input_regions`)
+  says none, has no default body, and the window conformance checks
   both. A verb answers its reason itself: nothing admits it against the
   capabilities, so the capabilities keep no second copy of it. A test double whose window system takes neither writes them with
   `window_takes_no_frame_verbs!`.

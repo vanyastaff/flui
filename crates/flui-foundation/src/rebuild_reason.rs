@@ -123,6 +123,13 @@ impl RebuildReasons {
         self.0 & reason.bit() != 0
     }
 
+    /// The set as a bitmask: bit `n` is set when the [`RebuildReason`] variant declared `n`th,
+    /// counting from zero, is in it. Trace spans carry it as a primitive field.
+    #[must_use]
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
     /// Number of distinct causes in this set.
     #[must_use]
     pub const fn len(self) -> usize {

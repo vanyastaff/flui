@@ -60,3 +60,6 @@ mod app_data_dir;
 
 #[path = "window_insets.rs"]
 mod window_insets;
+
+#[path = "window_chrome_regions.rs"]
+mod window_chrome_regions;

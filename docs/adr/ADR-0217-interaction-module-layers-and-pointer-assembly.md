@@ -7,6 +7,7 @@
 - **Date:** 2026-10-13
 - **Amended:** 2026-10-19 — the layer table follows the implemented manifest: DnD sessions are
   the `drag` module beside `gesture`, and `haptics` is layer 5, below `__runtime` and `testing`.
+- **Amended-by:** [ADR-0286](ADR-0286-window-chrome-regions-answer-the-system-hit-test.md): §5's chrome kinds, paint-order resolution and per-kind availability.
 - **Amends:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md): `PanZoomTransform`
   loses its pan component; a two-finger pan is `Scroll` with phases, and translation during a
   pinch is carried by the focal point, updated on every `Update`.

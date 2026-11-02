@@ -312,7 +312,7 @@ pub(crate) fn a_composition_past_the_delay_ceiling_is_reported() {
     assert!(
         log.records().iter().any(|record| {
             record.level == tracing::Level::WARN
-                && record.target == "flui_widgets::gesture_detector"
+                && record.target == "flui.input.gesture_detector"
                 && record.message.contains("composition refused")
         }),
         "the refusal is reported:\n{log}"

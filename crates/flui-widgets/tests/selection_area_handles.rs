@@ -22,7 +22,7 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, Focus, HandleInfo,
+    Column, DefaultSelectionControls, DefaultTextStyle, Directionality, Focus, HandleInfo,
     HandleSide, SelectionArea, SelectionChangeCause, SelectionController, SelectionHandles,
     SelectionInput, SizedBox, Text, WidgetsApp,
 };
@@ -434,7 +434,7 @@ pub(crate) fn handles_come_from_the_area_then_the_default_and_need_an_overlay() 
     let app = |own: Option<Marked>, heard: &Heard| {
         let area = Scene::area(heard, own);
         let default = default.clone();
-        WidgetsApp::new(DefaultSelectionHandles::new(default, area))
+        WidgetsApp::new(DefaultSelectionControls::new(area).handles(default))
     };
     let at = width_of("alpha be");
 

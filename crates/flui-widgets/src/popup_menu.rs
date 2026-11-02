@@ -31,13 +31,15 @@ use flui_view::prelude::*;
 
 use crate::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
-    Focus, FocusRing, GestureArenaScope, GestureDetector, Intent, MenuItem, MenuRequest, Shortcuts,
-    SingleActivator,
+    Focus, FocusRing, GestureArenaScope, GestureDetector, Intent, MenuItem, MenuPresenter,
+    MenuRequest, Shortcuts, SingleActivator,
 };
+use crate::localization::Directionality;
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
 use crate::{
     Align, ColoredBox, Column, ConstrainedBox, CustomSingleChildLayout, ExcludeSemantics,
-    IntrinsicWidth, Padding, Semantics, SemanticsRole, Text,
+    IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, SemanticsRole,
+    Text, Wrap,
 };
 
 // ============================================================================
@@ -107,7 +109,7 @@ impl Presenter {
     pub(crate) fn present(&self, request: MenuRequest) {
         let Some(navigator) = self.navigator.clone() else {
             tracing::warn!(
-                target: "flui::a11y",
+                target: "flui.a11y",
                 "a menu has no Navigator above it, so it cannot open"
             );
             return;
@@ -454,5 +456,113 @@ impl fmt::Debug for MenuPanelState {
         f.debug_struct("MenuPanelState")
             .field("items", &self.nodes.len())
             .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// The plain selection menu
+// ============================================================================
+
+/// The theme-free [`SelectionMenu`] [`WidgetsApp`](crate::WidgetsApp)
+/// installs: the popup is this module's plain menu, and the toolbar a white
+/// strip of the same labels in a row.
+///
+/// The toolbar's buttons never take the focus, so the field keeps it and its
+/// input session; each is a button to assistive technology, labelled by its
+/// command.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlainSelectionMenu;
+
+impl SelectionMenu for PlainSelectionMenu {
+    fn toolbar(&self, items: &[MenuItem], ctx: &dyn BuildContext) -> BoxedView {
+        let min_target =
+            GestureArenaScope::settings_or_default_of(ctx).min_target_for(PointerKind::Touch);
+        let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        let buttons: Vec<BoxedView> = items
+            .iter()
+            .map(|item| toolbar_button(item, direction, min_target))
+            .collect();
+        Semantics::new()
+            .container(true)
+            .role(SemanticsRole::Toolbar)
+            .child(ColoredBox::new(MENU_SURFACE).child(
+                // Labels wider than the room wrap onto another run, so
+                // every command stays reachable.
+                Wrap::new(buttons),
+            ))
+            .boxed()
+    }
+
+    fn popup(&self) -> Rc<dyn SelectionPopup> {
+        Rc::new(PlainPopup {
+            session: Rc::new(MenuSession::default()),
+        })
+    }
+}
+
+/// One toolbar button: the item's label, performing it on a tap.
+fn toolbar_button(item: &MenuItem, direction: TextDirection, min_target: f64) -> BoxedView {
+    let side = if min_target.is_finite() {
+        min_target.max(0.0)
+    } else {
+        0.0
+    };
+    let label = item.label().to_owned();
+    let chosen = item.clone();
+    Semantics::new()
+        .container(true)
+        .role(SemanticsRole::Button)
+        .label(label.clone())
+        .child(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_tap(move |cx| {
+                    let _ = chosen.perform(cx);
+                })
+                .child(
+                    ConstrainedBox::new(BoxConstraints::new(
+                        side,
+                        f64::INFINITY,
+                        side,
+                        f64::INFINITY,
+                    ))
+                    .child(
+                        Padding::symmetric(12.0, 8.0).child(
+                            Align::new(AlignmentDirectional::CENTER.resolve(direction.is_ltr()))
+                                .width_factor(1.0)
+                                .height_factor(1.0)
+                                .child(
+                                    ExcludeSemantics::new().child(
+                                        Text::new(label)
+                                            .direction(direction)
+                                            .style(TextStyle::default().with_color(MENU_LABEL)),
+                                    ),
+                                ),
+                        ),
+                    ),
+                ),
+        )
+        .boxed()
+}
+
+/// The plain popup of one field or area: the menu it has open.
+struct PlainPopup {
+    session: Rc<MenuSession>,
+}
+
+impl SelectionPopup for PlainPopup {
+    fn presenter(&self, ctx: &dyn BuildContext, origin: &PopupOrigin) -> MenuPresenter {
+        let presenter = Presenter {
+            session: Rc::clone(&self.session),
+            navigator: NavigatorHandle::maybe_of(ctx),
+            anchor: origin.anchor().clone(),
+            owner: origin.owner().cloned(),
+            direction: Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
+        };
+        Rc::new(move |_cx, request| presenter.present(request))
+    }
+
+    fn close(&self) {
+        self.session.close_current();
     }
 }

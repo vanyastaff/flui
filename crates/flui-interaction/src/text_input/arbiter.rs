@@ -139,7 +139,7 @@ impl LockArbiter {
         settle: &mut dyn FnMut(&mut OwnerCalls),
     ) -> Result<LockOutcome, TextStoreError> {
         if self.locked.get() || !self.may_commit() {
-            return self.defer_or_refuse(grant, timing);
+            return self.defer(grant, timing);
         }
         // Earlier requests first, so this one cannot overtake them. When one
         // of them fails, this request is still accepted work: an
@@ -160,7 +160,7 @@ impl LockArbiter {
         }
         // An earlier grant may have closed the presentation's transaction gate.
         if !self.may_commit() {
-            return self.defer_or_refuse(grant, timing);
+            return self.defer(grant, timing);
         }
         self.run_one(grant, open, settle);
         // Whatever this grant queued runs now that its lock is released.
@@ -181,7 +181,15 @@ impl LockArbiter {
     /// Queue `grant` or refuse it. A refused grant is retired inside a
     /// scope, after the queue's borrow is released: its captures are the
     /// requester's code.
-    fn defer_or_refuse(
+    ///
+    /// A store uses this while publishing an application change: writes
+    /// wait in this same bounded queue until the publication completes.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::SyncLockUnavailable`] for a synchronous request,
+    /// or [`TextStoreError::DeferredQueueFull`] when the async queue is full.
+    pub fn defer(
         &self,
         grant: LockGrant,
         timing: LockTiming,
@@ -199,6 +207,28 @@ impl LockArbiter {
         outcome
     }
 
+    /// Read a frozen publication snapshot without running queued writes.
+    ///
+    /// This is the narrow exception to normal request ordering: an observer
+    /// must be able to read the old document before its publication, while
+    /// writes wait until that publication finishes. The store drains and
+    /// settles the normal queue after leaving the publication. Nested reads
+    /// and reads behind a closed commit gate are refused as usual.
+    ///
+    /// # Errors
+    ///
+    /// [`TextStoreError::SyncLockUnavailable`] while another grant runs or
+    /// commits are not allowed.
+    pub fn read_snapshot<R>(&self, read: impl FnOnce() -> R) -> Result<R, TextStoreError> {
+        if self.locked.get() || !self.may_commit() {
+            drop(read);
+            return Err(TextStoreError::SyncLockUnavailable);
+        }
+        self.locked.set(true);
+        let _held = Held(&self.locked);
+        Ok(read())
+    }
+
     /// Run every queued grant, in request order, when the store is unlocked
     /// and its gate is open. Returns how many ran.
     ///
@@ -213,6 +243,53 @@ impl LockArbiter {
             return 0;
         }
         self.drain(open, settle)
+    }
+
+    /// Attempt every eligible queued grant inside the caller's failure scope.
+    ///
+    /// A publication uses this before releasing its observer: a failing
+    /// grant or settle must not strand a later accepted write. Each grant
+    /// is removed before calling other code, so a failure is never retried.
+    /// Eligibility is checked between attempts; a closed gate or nested
+    /// lock leaves the remaining grants for their next owner anchor.
+    /// Ordinary [`Self::run_deferred`] keeps its existing unwind behavior.
+    /// Before admitting each grant, `before_grant` runs unlocked so an
+    /// application edit made by earlier work is published before a later
+    /// platform write can absorb it. It runs only with queued work; lock,
+    /// gate and queue eligibility are checked again afterwards.
+    ///
+    /// Newly parked settle failures join `calls` in order through
+    /// [`OwnerCalls::run_parking`]. Returns the number attempted, including
+    /// failed bodies or settles, saturating at [`usize::MAX`].
+    pub fn run_deferred_contained(
+        &self,
+        calls: &mut OwnerCalls,
+        before_grant: &mut dyn FnMut(&mut OwnerCalls),
+        open: &mut dyn FnMut(LockGrant),
+        settle: &mut dyn FnMut(&mut OwnerCalls),
+    ) -> usize {
+        let mut attempted = 0_usize;
+        while !self.locked.get() && self.may_commit() && self.pending() > 0 {
+            let prepared = catch_unwind(AssertUnwindSafe(|| before_grant(calls)));
+            if let Err(payload) = prepared {
+                calls.keep(payload);
+            }
+            if self.locked.get() || !self.may_commit() {
+                break;
+            }
+            let next = self.queue.borrow_mut().pop_front();
+            let Some(grant) = next else {
+                break;
+            };
+            if let Some(admitting) = self.owner_gate() {
+                calls.run_parking(&admitting, || self.run_one(grant, open, settle));
+                calls.run(|| drop(admitting));
+            } else {
+                calls.run(|| self.run_one(grant, open, settle));
+            }
+            attempted = attempted.saturating_add(1);
+        }
+        attempted
     }
 
     /// Whether a grant is running.

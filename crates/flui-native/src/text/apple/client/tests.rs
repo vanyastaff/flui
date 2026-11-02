@@ -12,22 +12,79 @@ use flui_platform::text_store::{
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
-use super::{InputContext, TextClient};
+use super::super::secure_input::SecureHold;
+use super::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 
-/// AppKit's input context as the client reaches it: the calls it got, and
-/// what the input method does when told to discard its marked text.
-#[derive(Default)]
+/// The input method's context as the client reaches it: the calls it got,
+/// what the input method does when told to discard its marked text, and
+/// macOS's secure event input, held through [`SecureHold`] as the AppKit
+/// context holds it.
 struct Context {
     discards: Cell<usize>,
     invalidations: Cell<usize>,
     on_discard: RefCell<Option<Box<dyn Fn()>>>,
+    /// Each status the client told, in order.
+    statuses: RefCell<Vec<Option<TextStoreStatus>>>,
+    /// Each application change the client told, in order.
+    changes: RefCell<Vec<DocumentChange>>,
+    will_changes: RefCell<Vec<DocumentChange>>,
+    on_will_change: RefCell<Option<Box<dyn Fn()>>>,
+    /// What the input method does when told of an application change.
+    on_change: RefCell<Option<Box<dyn Fn()>>>,
+    on_field: RefCell<Option<Box<dyn Fn()>>>,
+    on_drop: Option<Box<dyn Fn()>>,
+    secure: SecureHold<Box<dyn Fn(bool) -> bool>>,
     /// The holds on secure event input the client has taken and not given
     /// back.
-    secure_holds: Cell<isize>,
+    secure_holds: Rc<Cell<isize>>,
     /// Whether the view's window has resigned key status.
     resigned: Cell<bool>,
     /// Whether the system refuses the next change of secure event input.
-    refuse_secure: Cell<bool>,
+    refuse_secure: Rc<Cell<bool>>,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        let secure_holds = Rc::new(Cell::new(0_isize));
+        let refuse_secure = Rc::new(Cell::new(false));
+        let change: Box<dyn Fn(bool) -> bool> = Box::new({
+            let holds = Rc::clone(&secure_holds);
+            let refuse = Rc::clone(&refuse_secure);
+            move |secure| {
+                if refuse.replace(false) {
+                    return false;
+                }
+                let count = holds.get() + if secure { 1 } else { -1 };
+                assert!(count >= 0, "a hold was given back that was never taken");
+                holds.set(count);
+                true
+            }
+        });
+        Self {
+            discards: Cell::new(0),
+            invalidations: Cell::new(0),
+            on_discard: RefCell::new(None),
+            statuses: RefCell::new(Vec::new()),
+            changes: RefCell::new(Vec::new()),
+            will_changes: RefCell::new(Vec::new()),
+            on_will_change: RefCell::new(None),
+            on_change: RefCell::new(None),
+            on_field: RefCell::new(None),
+            on_drop: None,
+            secure: SecureHold::new(change),
+            secure_holds,
+            resigned: Cell::new(false),
+            refuse_secure,
+        }
+    }
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop();
+        }
+    }
 }
 
 impl InputContext for Context {
@@ -43,18 +100,33 @@ impl InputContext for Context {
         self.invalidations.set(self.invalidations.get() + 1);
     }
 
-    fn set_secure_input(&self, secure: bool) -> bool {
-        if self.refuse_secure.replace(false) {
-            return false;
+    fn field_changed(&self, status: Option<TextStoreStatus>) {
+        let answer = self.on_field.borrow_mut().take();
+        if let Some(answer) = answer {
+            answer();
         }
-        let holds = self.secure_holds.get() + if secure { 1 } else { -1 };
-        assert!(holds >= 0, "a hold was given back that was never taken");
-        self.secure_holds.set(holds);
-        true
+        self.statuses.borrow_mut().push(status);
+        let wanted = status.is_some_and(|status| status.protected) && !self.resigned.get();
+        self.secure.sync(wanted);
     }
 
-    fn is_key_window(&self) -> bool {
-        !self.resigned.get()
+    fn document_changed(&self, change: DocumentChange, marked_text: MarkedText) {
+        if marked_text == MarkedText::Discard {
+            self.discard_marked_text();
+        }
+        self.changes.borrow_mut().push(change);
+        let answer = self.on_change.borrow_mut().take();
+        if let Some(answer) = answer {
+            answer();
+        }
+    }
+
+    fn document_will_change(&self, change: DocumentChange) {
+        self.will_changes.borrow_mut().push(change);
+        let answer = self.on_will_change.borrow_mut().take();
+        if let Some(answer) = answer {
+            answer();
+        }
     }
 }
 
@@ -74,7 +146,7 @@ fn composing(range: Utf16Range) -> Composition {
 }
 
 /// A client bound to a fresh context, serving `store`.
-fn serving(store: &Rc<InMemoryTextStore>) -> (Rc<TextClient>, Rc<Context>) {
+fn serving<S: TextStore + 'static>(store: &Rc<S>) -> (Rc<TextClient>, Rc<Context>) {
     let client = TextClient::new();
     let context = Rc::new(Context::default());
     client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
@@ -451,14 +523,15 @@ fn secure_input_is_given_back_while_the_window_is_not_key() {
     assert_eq!(context.secure_holds.get(), 1, "the window became key again");
 }
 
-/// A store whose `status` moves focus: the hold follows the focus it gives,
-/// not the answer the outer call read before the move.
-struct MovesFocusOnStatus {
+/// Application code may reenter the host from a status or lock request.
+struct ReentrantStore {
     inner: Rc<InMemoryTextStore>,
     on_status: RefCell<Option<Box<dyn FnOnce()>>>,
+    on_read: RefCell<Option<Box<dyn FnOnce()>>>,
+    on_write: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
-impl TextStore for MovesFocusOnStatus {
+impl TextStore for ReentrantStore {
     fn status(&self) -> TextStoreStatus {
         let on_status = self.on_status.borrow_mut().take();
         if let Some(on_status) = on_status {
@@ -473,6 +546,17 @@ impl TextStore for MovesFocusOnStatus {
         timing: flui_platform::text_store::LockTiming,
     ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
     {
+        if matches!(&grant, flui_platform::text_store::LockGrant::Read(_)) {
+            let on_read = self.on_read.borrow_mut().take();
+            if let Some(on_read) = on_read {
+                on_read();
+            }
+        } else {
+            let on_write = self.on_write.borrow_mut().take();
+            if let Some(on_write) = on_write {
+                on_write();
+            }
+        }
         self.inner.request_lock(grant, timing)
     }
 
@@ -496,8 +580,10 @@ fn a_focus_moved_by_a_status_query_is_held_for() {
     let client = TextClient::new();
     let context = Rc::new(Context::default());
     client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
-    let plain = Rc::new(MovesFocusOnStatus {
+    let plain = Rc::new(ReentrantStore {
         inner: InMemoryTextStore::new(""),
+        on_read: RefCell::new(None),
+        on_write: RefCell::new(None),
         on_status: RefCell::new(Some(Box::new({
             let client = Rc::clone(&client);
             let password = as_store(&password);
@@ -513,4 +599,842 @@ fn a_focus_moved_by_a_status_query_is_held_for() {
     );
     client.focus_store(None);
     assert_eq!(context.secure_holds.get(), 0);
+}
+
+/// The input method hears of the application's edits, text and selection
+/// apart, and never of its own: UIKit drops its marked text when told the
+/// document changed under it, so an edit it made itself must not be told
+/// back.
+#[test]
+fn the_input_method_hears_the_applications_edits_and_not_its_own() {
+    let store = InMemoryTextStore::new("ab");
+    store.app_select(caret(2));
+    let (client, context) = serving(&store);
+
+    client.set_marked_text("か".to_owned(), span(1, 1), None);
+    client.insert_text("漢".to_owned(), None);
+    client.replace(span(0, 1), "A".to_owned());
+    client.select(span(1, 1));
+    client.unmark_text();
+    assert_eq!(store.text(), "Ab漢");
+    assert_eq!(
+        *context.changes.borrow(),
+        [],
+        "the input method's own edits are not told back"
+    );
+
+    store.app_replace(span(0, 1), "x");
+    assert_eq!(
+        context.changes.borrow().first(),
+        Some(&DocumentChange::Text),
+        "an application's edit of the text"
+    );
+    let told = context.changes.borrow().len();
+    store.app_select(caret(0));
+    assert_eq!(
+        context.changes.borrow()[told..],
+        [DocumentChange::Selection],
+        "an application's move of the selection alone"
+    );
+
+    client.focus_store(None);
+    let told = context.changes.borrow().len();
+    store.app_replace(span(0, 1), "y");
+    assert_eq!(
+        context.changes.borrow().len(),
+        told,
+        "a field without focus is not the input method's"
+    );
+}
+
+/// An input method that answers an application's edit by editing the field
+/// (UIKit committing its marked text) edits it under that notice, and a
+/// focus move it causes waits for the notice to return.
+#[test]
+fn an_edit_answering_the_applications_notice_lands() {
+    let store = InMemoryTextStore::new("ab");
+    store.app_select(caret(2));
+    let other = InMemoryTextStore::new("");
+    let (client, context) = serving(&store);
+    *context.on_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        let context = Rc::clone(&context);
+        let store = Rc::clone(&store);
+        move || {
+            client.select(span(2, 2));
+            client.insert_text("c".to_owned(), None);
+            *context.on_field.borrow_mut() = Some(Box::new({
+                let store = Rc::clone(&store);
+                move || {
+                    assert_eq!(
+                        store.text(),
+                        "abc",
+                        "accepted edits precede the focus transition"
+                    );
+                }
+            }));
+            client.focus_store(Some(Rc::clone(&other)));
+            assert!(
+                client.document_len() == Some(Utf16Offset::new(2)),
+                "focus moves only once the notice returns"
+            );
+        }
+    }));
+    store.app_select(caret(1));
+    assert_eq!(store.text(), "abc");
+    assert_eq!(
+        client.document_len(),
+        Some(Utf16Offset::new(0)),
+        "then it moved"
+    );
+}
+
+/// The field's status reaches the input method as focus, status, binding
+/// and retirement change it; `None` once no field has focus.
+#[test]
+fn the_input_method_is_told_the_fields_status() {
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    let client = TextClient::new();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    client.focus_store(Some(as_store(&password)));
+    password.set_protected(false);
+    client.focus_store(None);
+    client.focus_store(Some(as_store(&password)));
+    client.retire();
+    let told = context
+        .statuses
+        .borrow()
+        .iter()
+        .map(|status| status.map(|status| status.protected))
+        .collect::<Vec<Option<bool>>>();
+    assert_eq!(
+        told,
+        [None, Some(true), Some(false), None, Some(false), None],
+        "bind, focus, status, focus left, focus, retirement"
+    );
+}
+
+/// UIKit's verbs beyond AppKit's: a replacement and a selection clamped to
+/// the document, and the document's length.
+#[test]
+fn uikit_replaces_selects_and_measures_the_field() {
+    let store = InMemoryTextStore::new("old cat");
+    store.app_select(caret(7));
+    let (client, _context) = serving(&store);
+    assert_eq!(client.document_len(), Some(Utf16Offset::new(7)));
+    client.replace(span(0, 3), "the".to_owned());
+    assert_eq!(store.text(), "the cat");
+    client.replace(span(4, 99), "dog".to_owned());
+    assert_eq!(store.text(), "the dog");
+    client.select(span(4, 99));
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: Utf16Offset::new(4),
+            active: Utf16Offset::new(7),
+        }
+    );
+    client.focus_store(None);
+    assert_eq!(client.document_len(), None, "no field has focus");
+}
+
+#[test]
+fn uikit_ranges_keep_supplementary_scalars_whole() {
+    for protected in [false, true] {
+        for (text, at, backward, expected) in [
+            ("😀", 0, false, span(0, 2)),
+            ("😀", 2, true, span(0, 2)),
+            ("😀", 1, false, span(0, 2)),
+            ("😀", 1, true, span(0, 0)),
+            ("😀", 9, true, span(0, 2)),
+            ("a😀b", 1, false, span(1, 3)),
+            ("a😀b", 3, true, span(1, 3)),
+            ("a😀b", 2, false, span(1, 3)),
+            ("a", 0, false, span(0, 1)),
+            ("a", 1, true, span(0, 1)),
+            ("\n\0", 0, false, span(0, 1)),
+            ("\n\0", 2, true, span(1, 2)),
+            ("", 0, false, span(0, 0)),
+            ("a", 0, true, span(0, 0)),
+            ("a", 1, false, span(1, 1)),
+        ] {
+            let store = InMemoryTextStore::new(text);
+            store.set_protected(protected);
+            let (client, _) = serving(&store);
+            let range = client.extended_range(Utf16Offset::new(at), backward);
+            assert_eq!(range, Some(expected), "{text:?}, {at}, backward={backward}");
+            assert_eq!(
+                client.substring(expected).is_some(),
+                !protected,
+                "only a plain field exposes text"
+            );
+        }
+        let advance = InMemoryTextStore::ADVANCE;
+        for (text, point, expected) in [
+            ("😀x", Point::new(advance * 0.25, 1.0), Some(span(0, 2))),
+            ("😀x", Point::new(advance * 0.75, 1.0), Some(span(0, 2))),
+            ("ab", Point::new(advance * 0.25, 1.0), Some(span(0, 1))),
+            ("ab", Point::new(advance * 0.75, 1.0), Some(span(0, 1))),
+            ("ab", Point::new(advance * 1.25, 1.0), Some(span(1, 2))),
+            ("ab", Point::new(advance * 1.75, 1.0), Some(span(1, 2))),
+            ("ab", Point::new(-1.0, 1.0), None),
+            ("ab", Point::new(advance * 2.0, 1.0), None),
+            ("ab", Point::new(1.0, -1.0), None),
+            ("", Point::new(0.0, 1.0), None),
+        ] {
+            let store = InMemoryTextStore::new(text);
+            store.set_protected(protected);
+            let (client, _) = serving(&store);
+            assert_eq!(
+                client.character_range_at_point(point),
+                expected,
+                "{text:?}, {point:?}, protected={protected}"
+            );
+        }
+        let store = InMemoryTextStore::new("😀x");
+        let (client, _) = serving(&store);
+        assert_eq!(
+            client.character_index(Point::new(advance * 0.75, 1.0)),
+            Some(Utf16Offset::new(2)),
+            "nearest caret remains a distinct query"
+        );
+        client.focus_store(None);
+        assert_eq!(client.extended_range(Utf16Offset::ZERO, false), None);
+    }
+}
+
+#[test]
+fn point_derived_ranges_stay_with_the_queried_field() {
+    let store = Rc::new(ReentrantStore {
+        inner: InMemoryTextStore::new("😀x"),
+        on_status: RefCell::new(None),
+        on_read: RefCell::new(None),
+        on_write: RefCell::new(None),
+    });
+    let other = InMemoryTextStore::new("other");
+    let (client, _) = serving(&store);
+    *store.on_read.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        move || client.focus_store(Some(other))
+    }));
+    assert_eq!(
+        client.character_range_at_point(Point::new(1.0, 1.0)),
+        Some(span(0, 2))
+    );
+    assert_eq!(
+        client.document_len(),
+        Some(Utf16Offset::new(5)),
+        "then focus moves"
+    );
+}
+
+#[test]
+fn a_failing_point_read_delivers_reentrant_focus_and_keeps_its_first_failure() {
+    let store = Rc::new(ReentrantStore {
+        inner: InMemoryTextStore::new("😀x"),
+        on_status: RefCell::new(None),
+        on_read: RefCell::new(None),
+        on_write: RefCell::new(None),
+    });
+    let other = InMemoryTextStore::new("other");
+    let latest = InMemoryTextStore::new("latest");
+    latest.set_protected(true);
+    let (client, context) = serving(&store);
+    *store.on_read.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        move || {
+            client.focus_store(Some(other));
+            panic!("first point read failure");
+        }
+    }));
+    *context.on_field.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let latest = as_store(&latest);
+        move || {
+            client.focus_store(Some(Rc::clone(&latest)));
+            panic!("later focus notice failure");
+        }
+    }));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.character_range_at_point(Point::new(1.0, 1.0))
+    }))
+    .expect_err("the first read failure propagates after cleanup");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"first point read failure")
+    );
+    assert_eq!(
+        context.secure_holds.get(),
+        1,
+        "the newest protected focus was delivered before returning"
+    );
+    client.insert_text("!".to_owned(), None);
+    assert!(
+        latest.text().contains('!'),
+        "the next operation uses the newest field"
+    );
+}
+
+#[test]
+fn failing_store_calls_deliver_focus_before_the_next_edit() {
+    #[derive(Debug, Clone, Copy)]
+    enum Call {
+        Status,
+        Edit,
+        Complete,
+    }
+
+    let mut failed = Vec::new();
+    for (call, competing) in [
+        (Call::Status, false),
+        (Call::Edit, false),
+        (Call::Complete, false),
+        (Call::Status, true),
+        (Call::Edit, true),
+        (Call::Complete, true),
+    ] {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let store = Rc::new(ReentrantStore {
+                inner: InMemoryTextStore::new("old"),
+                on_status: RefCell::new(None),
+                on_read: RefCell::new(None),
+                on_write: RefCell::new(None),
+            });
+            let other = InMemoryTextStore::new("other");
+            let _ = other
+                .request_lock(
+                    flui_platform::text_store::LockGrant::read_write(|session| {
+                        session
+                            .set_composition(Some(composing(span(0, 5))))
+                            .unwrap();
+                    }),
+                    flui_platform::text_store::LockTiming::Sync,
+                )
+                .unwrap();
+            let latest = InMemoryTextStore::new("latest");
+            let (client, context) = serving(&store);
+            let completion_deferred = Rc::new(Cell::new(false));
+            let interrupt: Box<dyn FnOnce()> = Box::new({
+                let client = Rc::clone(&client);
+                let other = as_store(&other);
+                let completion_deferred = Rc::clone(&completion_deferred);
+                move || {
+                    client.focus_store(Some(Rc::clone(&other)));
+                    completion_deferred.set(matches!(
+                        client.complete_composition(&other),
+                        Ok(CompositionEnd::Deferred)
+                    ));
+                    panic!("first store call failure");
+                }
+            });
+            match call {
+                Call::Status => *store.on_status.borrow_mut() = Some(interrupt),
+                Call::Edit => *store.on_write.borrow_mut() = Some(interrupt),
+                Call::Complete => *store.on_read.borrow_mut() = Some(interrupt),
+            }
+            *context.on_field.borrow_mut() = Some(Box::new({
+                let client = Rc::clone(&client);
+                let latest = as_store(&latest);
+                move || {
+                    client.focus_store(Some(Rc::clone(&latest)));
+                    assert!(!competing, "later focus notice failure");
+                }
+            }));
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match call {
+                Call::Status => client.key_window_changed(),
+                Call::Edit => client.insert_text("discarded".to_owned(), None),
+                Call::Complete => {
+                    let store: Rc<dyn TextStore> = Rc::clone(&store) as Rc<dyn TextStore>;
+                    let _ = client.complete_composition(&store);
+                }
+            }))
+            .expect_err("the store failure propagates after accepted work finishes");
+            assert_eq!(
+                failure.downcast_ref::<&str>(),
+                Some(&"first store call failure")
+            );
+            assert!(
+                completion_deferred.get(),
+                "{call:?}: completion was accepted"
+            );
+
+            // No query or fixture operation may drain pending focus first.
+            client.insert_text("!".to_owned(), None);
+            assert_eq!(store.inner.text(), "old", "{call:?}");
+            assert_eq!(other.text(), "other", "{call:?}");
+            assert_eq!(latest.text(), "latest!", "{call:?}");
+            assert_eq!(
+                other.composition(),
+                None,
+                "the accepted completion finished"
+            );
+        }));
+        if outcome.is_err() {
+            failed.push((call, competing));
+        }
+    }
+    assert!(failed.is_empty(), "failed store-call rows: {failed:?}");
+}
+
+#[test]
+fn a_queued_completion_keeps_newer_focus_after_older_requests() {
+    let mut failed = Vec::new();
+    for fail_read in [false, true] {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let store = Rc::new(ReentrantStore {
+                inner: InMemoryTextStore::new("a"),
+                on_status: RefCell::new(None),
+                on_read: RefCell::new(None),
+                on_write: RefCell::new(None),
+            });
+            let other = InMemoryTextStore::new("b");
+            let latest = InMemoryTextStore::new("c");
+            let (client, context) = serving(&store);
+            *context.on_change.borrow_mut() = Some(Box::new({
+                let client = Rc::clone(&client);
+                let store: Rc<dyn TextStore> = Rc::clone(&store) as Rc<dyn TextStore>;
+                let other = as_store(&other);
+                move || {
+                    assert_eq!(
+                        client.complete_composition(&store),
+                        Ok(CompositionEnd::Deferred)
+                    );
+                    client.focus_store(Some(Rc::clone(&other)));
+                }
+            }));
+            *store.on_read.borrow_mut() = Some(Box::new({
+                let client = Rc::clone(&client);
+                let latest = as_store(&latest);
+                move || {
+                    client.focus_store(Some(latest));
+                    assert!(!fail_read, "queued completion read failure");
+                }
+            }));
+            *context.on_field.borrow_mut() = Some(Box::new(move || {
+                assert!(!fail_read, "later queued focus notice failure");
+            }));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                store.inner.app_replace(span(0, 1), "A");
+            }));
+            if fail_read {
+                let failure = result.expect_err("the queued read failure propagates");
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"queued completion read failure")
+                );
+            } else {
+                result.expect("the completion and focus requests succeed");
+            }
+            // The next edit, before any query, witnesses the final focus.
+            client.insert_text("!".to_owned(), None);
+            assert_eq!(store.inner.text(), "A");
+            assert_eq!(other.text(), "b");
+            assert_eq!(latest.text(), "c!");
+        }));
+        if outcome.is_err() {
+            failed.push(fail_read);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "failed queued-completion rows: {failed:?}"
+    );
+}
+
+#[test]
+fn a_queued_completion_finishes_after_its_read_panics_without_moving_focus() {
+    for fail_fallback in [false, true] {
+        let store = Rc::new(ReentrantStore {
+            inner: InMemoryTextStore::new(""),
+            on_status: RefCell::new(None),
+            on_read: RefCell::new(None),
+            on_write: RefCell::new(None),
+        });
+        let (client, context) = serving(&store);
+        client.set_marked_text("a".to_owned(), span(1, 1), None);
+        let accepted = Rc::new(Cell::new(false));
+        let fallback_attempted = Rc::new(Cell::new(false));
+        *context.on_change.borrow_mut() = Some(Box::new({
+            let client = Rc::clone(&client);
+            let store = Rc::clone(&store);
+            let accepted = Rc::clone(&accepted);
+            let fallback_attempted = Rc::clone(&fallback_attempted);
+            move || {
+                let target: Rc<dyn TextStore> = Rc::clone(&store) as Rc<dyn TextStore>;
+                accepted.set(matches!(
+                    client.complete_composition(&target),
+                    Ok(CompositionEnd::Deferred)
+                ));
+                *store.on_read.borrow_mut() =
+                    Some(Box::new(|| panic!("unanswered completion read")));
+                *store.on_write.borrow_mut() = Some(Box::new({
+                    let fallback_attempted = Rc::clone(&fallback_attempted);
+                    move || {
+                        fallback_attempted.set(true);
+                        assert!(!fail_fallback, "later fallback request failure");
+                    }
+                }));
+            }
+        }));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.inner.app_select(caret(0));
+        }))
+        .expect_err("the queued read failure propagates after completion");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"unanswered completion read")
+        );
+        assert!(
+            accepted.get(),
+            "the notice transferred completion to the host"
+        );
+        assert!(
+            fallback_attempted.get(),
+            "a failed platform read still attempts fallback"
+        );
+        // This fixture accessor only borrows the document: no host/frame pump.
+        assert_eq!(
+            store.inner.composition(),
+            fail_fallback.then_some(composing(span(0, 1))),
+            "only a failed fallback request may leave composition for a later edit"
+        );
+        client.insert_text("!".to_owned(), Some(span(0, 0)));
+        assert_eq!(
+            store.inner.text(),
+            "!a",
+            "the next operation remains healthy"
+        );
+    }
+}
+
+/// A lone line break from the keyboard is the Return key, which the field
+/// answers as a press; any other text, a line break inside it included, is
+/// inserted.
+#[test]
+fn a_lone_line_break_is_the_return_key() {
+    let store = InMemoryTextStore::new("");
+    let (client, _context) = serving(&store);
+    for (typed, answer, text) in [
+        ("a", Typed::Inserted, "a"),
+        ("\n", Typed::Return, "a"),
+        ("b\nc", Typed::Inserted, "ab\nc"),
+        ("\n\n", Typed::Inserted, "ab\nc\n\n"),
+    ] {
+        assert_eq!(client.type_text(typed.to_owned()), answer, "{typed:?}");
+        assert_eq!(store.text(), text, "{typed:?}");
+    }
+}
+
+/// A synchronous keyboard callback cannot publish an older field after a
+/// focus move or retirement it requested itself.
+#[test]
+fn a_field_notice_finishes_before_its_reentrant_focus_change() {
+    for retire in [false, true] {
+        let plain = InMemoryTextStore::new("");
+        let password = InMemoryTextStore::new("");
+        password.set_protected(true);
+        let (client, context) = serving(&plain);
+        *context.on_field.borrow_mut() = Some(Box::new({
+            let client = Rc::clone(&client);
+            move || {
+                if retire {
+                    client.retire();
+                } else {
+                    client.focus_store(None);
+                }
+            }
+        }));
+        client.focus_store(Some(as_store(&password)));
+        assert_eq!(context.secure_holds.get(), 0, "retire={retire}");
+        assert_eq!(client.document_len(), None);
+    }
+}
+
+/// Work accepted inside a notice is drained even when that notice fails;
+/// a second failing notice cannot replace the original panic.
+#[test]
+fn a_panicking_document_notice_still_delivers_accepted_work() {
+    let store = InMemoryTextStore::new("ab");
+    let other = InMemoryTextStore::new("next");
+    let (client, context) = serving(&store);
+    *context.on_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        let context = Rc::clone(&context);
+        move || {
+            client.insert_text("x".to_owned(), None);
+            client.focus_store(Some(Rc::clone(&other)));
+            *context.on_field.borrow_mut() = Some(Box::new(|| panic!("later field notice")));
+            panic!("first document notice");
+        }
+    }));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.app_select(caret(1));
+    }));
+    let failure = failure.expect_err("the first notice must propagate");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"first document notice")
+    );
+    assert_eq!(client.document_len(), Some(Utf16Offset::new(4)));
+    client.insert_text("!".to_owned(), None);
+    assert!(other.text().contains('!'), "the next operation works");
+}
+
+#[test]
+fn retirement_releases_the_store_even_when_the_keyboard_panics() {
+    let store = InMemoryTextStore::new("ab");
+    let (client, context) = serving(&store);
+    *context.on_field.borrow_mut() = Some(Box::new(|| panic!("retirement notice")));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.retire()));
+    assert!(failure.is_err());
+    assert_eq!(client.document_len(), None, "no retained retired field");
+    let notices = context.changes.borrow().len();
+    store.app_select(caret(1));
+    assert_eq!(context.changes.borrow().len(), notices, "observer detached");
+    client.retire();
+}
+
+#[test]
+fn rebinding_gives_the_previous_context_its_secure_hold_back() {
+    for refused_release in [false, true] {
+        let password = InMemoryTextStore::new("");
+        password.set_protected(true);
+        let (client, previous) = serving(&password);
+        let previous_holds = Rc::clone(&previous.secure_holds);
+        previous.refuse_secure.set(refused_release);
+        drop(previous); // The client owns the previous context's last reference.
+        let next = Rc::new(Context::default());
+        client.bind(Rc::clone(&next) as Rc<dyn InputContext>);
+        assert_eq!(previous_holds.get(), 0, "refused_release={refused_release}");
+        assert_eq!(next.secure_holds.get(), 1);
+        client.retire();
+        assert_eq!(next.secure_holds.get(), 0);
+    }
+}
+
+#[test]
+fn retirement_delivers_a_completion_accepted_inside_a_notice() {
+    let store = InMemoryTextStore::new("ab");
+    let (client, context) = serving(&store);
+    client.set_marked_text("x".to_owned(), span(1, 1), None);
+    *context.on_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let store = as_store(&store);
+        move || {
+            assert_eq!(
+                client.complete_composition(&store),
+                Ok(CompositionEnd::Deferred)
+            );
+            client.retire();
+            panic!("notice after accepted completion");
+        }
+    }));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.app_select(caret(0));
+    }));
+    assert!(failure.is_err());
+    assert_eq!(
+        store.composition(),
+        None,
+        "accepted completion committed in place"
+    );
+    assert_eq!(client.document_len(), None);
+}
+
+#[test]
+fn a_replaced_context_can_drop_with_reentry_and_a_panic() {
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    let client = TextClient::new();
+    let dropped = Rc::new(Cell::new(false));
+    let mut previous = Context::default();
+    previous.on_drop = Some(Box::new({
+        let client = Rc::downgrade(&client);
+        let dropped = Rc::clone(&dropped);
+        move || {
+            client.upgrade().expect("live client").focus_store(None);
+            dropped.set(true);
+            panic!("replaced context drop");
+        }
+    }));
+    client.bind(Rc::new(previous) as Rc<dyn InputContext>);
+    client.focus_store(Some(as_store(&password)));
+    let next = Rc::new(Context::default());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.bind(Rc::clone(&next) as Rc<dyn InputContext>);
+    }));
+    let failure = failure.expect_err("drop failure propagated");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"replaced context drop")
+    );
+    assert!(dropped.get());
+    assert_eq!(client.document_len(), None);
+    assert_eq!(next.secure_holds.get(), 0);
+    client.focus_store(Some(as_store(&password)));
+    assert_eq!(next.secure_holds.get(), 1, "the next operation works");
+    client.retire();
+}
+
+#[test]
+fn application_notices_bracket_the_document_the_keyboard_reads() {
+    let store = InMemoryTextStore::new("ab");
+    store.app_select(caret(2));
+    let (client, context) = serving(&store);
+    let documents = Rc::new(RefCell::new(Vec::new()));
+    *context.on_will_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let documents = Rc::clone(&documents);
+        move || {
+            documents.borrow_mut().push((
+                "will",
+                client.substring(span(0, 99)),
+                client.selected_range(),
+            ));
+        }
+    }));
+    *context.on_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let documents = Rc::clone(&documents);
+        move || {
+            documents.borrow_mut().push((
+                "did",
+                client.substring(span(0, 99)),
+                client.selected_range(),
+            ));
+        }
+    }));
+    store.app_replace(span(0, 1), "XYZ");
+    assert_eq!(
+        *context.will_changes.borrow(),
+        [DocumentChange::Text, DocumentChange::Selection]
+    );
+    assert_eq!(
+        *documents.borrow(),
+        [
+            (
+                "will",
+                Some(("ab".to_owned(), span(0, 2))),
+                Some(span(2, 2))
+            ),
+            (
+                "did",
+                Some(("XYZb".to_owned(), span(0, 4))),
+                Some(store.selection().range())
+            ),
+        ]
+    );
+    context.will_changes.borrow_mut().clear();
+    client.select(span(0, 0));
+    assert!(
+        context.will_changes.borrow().is_empty(),
+        "platform edits are not echoed"
+    );
+}
+
+#[test]
+fn a_will_notice_keeps_its_recipient_until_publication_or_retirement() {
+    #[derive(Clone, Copy, Debug)]
+    enum DuringWill {
+        Focus,
+        Bind,
+        Retire,
+    }
+    for action in [DuringWill::Focus, DuringWill::Bind, DuringWill::Retire] {
+        let store = InMemoryTextStore::new("ab");
+        let other = InMemoryTextStore::new("next");
+        let (client, context) = serving(&store);
+        let replacement = Rc::new(Context::default());
+        *context.on_will_change.borrow_mut() = Some(Box::new({
+            let client = Rc::clone(&client);
+            let other = as_store(&other);
+            let replacement = Rc::clone(&replacement);
+            move || match action {
+                DuringWill::Focus => {
+                    client.focus_store(Some(Rc::clone(&other)));
+                    assert_eq!(client.document_len(), Some(Utf16Offset::new(2)));
+                }
+                DuringWill::Bind => client.bind(Rc::clone(&replacement) as Rc<dyn InputContext>),
+                DuringWill::Retire => client.retire(),
+            }
+        }));
+        store.app_replace(span(0, 1), "XYZ");
+        assert_eq!(store.text(), "XYZb", "published despite {action:?}");
+        match action {
+            DuringWill::Focus => {
+                assert_eq!(
+                    *context.will_changes.borrow(),
+                    [DocumentChange::Text, DocumentChange::Selection]
+                );
+                assert_eq!(
+                    *context.changes.borrow(),
+                    [DocumentChange::Text, DocumentChange::Selection]
+                );
+                assert_eq!(client.document_len(), Some(Utf16Offset::new(4)));
+            }
+            DuringWill::Bind | DuringWill::Retire => {
+                assert_eq!(*context.will_changes.borrow(), [DocumentChange::Text]);
+                assert!(context.changes.borrow().is_empty(), "superseded recipient");
+                assert!(
+                    replacement.changes.borrow().is_empty(),
+                    "new recipient had no Will"
+                );
+                if matches!(action, DuringWill::Retire) {
+                    assert_eq!(client.document_len(), None);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_will_failure_still_publishes_and_preserves_its_first_failure() {
+    let store = InMemoryTextStore::new("ab");
+    let other = InMemoryTextStore::new("next");
+    let (client, context) = serving(&store);
+    *context.on_will_change.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        let other = as_store(&other);
+        move || {
+            client.focus_store(Some(Rc::clone(&other)));
+            panic!("first Will failure");
+        }
+    }));
+    *context.on_change.borrow_mut() = Some(Box::new(|| panic!("later Did failure")));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.app_replace(span(0, 1), "XYZ");
+    }))
+    .expect_err("the Will failure propagates after publication");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first Will failure"));
+    assert_eq!(store.text(), "XYZb");
+    assert_eq!(client.document_len(), Some(Utf16Offset::new(4)));
+    client.insert_text("!".to_owned(), None);
+    assert!(other.text().contains('!'), "the next operation works");
+}
+
+#[test]
+fn an_application_commit_with_identical_text_still_ends_marked_text() {
+    let store = InMemoryTextStore::new("");
+    let (client, context) = serving(&store);
+    client.set_marked_text("x".to_owned(), span(1, 1), None);
+    assert!(!client.reports_key_release());
+    store.app_replace(span(0, 1), "x");
+    assert_eq!(store.text(), "x");
+    assert_eq!(store.composition(), None);
+    assert_eq!(
+        *context.will_changes.borrow(),
+        [DocumentChange::Composition, DocumentChange::Selection]
+    );
+    assert_eq!(
+        *context.changes.borrow(),
+        [DocumentChange::Composition, DocumentChange::Selection]
+    );
+    assert_eq!(context.discards.get(), 1);
+    assert!(client.reports_key_release());
 }

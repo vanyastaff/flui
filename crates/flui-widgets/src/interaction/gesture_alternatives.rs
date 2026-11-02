@@ -154,6 +154,12 @@ impl GestureCommand {
         intent.is::<I>()
     }
 
+    /// Whether `other` is shown as this command and performs an intent of
+    /// the same type.
+    pub(crate) fn same_command(&self, other: &Self) -> bool {
+        self.label == other.label && self.intent_any().type_id() == other.intent_any().type_id()
+    }
+
     fn intent_any(&self) -> &dyn Any {
         &*self.intent
     }
@@ -183,7 +189,7 @@ impl GestureCommand {
         let Some(action) = chain.and_then(|chain| resolve(chain, intent)) else {
             if chain.is_none_or(|chain| !chain.contains_key(&intent.type_id())) {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     intent = self.intent_name,
                     command = &*self.label,
                     "a gesture command's intent has no action above its GestureAlternatives; \
@@ -204,7 +210,7 @@ impl GestureCommand {
             }
             if let Some(reserved) = reserved_key(platform, activator) {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     command = &*self.label,
                     ?activator,
                     ?reserved,
@@ -419,7 +425,7 @@ impl fmt::Debug for MenuSpec {
 ///
 /// The alternatives draw no control: each command is performed by the node a
 /// registered companion publishes for it. With no companion registered the
-/// alternatives are unfulfilled, which is a `flui::a11y` warning once the frame
+/// alternatives are unfulfilled, which is a `flui.a11y` warning once the frame
 /// that mounted them has run and a failure of
 /// `flui_testing::assert_gesture_alternatives`.
 ///
@@ -627,6 +633,20 @@ pub struct MenuRequest {
 }
 
 impl MenuRequest {
+    /// A request to show `items`, raised by `cause`, at `position` in root
+    /// coordinates when a pointer raised it.
+    pub(crate) fn new(
+        items: Rc<[MenuItem]>,
+        cause: MenuCause,
+        position: Option<Offset<f64>>,
+    ) -> Self {
+        Self {
+            items,
+            cause,
+            position,
+        }
+    }
+
     /// The items to show, in order.
     #[must_use]
     pub fn items(&self) -> &[MenuItem] {
@@ -662,18 +682,70 @@ impl fmt::Debug for MenuRequest {
 pub struct MenuItem {
     command: GestureCommand,
     chain: Option<ActionChain>,
+    /// Runs once the item was chosen, whatever its command did.
+    chosen: Option<Rc<dyn Fn()>>,
 }
 
 impl MenuItem {
+    /// An item performing `command` through `chain`, the bindings where the
+    /// widget offering it is mounted.
+    pub(crate) fn new(command: GestureCommand, chain: Option<ActionChain>) -> Self {
+        Self {
+            command,
+            chain,
+            chosen: None,
+        }
+    }
+
+    /// Whether choosing the item would perform its command now: unless the
+    /// action bound to its intent is disabled.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.command.is_offered_in(self.chain.as_ref())
+    }
+
+    /// The signal that [`is_enabled`](Self::is_enabled) may have changed,
+    /// when the action bound to the item's intent gives one.
+    #[must_use]
+    pub fn enablement_changes(&self) -> Option<ChangeNotifier> {
+        self.command.offer_changes_in(self.chain.as_ref())
+    }
+
     /// The item's label.
     #[must_use]
     pub fn label(&self) -> &str {
         self.command.label()
     }
 
-    /// Perform the item's command, as choosing it does.
+    /// Perform the item's command, as choosing it does. A menu that hears
+    /// of the choice hears of it though the command panics; the panic
+    /// resumes after.
     pub fn perform(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
-        self.command.perform(cx, self.chain.as_ref())
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        let outcome = failure.contain(|| self.command.perform(cx, self.chain.as_ref()));
+        if let Some(chosen) = &self.chosen {
+            failure.contain(|| chosen());
+        }
+        failure.resume();
+        outcome.expect("BUG: a contained panic resumed above")
+    }
+
+    /// Whether `other` offers the same command through the same bindings.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        let same_chain = match (&self.chain, &other.chain) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        same_chain && self.command.same_command(&other.command)
+    }
+
+    /// The item, running `chosen` each time it is performed: how a menu
+    /// closes after a choice however it was made, by a tap or by assistive
+    /// technology.
+    pub(crate) fn when_chosen(mut self, chosen: Rc<dyn Fn()>) -> Self {
+        self.chosen = Some(chosen);
+        self
     }
 }
 
@@ -999,7 +1071,7 @@ impl GestureAlternativesState {
                 Ok(branch) => Some(Rc::new(branch)),
                 Err(error) => {
                     tracing::warn!(
-                        target: "flui::a11y",
+                        target: "flui.a11y",
                         %error,
                         "the context menu's long press could not compose as Sequenced; it joins the arena directly"
                     );
@@ -1138,7 +1210,7 @@ impl GestureAlternativesState {
                 .is_some_and(|link| !link.is_fulfilled());
             if mounted.get() && unfulfilled {
                 tracing::warn!(
-                    target: "flui::a11y",
+                    target: "flui.a11y",
                     commands = ?watch.commands,
                     "a gesture's alternatives rely on a companion, and none is registered on \
                      their CompanionLink; its commands have no single-pointer path"
@@ -1260,10 +1332,7 @@ impl GestureAlternatives {
                 let items: Rc<[MenuItem]> = menu
                     .items
                     .iter()
-                    .map(|command| MenuItem {
-                        command: command.clone(),
-                        chain: chain.clone(),
-                    })
+                    .map(|command| MenuItem::new(command.clone(), chain.clone()))
                     .collect();
                 let presenter = Rc::clone(&menu.presenter);
                 let opener: MenuOpener = Rc::new(move |cx, cause, position| {

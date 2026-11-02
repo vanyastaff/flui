@@ -1227,38 +1227,55 @@ fn as_store(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
 /// field takes the context off the canvas.
 #[wasm_bindgen_test]
 fn an_edit_context_serves_the_focused_field() {
-    let canvas = HostedCanvas::open();
-    let store = InMemoryTextStore::new("hello");
-    canvas.host.focus_store(Some(as_store(&store)));
-    assert_eq!(
-        edit_context_text().as_deref(),
-        Some("hello"),
-        "Chrome has EditContext"
-    );
+    for application_commit in [false, true] {
+        let canvas = HostedCanvas::open();
+        assert!(focus_canvas());
+        let store = InMemoryTextStore::new("hello");
+        canvas.host.focus_store(Some(as_store(&store)));
+        assert_eq!(
+            edit_context_text().as_deref(),
+            Some("hello"),
+            "Chrome has EditContext"
+        );
 
-    text_update(5, 5, " world", 11, 11);
-    assert_eq!(store.text(), "hello world");
-    assert_eq!(store.selection().range().start().get(), 11);
+        text_update(5, 5, " world", 11, 11);
+        assert_eq!(store.text(), "hello world");
+        assert_eq!(store.selection().range().start().get(), 11);
 
-    edit_context_composition("compositionstart");
-    text_update(11, 11, "に", 12, 12);
-    let composing = store.composition().expect("the update composes");
-    assert_eq!(
-        (composing.range.start().get(), composing.range.end().get()),
-        (11, 12)
-    );
-    edit_context_composition("compositionend");
-    assert_eq!(store.composition(), None, "committed");
-    assert_eq!(store.text(), "hello worldに");
+        edit_context_composition("compositionstart");
+        text_update(11, 11, "に", 12, 12);
+        let composing = store.composition().expect("the update composes");
+        assert_eq!(
+            (composing.range.start().get(), composing.range.end().get()),
+            (11, 12)
+        );
+        if application_commit {
+            store.app_replace(
+                Utf16Range::try_new(Utf16Offset::new(11), Utf16Offset::new(12))
+                    .expect("composition range"),
+                "に",
+            );
+        } else {
+            edit_context_composition("compositionend");
+        }
+        assert_eq!(store.composition(), None, "committed");
+        assert_eq!(store.text(), "hello worldに");
+        key_at_focus("Escape", None);
+        assert_eq!(
+            canvas.last_key().composition,
+            ImeComposition::Inactive,
+            "application_commit={application_commit}"
+        );
 
-    store.app_replace(
-        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
-        "HELLO",
-    );
-    assert_eq!(edit_context_text().as_deref(), Some("HELLO worldに"));
+        store.app_replace(
+            Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(5)).expect("a range"),
+            "HELLO",
+        );
+        assert_eq!(edit_context_text().as_deref(), Some("HELLO worldに"));
 
-    canvas.host.focus_store(None);
-    assert_eq!(edit_context_text(), None, "the context leaves the canvas");
+        canvas.host.focus_store(None);
+        assert_eq!(edit_context_text(), None, "the context leaves the canvas");
+    }
 }
 
 /// A key the input method processes is delivered marked composing, so no
@@ -1323,50 +1340,66 @@ fn editor() -> Option<EditorState> {
 /// the canvas.
 #[wasm_bindgen_test]
 fn a_textarea_serves_the_field_without_edit_context() {
-    let _hidden = EditContextHidden::hide();
-    let canvas = HostedCanvas::open();
-    assert!(focus_canvas());
-    let store = InMemoryTextStore::new("ab");
-    let reported = canvas.active.lock().expect("focus log").len();
-    canvas.host.focus_store(Some(as_store(&store)));
-    let state = editor().expect("a textarea beside the canvas");
-    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
-    assert!(
-        canvas.active.lock().expect("focus log")[reported..].is_empty(),
-        "focus moved within the canvas's area: no window focus change"
-    );
-    assert!(canvas.window.state().focused);
+    for application_commit in [false, true] {
+        let _hidden = EditContextHidden::hide();
+        let canvas = HostedCanvas::open();
+        assert!(focus_canvas());
+        let store = InMemoryTextStore::new("ab");
+        let reported = canvas.active.lock().expect("focus log").len();
+        canvas.host.focus_store(Some(as_store(&store)));
+        let state = editor().expect("a textarea beside the canvas");
+        assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+        assert!(
+            canvas.active.lock().expect("focus log")[reported..].is_empty(),
+            "focus moved within the canvas's area: no window focus change"
+        );
+        assert!(canvas.window.state().focused);
 
-    editor_composition("compositionstart");
-    type_into_editor("abに", 3, true);
-    assert_eq!(store.text(), "abに");
-    assert!(store.composition().is_some(), "the inserted text composes");
-    editor_composition("compositionend");
-    assert_eq!(store.composition(), None);
-    type_into_editor("abにc", 4, false);
-    assert_eq!(store.text(), "abにc");
-    assert_eq!(store.selection().range().start().get(), 4);
+        editor_composition("compositionstart");
+        type_into_editor("abに", 3, true);
+        assert_eq!(store.text(), "abに");
+        assert!(store.composition().is_some(), "the inserted text composes");
+        if application_commit {
+            store.app_replace(
+                Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(3))
+                    .expect("composition range"),
+                "に",
+            );
+        } else {
+            editor_composition("compositionend");
+        }
+        assert_eq!(store.composition(), None);
+        key_at_focus("Escape", None);
+        assert_eq!(
+            canvas.last_key().composition,
+            ImeComposition::Inactive,
+            "application_commit={application_commit}"
+        );
+        type_into_editor("abにc", 4, false);
+        assert_eq!(store.text(), "abにc");
+        assert_eq!(store.selection().range().start().get(), 4);
 
-    store.app_replace(
-        Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
-        "AB",
-    );
-    let state = editor().expect("the textarea");
-    assert_eq!(state.value, "ABにc");
-    let _ = (state.start, state.end);
+        store.app_replace(
+            Utf16Range::try_new(Utf16Offset::ZERO, Utf16Offset::new(2)).expect("a range"),
+            "AB",
+        );
+        let state = editor().expect("the textarea");
+        assert_eq!(state.value, "ABにc");
+        let _ = (state.start, state.end);
 
-    key_at_focus("Enter", None);
-    assert_eq!(
-        canvas.last_key().key,
-        flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
-    );
+        key_at_focus("Enter", None);
+        assert_eq!(
+            canvas.last_key().key,
+            flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
+        );
 
-    canvas.host.focus_store(None);
-    assert!(editor().is_none(), "the textarea is gone");
-    assert!(
-        canvas.window.state().focused,
-        "focus went back to the canvas"
-    );
+        canvas.host.focus_store(None);
+        assert!(editor().is_none(), "the textarea is gone");
+        assert!(
+            canvas.window.state().focused,
+            "focus went back to the canvas"
+        );
+    }
 }
 
 /// A frame request carries the browser's own frame time, not the moment the callback ran: a frame

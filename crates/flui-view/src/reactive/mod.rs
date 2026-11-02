@@ -339,7 +339,7 @@ impl Reactive {
         }
         if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
-                target: "flui::signals",
+                target: "flui.signals",
                 element = ?element,
                 owner = ?owner,
                 "refused: a signal was created during build (create it in init_state and hold the handle)"
@@ -355,7 +355,7 @@ impl Reactive {
             let generation = inner.nodes[index as usize].generation;
             Self::release_index(&mut inner, index);
             tracing::debug!(
-                target: "flui::signals",
+                target: "flui.signals",
                 ?owner,
                 "refused: a signal was created for an element that is releasing its signals"
             );
@@ -366,7 +366,7 @@ impl Reactive {
         if let Some(owner) = owner {
             inner.owned_by_element.entry(owner).or_default().push(slot);
         }
-        tracing::trace!(target: "flui::signals", slot = ?slot, owner = ?owner, "signal created");
+        tracing::trace!(target: "flui.signals", slot = ?slot, owner = ?owner, "signal created");
         Ok(slot)
     }
 
@@ -412,7 +412,7 @@ impl Reactive {
             // not unwind this value's destructor into another refusal.
             discard_secondary(value);
             tracing::debug!(
-                target: "flui::signals",
+                target: "flui.signals",
                 %error,
                 "a refused value's destructor caused another refusal; that value is retained"
             );
@@ -542,7 +542,7 @@ impl Reactive {
         };
         Self::retire_released(std::iter::once(retired));
         // After retirement: a subscriber failure here owns no released value.
-        tracing::trace!(target: "flui::signals", slot = ?slot, "signal released");
+        tracing::trace!(target: "flui.signals", slot = ?slot, "signal released");
     }
 
     fn release_index(inner: &mut Inner, index: u32) -> Option<Box<dyn Any>> {
@@ -735,7 +735,7 @@ impl Reactive {
         // After retirement: a subscriber failure here owns no released value.
         for slot in released {
             tracing::trace!(
-                target: "flui::signals",
+                target: "flui.signals",
                 slot = ?slot,
                 ?element,
                 "signal released with its element"
@@ -880,7 +880,7 @@ impl Reactive {
         self.check(&inner, slot)?;
         if let Some(element) = Self::building_element(&inner, self.id) {
             tracing::warn!(
-                target: "flui::signals",
+                target: "flui.signals",
                 slot = ?slot,
                 ?element,
                 "refused: a signal was written during build (write from a callback, init_state or a ui_runtime command)"
@@ -1129,7 +1129,7 @@ impl Reactive {
             scheduler.schedule_many(readers.iter().copied(), RebuildReason::SignalChange);
         }
         tracing::debug!(
-            target: "flui::signals",
+            target: "flui.signals",
             slot = ?slot,
             readers = readers.len(),
             scheduled = scheduler.is_some(),

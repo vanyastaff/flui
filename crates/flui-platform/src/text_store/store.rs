@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use super::OwnerCalls;
 use super::lock::{CommitGate, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{TextChange, TextStoreStatus};
 
@@ -67,20 +68,67 @@ pub trait TextStore {
     fn screen_moved(&self) {}
 }
 
+/// An application change about to become visible to the input method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TextStoreChange {
+    /// Text changed, with a corresponding selection notification.
+    Text(TextChange),
+    /// Only the selection changed.
+    Selection,
+    /// The composition or the committed text it stands for changed, with
+    /// a corresponding selection-display refresh.
+    Composition,
+}
+
 /// Notifications from a store to the platform, TSF's `ITextStoreACPSink`.
 ///
 /// A store calls these only for changes the platform did not make itself
-/// (an edit by the application, a relayout), and never while a lock is held
-/// or its [`CommitGate`] is shut: a change made then is reported once both
-/// allow it, at the latest by the next
-/// [`TextStore::run_deferred_grants`]. So an observer may request a
-/// synchronous lock from inside a notification and be granted it.
+/// (an edit by the application, a relayout). A new publication starts only
+/// outside a lock with its [`CommitGate`] open; changes made while either
+/// prevents it wait until the next eligible owner anchor, at the latest by
+/// [`TextStore::run_deferred_grants`]. An already admitted publication still
+/// finishes its matched notifications if a callback closes the gate. New
+/// grants honor the current gate, so synchronous reads from such a later
+/// notification may be refused rather than run inside the closed gate.
 pub trait TextStoreObserver {
+    /// Publish an application's change between the input method's before
+    /// and after notifications. A synchronous read before `publish` sees
+    /// the previous published document; one inside the resulting
+    /// [`Self::text_changed`] or [`Self::selection_changed`] sees the new
+    /// document. Platform edits are never echoed through this method.
+    ///
+    /// The store captures one observer for the entire transaction. Calling
+    /// `publish` delivers its matching after notifications synchronously.
+    /// The store publishes exactly once even if this method omits, repeats
+    /// or panics before that call. Read-write requests during this method
+    /// are deferred, or synchronously refused, through the normal bounded
+    /// lock queue. A reentrant application edit is a later publication.
+    ///
+    /// All callbacks and cleanup use `calls`, preserving the first failure
+    /// across before, publication and after notifications. The store owns
+    /// resuming that failure after finishing the transaction and its queue.
+    fn publish_change(
+        &self,
+        _change: TextStoreChange,
+        publish: &mut dyn FnMut(&mut OwnerCalls),
+        calls: &mut OwnerCalls,
+    ) {
+        publish(calls);
+    }
+
     /// The document changed outside a platform session.
     fn text_changed(&self, change: TextChange);
 
-    /// The selection changed outside a platform session.
+    /// Refresh the selection display after an application change. This also
+    /// follows a text or composition change whose numeric selection stayed
+    /// the same, since its display may differ.
     fn selection_changed(&self);
+
+    /// The composition changed without a text or selection change outside
+    /// a platform session. Delivered after [`Self::publish_change`]
+    /// publishes it; its preceding read sees the previous composition.
+    fn composition_changed(&self) {}
 
     /// The document's geometry changed (`OnLayoutChange`).
     fn layout_changed(&self);
