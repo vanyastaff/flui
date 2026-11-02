@@ -796,3 +796,51 @@ pub(crate) fn a_field_rebuilt_with_other_commands_closes_the_popup() {
         strings(&["Cut", "Copy", "Paste", "Select all", "Whisper"])
     );
 }
+
+/// A field rebuilt with no menu while its toolbar shows takes the toolbar
+/// away, though its handles look the same. Only the field rebuilds.
+///
+/// Red-check: only show the toolbar again after a rebuild, without taking
+/// it away first (the old toolbar stays).
+pub(crate) fn a_field_rebuilt_without_its_menu_takes_its_toolbar_away() {
+    let controller = TextEditingController::with_text(WORDS);
+    let field_focus = FocusNode::with_debug_label("field");
+    let off = Rc::new(Cell::new(false));
+    let count: Rc<RefCell<Option<Signal<u32>>>> = Rc::default();
+    let probe = {
+        let (controller, field_focus) = (controller.clone(), Rc::clone(&field_focus));
+        let (off, count) = (Rc::clone(&off), Rc::clone(&count));
+        SignalProbe::new(move |signals| {
+            count.replace(Some(signals.count));
+            let field = EditableText::new(controller.clone(), Rc::clone(&field_focus))
+                .text_style(style())
+                .menu_policy(SelectionMenuPolicy::ALWAYS);
+            let field = if off.get() { field.no_menu() } else { field };
+            SizedBox::new(400.0, 40.0).child(field)
+        })
+    };
+    let page = Column::new((SizedBox::new(400.0, 80.0), probe.view()));
+    let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
+    laid.enable_semantics();
+    laid.pump();
+    let mut scene = Scene {
+        laid,
+        controller,
+        field_focus,
+        elsewhere: FocusNode::with_debug_label("elsewhere"),
+        log: Rc::default(),
+        line_height: Rc::default(),
+        square: false,
+    };
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+
+    off.set(true);
+    let signal = count.borrow().expect("the probe built");
+    probe
+        .write(|cx| signal.set(cx, 1))
+        .expect("the probe's signal takes it");
+    scene.settle();
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+    assert_eq!(scene.controller.selection(), 6..10, "the selection stays");
+}
