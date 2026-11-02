@@ -507,3 +507,73 @@ index 0000000..e54315b
 +        },
 +    )
 +}
+diff --git a/src/util.rs b/src/util.rs
+index 45b1d4705..08faff823 100644
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -39,3 +39,9 @@ impl StringBuffer {
+     pub(crate) fn acquire() -> Self {
+-        Self(STRING_SCRATCH.with(|c| c.borrow_mut().pop().unwrap_or_default()))
++        // COM apartment retirement can pump UIA calls after this optional
++        // thread-local cache has already been destroyed.
++        Self(
++            STRING_SCRATCH
++                .try_with(|c| c.borrow_mut().pop().unwrap_or_default())
++                .unwrap_or_default(),
++        )
+     }
+@@ -50,3 +56,4 @@ fn drop(&mut self) {
+         }
+-        STRING_SCRATCH.with(|c| {
++        // A lease may outlive the pool. In that case its allocation is dropped.
++        let _ = STRING_SCRATCH.try_with(|c| {
+             let mut pool = c.borrow_mut();
+@@ -535,2 +542,48 @@ fn pool_retains_at_most_max_pooled_buffers() {
+     }
++
++    #[test]
++    fn scratch_remains_usable_after_its_thread_local_pool_is_destroyed() {
++        struct LateUse {
++            report: std::sync::mpsc::Sender<(bool, bool)>,
++            held: Option<StringBuffer>,
++        }
++        impl Drop for LateUse {
++            fn drop(&mut self) {
++                let destroyed = STRING_SCRATCH.try_with(|_| ()).is_err();
++                let held = self.held.take();
++                let usable = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    if let Some(buffer) = held {
++                        drop(buffer);
++                    } else {
++                        let mut buffer = StringBuffer::acquire();
++                        let mut wide = WideString::new(&mut buffer);
++                        wide.write_str("UIA during COM retirement").unwrap();
++                        let value: BSTR = wide.into();
++                        assert_eq!(value.to_string(), "UIA during COM retirement");
++                    }
++                })).is_ok();
++                self.report.send((destroyed, usable)).unwrap();
++            }
++        }
++        thread_local! {
++            static LATE_USE: RefCell<Option<LateUse>> = const { RefCell::new(None) };
++        }
++        let mut results = Vec::new();
++        for return_existing_lease in [false, true] {
++            let (report, observed) = std::sync::mpsc::channel();
++            on_fresh_thread(move || {
++                // TLS destructors run in reverse initialization order. The
++                // simulated COM callback must outlive the scratch pool.
++                LATE_USE.with(|slot| *slot.borrow_mut() = Some(LateUse { report, held: None }));
++                let buffer = StringBuffer::acquire();
++                if return_existing_lease {
++                    LATE_USE.with(|slot| slot.borrow_mut().as_mut().unwrap().held = Some(buffer));
++                } else {
++                    drop(buffer);
++                }
++            });
++            results.push(observed.recv().unwrap());
++        }
++        assert_eq!(results, [(true, true), (true, true)], "acquire, then return an existing lease");
++    }
+ }
