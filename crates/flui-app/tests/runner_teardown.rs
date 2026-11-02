@@ -2217,7 +2217,7 @@ impl Drop for IoDriver {
 /// a session end that does not wait for the write returns first.
 const IO_BUSY: Duration = Duration::from_millis(200);
 
-/// R22: the `Ending` phase writes what the documents published before it
+/// The `Ending` phase writes what the documents published before it
 /// returns, waiting for a write already in flight, and the framework's share
 /// stays within `SESSION_END_BUDGET` (ADR-0260), even when the write never
 /// finishes.
@@ -2267,7 +2267,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
     );
 }
 
-/// R22: a session end reported while the window's UI runtime is checked out
+/// A session end reported while the window's UI runtime is checked out
 /// to its frame still writes the published bytes, and runs none of the
 /// window's observers while the runtime is out (ADR-0260 §3).
 ///
