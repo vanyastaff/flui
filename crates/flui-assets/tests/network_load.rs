@@ -498,6 +498,10 @@ fn a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane() {
             no_room_leads_here,
         ),
         (
+            "a panicking waker leaves the rest told",
+            a_panicking_waker_leaves_the_rest_told,
+        ),
+        (
             "lanes shutting down refuse the lead only",
             shutting_down_refuses_the_lead,
         ),
@@ -631,6 +635,72 @@ fn no_room_leads_here() {
     );
     assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
     drop(extra);
+}
+
+/// Panics on its first wake only.
+struct PanicsOnFirstWake(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for PanicsOnFirstWake {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        assert!(
+            self.0.swap(true, std::sync::atomic::Ordering::SeqCst),
+            "a subscriber's waker panicked"
+        );
+    }
+}
+
+/// The run is parked with no room on the lanes, and the waker of a
+/// subscriber told before the last panics: the last is still told, claims
+/// the run and drives it, and the panic is raised once every one is told.
+fn a_panicking_waker_leaves_the_rest_told() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let (registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    http.respond(
+        nth_url(LOAD_SLOTS),
+        ScriptedResponse::Fail(HttpError::Timeout),
+    );
+    let mut panicking = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
+        std::sync::atomic::AtomicBool::new(false),
+    )));
+    assert!(
+        std::pin::Pin::new(&mut panicking)
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    let mut last = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    assert!(poll_once(&mut last).is_pending());
+    lanes.refuse(SpawnError::Saturated);
+    http.release(&nth_url(0));
+    http.release(&nth_url(LOAD_SLOTS));
+    let parked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lanes.run_until_idle()));
+    assert!(parked.is_err(), "the waker's panic is raised");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut last) else {
+        panic!("the last subscriber, told past the panic, drove the run to its end");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the load fails where it is polled"
+    );
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
+    drop((loads.drain(..), panicking));
 }
 
 /// The lead's lanes shut down while it waits for a slot: the lead answers

@@ -608,10 +608,16 @@ impl DecodedImages {
         };
         // Told outside the lock: a send wakes its subscriber's task. One
         // that left changes nothing; one never polled again leaves the run
-        // to the others, and every one still hears the outcome.
+        // to the others, and every one still hears the outcome. A waker that
+        // panics leaves the rest told; the first panic is raised once every
+        // one is (ADR-0281).
+        let mut first = flui_foundation::panic::FirstPanic::new();
         for claim in told {
-            let _ = claim.send(());
+            first.contain(|| {
+                let _ = claim.send(());
+            });
         }
+        first.resume();
         None
     }
 
@@ -685,12 +691,23 @@ impl DecodedImages {
             waiters, cancel, ..
         } = pending;
         drop(cancel);
-        if let Some(outcome) = outcome {
-            for waiter in waiters {
+        // Each waiter answered, or closed when there is no outcome so it takes
+        // the load over, in turn: a waker that panics leaves the rest
+        // answered, and the first panic is raised once every one is
+        // (ADR-0281).
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        for waiter in waiters {
+            let delivery = outcome.clone().map(Delivery::Settled);
+            first.contain(move || {
+                let Waiter { settle, claim } = waiter;
+                drop(claim);
                 // A waiter whose subscriber left before completion is closed.
-                let _ = waiter.settle.send(Delivery::Settled(outcome.clone()));
-            }
+                if let Some(delivery) = delivery {
+                    let _ = settle.send(delivery);
+                }
+            });
         }
+        first.resume();
     }
 
     /// Adds `image` under `source` and evicts down to the budget.
@@ -1062,16 +1079,19 @@ impl Subscription {
         }
     }
 
-    /// Whether this subscriber was just told the load's run is parked.
+    /// Whether this subscriber should look for a parked run: it was told one
+    /// is parked, or its claim channel closed without telling, which leaves
+    /// it to look rather than miss a run. Looking finds nothing when none is
+    /// parked for its load.
     fn poll_told(&mut self, cx: &mut Context<'_>) -> bool {
         let Some(claim) = &mut self.claim else {
             return false;
         };
         match Pin::new(claim).poll(cx) {
             Poll::Pending => false,
-            Poll::Ready(told) => {
+            Poll::Ready(_) => {
                 self.claim = None;
-                told.is_ok()
+                true
             }
         }
     }
