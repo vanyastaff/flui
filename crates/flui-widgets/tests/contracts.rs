@@ -757,6 +757,7 @@ fn toolbar_items() {
         &[
             ("toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides", crate::toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides as fn()),
             ("toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change", crate::toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change),
+            ("toolbar_items::nothing_in_a_toolbar_takes_the_focus", crate::toolbar_items::nothing_in_a_toolbar_takes_the_focus),
         ],
     );
 }

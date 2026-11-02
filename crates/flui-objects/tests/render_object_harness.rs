@@ -8115,6 +8115,97 @@ fn harness_toolbar_items_hide_what_does_not_fit_behind_the_button() {
     );
 }
 
+/// Every command stays reachable: a first item too wide beside the button
+/// gives up the button's room; a column taller than the room continues in
+/// another column beside it; and a back button narrower than "more" moves
+/// no item into a row that does not show.
+fn harness_toolbar_items_keep_every_command_reachable() {
+    let sized =
+        |label: &'static str, width: f64| box_node(RenderSizedBox::fixed(width, 20.0)).label(label);
+    let toolbar = |expanded: bool, children: Vec<(&'static str, f64)>| {
+        let mut node =
+            box_node(RenderToolbarItems::new(ToolbarItemsSplit::new()).with_expanded(expanded));
+        for (label, width) in children {
+            node = node.child(sized(label, width));
+        }
+        node
+    };
+
+    // 100 + 40 in 100 beside a 20 button: the first item takes 80.
+    let run = RenderTester::mount(toolbar(
+        false,
+        vec![("wide", 100.0), ("b", 40.0), ("more", 20.0)],
+    ))
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_frame();
+    assert_eq!(run.box_geometry(run.id("wide")).width, 80.0);
+    assert_eq!(run.offset(run.id("more")), Offset::new(80.0, 0.0));
+    assert_eq!(run.hit_first(90.0, 10.0), Some(run.id("more")));
+
+    // Six 40-wide items in 100 × 60: two in the row, and expanded, the
+    // button and four items in columns of three and two.
+    let six = vec![
+        ("a", 40.0),
+        ("b", 40.0),
+        ("c", 40.0),
+        ("d", 40.0),
+        ("e", 40.0),
+        ("f", 40.0),
+        ("more", 20.0),
+    ];
+    let short = BoxConstraints::new(0.0, 100.0, 0.0, 60.0);
+    let mut run = RenderTester::mount(toolbar(true, six))
+        .with_constraints(short)
+        .run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(80.0, 60.0));
+    assert_eq!(run.dry_layout(root, short), Size::new(80.0, 60.0));
+    assert_eq!(run.offset(run.id("more")), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(run.id("d")), Offset::new(0.0, 40.0));
+    assert_eq!(run.offset(run.id("f")), Offset::new(40.0, 20.0));
+    assert_eq!(run.hit_first(60.0, 30.0), Some(run.id("f")));
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_text_direction(TextDirection::Rtl),
+    );
+    run.pump();
+    assert_eq!(
+        run.offset(run.id("f")),
+        Offset::new(0.0, 20.0),
+        "columns follow the reading direction"
+    );
+
+    // Three 40-wide items in 100 beside a 30 "more" leave one in the row;
+    // expanded with a 20 "back", the column still starts at the second.
+    let mut run = RenderTester::mount(toolbar(
+        false,
+        vec![("a", 40.0), ("b", 40.0), ("c", 40.0), ("button", 30.0)],
+    ))
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_frame();
+    let root = run.root();
+    assert_eq!(run.offset(run.id("button")), Offset::new(40.0, 0.0));
+    let button = run.id("button");
+    flui_rendering::testing::update_render_object::<RenderSizedBox, _>(
+        run.owner_mut(),
+        button,
+        |object| object.set_size(Some(20.0), Some(20.0)),
+    );
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_expanded(true),
+    );
+    run.pump();
+    assert_eq!(
+        run.offset(run.id("b")),
+        Offset::new(0.0, 20.0),
+        "b is in the column"
+    );
+    assert_eq!(run.hit_first(10.0, 30.0), Some(run.id("b")));
+}
+
 // ── RenderStack dry layout ────────────────────────────────────────────────────
 
 // ============================================================================
@@ -13929,6 +14020,10 @@ fn family_multi_child() {
             (
                 "toolbar_items_hide_what_does_not_fit_behind_the_button",
                 harness_toolbar_items_hide_what_does_not_fit_behind_the_button,
+            ),
+            (
+                "toolbar_items_keep_every_command_reachable",
+                harness_toolbar_items_keep_every_command_reachable,
             ),
         ],
     );

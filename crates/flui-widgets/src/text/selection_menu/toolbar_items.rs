@@ -17,7 +17,7 @@ use flui_view::prelude::*;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason, View};
 
-use crate::interaction::GestureDetector;
+use crate::interaction::{ExcludeFocus, GestureDetector};
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};
 use crate::{ExcludeSemantics, Padding, Semantics, SemanticsRole, Text};
 
@@ -119,16 +119,18 @@ type ButtonBuilder = Rc<dyn Fn(&ToolbarItemsController, &dyn BuildContext) -> Bo
 
 /// A toolbar's commands in one row, as many leading ones as fit, and an
 /// overflow button when some are left over. The button shows the left-over
-/// items in a column in place of the row, then takes it back.
+/// items in a column in place of the row (more columns beside it in a short
+/// room), then takes it back.
 ///
 /// The items and the button are laid out at their own width in the room
 /// the toolbar is given; an item left out is not painted, not hit and not
-/// seen by assistive technology. A design package builds its look's toolbar
-/// on it, with its own [`overflow_button`](Self::overflow_button), and can
-/// keep the column for itself: a [`controller`](Self::controller) it holds
-/// names the [`hidden`](ToolbarItemsController::hidden) items for a popup of
-/// its own. Without a controller the toolbar holds its own, and goes back to
-/// its row when its number of items changes.
+/// seen by assistive technology. Nothing in a toolbar takes the focus, so a
+/// field keeps it and its input session. A design package builds its look's
+/// toolbar on it, with its own [`overflow_button`](Self::overflow_button),
+/// and can keep the column for itself: a [`controller`](Self::controller) it
+/// holds names the [`hidden`](ToolbarItemsController::hidden) items for a
+/// popup of its own. Without a controller the toolbar holds its own, and
+/// goes back to its row when its number of items changes.
 ///
 /// # Examples
 ///
@@ -267,12 +269,14 @@ impl ViewState<ToolbarItems> for ToolbarItemsState {
         };
         let mut children = view.items.clone();
         children.push(button);
-        ToolbarRow {
+        // A toolbar never takes the focus, so a field keeps it and its input
+        // session, and no hidden item can hold it.
+        ExcludeFocus::new(ToolbarRow {
             expanded: controller.is_expanded(),
             direction: Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr),
             split: controller.inner.split.clone(),
             children,
-        }
+        })
     }
 
     fn did_update_view(&mut self, old_view: &ToolbarItems, new_view: &ToolbarItems) {

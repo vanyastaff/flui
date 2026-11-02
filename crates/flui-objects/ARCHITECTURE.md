@@ -29,12 +29,15 @@ Its expanded column holds the button and the left-over items. Children it
 leaves out are laid out but not painted, not hit-tested and not visited for
 semantics (`visits_child_for_semantics`). An offstage child, a `RenderWrap` or
 a layout delegate cannot hide a child by what layout decides. The row keeps its
-first item even when that item and the button do not fit, and clips it, so a lone
-command stays reachable. Each layout writes the row length to the
+first item even when that item and the button do not fit, laying it out again in
+what the button leaves. A short room spreads the expanded column into more
+columns, and the expanded split holds back the collapsed button's width too, so
+every command stays reachable. Each layout writes the row length to the
 `ToolbarItemsSplit` it holds, so the widget above can offer the left-over items
 another way after the frame. Harness row
 `harness_toolbar_items_hide_what_does_not_fit_behind_the_button` checks the
-split, both layouts, dry layout, intrinsics, paint, hits and semantics.
+split, both layouts, dry layout, intrinsics, paint, hits and semantics, and
+`harness_toolbar_items_keep_every_command_reachable` the three cases above.
 
 ### Cross-axis sliver tracks preserve the scrolling protocol
 

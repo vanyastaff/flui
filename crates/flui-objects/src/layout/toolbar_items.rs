@@ -7,16 +7,19 @@
 //! All children are laid out once a frame, loosely, at their own width under
 //! the incoming maximum. The row takes the longest leading run of items
 //! that fits the maximum width; when not every item fits, the button's width
-//! is held back so the run and the button fit together, and the run keeps
-//! at least its first item, clipped when even that and the button are too
-//! wide, so a lone command stays reachable.
+//! is held back so the run and the button fit together. The run keeps at
+//! least its first item; when that and the button are too wide, the item is
+//! laid out again in what the button leaves, so both stay on screen.
 //!
 //! Collapsed, the run and then the button (when items are left over) stand
 //! in a row in reading order, as tall as the tallest of them. Expanded, the
-//! button and then the left-over items stand in a column as wide as the
-//! widest, each laid out again at that width so its whole row answers a
-//! touch. With nothing left over there is no button and expanding changes
-//! nothing.
+//! button and then the left-over items stand in a column, and in more
+//! columns beside it, in reading order, where the maximum height runs out;
+//! each child is laid out again at its column's width so its whole row
+//! answers a touch. The expanded split holds back the wider of the button
+//! now and the button of the last collapsed layout, so a back button
+//! narrower than "more" leaves no item in a row that does not show. With
+//! nothing left over there is no button and expanding changes nothing.
 //!
 //! # Hidden children
 //!
@@ -125,6 +128,8 @@ struct Arrangement {
     placed: Vec<(usize, Offset)>,
     row_len: usize,
     clipped: bool,
+    /// The width the overflow button took.
+    button_width: f64,
 }
 
 /// A toolbar's items in one row, those that don't fit behind an overflow
@@ -140,6 +145,8 @@ pub struct RenderToolbarItems {
     row_len: usize,
     /// Whether the last layout's content is bigger than its size.
     clipped: bool,
+    /// The width the overflow button took in the last collapsed layout.
+    collapsed_button_width: f64,
 }
 
 impl RenderToolbarItems {
@@ -153,6 +160,7 @@ impl RenderToolbarItems {
             child_count: 0,
             row_len: 0,
             clipped: false,
+            collapsed_button_width: 0.0,
         }
     }
 
@@ -168,24 +176,6 @@ impl RenderToolbarItems {
     pub fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
         self.text_direction = text_direction;
         self
-    }
-
-    /// Whether the left-over items show in place of the row.
-    #[must_use]
-    pub fn expanded(&self) -> bool {
-        self.expanded
-    }
-
-    /// The reading direction the row follows.
-    #[must_use]
-    pub fn text_direction(&self) -> TextDirection {
-        self.text_direction
-    }
-
-    /// How many items the last layout put in the row.
-    #[must_use]
-    pub fn row_len(&self) -> usize {
-        self.row_len
     }
 
     /// Shows the left-over items in place of the row, or the row again.
@@ -264,10 +254,12 @@ impl RenderToolbarItems {
                 placed: Vec::new(),
                 row_len: 0,
                 clipped: false,
+                button_width: 0.0,
             });
         }
         let items = Self::item_count(count);
-        let loose = BoxConstraints::new(0.0, constraints.max_width, 0.0, constraints.max_height);
+        let max_width = constraints.max_width;
+        let loose = BoxConstraints::new(0.0, max_width, 0.0, constraints.max_height);
         let mut sizes = Vec::with_capacity(count);
         for i in 0..count {
             sizes.push(layout(i, loose)?);
@@ -276,35 +268,35 @@ impl RenderToolbarItems {
             .iter()
             .map(|size| size.width)
             .collect::<Vec<f64>>();
-        let row_len = row_len(&widths, sizes[items].width, constraints.max_width);
+        let button_width = sizes[items].width;
+        // Expanded, the split holds back the room the collapsed button took
+        // too, so a back button narrower than "more" moves no item out of
+        // the column into a row that does not show.
+        let held_back = if self.expanded {
+            button_width.max(self.collapsed_button_width)
+        } else {
+            button_width
+        };
+        let row_len = row_len(&widths, held_back, max_width);
         let overflowing = row_len < items;
 
         if self.expanded && overflowing {
             let shown = std::iter::once(items)
                 .chain(row_len..items)
                 .collect::<Vec<usize>>();
-            let widest = shown
-                .iter()
-                .map(|&i| sizes[i].width)
-                .fold(0.0_f64, f64::max);
-            let width = constraints.constrain_width(widest);
-            let across = BoxConstraints::new(width, width, 0.0, constraints.max_height);
-            let mut placed = Vec::with_capacity(shown.len());
-            let mut y = 0.0;
-            for i in shown {
-                let size = layout(i, across)?;
-                placed.push((i, Offset::new(0.0, y)));
-                y += size.height;
-            }
-            let size = constraints.constrain(Size::new(width, y));
-            return Ok(Arrangement {
-                size,
-                placed,
-                row_len,
-                clipped: y > size.height || widest > size.width,
-            });
+            return self.columns(constraints, &shown, &sizes, row_len, button_width, layout);
         }
 
+        if overflowing && widths[..row_len].iter().sum::<f64>() + button_width > max_width {
+            // Only the first item is in the row and it is too wide beside
+            // the button: it gives up the button's room, so the button
+            // stays inside the toolbar and takes a touch.
+            let room = (max_width - button_width).max(0.0);
+            sizes[0] = layout(
+                0,
+                BoxConstraints::new(0.0, room, 0.0, constraints.max_height),
+            )?;
+        }
         let mut shown = (0..row_len).collect::<Vec<usize>>();
         if overflowing {
             shown.push(items);
@@ -331,6 +323,75 @@ impl RenderToolbarItems {
             placed,
             row_len,
             clipped: content > size.width || height > size.height,
+            button_width,
+        })
+    }
+
+    /// The expanded toolbar: `shown` (the button, then the left-over items)
+    /// top to bottom, starting another column beside the last, in reading
+    /// order, whenever the next child would pass the maximum height, so a
+    /// short room keeps every command on screen. Each child spans its
+    /// column's width.
+    fn columns(
+        &self,
+        constraints: BoxConstraints,
+        shown: &[usize],
+        sizes: &[Size],
+        row_len: usize,
+        button_width: f64,
+        mut layout: impl FnMut(usize, BoxConstraints) -> flui_rendering::RenderResult<Size>,
+    ) -> flui_rendering::RenderResult<Arrangement> {
+        let mut columns: Vec<Vec<usize>> = vec![Vec::new()];
+        let mut height = 0.0;
+        for &i in shown {
+            let child = sizes[i].height;
+            let column = columns.last_mut().expect("BUG: columns starts with one");
+            if !column.is_empty() && height + child > constraints.max_height {
+                columns.push(vec![i]);
+                height = child;
+            } else {
+                column.push(i);
+                height += child;
+            }
+        }
+        let mut placed = Vec::with_capacity(shown.len());
+        let mut spans = Vec::with_capacity(columns.len());
+        let (mut content_width, mut content_height) = (0.0_f64, 0.0_f64);
+        for (index, column) in columns.iter().enumerate() {
+            let width = column
+                .iter()
+                .map(|&i| sizes[i].width)
+                .fold(0.0_f64, f64::max)
+                .min(constraints.max_width);
+            let across = BoxConstraints::new(width, width, 0.0, constraints.max_height);
+            let mut y = 0.0;
+            for &i in column {
+                let size = layout(i, across)?;
+                placed.push((i, index, y));
+                y += size.height;
+            }
+            spans.push((content_width, width));
+            content_width += width;
+            content_height = content_height.max(y);
+        }
+        let size = constraints.constrain(Size::new(content_width, content_height));
+        let placed = placed
+            .into_iter()
+            .map(|(i, column, y)| {
+                let (x, width) = spans[column];
+                let dx = match self.text_direction {
+                    TextDirection::Ltr => x,
+                    TextDirection::Rtl => size.width - x - width,
+                };
+                (i, Offset::new(dx, y))
+            })
+            .collect::<Vec<(usize, Offset)>>();
+        Ok(Arrangement {
+            size,
+            placed,
+            row_len,
+            clipped: content_width > size.width || content_height > size.height,
+            button_width,
         })
     }
 
@@ -422,6 +483,9 @@ impl RenderBox for RenderToolbarItems {
         self.child_count = count;
         self.row_len = arrangement.row_len;
         self.clipped = arrangement.clipped;
+        if !self.expanded {
+            self.collapsed_button_width = arrangement.button_width;
+        }
         self.split
             .record
             .set(Some((arrangement.row_len, Self::item_count(count))));

@@ -8,6 +8,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
+use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::a11y::{A11yTree, Role};
@@ -15,7 +16,8 @@ use flui_testing::replay::PointerScript;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::interaction::GestureDetector;
 use flui_widgets::{
-    Align, Semantics, SemanticsRole, SizedBox, ToolbarItems, ToolbarItemsController, WidgetsApp,
+    Align, Focus, Semantics, SemanticsRole, SizedBox, ToolbarItems, ToolbarItemsController,
+    WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -153,4 +155,20 @@ pub(crate) fn a_toolbar_s_own_controller_starts_from_the_row_when_its_items_chan
     laid.pump_widget(app(ToolbarItems::new(items(2))));
     laid.pump();
     assert_eq!(shown(&laid), ["a", "b"]);
+}
+
+/// Nothing in a toolbar takes the focus, so a field under it keeps the
+/// focus and its input session, and no hidden item can hold it.
+///
+/// Red-check: build the row without `ExcludeFocus` (the item's node takes
+/// the focus).
+pub(crate) fn nothing_in_a_toolbar_takes_the_focus() {
+    let node = FocusNode::with_debug_label("item");
+    let focusable = Focus::new(SizedBox::new(40.0, 20.0))
+        .focus_node(Rc::clone(&node))
+        .boxed();
+    let mut laid = mount(ToolbarItems::new(vec![focusable]));
+    let _outcome = node.request_focus();
+    laid.pump();
+    assert!(!node.has_focus(), "the toolbar's item takes no focus");
 }
