@@ -140,6 +140,15 @@ impl UiRuntime {
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
             let attempt = catch_unwind(AssertUnwindSafe(|| {
+                // Everything the pipeline opens for this presentation nests under this span, so the
+                // capture layer in `flui-devtools` can tell the presentations of one runtime apart.
+                // A subscriber that panics here fails the segment, which is contained below.
+                let _segment = tracing::debug_span!(
+                    target: "flui.frame",
+                    "presentation",
+                    presentation = presentation.id().as_u64()
+                )
+                .entered();
                 let now = self.frame_time.get().unwrap_or(segment_start);
                 let fresh = super::text_preparation::admit(presentation, constraints, now);
                 Self::draw_prepared_frame_for_presentation(
@@ -375,8 +384,15 @@ impl UiRuntime {
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
         mut prepare: impl FnMut(),
-        pipeline: impl FnMut() -> bool,
+        mut pipeline: impl FnMut() -> bool,
     ) -> bool {
+        // The frame span learns whose frame it is once it is open: the capture layer in
+        // `flui-devtools` partitions a frame's spans by this id.
+        let runtime = self.id().as_u64();
+        let pipeline = move || {
+            tracing::Span::current().record("runtime", runtime);
+            pipeline()
+        };
         let mut commits_closed = None;
         let commit_slot = &mut commits_closed;
         // Owed until the anchor below completes: a drive that unwinds leaves

@@ -901,6 +901,11 @@ fn developer_history_respects_capacity_and_clear() {
         ),
         #[cfg(feature = "timeline")]
         (
+            "partitioned_real_frame",
+            a_real_runtime_frame_is_partitioned_and_exported,
+        ),
+        #[cfg(feature = "timeline")]
+        (
             "stale_guard",
             a_guard_before_clear_cannot_update_a_new_event,
         ),
@@ -968,5 +973,110 @@ fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
             "a {period:?} budget judged a real frame that took {:.3} ms",
             frame.total_time_ms()
         );
+    }
+}
+
+/// The real runtime names itself on its frames and presentations on its segments, and the
+/// capture, the timeline over it and the Perfetto export all show the same measurement.
+///
+/// Fails when the runtime stops recording `runtime` on the `frame` span or stops opening the
+/// `presentation` span, because every span would then fall into the unknown partition.
+#[cfg(feature = "timeline")]
+fn a_real_runtime_frame_is_partitioned_and_exported() {
+    use flui_devtools::timeline::Timeline;
+    use flui_devtools::{Capture, Phase};
+    use flui_sdk::animation::Vsync;
+    use flui_sdk::rendering::BoxConstraints;
+    use flui_sdk::widgets::SizedBox;
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let capture = Capture::new();
+    let timeline = Timeline::over(&capture);
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut laid = flui_testing::widgets::lay_out_animated(
+            SizedBox::new(32.0, 32.0),
+            BoxConstraints::tight(flui_sdk::geometry::Size::new(64.0, 64.0)),
+            Vsync::new(),
+        );
+        laid.pump_for(Duration::from_millis(16));
+    });
+
+    let frames = capture.frames();
+    assert!(!frames.is_empty(), "a driven frame is captured");
+    let runtimes = capture.runtimes();
+    assert_eq!(
+        runtimes.len(),
+        1,
+        "one runtime drove every frame: {runtimes:?}"
+    );
+    assert!(
+        runtimes[0].is_some(),
+        "the frame names the runtime that drove it"
+    );
+    let layouts: Vec<_> = capture
+        .spans()
+        .into_iter()
+        .filter(|span| span.phase() == Some(Phase::Layout))
+        .collect();
+    assert!(!layouts.is_empty(), "the pipeline's layout is captured");
+    assert!(
+        layouts
+            .iter()
+            .any(|span| span.partition().presentation().is_some()),
+        "layout runs inside a presentation's segment: {layouts:?}"
+    );
+
+    let trace: serde_json::Value =
+        serde_json::from_str(&timeline.export_chrome_trace()).expect("the export is JSON");
+    let events = trace["traceEvents"].as_array().expect("traceEvents");
+    let mut complete = Vec::new();
+    for event in events {
+        match event["ph"].as_str().expect("every event has a phase") {
+            "X" => {
+                for key in ["name", "cat"] {
+                    assert!(event[key].is_string(), "{key} of {event}");
+                }
+                for key in ["ts", "dur", "pid", "tid"] {
+                    assert!(
+                        event[key].is_u64() || event[key].is_i64(),
+                        "{key} of {event}"
+                    );
+                }
+                complete.push((
+                    event["pid"].as_i64().expect("pid is an integer"),
+                    event["tid"].as_i64().expect("tid is an integer"),
+                    event["ts"].as_u64().expect("ts is an integer"),
+                    event["dur"].as_u64().expect("dur is an integer"),
+                ));
+            }
+            "C" => assert!(event["args"].is_object(), "counter args of {event}"),
+            "M" => assert!(
+                event["args"]["name"].is_string(),
+                "metadata name of {event}"
+            ),
+            other => panic!("the export holds only X, C and M events; saw {other}"),
+        }
+    }
+    assert!(
+        events
+            .iter()
+            .any(|event| event["ph"] == "C" && event["name"] == "frame_ms"),
+        "every frame is a frame_ms counter"
+    );
+    // Nested phases nest: on one thread, an event that starts inside another ends inside it.
+    complete.sort_by_key(|&(pid, tid, ts, dur)| (pid, tid, ts, std::cmp::Reverse(dur)));
+    let mut open: Vec<(i64, i64, u64)> = Vec::new();
+    for (pid, tid, ts, dur) in complete {
+        while open
+            .last()
+            .is_some_and(|&(p, t, end)| (p, t) != (pid, tid) || end <= ts)
+        {
+            open.pop();
+        }
+        if let Some(&(_, _, end)) = open.last() {
+            assert!(ts + dur <= end, "partially overlapping complete events");
+        }
+        open.push((pid, tid, ts + dur));
     }
 }

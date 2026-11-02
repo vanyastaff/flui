@@ -872,6 +872,21 @@ impl<T: Marker> GenId<T> {
     pub fn as_u64(self) -> u64 {
         self.0.get()
     }
+
+    /// The id whose [`Self::as_u64`] is `packed`, or `None` when `packed` has no generation
+    /// (its high 32 bits are zero), which no id minted by `new`/`new_gen` has.
+    ///
+    /// For a value read back from a trace field or a wire message. It proves the value is
+    /// well-formed, not that the slot is live: resolving it still goes through the owner's
+    /// generation check.
+    #[inline]
+    #[must_use]
+    pub fn from_u64(packed: u64) -> Option<Self> {
+        if packed >> 32 == 0 {
+            return None;
+        }
+        core::num::NonZeroU64::new(packed).map(|packed| Self(packed, PhantomData))
+    }
 }
 
 // Manual impls so `T` needs no bounds beyond `Marker` (same rationale as `Id<T>`).
@@ -1066,6 +1081,15 @@ impl PresentationId {
     #[must_use]
     pub fn as_u64(self) -> u64 {
         self.0.as_u64()
+    }
+
+    /// The identity whose [`Self::as_u64`] is `packed`, or `None` for a value no identity has.
+    ///
+    /// For a value read back from a trace field; it does not prove the slot is live.
+    #[inline]
+    #[must_use]
+    pub fn from_u64(packed: u64) -> Option<Self> {
+        GenId::from_u64(packed).map(Self)
     }
 }
 
@@ -1416,6 +1440,20 @@ mod tests {
     use core::num::NonZeroU32;
 
     use super::*;
+
+    #[test]
+    fn a_packed_value_read_back_from_a_trace_field_names_the_same_identity() {
+        let presentation = PresentationId::new_gen(7, NonZeroU32::new(3).unwrap());
+        assert_eq!(
+            PresentationId::from_u64(presentation.as_u64()),
+            Some(presentation)
+        );
+        let runtime = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        assert_eq!(UiRuntimeId::from_u64(runtime.as_u64()), Some(runtime));
+        // No minted identity has a zero generation, so such a value is not an identity.
+        assert_eq!(PresentationId::from_u64(0), None);
+        assert_eq!(PresentationId::from_u64(41), None);
+    }
 
     // -----------------------------------------------------------------------
     // RawId tests

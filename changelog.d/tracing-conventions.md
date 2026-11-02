@@ -13,3 +13,18 @@
   that were created but never entered are now entered TRACE spans.
 - **`flui-devtools`' frame profiler recognizes a phase by target and name**, so an application
   span named `paint` is no longer counted as the paint phase.
+- **`Timeline::export_chrome_trace` writes complete (`X`) events** with a process per runtime,
+  thread names and, for a timeline over a capture, `frame_ms` and `jank` counters, in place of
+  begin/end pairs on a fixed process.
+- `TimelineEvent` gained `runtime` and `presentation`.
+
+### Added
+
+- **`flui-devtools` has one capture of the frame spans**: `Capture` and `CaptureLayer` record the
+  frame, each presentation's segment and every `Phase`, partitioned by the runtime that drove the
+  frame and the presentation a span ran for. `FrameTimingLayer::over(&capture, profiler)` and
+  `Timeline::over(&capture)` read it instead of recording on their own. `Phase::of` is the one
+  `(target, name)` table. `PresentationId::from_u64` and `GenId::from_u64` read an id back from a
+  trace field.
+- The scheduler's `frame` span carries `runtime`, and the runtime opens a `presentation` span
+  around each presentation's segment of a frame.

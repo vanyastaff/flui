@@ -373,7 +373,8 @@ impl OwnerFrame {
                     target: "flui.frame",
                     "frame",
                     id = tracing::field::Empty,
-                    period_us = tracing::field::Empty
+                    period_us = tracing::field::Empty,
+                    runtime = tracing::field::Empty
                 )
             })
         } else {
