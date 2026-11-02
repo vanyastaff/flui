@@ -1,6 +1,6 @@
 //! Shared tracing-capture fixture for reconcile-event tests.
 //!
-//! Every test that observes the `flui::reconcile` trace stream must capture
+//! Every test that observes the `flui.tree.reconcile` trace stream must capture
 //! through this module — not by building its own scoped dispatcher — because
 //! of a `tracing` callsite-interest race under parallel test threads:
 //!

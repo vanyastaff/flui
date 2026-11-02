@@ -52,7 +52,7 @@
 //! [`crate::TabBar`] on the same controller, which registers on the
 //! controller's companion link while mounted and publishes the adjacent tab's
 //! node for each command. A view with no [`crate::TabBar`] mounted leaves the
-//! commands without that path, and says so with a `flui::a11y` warning once
+//! commands without that path, and says so with a `flui.a11y` warning once
 //! the frame it mounted in has run. The labels are English until Material has
 //! a localizations table.
 

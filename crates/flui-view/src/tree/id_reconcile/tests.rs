@@ -182,7 +182,7 @@ fn id_reconcile_matrix() {
     );
 }
 
-/// `flui::reconcile` emission coverage on the LIVE slab path
+/// `flui.tree.reconcile` emission coverage on the LIVE slab path
 /// (catalog #3). The production reconciler
 /// emits one typed [`ReconcileEvent`](super::ReconcileEvent) per
 /// child disposition so devtools / selection-persistence subscribers
@@ -218,7 +218,7 @@ mod emission {
     /// Install an *interested* process-global default subscriber ONCE
     /// for this test binary.
     ///
-    /// The `flui::reconcile` callsite is shared by every reconcile,
+    /// The `flui.tree.reconcile` callsite is shared by every reconcile,
     /// including the many `ElementTree::insert` calls (an emit site) in
     /// non-collector tests that run in PARALLEL. If one hits the callsite
     /// while the only default is the no-op global, tracing caches
@@ -241,7 +241,7 @@ mod emission {
         });
     }
 
-    /// Capture the `flui::reconcile` events `body` emits on this thread.
+    /// Capture the `flui.tree.reconcile` events `body` emits on this thread.
     fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
         ensure_global_subscriber();
         let collector = ReconcileEventCollector::new();
@@ -275,7 +275,7 @@ mod emission {
     }
 
     /// Seed `parent` with `views` via direct slab inserts, bypassing
-    /// the reconciler so NO `flui::reconcile` event fires during
+    /// the reconciler so NO `flui.tree.reconcile` event fires during
     /// setup. This matters: tracing's callsite-interest cache is
     /// process-global, so if the production emit callsite is first
     /// exercised OUTSIDE a collector scope it can latch "no interest"

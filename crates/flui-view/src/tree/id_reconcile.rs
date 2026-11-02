@@ -14,7 +14,7 @@
 //! `Vec<Box<dyn ElementBase>>`; that one has been removed.)
 //!
 //! It also emits one typed [`ReconcileEvent`] per child disposition on
-//! the live path, so the `flui::reconcile` (FR-035) stability boundary
+//! the live path, so the `flui.tree.reconcile` (FR-035) stability boundary
 //! is meaningful for normal reconciliation, not just a reference impl.
 //!
 //! # Emitted dispositions

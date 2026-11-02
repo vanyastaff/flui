@@ -370,6 +370,7 @@ impl OwnerFrame {
         let span = if recovery.first.is_none() {
             recovery.attempt(|| {
                 tracing::debug_span!(
+                    target: "flui.frame",
                     "frame",
                     id = tracing::field::Empty,
                     period_us = tracing::field::Empty

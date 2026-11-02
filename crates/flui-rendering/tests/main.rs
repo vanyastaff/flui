@@ -28,6 +28,8 @@ mod intrinsics_cache;
 mod layout_cycle_guard;
 #[path = "layout_dirty_root.rs"]
 mod layout_dirty_root;
+#[path = "subscriber_panics.rs"]
+mod subscriber_panics;
 
 #[path = "leader_watch.rs"]
 mod leader_watch;

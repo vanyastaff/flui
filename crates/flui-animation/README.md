@@ -11,15 +11,15 @@ rendered page leaves out.
 ### Optional diagnostics and profiling
 
 Enable `diagnostics` on this crate, or `animation-diagnostics` on `flui` /
-`flui-sdk`, to compile structured DEBUG events at `flui_animation::diagnostics`.
-For example, `RUST_LOG=info,flui_animation::diagnostics=debug` admits these
+`flui-sdk`, to compile structured DEBUG events at `flui.animation.diagnostics`.
+For example, `RUST_LOG=info,flui.animation.diagnostics=debug` admits these
 events with FLUI's managed log subscriber. The subscriber supplies controller
 span identities; run generations and resolved outcome generations correlate
 start, replacement, cancellation, completion, disposal, direction, playback
 and clock/policy changes. Ordinary unchanged samples emit no transition event.
 
 The same feature emits `animation_tick`, `animation_sampling` and
-`animation_listeners` CPU spans at target `flui_animation`.
+`animation_listeners` CPU spans at target `flui.animation`.
 `flui-devtools/profiling` enables it and attributes those spans to their owning
 scheduler frame (ADR-0202). Tick durations include sampling and delivery;
 they are not three additive portions of a CPU total. Standalone ticks have no

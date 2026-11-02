@@ -1812,6 +1812,7 @@ impl GestureArena {
     /// ```
     #[instrument(
         name = "arena.add",
+        target = "flui.input",
         level = "debug",
         skip(self, member),
         fields(
@@ -1932,6 +1933,7 @@ impl GestureArena {
     /// at closure; otherwise the arena waits for a member's decision.
     #[instrument(
         name = "arena.close",
+        target = "flui.input",
         level = "debug",
         skip(self),
         fields(
@@ -2190,6 +2192,7 @@ impl GestureArena {
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     #[instrument(
         name = "arena.resolve",
+        target = "flui.input",
         level = "debug",
         skip(self, winner),
         fields(
@@ -2248,6 +2251,7 @@ impl GestureArena {
     /// If arena is held, sweep is deferred until release().
     #[instrument(
         name = "arena.sweep",
+        target = "flui.input",
         level = "debug",
         skip(self),
         fields(

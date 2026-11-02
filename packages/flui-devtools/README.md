@@ -58,7 +58,7 @@ clone in application code cannot extend their timing into another frame.
 
 Transition events can be logged separately with `animation-diagnostics` on
 `flui` or `flui-sdk`, or `diagnostics` on `flui-animation`, and a DEBUG filter
-for `flui_animation::diagnostics`. Instrumentation is off without these features
+for `flui.animation.diagnostics`. Instrumentation is off without these features
 or devtools `profiling`; an interested subscriber is still required.
 
 ```rust

@@ -878,7 +878,7 @@ pub trait BuildContextExt: BuildContext {
         // opting out (read-is-depend holds for every public read path).
         let set = if mask.is_empty() {
             tracing::debug!(
-                target: "flui::signals",
+                target: "flui.signals",
                 provider = std::any::type_name::<T>(),
                 "depend_on_field with an empty mask; recorded as a whole-provider dependency"
             );

@@ -643,21 +643,43 @@ impl UiRuntime {
     }
 
     /// Commit a painted presentation after the sink accepts its scene.
-    fn commit_painted_frame(&self, presentation: &PresentationState) {
+    ///
+    /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
+    /// resume once the verdict's own obligations have run.
+    fn commit_painted_frame(
+        &self,
+        presentation: &PresentationState,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
             "commit target must belong to this ui_runtime"
         );
+        // The scene is already accepted, so the commit happens whatever a subscriber does with the
+        // span: a failure to open it is held, the commit runs, and the first failure resumes after.
+        let opened = catch_unwind(AssertUnwindSafe(|| {
+            tracing::debug_span!(target: "flui.frame", "commit").entered()
+        }));
+        let (commit_span, mut subscriber_panic) = match opened {
+            Ok(span) => (Some(span), None),
+            Err(payload) => (None, Some(payload)),
+        };
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
-        tracing::trace!(
-            target: "flui.frame",
-            event = "tree_revision_committed",
-            { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
-            tree_revision = committed_revision.as_u64(),
-            presented_revision = committed_revision.as_u64(),
-            "Presentation tree revision committed"
-        );
+        let event = catch_unwind(AssertUnwindSafe(|| {
+            tracing::trace!(
+                target: "flui.frame",
+                event = "tree_revision_committed",
+                { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
+                tree_revision = committed_revision.as_u64(),
+                presented_revision = committed_revision.as_u64(),
+                "Presentation tree revision committed"
+            );
+        }))
+        .err();
+        super::input::preserve_first_input_panic(&mut subscriber_panic, event, "commit event");
+        let closed = catch_unwind(AssertUnwindSafe(|| drop(commit_span))).err();
+        super::input::preserve_first_input_panic(&mut subscriber_panic, closed, "commit span");
+        subscriber_panic
     }
 
     fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
@@ -866,11 +888,42 @@ impl UiRuntime {
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
             producer.stage_agent_layer_reads(scene.tree());
-            let render_verdict = match catch_unwind(AssertUnwindSafe(|| sink.submit(scene))) {
-                Ok(verdict) => verdict,
-                Err(payload) => {
+            // The verdict is kept apart from the span's teardown: a subscriber that panics when
+            // the `submit` span exits must not lose a verdict the sink already returned.
+            let mut submitted = None;
+            let span_outcome = catch_unwind(AssertUnwindSafe(|| {
+                let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
+                submitted = Some(sink.submit(scene));
+            }));
+            let render_verdict = match (submitted, span_outcome) {
+                (Some(verdict), Ok(())) => verdict,
+                // The sink answered and only the subscriber failed: settle what the verdict owes,
+                // then resume that failure with the first panic of the frame.
+                (Some(verdict), Err(payload)) => {
+                    super::input::preserve_first_input_panic(
+                        &mut hover_panic,
+                        Some(payload),
+                        "submit span",
+                    );
+                    verdict
+                }
+                // The sink panicked, or the span failed before it was called. Either way the scene
+                // is lost after the pipeline consumed its paint work: the repaint and the wake are
+                // owed before the first failure resumes, and a later failure of theirs yields to it.
+                (None, Err(payload)) => {
                     producer.restore_staged_agent_layer_reads();
+                    let owed = catch_unwind(AssertUnwindSafe(|| {
+                        self.mark_needs_full_repaint_for(producer);
+                        self.wake_frame();
+                    }))
+                    .err();
+                    if let Some(later) = owed {
+                        flui_foundation::panic::discard_payload(later);
+                    }
                     resume_unwind(payload);
+                }
+                (None, Ok(())) => {
+                    unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
             // Before anything else that can panic: the staged layer reads are answered if the
@@ -916,7 +969,11 @@ impl UiRuntime {
                 let submit_at = producer.clock().now();
                 match render_verdict {
                     SubmitVerdict::Presented => {
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         // The frame reached `present()`: frame-aligned haptics
                         // play with it (ADR-0210 §4). Only this arm plays them;
                         // the others leave the queue to its deadline.
@@ -943,7 +1000,11 @@ impl UiRuntime {
                         replay_committed_input = true;
                     }
                     SubmitVerdict::NoPresent => {
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         // No frame-aligned haptics: the backend found no damage,
                         // so the screen kept the previous frame and the change a
                         // queued request confirms never showed. A request queued
@@ -1005,7 +1066,11 @@ impl UiRuntime {
                         // The frame never reached the screen, so frame-aligned
                         // haptics wait: a retry that presents before their
                         // deadline plays them, otherwise they resolve `Suppressed`.
-                        self.commit_painted_frame(producer);
+                        super::input::preserve_first_input_panic(
+                            &mut hover_panic,
+                            self.commit_painted_frame(producer),
+                            "commit span",
+                        );
                         producer.record_frame_dropped();
                         let streak = producer.record_frame_withheld();
                         replay_committed_input = true;
@@ -1175,9 +1240,6 @@ impl UiRuntime {
                 "frame ambient hover refresh",
             );
         }
-        if let Some(payload) = hover_panic {
-            resume_unwind(payload);
-        }
 
         // The one place a frame decides whether the loop continues itself.
         // A frame that presents is followed by the compositor's own pacing,
@@ -1187,70 +1249,87 @@ impl UiRuntime {
         // consumed the work and left nothing to come back for. Same target
         // and level as `flui.pace`'s wake trace, which fires once per
         // platform wake; this one fires once per frame.
-        tracing::trace!(
-            target: "flui.pace",
-            event = "frame_tail",
-            presented,
-            any_retry_needed,
-            retry_needed,
-            retry_needs_repaint,
-            "frame tail resolved"
-        );
+        // What the verdict owes (the retry, or the rendered mark) runs before a held failure of the
+        // layer-read reply or of the sink's own span resumes; the work is contained so that it
+        // cannot replace that failure.
+        let settle_panic = catch_unwind(AssertUnwindSafe(|| {
+            tracing::trace!(
+                target: "flui.pace",
+                event = "frame_tail",
+                presented,
+                any_retry_needed,
+                retry_needed,
+                retry_needs_repaint,
+                "frame tail resolved"
+            );
 
-        if retry_needed {
-            // Issue #637: `wake_frame()` alone re-opens `draw_frame_entered`'s
-            // per-presentation segment gate but never touches `PipelineOwner`'s
-            // own independent dirty tracking — the frame that just failed to
-            // submit had already consumed whatever was dirty producing the
-            // scene it tried to send, so an otherwise-unchanged tree finds
-            // nothing dirty on the retry pump, produces `Idle`, and
-            // `mark_rendered()` clears the flag having never reached
-            // `render_scene`: one no-op frame, then the retry silently parks.
-            //
-            // `retry_needs_repaint` (set only by the submit-failure arms;
-            // post-pipeline segment panics were already re-dirtied at their
-            // exact per-presentation catch) gates
-            // [`Self::mark_needs_full_repaint_for`], the same fix #630
-            // already established for the pre-frame device-recovery-success
-            // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
-            // shared rather than duplicated via that one function, since
-            // both are "a retry needs the pipeline to actually have work to
-            // redo, not just a wake"; see that function's own doc for why
-            // `mark_needs_paint` (not `mark_needs_layout`) is the right
-            // weight. Addressed to `producer` — the presentation whose
-            // segment actually produced the scene that just failed to
-            // submit, resolved above and NEVER assumed to be `primary()`
-            // (this method's own doc, at the `producer` binding, explains
-            // why the two can differ) — not `self.presentations.primary()`:
-            // an earlier version of this fix wrongly hard-coded `primary()`
-            // here, which left the fix inert on any pump where a secondary
-            // presentation was the actual producer.
-            //
-            // Steady-state cost of a PERMANENTLY failing submit: unlike the
-            // pre-frame device-recovery path, this arm is not gated by
-            // `DeviceRecoveryBackoff` — a surface that keeps failing every
-            // submit now retries every wake, throttled only by
-            // `runner.rs`'s `NO_PRESENT_FALLBACK_PACE` (~62 Hz), running a
-            // full-tree paint each time, indefinitely. Before this fix that
-            // same surface went quiet after one no-op frame. A working
-            // retry that costs CPU forever on a permanently broken surface
-            // is still strictly better than one that silently gives up, but
-            // whether this steady state deserves its own backoff is a
-            // separate question this change does not answer.
-            if retry_needs_repaint {
-                self.mark_needs_full_repaint_for(producer);
+            if retry_needed {
+                // Issue #637: `wake_frame()` alone re-opens `draw_frame_entered`'s
+                // per-presentation segment gate but never touches `PipelineOwner`'s
+                // own independent dirty tracking — the frame that just failed to
+                // submit had already consumed whatever was dirty producing the
+                // scene it tried to send, so an otherwise-unchanged tree finds
+                // nothing dirty on the retry pump, produces `Idle`, and
+                // `mark_rendered()` clears the flag having never reached
+                // `render_scene`: one no-op frame, then the retry silently parks.
+                //
+                // `retry_needs_repaint` (set only by the submit-failure arms;
+                // post-pipeline segment panics were already re-dirtied at their
+                // exact per-presentation catch) gates
+                // [`Self::mark_needs_full_repaint_for`], the same fix #630
+                // already established for the pre-frame device-recovery-success
+                // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
+                // shared rather than duplicated via that one function, since
+                // both are "a retry needs the pipeline to actually have work to
+                // redo, not just a wake"; see that function's own doc for why
+                // `mark_needs_paint` (not `mark_needs_layout`) is the right
+                // weight. Addressed to `producer` — the presentation whose
+                // segment actually produced the scene that just failed to
+                // submit, resolved above and NEVER assumed to be `primary()`
+                // (this method's own doc, at the `producer` binding, explains
+                // why the two can differ) — not `self.presentations.primary()`:
+                // an earlier version of this fix wrongly hard-coded `primary()`
+                // here, which left the fix inert on any pump where a secondary
+                // presentation was the actual producer.
+                //
+                // Steady-state cost of a PERMANENTLY failing submit: unlike the
+                // pre-frame device-recovery path, this arm is not gated by
+                // `DeviceRecoveryBackoff` — a surface that keeps failing every
+                // submit now retries every wake, throttled only by
+                // `runner.rs`'s `NO_PRESENT_FALLBACK_PACE` (~62 Hz), running a
+                // full-tree paint each time, indefinitely. Before this fix that
+                // same surface went quiet after one no-op frame. A working
+                // retry that costs CPU forever on a permanently broken surface
+                // is still strictly better than one that silently gives up, but
+                // whether this steady state deserves its own backoff is a
+                // separate question this change does not answer.
+                if retry_needs_repaint {
+                    self.mark_needs_full_repaint_for(producer);
+                }
+                // Still called unconditionally for every `retry_needed` cause,
+                // retryable pipeline `Errored` included: unlike the pre-frame success arm
+                // (which runs synchronously right before this same call's own
+                // `render_frame`, so nothing external needs poking),
+                // every cause here fails INSIDE this call — the retry can only
+                // happen on a LATER wake, so the platform still needs the poke
+                // `wake_frame()` provides regardless of whether a repaint was
+                // also marked above.
+                self.wake_frame();
+            } else {
+                self.mark_rendered();
             }
-            // Still called unconditionally for every `retry_needed` cause,
-            // retryable pipeline `Errored` included: unlike the pre-frame success arm
-            // (which runs synchronously right before this same call's own
-            // `render_frame`, so nothing external needs poking),
-            // every cause here fails INSIDE this call — the retry can only
-            // happen on a LATER wake, so the platform still needs the poke
-            // `wake_frame()` provides regardless of whether a repaint was
-            // also marked above.
-            self.wake_frame();
-        } else {
-            self.mark_rendered();
+        }))
+        .err();
+        // A subscriber or waker that failed while the frame settled what the sink's verdict owes
+        // is secondary to the failure that came first.
+        if let Some(payload) = hover_panic {
+            if let Some(later) = settle_panic {
+                flui_foundation::panic::discard_payload(later);
+            }
+            resume_unwind(payload);
+        }
+        if let Some(payload) = settle_panic {
+            resume_unwind(payload);
         }
 
         if replay_committed_input {

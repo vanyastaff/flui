@@ -600,7 +600,7 @@ pub(crate) fn the_menu_closes_when_its_area_unmounts() {
     );
 }
 
-/// Without a navigator to show the menu in, a request is a `flui::a11y`
+/// Without a navigator to show the menu in, a request is a `flui.a11y`
 /// warning, not a silent no-op.
 pub(crate) fn a_missing_navigator_is_reported() {
     let ((), log) = flui_testing::log_capture::capture(|| {
@@ -626,7 +626,7 @@ pub(crate) fn a_missing_navigator_is_reported() {
     assert!(
         log.records()
             .iter()
-            .any(|record| record.target == "flui::a11y" && record.message.contains("no Navigator")),
+            .any(|record| record.target == "flui.a11y" && record.message.contains("no Navigator")),
         "the request is reported:\n{log}"
     );
 }

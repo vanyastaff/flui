@@ -8,7 +8,7 @@
 //! into an installed observer, and devtools implements the trait with only
 //! `flui-foundation` on its dependency list.
 //!
-//! The existing `flui::reconcile` tracing stream is deliberately NOT this
+//! The existing `flui.tree.reconcile` tracing stream is deliberately NOT this
 //! seam (typed payloads degrade to strings there, its subscriber lifecycle
 //! is process-global, and it cannot be UI runtime-scoped); it remains unchanged
 //! for trace tooling.

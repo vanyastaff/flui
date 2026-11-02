@@ -12,7 +12,7 @@
 //! performs it.
 //!
 //! The link makes the claim checkable. With no companion registered the
-//! alternatives are unfulfilled: the behavioural widget warns on `flui::a11y`
+//! alternatives are unfulfilled: the behavioural widget warns on `flui.a11y`
 //! once the frame it mounted in has run, and `assert_gesture_alternatives`
 //! fails. A widget therefore cannot claim a single-pointer path that is not
 //! there.

@@ -1350,7 +1350,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
 }
 
 /// A command whose intent nothing answers, and a command key the platform
-/// reserves, each leave a `flui::a11y` warning naming the command: a gesture
+/// reserves, each leave a `flui.a11y` warning naming the command: a gesture
 /// that silently does nothing is the defect the diagnostic exists for. The
 /// reserved key is reported once, not again on each rebuild.
 pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
@@ -1387,7 +1387,7 @@ pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
         log.records()
             .iter()
             .filter(|record| {
-                record.target == "flui::a11y"
+                record.target == "flui.a11y"
                     && record.message.contains(text)
                     && record.field("command") == Some("Delete Alice")
             })
@@ -1681,7 +1681,7 @@ pub(crate) fn unfulfilled_companion_alternatives_are_reported() {
         log.records()
             .iter()
             .filter(|record| {
-                record.target == "flui::a11y" && record.message.contains("none is registered")
+                record.target == "flui.a11y" && record.message.contains("none is registered")
             })
             .count()
     };

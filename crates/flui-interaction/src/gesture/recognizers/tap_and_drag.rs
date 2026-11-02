@@ -796,11 +796,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             return;
         };
         // per-impl span (trait fn disallows `#[instrument]`).
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "tap_and_drag.add_pointer",
-            pointer = ?pointer,
-            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
-        );
+            pointer = pointer.get().get(),
+            event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
+        )
+        .entered();
         let prospective_settings = self
             .settings
             .snapshot_for(super::recognizer::admission_kind(down.local));
@@ -869,11 +871,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         // per-impl span (trait fn disallows `#[instrument]`).
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "tap_and_drag.handle_event",
-            kind = %crate::gesture::observability::pointer_event_kind(event),
-            event = %crate::gesture::observability::GestureEvent::EventReceived,
-        );
+            kind = crate::gesture::observability::pointer_event_kind(event),
+            event = crate::gesture::observability::GestureEvent::EventReceived.as_str(),
+        )
+        .entered();
         if self.gesture_state.borrow().pointer != event.pointer_id() {
             return;
         }
