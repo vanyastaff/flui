@@ -318,7 +318,7 @@ pub(crate) fn a_secondary_click_opens_the_popup_on_the_selection() {
     assert_eq!(scene.laid.clipboard().text().as_deref(), Some("beta"));
     assert!(scene.popup().is_empty(), "a chosen item closes the popup");
 
-    scene.secondary_click(scene.along(width_of("alpha beta gam")));
+    scene.secondary_click(scene.along(width_of("alpha beta ga")));
     assert!(!scene.controller.has_selection(), "the caret moved there");
     assert_eq!(scene.popup(), strings(&["Paste", "Select all"]));
     scene.key(NamedKey::Escape);
@@ -395,7 +395,7 @@ pub(crate) fn a_handle_drag_hides_the_toolbar_until_it_lets_go() {
     assert_eq!(scene.toolbar(), strings(&EDITING));
 
     let from = scene.end_handle(width_of("alpha beta"));
-    let to = scene.end_handle(width_of("alpha beta gam"));
+    let to = scene.end_handle(width_of("alpha beta ga"));
     let mut during = None;
     let drag = PointerScript::drag(from, to, 12, Duration::from_millis(16));
     let last = drag.steps().len() - 1;
@@ -408,7 +408,7 @@ pub(crate) fn a_handle_drag_hides_the_toolbar_until_it_lets_go() {
     });
     scene.settle();
     assert_eq!(during, Some(false), "a drag takes the toolbar");
-    assert_eq!(scene.controller.selection(), 6..14);
+    assert_eq!(scene.controller.selection(), 6..13);
     assert_eq!(scene.toolbar(), strings(&EDITING), "letting go shows it");
 
     scene.key(NamedKey::ArrowLeft);
