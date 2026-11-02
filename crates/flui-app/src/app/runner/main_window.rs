@@ -665,9 +665,13 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
 /// there is the loop's terminal failure (ADR-0258 §2), which the exit
 /// resumes once it has written what the application persisted.
 pub(super) fn shutdown_main_window() {
-    let (controller, ingress) = APP_RUNTIME.with(|slot| {
+    let (controller, ingress, dev_agent) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        (runtime.main_controller.take(), runtime.main_ingress.take())
+        (
+            runtime.main_controller.take(),
+            runtime.main_ingress.take(),
+            runtime.loop_dev_agent.take(),
+        )
     });
     if let Some(ingress) = ingress {
         ingress.close();
@@ -676,6 +680,9 @@ pub(super) fn shutdown_main_window() {
         super::terminal::contain_terminal("main window cancellation", || controller.cancel());
         super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
+    // The hooks' last references may run their `Drop`, outside the borrow and
+    // contained like the controller's.
+    super::terminal::contain_terminal("development agents' release", || drop(dev_agent));
 }
 
 /// Retires the loop's main window and UI runtimes when dropped: after
@@ -897,6 +904,14 @@ where
                 }
             });
             crate::app::agent::install_from_env(&mut config, &ended);
+            // A stale value would be one a loop on this thread failed to clear;
+            // it drops here, outside the borrow.
+            let _stale = APP_RUNTIME.with(|slot| {
+                std::mem::replace(
+                    &mut slot.borrow_mut().loop_dev_agent,
+                    config.dev_agent.clone(),
+                )
+            });
             let reload = WorkerReload::from_config(&config);
             let watcher = reload.spawn_watcher(runtime_wake_callback());
             let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
@@ -1532,6 +1547,10 @@ mod tests {
                     .is_some()),
                 "the loop holds the attachment"
             );
+            assert!(
+                super::super::desktop::window_dev_agent(&AppConfig::new()).is_some(),
+                "a window opened with a configuration that names no hook is handed to the loop's"
+            );
             for _ in 0..2 {
                 let mut request = handle.request_show_main_window().expect("admit retry");
                 drive_main_window();
@@ -1551,6 +1570,10 @@ mod tests {
             counts.get(),
             (1, 1, 0),
             "loop teardown detached the hook exactly once"
+        );
+        assert!(
+            super::super::desktop::window_dev_agent(&AppConfig::new()).is_none(),
+            "the loop's end released its hooks"
         );
     }
 
