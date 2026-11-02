@@ -27,13 +27,9 @@ pub(crate) use flui_protocol::launch::{ENDPOINT_ENV, TOKEN_ENV};
 
 use crate::error::{CliError, CliResult, ResultExt};
 
-/// The feature, on the `flui` facade, that keeps the agent in a release
-/// build; a debug build carries it without one.
-pub(crate) const FACADE_DRIVER_FEATURE: &str = "flui/driver";
-
-/// The same feature on `flui-app`, for an application that names the
-/// runtime crate rather than the facade.
-pub(crate) const APP_DRIVER_FEATURE: &str = "flui-app/driver";
+/// The feature, on the `flui` facade and on `flui-app`, that keeps the agent
+/// in a build without debug assertions; a debug build carries it without one.
+pub(crate) const DRIVER_FEATURE: &str = "driver";
 
 /// The file `flui run --agent` writes beside the build output so
 /// `flui mcp` finds the running app without arguments.
@@ -137,7 +133,7 @@ pub(crate) struct Session {
     _dir: tempfile::TempDir,
     file: PathBuf,
     /// The feature a build without debug assertions needs to keep the agent.
-    driver_feature: Option<&'static str>,
+    driver_feature: Option<String>,
 }
 
 impl Session {
@@ -179,9 +175,9 @@ impl Session {
         })
     }
 
-    /// Building with `feature` ([`FACADE_DRIVER_FEATURE`] or
-    /// [`APP_DRIVER_FEATURE`]), for a profile without debug assertions.
-    pub(crate) fn with_driver_feature(mut self, feature: &'static str) -> Self {
+    /// Building with `feature` (`<key>/`[`DRIVER_FEATURE`], by the key the
+    /// application names the crate under), for a profile without debug assertions.
+    pub(crate) fn with_driver_feature(mut self, feature: String) -> Self {
         self.driver_feature = Some(feature);
         self
     }
@@ -198,7 +194,7 @@ impl Session {
     /// Gives `cmd` (the cargo that builds and runs the app) the driver
     /// feature when the profile needs it, and the endpoint and token.
     pub(crate) fn apply(&self, cmd: &mut Command) {
-        if let Some(feature) = self.driver_feature {
+        if let Some(feature) = &self.driver_feature {
             cmd.args(["--features", feature]);
         }
         cmd.env(ENDPOINT_ENV, &self.credentials.endpoint)

@@ -10,7 +10,8 @@
     reason = "an error object is the reply, returned once per request"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use flui_protocol::method::{
@@ -29,7 +30,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::endpoint::Shared;
-use super::registry::Lookup;
+use super::registry::{Lookup, Registry};
 
 /// The longest single wait on an answer before the stop flag is looked at.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
@@ -51,28 +52,71 @@ pub(super) const SERVED: &[&str] = &[
     WindowsList::NAME,
 ];
 
-/// One connection's event subscriptions: each a stream per window it was
-/// made on.
+/// One connection's event subscriptions.
 #[derive(Default)]
 pub(super) struct Subscriptions {
     next: u64,
-    live: BTreeMap<u64, Vec<AgentEvents>>,
+    live: BTreeMap<u64, Subscribed>,
+}
+
+/// One subscription: its filters, and a stream per window it reaches,
+/// windows opened after it was made included.
+struct Subscribed {
+    filters: Vec<flui_protocol::EventFilter>,
+    streams: Vec<AgentEvents>,
+    /// Streams asked of windows opened since, not answered yet.
+    asked: Vec<AgentAnswer<AgentEvents>>,
+    /// Every window a stream was asked of.
+    reached: BTreeSet<WindowId>,
 }
 
 impl Subscriptions {
     /// Every event the streams hold now, oldest first per stream; a stream
-    /// whose window closed is let go.
-    pub(super) fn drain(&mut self) -> Vec<flui_protocol::Event> {
+    /// whose window closed is let go. Each subscription first asks a stream
+    /// of every window opened since it was made, and takes the streams
+    /// asked earlier that the owners answered.
+    pub(super) fn drain(&mut self, registry: &Registry) -> Vec<flui_protocol::Event> {
+        let windows = if self.live.is_empty() {
+            Vec::new()
+        } else {
+            registry.list()
+        };
         let mut events = Vec::new();
-        for streams in self.live.values_mut() {
-            for stream in streams.iter_mut() {
+        for subscribed in self.live.values_mut() {
+            subscribed.reach(&windows, registry);
+            for stream in &mut subscribed.streams {
                 while let Some(event) = stream.try_next() {
                     events.push(event);
                 }
             }
-            streams.retain(|stream| !stream.is_finished());
+            subscribed.streams.retain(|stream| !stream.is_finished());
         }
         events
+    }
+}
+
+impl Subscribed {
+    fn reach(&mut self, windows: &[WindowId], registry: &Registry) {
+        for &id in windows {
+            if !self.reached.insert(id) {
+                continue;
+            }
+            if let Lookup::Open(window) = registry.lookup(id)
+                && let Ok(answer) = window.subscribe(self.filters.clone())
+            {
+                self.asked.push(answer);
+            }
+        }
+        let mut waiting = Vec::with_capacity(self.asked.len());
+        for mut answer in self.asked.drain(..) {
+            match answer.try_take() {
+                Some(Ok(stream)) => self.streams.push(stream),
+                // The window closed in between: it has nothing to stream.
+                Some(Err(_)) => {}
+                None => waiting.push(answer),
+            }
+        }
+        self.asked = waiting;
     }
 }
 
@@ -80,6 +124,8 @@ impl Subscriptions {
 pub(super) struct Context<'a> {
     pub(super) shared: &'a Shared,
     pub(super) subscriptions: &'a Mutex<Subscriptions>,
+    /// Set once the connection ended: its requests stop waiting.
+    pub(super) closed: &'a AtomicBool,
 }
 
 /// Run `method` with `params`: its output, or the error object to answer.
@@ -119,7 +165,7 @@ pub(super) fn run(
             let window = window(cx, id)?;
             // The wait's own timeout runs on the owner; the reply waits that
             // long and the usual bound on top.
-            let extra = Duration::from_millis(params.timeout_ms.unwrap_or(0));
+            let extra = Duration::from_millis(params.effective_timeout_ms());
             settle_within(cx, method, extra, window.wait(params), |fault| {
                 named(fault, id, None)
             })
@@ -306,7 +352,9 @@ fn subscribe(
         ));
     }
     let mut streams = Vec::new();
+    let mut reached = BTreeSet::new();
     for id in cx.shared.registry.list() {
+        reached.insert(id);
         let Lookup::Open(window) = cx.shared.registry.lookup(id) else {
             continue;
         };
@@ -322,7 +370,16 @@ fn subscribe(
     let mut subscriptions = cx.subscriptions.lock();
     subscriptions.next += 1;
     let subscription = subscriptions.next;
-    subscriptions.live.insert(subscription, streams);
+    // Windows opened from now on are reached as the connection drains.
+    subscriptions.live.insert(
+        subscription,
+        Subscribed {
+            filters,
+            streams,
+            asked: Vec::new(),
+            reached,
+        },
+    );
     Ok(Subscription::new(subscription))
 }
 
@@ -384,7 +441,7 @@ fn settle_within<T>(
     };
     let answer = asked.map_err(fail)?;
     let timeout = cx.shared.limits.reply_timeout.saturating_add(extra);
-    match wait(answer, timeout, cx.shared) {
+    match wait(answer, timeout, cx) {
         Some(Ok(value)) => Ok(value),
         Some(Err(agent_fault)) => Err(fail(agent_fault)),
         None if method.effect == MethodEffect::ReadOnly => Err(ErrorObject::new(
@@ -402,11 +459,12 @@ fn settle_within<T>(
 }
 
 /// Waits for the owner's answer, up to `timeout`, looking at the stop flag
-/// between slices. `None` on a timeout or a stop.
+/// and the connection between slices. `None` on a timeout, a stop or a
+/// connection that ended: dropping the answer lets the owner forget a wait.
 fn wait<T>(
     mut answer: AgentAnswer<T>,
     timeout: Duration,
-    shared: &Shared,
+    cx: &Context<'_>,
 ) -> Option<Result<T, AgentFault>> {
     let deadline = Instant::now().checked_add(timeout);
     loop {
@@ -416,7 +474,10 @@ fn wait<T>(
         if let Some(result) = answer.recv_timeout(left.min(WAIT_SLICE)) {
             return Some(result);
         }
-        if left <= WAIT_SLICE || shared.stop.load(std::sync::atomic::Ordering::SeqCst) {
+        if left <= WAIT_SLICE
+            || cx.shared.stop.load(Ordering::SeqCst)
+            || cx.closed.load(Ordering::SeqCst)
+        {
             return None;
         }
     }

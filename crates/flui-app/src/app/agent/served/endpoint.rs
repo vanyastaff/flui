@@ -31,6 +31,8 @@ pub(super) struct Shared {
     pub(super) app: AppInfo,
     /// `Some` when the launch asked to exit when the driver goes.
     pub(super) disconnect: Option<Arc<Disconnect>>,
+    /// Set by the first connection past its hello: the driver.
+    pub(super) driver_claimed: AtomicBool,
     /// Connections being served.
     live: AtomicUsize,
 }
@@ -91,6 +93,7 @@ pub(super) fn listen(
         limits: launch.limits,
         app,
         disconnect,
+        driver_claimed: AtomicBool::new(false),
         live: AtomicUsize::new(0),
     });
     let accepting = Arc::clone(&shared);

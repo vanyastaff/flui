@@ -71,6 +71,12 @@ fn main() {
 /// A fixture app depending on `dependency`, a stand-in facade with a
 /// `driver` feature.
 fn fixture(root: &Path, dependency: &str) -> std::path::PathBuf {
+    fixture_as(root, dependency, dependency)
+}
+
+/// A fixture app naming `dependency` under the key `key` (`package =` when
+/// they differ), as an app that renames the facade does.
+fn fixture_as(root: &Path, dependency: &str, key: &str) -> std::path::PathBuf {
     let facade = root.join("facade");
     std::fs::create_dir_all(facade.join("src")).expect("fixture");
     std::fs::write(
@@ -88,17 +94,31 @@ fn fixture(root: &Path, dependency: &str) -> std::path::PathBuf {
     .expect("fixture");
     let app = root.join("app");
     std::fs::create_dir_all(app.join("src")).expect("fixture");
+    // A renamed dependency is reached by its key, not its library name.
+    let (declaration, krate) = if key == dependency {
+        (
+            format!("{key} = {{ path = \"../facade\" }}"),
+            "flui".to_owned(),
+        )
+    } else {
+        (
+            format!("{key} = {{ package = \"{dependency}\", path = \"../facade\" }}"),
+            key.replace('-', "_"),
+        )
+    };
     std::fs::write(
         app.join("Cargo.toml"),
         format!(
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
-             [workspace]\n[dependencies]\n{dependency} = {{ path = \"../facade\" }}\n"
+             [workspace]\n[dependencies]\n{declaration}\n"
         ),
     )
     .expect("fixture");
     std::fs::write(
         app.join("src/main.rs"),
-        FIXTURE_MAIN.replace("__PROTOCOL__", &PROTOCOL_VERSION.to_string()),
+        FIXTURE_MAIN
+            .replace("__PROTOCOL__", &PROTOCOL_VERSION.to_string())
+            .replace("flui::DRIVER", &format!("{krate}::DRIVER")),
     )
     .expect("fixture");
     app
@@ -139,13 +159,15 @@ fn app_lines(events: impl std::io::BufRead) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_none() {
-    for (args, driver) in [
-        (&["--release"][..], true),
-        (&["--profile", "release"][..], true),
-        (&[][..], false),
+    for (args, key, driver) in [
+        (&["--release"][..], "flui", true),
+        // The feature goes through the key an app renamed the facade to.
+        (&["--release"][..], "ui", true),
+        (&["--profile", "release"][..], "flui", true),
+        (&[][..], "flui", false),
     ] {
         let tmp = TempDir::new().unwrap();
-        let app = fixture(tmp.path(), "flui");
+        let app = fixture_as(tmp.path(), "flui", key);
         let mut run = flui()
             .current_dir(&app)
             .env("CARGO_TARGET_DIR", tmp.path().join("target"))
@@ -162,7 +184,7 @@ fn an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_no
         run.wait().unwrap();
         assert!(
             lines.contains(&format!("FIXTURE_DRIVER {driver}")),
-            "{args:?}: {lines:?}"
+            "{args:?} as `{key}`: {lines:?}"
         );
     }
 }

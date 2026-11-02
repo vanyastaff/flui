@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use flui_protocol::framing::MAX_LINE;
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{ActParams, ActionName, AppInfo, Locator, Node, Target, Tree};
+use flui_protocol::{ActParams, ActionName, AppInfo, Condition, Locator, Node, Target, Tree};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
@@ -327,6 +327,17 @@ impl Client {
         self.read_until(window, |tree| node(tree, &label).map(|_| ()));
     }
 
+    /// Reads until an event `found` accepts has arrived.
+    fn next_event(&mut self, found: impl Fn(&Value) -> bool, what: &str) {
+        let deadline = Instant::now() + RECV;
+        while !self.events.iter().any(&found) {
+            assert!(Instant::now() < deadline, "{what} never arrived");
+            if let Recv::Line(line) = self.recv(Duration::from_millis(50)) {
+                self.events.push(line);
+            }
+        }
+    }
+
     fn tap(&mut self, element: &str) -> Value {
         self.call(
             "semantics.act",
@@ -370,6 +381,8 @@ enum Command {
     Resume,
     /// Drop the UI runtime: its window closes.
     CloseWindow,
+    /// Open a second window with its own counter.
+    OpenWindow,
     /// Drop the agent: the hook detaches.
     Detach,
 }
@@ -388,6 +401,8 @@ impl OwnerHandle {
 struct Owner {
     agent: Option<HeadlessDevAgent>,
     ui_runtime: Option<HeadlessHost>,
+    /// A window opened while a client talks.
+    second: Option<HeadlessHost>,
     presses: Arc<AtomicU32>,
 }
 
@@ -404,8 +419,20 @@ impl Owner {
         Self {
             agent: Some(agent),
             ui_runtime: Some(ui_runtime),
+            second: None,
             presses,
         }
+    }
+
+    fn open_second(&mut self) {
+        let agent = self.agent.as_ref().expect("the agent is attached");
+        let second = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(agent);
+        second
+            .attach(&Counter {
+                presses: Arc::clone(&self.presses),
+            })
+            .expect("the second counter attaches");
+        self.second = Some(second);
     }
 
     fn presses(&self) -> u32 {
@@ -434,11 +461,14 @@ impl Owner {
                         Command::Resume => pumping = true,
                         Command::CloseWindow => drop(self.ui_runtime.take()),
                         Command::Detach => drop(self.agent.take()),
+                        Command::OpenWindow => self.open_second(),
                     }
                     let _ = done.send(());
                 }
-                if pumping && let Some(ui_runtime) = self.ui_runtime.as_mut() {
-                    let _ = ui_runtime.pump(Duration::from_millis(16));
+                if pumping {
+                    for ui_runtime in self.ui_runtime.iter_mut().chain(self.second.iter_mut()) {
+                        let _ = ui_runtime.pump(Duration::from_millis(16));
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -771,7 +801,7 @@ fn events_stream_after_a_subscription_until_it_ends() {
     let (agent, _, _) = driver_agent(address.launch());
     let mut owner = Owner::new(agent);
     let at = address.address;
-    owner.drive(move |_| {
+    owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
         let button = client.button(&window);
@@ -782,17 +812,26 @@ fn events_stream_after_a_subscription_until_it_ends() {
         let subscription = subscribed["result"]["subscription"].clone();
         assert!(subscription.is_u64(), "{subscribed}");
         client.tap(&button);
+        client.next_event(|event| event["event"] == "semantics", "a semantics event");
+
+        // A window opened after the subscription is streamed too.
+        owner.ask(Command::OpenWindow);
         let deadline = Instant::now() + RECV;
-        while !client
-            .events
-            .iter()
-            .any(|event| event["event"] == "semantics")
-        {
-            assert!(Instant::now() < deadline, "no semantics event arrived");
-            if let Recv::Line(line) = client.recv(Duration::from_millis(50)) {
-                client.events.push(line);
+        let second = loop {
+            if let Some(second) = client.windows().into_iter().find(|id| *id != window) {
+                break second;
             }
-        }
+            assert!(Instant::now() < deadline, "the second window never listed");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let button = client.button(&second);
+        client.events.clear();
+        client.tap(&button);
+        client.next_event(
+            |event| event["event"] == "semantics" && event["params"]["window"] == second.as_str(),
+            "a semantics event of the window opened later",
+        );
+
         let ended = client.call(
             "events.unsubscribe",
             json!({ "subscription": subscription }),
@@ -803,6 +842,32 @@ fn events_stream_after_a_subscription_until_it_ends() {
             json!({ "subscription": subscription }),
         );
         assert_eq!(again["error"]["code"], "unknown_handle", "{again}");
+    });
+}
+
+fn a_wait_without_a_timeout_is_answered_by_the_window() {
+    let address = Address::new();
+    let launch = address.launch().with_limits(Limits {
+        reply_timeout: Duration::from_millis(300),
+        ..Limits::default()
+    });
+    let (agent, _, _) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    owner.drive(move |_| {
+        let mut client = Client::hello(&at);
+        let window = client.only_window();
+        let condition = serde_json::to_value(Condition::Appears(Locator::named("Missing")))
+            .expect("a condition serializes");
+        // No `timeout_ms`: the window's default, longer than the transport's own wait.
+        let reply = client.call(
+            "wait.until",
+            json!({ "window": window, "condition": condition }),
+        );
+        assert_eq!(
+            reply["result"]["satisfied"], false,
+            "the window answers its own timeout: {reply}"
+        );
     });
 }
 
@@ -861,6 +926,17 @@ fn the_driver_going_asks_one_exit_when_launched_to() {
         );
 
         let mut driver = Client::hello(&at);
+        driver.only_window();
+        // An inspector beside the driver comes and goes: the app stays.
+        let mut inspector = Client::hello(&at);
+        inspector.only_window();
+        drop(inspector);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            counted.load(Ordering::SeqCst),
+            0,
+            "only the driver's going ends the app"
+        );
         driver.only_window();
         drop(driver);
         let deadline = Instant::now() + RECV;
@@ -1069,6 +1145,10 @@ fn the_driver_agent_contains_every_failure() {
         (
             "events_stream_after_a_subscription_until_it_ends",
             events_stream_after_a_subscription_until_it_ends,
+        ),
+        (
+            "a_wait_without_a_timeout_is_answered_by_the_window",
+            a_wait_without_a_timeout_is_answered_by_the_window,
         ),
         (
             "detach_closes_the_endpoint_and_asks_no_exit",

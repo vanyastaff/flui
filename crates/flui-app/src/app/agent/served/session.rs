@@ -4,7 +4,7 @@
 
 use std::io::{self, Read as _, Write as _};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -55,8 +55,14 @@ pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) {
     if !handshake(&mut connection, shared) {
         return;
     }
+    // Under `EXIT_ON_DISCONNECT` the first connection past its hello is the
+    // driver; only its going ends the app, not an inspector's beside it.
+    let disconnect = shared
+        .disconnect
+        .as_ref()
+        .filter(|_| !shared.driver_claimed.swap(true, Ordering::SeqCst));
     let end = converse(&mut connection, shared);
-    if let (End::Peer, Some(disconnect)) = (end, &shared.disconnect) {
+    if let (End::Peer, Some(disconnect)) = (end, disconnect) {
         disconnect.fire();
     }
 }
@@ -130,11 +136,22 @@ struct Queue {
     cap: usize,
 }
 
+/// Marks the connection ended when dropped, on every exit of the
+/// conversation, so its worker stops waiting and takes no further request.
+struct Closing(Arc<AtomicBool>);
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Serve requests until the driver goes or the agent stops.
 fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
     let subscriptions = Arc::new(Mutex::new(Subscriptions::default()));
     let (outbox, answers) = mpsc::channel::<Value>();
-    let Some(jobs) = start_worker(shared, &subscriptions, outbox) else {
+    let closing = Closing(Arc::new(AtomicBool::new(false)));
+    let Some(jobs) = start_worker(shared, &subscriptions, &closing.0, outbox) else {
         return End::Stopped;
     };
     let mut queue = Queue {
@@ -179,7 +196,7 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
                 return End::Peer;
             }
         }
-        let events = subscriptions.lock().drain();
+        let events = subscriptions.lock().drain(&shared.registry);
         for event in events {
             busy = true;
             let Ok(line) = serde_json::to_value(&event) else {
@@ -196,18 +213,21 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
 }
 
 /// The connection's worker: runs each queued request in order and posts
-/// its answer to `outbox`. It ends when the connection drops its queue.
+/// its answer to `outbox`. It ends when the connection drops its queue or
+/// has ended.
 fn start_worker(
     shared: &Arc<Shared>,
     subscriptions: &Arc<Mutex<Subscriptions>>,
+    closed: &Arc<AtomicBool>,
     outbox: mpsc::Sender<Value>,
 ) -> Option<mpsc::Sender<Job>> {
     let (jobs, queue) = mpsc::channel::<Job>();
     let shared = Arc::clone(shared);
     let subscriptions = Arc::clone(subscriptions);
+    let closed = Arc::clone(closed);
     std::thread::Builder::new()
         .name("flui-agent-worker".into())
-        .spawn(move || work(&queue, &shared, &subscriptions, &outbox))
+        .spawn(move || work(&queue, &shared, &subscriptions, &closed, &outbox))
         .ok()?;
     Some(jobs)
 }
@@ -216,13 +236,19 @@ fn work(
     queue: &Receiver<Job>,
     shared: &Shared,
     subscriptions: &Mutex<Subscriptions>,
+    closed: &AtomicBool,
     outbox: &mpsc::Sender<Value>,
 ) {
     let cx = Context {
         shared,
         subscriptions,
+        closed,
     };
     while let Ok(Job { id, method, params }) = queue.recv() {
+        // Nobody reads an answer once the connection ended.
+        if closed.load(Ordering::SeqCst) {
+            return;
+        }
         let started = Instant::now();
         let outcome = dispatch::run(method, params, &cx);
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

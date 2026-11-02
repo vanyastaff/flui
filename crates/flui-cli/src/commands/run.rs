@@ -196,23 +196,23 @@ fn start_agent_session(
                 reason: "run the application project instead".into(),
             });
         }
-        Project::Application { host } => *host,
+        Project::Application { host } => host,
     };
     // Cargo's `dev` profile is the one known to keep debug assertions; any
     // other may drop them, and the feature costs nothing where they stay.
     let optimized = release || profile.is_some_and(|profile| profile != "dev");
-    let driver_feature = match (optimized, host) {
-        (false, _) => None,
-        (true, AgentHost::Facade) => Some(agent::FACADE_DRIVER_FEATURE),
-        (true, AgentHost::App) => Some(agent::APP_DRIVER_FEATURE),
-        (true, AgentHost::Neither) => {
+    let driver_feature = if optimized {
+        let Some(feature) = host.driver_feature() else {
             return Err(CliError::Unsupported {
                 what: "`flui run --agent` on an optimized build of this package".into(),
                 reason: "it names neither `flui` nor `flui-app`, whose `driver` feature keeps \
                          the agent in a build without debug assertions; run a debug build"
                     .into(),
             });
-        }
+        };
+        Some(feature)
+    } else {
+        None
     };
     let start = std::env::current_dir().context("could not read current directory")?;
     let workspace = find_workspace_root(&start);
@@ -2178,21 +2178,32 @@ enum Project {
     Worker(WorkerHotReloadProject),
 }
 
-/// Which crate of an application's normal dependencies carries the `driver`
-/// feature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which of an application's normal dependencies carries the `driver`
+/// feature, by the key the application names it under.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AgentHost {
-    /// The `flui` facade.
-    Facade,
-    /// `flui-app`, named without the facade.
-    App,
+    /// `flui` (the facade, preferred) or `flui-app`, under this key: its
+    /// `rename` when the manifest gives one, else the crate's name.
+    Named(String),
     /// Neither (a legacy `flui-widgets`-only package).
     Neither,
+}
+
+impl AgentHost {
+    /// The `--features` value that keeps the agent in an optimized build.
+    fn driver_feature(&self) -> Option<String> {
+        match self {
+            Self::Named(key) => Some(format!("{key}/{}", agent::DRIVER_FEATURE)),
+            Self::Neither => None,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
 struct ProjectDependency {
     name: String,
+    /// The key the manifest declares the dependency under, when it renames it.
+    rename: Option<String>,
     kind: Option<String>,
 }
 
@@ -2209,20 +2220,22 @@ fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
 }
 
 /// The crate among the normal dependencies whose `driver` feature an
-/// optimized `--agent` build turns on, the facade first.
+/// optimized `--agent` build turns on, the facade first, by its key.
 fn agent_host(dependencies: &[ProjectDependency]) -> AgentHost {
-    let named = |name: &str| {
+    let key = |name: &str| {
         dependencies
             .iter()
-            .any(|dependency| dependency.kind.is_none() && dependency.name == name)
+            .find(|dependency| dependency.kind.is_none() && dependency.name == name)
+            .map(|dependency| {
+                dependency
+                    .rename
+                    .clone()
+                    .unwrap_or_else(|| dependency.name.clone())
+            })
     };
-    if named("flui") {
-        AgentHost::Facade
-    } else if named("flui-app") {
-        AgentHost::App
-    } else {
-        AgentHost::Neither
-    }
+    key("flui")
+        .or_else(|| key("flui-app"))
+        .map_or(AgentHost::Neither, AgentHost::Named)
 }
 
 /// `Some(host)` for the application at `manifest` (the crate whose `driver`

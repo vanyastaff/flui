@@ -13,7 +13,12 @@
 - **`AppConfig::with_dev_agent` appends** a hook instead of replacing the installed one; each
   hook is contained on its own.
 - **`flui run --agent`** needs no feature of the application in a debug build, accepts
-  `--release` (building with `flui/driver`), and `flui mcp` speaks protocol 0.8.
+  `--release` (building with the `driver` feature of `flui` or `flui-app`, under the key the
+  application names it by), and `flui mcp` speaks protocol 0.8.
+- **An agent's `wait.until` without `timeout_ms`** waits `WaitParams::DEFAULT_TIMEOUT_MS`
+  (5 s) and none waits past `WaitParams::MAX_TIMEOUT_MS` (24 h); the window answers it
+  unsatisfied rather than the connection timing out, and a wait whose asker has gone gives
+  up its place under the window's cap.
 - **`flui_protocol::capture::BlobRef::id`** is a `BlobId`.
 
 ### Added
