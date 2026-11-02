@@ -2263,6 +2263,7 @@ impl ViewState<EditableText> for EditableTextState {
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
+        (self.touch_handles).set_magnifier(DefaultSelectionControls::magnifier_of(ctx));
         let origin =
             crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
         let chain = self.action_chain.clone();
