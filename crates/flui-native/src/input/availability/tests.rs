@@ -2,6 +2,7 @@
 //! what each input path delivers as the code stands, without presence.
 
 use flui_platform::Availability;
+use flui_platform::input_regions::InputRegionKind;
 
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
@@ -106,7 +107,7 @@ fn every_backend_states_its_availability() {
                 capabilities.pen(),
                 capabilities.precise_scroll(),
                 capabilities.trackpad_gestures(),
-                capabilities.input_regions(),
+                capabilities.input_region(InputRegionKind::SystemGestureExclusion),
                 capabilities.outgoing_drag(),
             ],
             expected,

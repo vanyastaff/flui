@@ -35,7 +35,7 @@ macro_rules! profile_span {
     ($name:literal) => {{
         #[cfg(feature = "diagnostics")]
         {
-            ProfileSpan::new(|| tracing::debug_span!(target: "flui_animation", $name))
+            ProfileSpan::new(|| tracing::debug_span!(target: "flui.animation", $name))
         }
         #[cfg(not(feature = "diagnostics"))]
         {
@@ -124,7 +124,7 @@ impl ControllerTrace {
         Self {
             span: observe(|| {
                 tracing::debug_span!(
-                    target: "flui_animation::diagnostics",
+                    target: "flui.animation.diagnostics",
                     parent: None,
                     "animation_controller",
                     label,

@@ -266,6 +266,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// composite, one frame stale by design.
     last_follower_transforms: FxHashMap<RenderId, Matrix4>,
 
+    /// The order each parent that does not paint its children first to last painted
+    /// them in, as of the last paint that reached it: a viewport whose first sliver is on
+    /// top, a group whose pinned header covers its content. The input-region walk visits
+    /// children in this order, so a region painted over another is reported after it.
+    last_child_paint_orders: FxHashMap<RenderId, paint::ChildPaintOrder>,
+
     /// The live [`LeaderWatch`]es of this pipeline, checked against each
     /// layer tree paint commits. Shared with the [`PipelineCell`], which
     /// registers them without checking the owner out.
@@ -434,6 +440,7 @@ where
         last_layer_tree: from.last_layer_tree,
         scenes_painted: from.scenes_painted,
         last_follower_transforms: from.last_follower_transforms,
+        last_child_paint_orders: from.last_child_paint_orders,
         leader_watches: from.leader_watches,
         retained_boundaries: from.retained_boundaries,
         retained_pixel_ratio: from.retained_pixel_ratio,

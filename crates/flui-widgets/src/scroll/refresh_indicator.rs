@@ -910,7 +910,7 @@ impl ViewState<RefreshBody> for RefreshBodyState {
             .is_some_and(|command| !command.performs::<RefreshIntent>())
         {
             tracing::warn!(
-                target: "flui::a11y",
+                target: "flui.a11y",
                 "RefreshIndicator: the first command of its alternatives does not perform \
                  RefreshIntent, so the pull performs it without refreshing; build it with \
                  RefreshIntent::command"

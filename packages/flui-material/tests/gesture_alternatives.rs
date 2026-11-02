@@ -108,7 +108,7 @@ fn companion_warnings(with_bar: bool) -> usize {
     log.records()
         .iter()
         .filter(|record| {
-            record.target == "flui::a11y" && record.message.contains("none is registered")
+            record.target == "flui.a11y" && record.message.contains("none is registered")
         })
         .count()
 }
@@ -156,7 +156,7 @@ pub(crate) fn tab_bar_view_with_its_tab_bar() {
 
 /// Matrix row: a `TabBarView` with no `TabBar` on its controller claims a
 /// single-pointer path that is not there. The check rejects it, naming the
-/// commands, and mounting it warns on `flui::a11y`.
+/// commands, and mounting it warns on `flui.a11y`.
 pub(crate) fn tab_bar_view_without_a_tab_bar() {
     let payload = catch_unwind(AssertUnwindSafe(|| {
         assert_gesture_alternatives(&check(false));

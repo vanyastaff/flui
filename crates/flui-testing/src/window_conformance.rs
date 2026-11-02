@@ -118,11 +118,11 @@ pub trait WindowFixture {
         false
     }
 
-    /// Whether the window's input path honours input regions, as its
-    /// [`InputCapabilities::input_regions`](flui_platform::input_capabilities::InputCapabilities::input_regions)
-    /// reports it: the capability the input-region verb answers to, which
+    /// The input regions the window's input path honours, as its
+    /// [`InputCapabilities`](flui_platform::input_capabilities::InputCapabilities)
+    /// report them: the capabilities the input-region verb answers to, which
     /// the snapshot does not carry.
-    fn input_regions(&self) -> Availability;
+    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities;
 
     /// Whether the window has a native surface, which its surface target
     /// hands out a window handle for while it is open, on the thread the
@@ -536,7 +536,11 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
         InputRegionKind::SystemGestureExclusion,
         Rect::from_ltrb(0.0, 0.0, 40.0, 30.0),
     );
-    let input_regions = fixture.input_regions();
+    let input_regions = if fixture.input_capabilities().honours_input_regions() {
+        Availability::Native
+    } else {
+        Availability::Unavailable
+    };
     for regions in [&[region][..], &[]] {
         judge(
             format!("set_input_regions({} regions)", regions.len()),

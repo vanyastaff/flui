@@ -1093,7 +1093,7 @@ impl UiRuntime {
                     let Some((presentation, source)) = self.signal_writer_for(target) else {
                         let diagnosed = catch_unwind(AssertUnwindSafe(|| {
                             tracing::warn!(
-                                target: "flui::signals",
+                                target: "flui.signals",
                                 graph = target.graph(),
                                 slot = ?target,
                                 "dropping a cross-thread signal write: no presentation of this \

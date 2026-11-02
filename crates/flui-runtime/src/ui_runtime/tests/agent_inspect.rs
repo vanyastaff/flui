@@ -706,3 +706,60 @@ fn an_unbounded_or_invalid_number_is_a_typed_value_that_survives_json() {
     let (finite, _) = wire(OwnedValue::Size(Size::new(3.0, 4.0)));
     assert!(matches!(finite, InspectValue::Size { .. }));
 }
+
+/// A tracing subscriber, scoped to the current thread, that panics when a span named `name`
+/// exits.
+struct PanicsOnSpanExit(&'static str);
+
+impl tracing::Subscriber for PanicsOnSpanExit {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(if attributes.metadata().name() == self.0 {
+            2
+        } else {
+            1
+        })
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, id: &tracing::span::Id) {
+        assert!(
+            id.into_u64() != 2,
+            "a subscriber that cannot close {}",
+            self.0
+        );
+    }
+}
+
+/// The sink showed the scene and only the subscriber failed as the `submit` span closed: the
+/// verdict stands, so the staged layer reads are answered and the scene is committed before the
+/// subscriber's panic resumes.
+///
+/// Fails when the span's teardown replaces the sink's verdict with its panic.
+#[test]
+fn a_subscriber_that_panics_as_the_submit_span_closes_does_not_lose_the_verdict() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let (ui_runtime, agent) = shown();
+    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let unwound = tracing::subscriber::with_default(PanicsOnSpanExit("submit"), || {
+        tracing::callsite::rebuild_interest_cache();
+        catch_unwind(AssertUnwindSafe(|| {
+            frame(&ui_runtime, &mut ScriptedSink::always_presents());
+        }))
+    });
+    assert!(unwound.is_err(), "the subscriber's panic continues");
+    parked
+        .try_take()
+        .expect("the scene was shown, so the read is answered")
+        .expect("the layers are read");
+}

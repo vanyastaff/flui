@@ -849,19 +849,26 @@ graph LR
 ### FD29. Tracing conventions and one span stream
 
 - **Changes:**
-  - targets renamed to `flui.<subsystem>`, with one-release aliases for `flui::reconcile` and
-    `flui_animation`, after an `EnvFilter` test pins prefix matching;
-  - `semantics`, `commit` and `submit` phase spans;
-  - primitive fields and `u64` ids everywhere on the frame path;
-  - `element_rebuild` at TRACE with a reasons bitmask;
-  - TRACE spans at relayout-boundary roots;
-  - the ten never-entered recognizer spans entered or made events;
-  - `tracing::enabled!` gates for costly fields;
-  - a capture layer partitioned by runtime and presentation with one `(target, name) → Phase`
-    table, replacing name-only matching in `frame_timing_layer.rs`;
-  - `Timeline` as a view over the capture;
-  - the Chrome/Perfetto export emits `X` events and counters;
-  - `flui-log`'s builder documents how to add Tracy or Chrome layers.
+  - [x] targets renamed to `flui.<subsystem>`, with one-release aliases for `flui::reconcile` and
+    `flui_animation` (`flui_log::TARGET_ALIASES`), after an `EnvFilter` test pins prefix matching
+    (`flui-log/tests/target_aliases.rs`);
+  - [x] `semantics`, `commit` and `submit` phase spans;
+  - [x] primitive fields and `u64` ids on the layout, paint and build paths (error and panic
+    reports keep `Debug`);
+  - [x] `element_rebuild` at TRACE with a reasons bitmask (`RebuildReasons::bits`);
+  - [x] TRACE spans at relayout-boundary roots (`layout_root`);
+  - [x] the eight never-entered recognizer spans entered, and the gesture lifecycle events on
+    `flui.input`;
+  - [x] a disabled level performs no allocation on a relayout
+    (`flui-rendering/tests/trace_allocation.rs`); costly fields stay inside the macros, so
+    `tracing::enabled!` is needed only where a field is computed outside one;
+  - [x] `frame_timing_layer.rs` recognizes a phase by `(target, name)`, so an app span named
+    `paint` is not a phase;
+  - [ ] a capture layer partitioned by runtime and presentation with one `(target, name) → Phase`
+    table shared by the profiler, the timeline and the driver;
+  - [ ] `Timeline` as a view over the capture;
+  - [ ] the Chrome/Perfetto export emits `X` events and counters;
+  - [x] `flui-log`'s builder documents how to add Tracy or Chrome layers.
 - **Done when:**
   - an app span named `paint` is not counted as a phase;
   - a disabled level performs zero allocations on a frame;

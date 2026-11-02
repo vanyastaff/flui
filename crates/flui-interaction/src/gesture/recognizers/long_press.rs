@@ -333,11 +333,13 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let pointer = down.local.pointer_id();
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "long_press.add_pointer",
-            pointer = ?pointer,
-            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
-        );
+            pointer = pointer.map_or(0, |id| id.get().get()),
+            event = crate::gesture::observability::GestureEvent::RecognizerAdded.as_str(),
+        )
+        .entered();
         if !is_primary_down(down.local) {
             return;
         }
@@ -396,11 +398,13 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         notices.finish();
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        let _span = tracing::info_span!(
+        let _span = tracing::trace_span!(
+            target: "flui.input",
             "long_press.handle_event",
-            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
-            event = %crate::gesture::observability::GestureEvent::EventReceived,
-        );
+            kind = crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = crate::gesture::observability::GestureEvent::EventReceived.as_str(),
+        )
+        .entered();
         let Some(contact) = self.contact.current() else {
             return;
         };

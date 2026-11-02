@@ -601,7 +601,7 @@ impl Failures {
         let destroyed = retire.failed.get();
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
             tracing::error!(
-                target: "flui_interaction::gesture::observer",
+                target: "flui.input.observer",
                 panic,
                 later_failures = later,
                 failed_retirements = destroyed,

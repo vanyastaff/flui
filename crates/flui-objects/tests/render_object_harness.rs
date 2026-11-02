@@ -8222,6 +8222,39 @@ fn harness_input_regions() {
     assert_eq!(run.owner().input_regions(), Vec::new());
 }
 
+/// A viewport whose first sliver is on top paints its slivers last to first, and its
+/// regions come out in that order, so a region painted over another follows it; when the
+/// viewport turns to painting first to last, the regions turn with it.
+fn harness_input_regions_follow_the_order_a_parent_paints_in() {
+    use flui_rendering::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    let close = InputRegionKind::CaptionButton(CaptionButton::Close);
+    let region = |kind: InputRegionKind| {
+        sliver_node(RenderSliverToBoxAdapter::new()).child(
+            box_node(RenderInputRegion::new(kind))
+                .child(box_node(RenderColoredBox::red(100.0, 40.0))),
+        )
+    };
+    let mut run = RenderTester::mount(viewport_multi([
+        region(InputRegionKind::WindowMove),
+        region(close),
+    ]))
+    .with_size(Size::new(100.0, 200.0))
+    .run_frame();
+    let move_area = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 100.0, 40.0),
+    );
+    let button = InputRegion::new(close, Rect::from_ltrb(0.0, 40.0, 100.0, 80.0));
+    assert_eq!(run.owner().input_regions(), vec![button, move_area]);
+
+    let viewport = run.id("viewport");
+    run.update_paint::<RenderViewport>(viewport, |viewport| {
+        let _ = viewport.set_paint_order(flui_rendering::view::SliverPaintOrder::LastIsTop);
+    });
+    run.pump();
+    assert_eq!(run.owner().input_regions(), vec![move_area, button]);
+}
+
 /// A region under a follower is reported at the follower's composite-resolved
 /// position (its leader's anchor), where it is painted and hit-tested, not at
 /// its tree-relative position.
@@ -13723,6 +13756,10 @@ fn family_pointer() {
             (
                 "input_regions_follow_a_follower_to_its_resolved_position",
                 harness_input_regions_follow_a_follower_to_its_resolved_position,
+            ),
+            (
+                "input_regions_follow_the_order_a_parent_paints_in",
+                harness_input_regions_follow_the_order_a_parent_paints_in,
             ),
         ],
     );

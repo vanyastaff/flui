@@ -65,7 +65,7 @@ pub const fn macos() -> InputCapabilities {
 pub const fn ios() -> InputCapabilities {
     InputCapabilities::builder()
         .pen(Native)
-        .input_regions(Native)
+        .system_gesture_exclusion(Native)
         .build()
 }
 
@@ -91,7 +91,7 @@ pub struct AndroidInputApis {
 pub const fn android(apis: AndroidInputApis) -> InputCapabilities {
     let mut builder = InputCapabilities::builder().pen(Native);
     if apis.gesture_exclusion {
-        builder = builder.input_regions(Native);
+        builder = builder.system_gesture_exclusion(Native);
     }
     if apis.touchpad_gestures {
         builder = builder.precise_scroll(Native).trackpad_gestures(Native);

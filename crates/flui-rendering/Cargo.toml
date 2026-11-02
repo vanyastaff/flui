@@ -37,6 +37,11 @@ path = "tests/compile_fail.rs"
 name = "transform_allocations"
 path = "tests/transform_allocations.rs"
 
+# Same reason: a counting global allocator.
+[[test]]
+name = "trace_allocation"
+path = "tests/trace_allocation.rs"
+
 [dependencies]
 serde = { workspace = true, optional = true }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }

@@ -484,7 +484,7 @@ cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot),
 itself (`BuildOwner::signal_graph`, which no build context reaches), for minting test signals
 and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
-`flui::signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
+`flui.signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
 which `Reactive::new` never mints, and is refused with `Unbound`.
 
 The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
@@ -616,7 +616,7 @@ table-row failure.
 ### Reconciliation emits typed events on the live path
 
 **Rule.** `reconcile_children_by_id` emits one `ReconcileEvent` per child disposition (`Mount`,
-`Reuse`, `Reorder`, `Unmount`, `Reparent`) through the `flui::reconcile` tracing target, so the
+`Reuse`, `Reorder`, `Unmount`, `Reparent`) through the `flui.tree.reconcile` tracing target, so the
 reconciliation stream observed by tools is the production one, not a test-only reconciler's.
 
 The stream is typed and zero-cost when nothing subscribes.

@@ -23,7 +23,7 @@
 //! | `animation_sampling` | time, simulation or repeat computation (`flui-animation`) | `Custom("Animation sampling")` |
 //! | `animation_listeners` | value/status listeners and run delivery (`flui-animation`) | `Custom("Animation listeners")` |
 //!
-//! Animation spans require the `flui_animation` target (ADR-0202).
+//! Animation spans require the `flui.animation` target (ADR-0202).
 //! `profiling` enables their optional producer through the SDK. Their durations
 //! are inclusive: tick contains sampling and listener work. Do not sum them.
 //! A reentrant phase inside the same phase is covered by its outer extent.
@@ -97,29 +97,35 @@ const FRAME_SPAN: &str = "frame";
 
 /// The scheduler's frame boundary, not an application's same-named span.
 fn is_scheduler_frame(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span()
-        && metadata.name() == FRAME_SPAN
-        && metadata.target() == "flui_scheduler::scheduler::execution"
+    metadata.is_span() && metadata.name() == FRAME_SPAN && metadata.target() == "flui.frame"
 }
 
 fn is_animation_phase(metadata: &Metadata<'_>) -> bool {
-    metadata.target() == "flui_animation"
+    metadata.target() == "flui.animation"
         && matches!(
             metadata.name(),
             "animation_tick" | "animation_sampling" | "animation_listeners"
         )
 }
 
-/// Maps a span name to the phase it measures, or `None` if it is not a phase.
-fn phase_for(name: &str) -> Option<FramePhase> {
-    match name {
-        "build" => Some(FramePhase::Build),
-        "layout" => Some(FramePhase::Layout),
-        "paint" => Some(FramePhase::Paint),
-        "compositing" => Some(FramePhase::Custom("Compositing")),
-        "animation_tick" => Some(FramePhase::Custom("Animation tick")),
-        "animation_sampling" => Some(FramePhase::Custom("Animation sampling")),
-        "animation_listeners" => Some(FramePhase::Custom("Animation listeners")),
+/// Maps a span to the phase it measures, or `None` if it is not a phase.
+///
+/// A phase is recognized by its target and its name together, so an application span named
+/// `paint` is not the framework's paint phase.
+fn phase_for(metadata: &Metadata<'_>) -> Option<FramePhase> {
+    match (metadata.target(), metadata.name()) {
+        ("flui.frame", "build") => Some(FramePhase::Build),
+        ("flui.frame", "layout") => Some(FramePhase::Layout),
+        ("flui.frame", "paint") => Some(FramePhase::Paint),
+        ("flui.frame", "compositing") => Some(FramePhase::Custom("Compositing")),
+        ("flui.frame", "semantics") => Some(FramePhase::Custom("Semantics")),
+        ("flui.frame", "commit") => Some(FramePhase::Custom("Commit")),
+        ("flui.frame", "submit") => Some(FramePhase::Custom("Submit")),
+        ("flui.animation", "animation_tick") => Some(FramePhase::Custom("Animation tick")),
+        ("flui.animation", "animation_sampling") => Some(FramePhase::Custom("Animation sampling")),
+        ("flui.animation", "animation_listeners") => {
+            Some(FramePhase::Custom("Animation listeners"))
+        }
         _ => None,
     }
 }
@@ -134,8 +140,8 @@ fn is_frame_or_phase(metadata: &Metadata<'_>) -> bool {
     }
     metadata.is_span()
         && (is_scheduler_frame(metadata)
-            || phase_for(metadata.name()).is_some()
-            || (metadata.target() == "flui_animation::diagnostics"
+            || phase_for(metadata).is_some()
+            || (metadata.target() == "flui.animation.diagnostics"
                 && metadata.name() == "animation_controller"))
 }
 
@@ -285,7 +291,7 @@ where
             }
             return;
         }
-        let Some(phase) = phase_for(span.name()) else {
+        let Some(phase) = phase_for(span.metadata()) else {
             return;
         };
         if span.extensions().get::<ClosedPhase>().is_some() {
@@ -312,7 +318,7 @@ where
         // A reentrant walk/sample is already covered by the same phase's
         // enclosing extent. Adding both guards would double-count its work.
         if span.scope().skip(1).any(|ancestor| {
-            phase_for(ancestor.name()) == Some(phase)
+            phase_for(ancestor.metadata()) == Some(phase)
                 && ancestor.extensions().get::<ActivePhase>().is_some()
         }) {
             return;
@@ -346,7 +352,7 @@ where
             }
             return;
         }
-        if phase_for(span.name()).is_none() {
+        if phase_for(span.metadata()).is_none() {
             return;
         }
         // User sources can retain or reenter Span::current(). The outermost
@@ -372,9 +378,8 @@ where
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(&id) else { return };
-        let name = span.name();
 
-        if phase_for(name).is_some() {
+        if phase_for(span.metadata()).is_some() {
             // Dropping the guard is what records the duration.
             drop(span.extensions_mut().remove::<ActivePhase>());
             return;
@@ -425,7 +430,7 @@ mod tests {
         let frame_that_takes = |period_us: Option<u64>, takes: std::time::Duration| {
             let profiler = profile(|| {
                 let frame = tracing::debug_span!(
-                    target: "flui_scheduler::scheduler::execution",
+                    target: "flui.frame",
                     "frame",
                     period_us = tracing::field::Empty
                 );
@@ -462,20 +467,31 @@ mod tests {
     #[test]
     fn the_frameworks_phase_spans_become_profiler_phases() {
         let profiler = profile(|| {
-            let _frame =
-                tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame")
-                    .entered();
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             {
-                let _build = tracing::debug_span!("build", dirty_elements = 3).entered();
+                let _build =
+                    tracing::debug_span!(target: "flui.frame", "build", dirty_elements = 3)
+                        .entered();
             }
             {
-                let _layout = tracing::debug_span!("layout", dirty_nodes = 1).entered();
+                let _layout =
+                    tracing::debug_span!(target: "flui.frame", "layout", dirty_nodes = 1).entered();
             }
             {
-                let _paint = tracing::debug_span!("paint").entered();
+                let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
             }
             {
-                let _compositing = tracing::debug_span!("compositing").entered();
+                let _compositing =
+                    tracing::debug_span!(target: "flui.frame", "compositing").entered();
+            }
+            {
+                let _semantics = tracing::debug_span!(target: "flui.frame", "semantics").entered();
+            }
+            {
+                let _commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
+            }
+            {
+                let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
             }
         });
 
@@ -499,6 +515,42 @@ mod tests {
         assert!(
             phases.contains(&FramePhase::Custom("Compositing")),
             "compositing span must land as a Compositing phase; saw {phases:?}",
+        );
+        for name in ["Semantics", "Commit", "Submit"] {
+            assert!(
+                phases.contains(&FramePhase::Custom(name)),
+                "the {name} span must land as a phase; saw {phases:?}",
+            );
+        }
+    }
+
+    /// A phase is a `(target, name)` pair: an application span that merely shares a name with
+    /// one is not counted.
+    ///
+    /// Fails when `phase_for` goes back to matching the name alone.
+    #[test]
+    fn an_application_span_named_like_a_phase_is_not_a_phase() {
+        let profiler = profile(|| {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            {
+                let _app = tracing::debug_span!(target: "my_app", "paint").entered();
+            }
+            {
+                let _app = tracing::debug_span!(target: "my_app::render", "layout").entered();
+            }
+            {
+                let _own = tracing::debug_span!(target: "flui.frame", "build").entered();
+            }
+        });
+
+        let stats = profiler
+            .frame_stats()
+            .expect("the frame span closed, so a frame was recorded");
+        let phases: Vec<_> = stats.phases.iter().map(|info| info.phase).collect();
+        assert_eq!(
+            phases,
+            [FramePhase::Build],
+            "only the framework's span counts"
         );
     }
 }
