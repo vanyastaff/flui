@@ -193,8 +193,8 @@ impl WindowFixture for WaylandFixture {
     }
 
     /// The Wayland window hands the compositor no input region.
-    fn input_regions(&self) -> Availability {
-        Availability::Unavailable
+    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE
     }
 
     fn has_native_surface(&self) -> bool {

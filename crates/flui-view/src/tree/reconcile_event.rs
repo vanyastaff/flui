@@ -23,7 +23,7 @@
 //!
 //! # Stability boundary
 //!
-//! The `target: "flui::reconcile"` string is a **stability boundary**
+//! The `target: "flui.tree.reconcile"` string is a **stability boundary**
 //! per FR-035. Renaming or relocating it requires a `#[deprecated]`
 //! alias period for one release — trace-tooling and test subscribers filter
 //! by exactly this target string.
@@ -221,9 +221,9 @@ impl ReconcileEvent {
 
 /// Tracing target — **stability boundary** per FR-035. Subscribers
 /// filter by this exact string.
-pub const RECONCILE_TARGET: &str = "flui::reconcile";
+pub const RECONCILE_TARGET: &str = "flui.tree.reconcile";
 
-/// Emit `event` to the `flui::reconcile` target as typed primitives.
+/// Emit `event` to the `flui.tree.reconcile` target as typed primitives.
 ///
 /// Field names match the table in the module docs. Each primitive is
 /// recorded via the typed `Visit` methods (`record_u64`,
@@ -237,7 +237,7 @@ pub const RECONCILE_TARGET: &str = "flui::reconcile";
 pub fn emit(event: &ReconcileEvent) {
     // `view_type_id = ?event.view_type_id` keeps the `TypeId` Debug-format
     // INSIDE `event!`, so it runs only when the callsite is enabled — a
-    // rebuild with no `flui::reconcile` subscriber pays nothing (the field
+    // rebuild with no `flui.tree.reconcile` subscriber pays nothing (the field
     // expression is not evaluated). The collector reconstructs the same
     // `TypeId(0x…)` string via `Visit::record_debug`.
     tracing::event!(

@@ -14,7 +14,7 @@
 //!   `ElementId`.
 //! - A real variable-arity render view can reorder keyed children through
 //!   `build_scope`; element ids follow keys, no remount occurs, and the
-//!   `flui::reconcile` trace stream reports the real parent id.
+//!   `flui.tree.reconcile` trace stream reports the real parent id.
 
 #![cfg(feature = "testing")]
 #![expect(

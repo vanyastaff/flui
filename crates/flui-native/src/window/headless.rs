@@ -405,10 +405,10 @@ pub struct HeadlessWindowSystem {
     /// Whether the simulated system says none of the window reaches the
     /// screen ([`MockWindow::simulate_occlusion`]).
     pub occluded: bool,
-    /// Whether the simulated system honours the window's input regions, as
+    /// The input regions the simulated system honours for the window, as
     /// the platform's input availability says
     /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
-    pub input_regions: flui_platform::Availability,
+    pub input_capabilities: flui_platform::input_capabilities::InputCapabilities,
     /// The material the simulated system draws behind the window: the last
     /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
     pub material: WindowMaterial,
@@ -986,10 +986,10 @@ impl MockWindow {
     /// system.
     #[must_use]
     pub fn window_system(&self) -> HeadlessWindowSystem {
-        let input_regions = self.delivery.input_capabilities().input_regions();
+        let input_capabilities = self.delivery.input_capabilities();
         let state = self.state.lock();
         HeadlessWindowSystem {
-            input_regions,
+            input_capabilities,
             material: state.materials.last().copied().unwrap_or_default(),
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 state.size,
@@ -1306,16 +1306,27 @@ impl PlatformWindow for MockWindow {
     }
 
     /// Taken while the window's
-    /// [`InputCapabilities::input_regions`](flui_platform::input_capabilities::InputCapabilities::input_regions)
-    /// says the simulated system honours them, as it does unless a test said
-    /// otherwise.
+    /// [`InputCapabilities::honours_input_regions`](flui_platform::input_capabilities::InputCapabilities::honours_input_regions)
+    /// says the simulated system honours some kind of region, as it does unless a test said
+    /// otherwise; the regions of a kind it does not honour are dropped.
     fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), Unsupported> {
-        let availability = self.delivery.input_capabilities().input_regions();
+        let capabilities = self.delivery.input_capabilities();
+        let availability = if capabilities.honours_input_regions() {
+            flui_platform::Availability::Native
+        } else {
+            flui_platform::Availability::Unavailable
+        };
         let (scale, display) = {
             let state = self.state.lock();
             takes(&state, availability)?;
             (state.scale_factor, state.display)
         };
+        let regions: Vec<InputRegion> = regions
+            .iter()
+            .filter(|region| capabilities.input_region(region.kind()).is_available())
+            .copied()
+            .collect();
+        let regions = regions.as_slice();
         let mut recorded = self.input_regions.lock();
         let RecordedInputRegions {
             projection,

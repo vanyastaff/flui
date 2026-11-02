@@ -32,9 +32,7 @@ mod cases {
     use flui_foundation::geometry::{Size, WindowMetrics};
     use flui_native::testing::appkit;
     use flui_native::{HostWindow, MacOSPlatform, Platform as _};
-    use flui_platform::{
-        Availability, PlatformWindow, WindowCommand, WindowMaterial, WindowOptions,
-    };
+    use flui_platform::{PlatformWindow, WindowCommand, WindowMaterial, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -288,8 +286,8 @@ mod cases {
 
         /// The AppKit input table: an AppKit window hands the system no input
         /// region.
-        fn input_regions(&self) -> Availability {
-            flui_native::input::availability::macos().input_regions()
+        fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+            flui_native::input::availability::macos()
         }
 
         /// The checks run on the main thread, where an AppKit window's target

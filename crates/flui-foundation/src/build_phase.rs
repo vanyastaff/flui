@@ -109,7 +109,7 @@ pub struct MutatedDuringBuild {
 
 impl MutatedDuringBuild {
     /// Refuse a mutation of `controller` when `building`: an error, also
-    /// reported on the `flui::signals` target.
+    /// reported on the `flui.signals` target.
     ///
     /// # Errors
     ///
@@ -119,7 +119,7 @@ impl MutatedDuringBuild {
             return Ok(());
         }
         let error = Self { controller };
-        tracing::warn!(target: "flui::signals", controller, %error, "a controller mutation was refused");
+        tracing::warn!(target: "flui.signals", controller, %error, "a controller mutation was refused");
         Err(error)
     }
 }

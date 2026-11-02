@@ -3799,8 +3799,8 @@ fullscreen are unavailable on this device and minimizing is not observed; a
 window manager that does not list a state in `_NET_SUPPORTED` leaves that mode
 unavailable; the root's `_NET_SUPPORTED` changing revises every window's
 capabilities, so a command admitted before is superseded. The material and the
-frame-rate hint are unavailable on X11; text input and the drag source wait
-for the host's data-transfer parts, and the cursor is the input's (below).
+frame-rate hint are unavailable on X11; text input waits
+for the host's input method, and the cursor is the input's (below).
 Commands go to the server (title, place, size, `WM_NORMAL_HINTS`,
 `_MOTIF_WM_HINTS`, map and the ICCCM withdraw) or to the window manager (the
 EWMH `_NET_WM_STATE`, `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` messages); a
@@ -3937,8 +3937,47 @@ the panic goes on; the step's requests are answered whatever fails first, a
 waker's panic included, and the first failure goes on; a drop whose handler
 panics before concluding it is finished unaccepted. A drag entering while the
 last one's exit fails learns its types before that failure goes on, and a
-diagnostic found under the lock is emitted once it is let go. The drag source is not
-written yet.
+diagnostic found under the lock is emitted once it is let go.
+
+A window is a source too: its `drag_source` starts the runtime's OS session
+(`drag::x11::source`) when the drag leaves it with a button held, so the
+press's implicit grab keeps the pointer's XInput 2 events coming to the window
+wherever it goes, and the session takes them before the input does. The
+press is the session's from then on: at the loop's next turn the window's
+input ends its contacts as `CaptureLost` (`LoopDrag::pointers_taken`,
+`LoopInput::pointer_taken`), as a Wayland compositor's leave does, so the next
+click starts afresh. The session owns `XdndSelection` through a window of its
+own, unmapped, made as it starts and destroyed as it ends, a session starting
+only once the server names it the owner. Each visit to a target, from its
+enter to its leave or the end of its drop, has a window of its own too: the
+messages name it as the source, it lists the session's types in
+`XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other format as
+its media type, the private identity included) and hears the target's
+replies, so a late reply to a visit the pointer left, or to an ended
+session, decides nothing now. Each movement finds
+the `XdndAware` window under the pointer, FLUI's own among them, entering and
+leaving targets as it crosses them, the first where the pointer is as the
+session starts, each in the lower of the two XDND versions; one position
+waits for its status at a time, the newest held meanwhile, and a release while one waits sends the held
+one and waits for its answer, so the drop is decided where the button was let
+go. Only the release of the button the drag holds ends it, never a wheel's
+notch or another button. The release drops on a target that accepted with an
+action the runtime allows and leaves one that refused. The session grabs the
+keyboard until the drop, so Escape reaches it wherever the focus goes; where
+the grab is refused, the window losing the focus cancels it. Escape or the window
+unmapping (which ends its grab) leaves and cancels, and a drop ends at `XdndFinished` with the target's action if the
+runtime allows it, cancelled otherwise or after five seconds without one. A
+session whose `XdndSelection` another client takes ends cancelled and lets go
+of nothing, a stale clear from its own earlier release told apart by the
+server's current owner. The data goes only to the client whose target took
+the drop, once it took it (a client's windows share the base of their X
+ids); a target hovered over, or any other client, reads nothing but the types
+`XdndTypeList` lists anyway. A conversion is served from the session's
+provider on the owner thread, with no cell borrowed, in one property: a
+payload past one request is refused, since the source writes no `INCR` yet.
+The session lives in an owner-thread cell; its provider and end hook run
+outside it, and the provider is dropped contained, so the hook hears the end
+though a capture fails (ADR-0127 §2).
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
@@ -3951,8 +3990,30 @@ on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `requests_are_answered_though_the_handler_and_a_waker_fail`,
 `a_drop_whose_handler_fails_finishes_unaccepted`,
 `a_drag_entered_over_a_failing_exit_offers_its_types`,
-`a_diagnostic_is_emitted_with_the_lock_let_go` and
-`an_incr_answer_is_read_in_chunks_and_held_to_its_limit`.
+`a_diagnostic_is_emitted_with_the_lock_let_go`,
+`an_incr_answer_is_read_in_chunks_and_held_to_its_limit` and
+`a_type_unnamed_or_named_past_a_media_type_is_refused_once`; a session from the window to
+another connection's window: `a_session_drops_on_a_target_that_accepts`,
+`a_session_released_over_a_refusing_target_is_cancelled`,
+`a_session_with_no_button_held_does_not_start`,
+`a_session_takes_its_windows_press`,
+`a_session_drops_at_its_own_buttons_release`,
+`a_release_waits_for_the_answer_where_it_let_go`,
+`a_finish_with_an_action_not_allowed_is_cancelled`,
+`a_session_whose_selection_is_taken_ends_and_keeps_off_it`,
+`a_session_the_selection_refuses_does_not_start`,
+`an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops`,
+`a_session_enters_an_older_target_in_its_version`,
+`a_session_started_over_a_target_enters_it_at_once`,
+`a_session_whose_window_unmaps_ends_cancelled`,
+`a_session_without_the_keyboard_ends_as_its_window_loses_the_focus`,
+`a_late_finish_does_not_end_the_next_session`,
+`a_status_for_an_earlier_visit_does_not_decide_the_drop`,
+`only_the_dropped_on_client_reads_the_session_data`; and in `tests/x11_input.rs`,
+with the host's own loop and window, XTest holding and moving the pointer:
+`an_xtest_drag_from_the_window_drops_on_another_client`, which also checks
+that the window's press ends cancelled and its next click arrives whole, and
+`an_xtest_escape_cancels_a_drag_after_the_focus_moved`.
 
 ### A Wayland window draws its own frame on subsurfaces, not through the engine
 

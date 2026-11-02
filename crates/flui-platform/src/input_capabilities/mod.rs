@@ -10,9 +10,10 @@ mod kind_set;
 pub use kind_set::PointerKindSet;
 
 use crate::Availability;
+use crate::input_regions::InputRegionKind;
 
 /// The input capabilities of one surface's backend that no handle answers for: pen input,
-/// precise (phased) scrolling, trackpad pinch and rotate, input regions and outgoing drags,
+/// precise (phased) scrolling, trackpad pinch and rotate, each kind of input region and outgoing drags,
 /// with the kinds of pointer device attached now.
 ///
 /// Haptics and IME answer through their own handles
@@ -36,7 +37,10 @@ use crate::Availability;
 ///     pen: Availability::Native,
 ///     precise_scroll: Availability::Native,
 ///     trackpad_gestures: Availability::Native,
-///     input_regions: Availability::Native,
+///     system_gesture_exclusion: Availability::Native,
+///     window_move: Availability::Native,
+///     window_resize: Availability::Native,
+///     caption_buttons: Availability::Native,
 ///     outgoing_drag: Availability::Native,
 ///     present: PointerKindSet::PEN,
 /// };
@@ -63,7 +67,10 @@ pub struct InputCapabilities {
     pen: Availability,
     precise_scroll: Availability,
     trackpad_gestures: Availability,
-    input_regions: Availability,
+    system_gesture_exclusion: Availability,
+    window_move: Availability,
+    window_resize: Availability,
+    caption_buttons: Availability,
     outgoing_drag: Availability,
     present: PointerKindSet,
 }
@@ -75,7 +82,10 @@ impl InputCapabilities {
         pen: Availability::Unavailable,
         precise_scroll: Availability::Unavailable,
         trackpad_gestures: Availability::Unavailable,
-        input_regions: Availability::Unavailable,
+        system_gesture_exclusion: Availability::Unavailable,
+        window_move: Availability::Unavailable,
+        window_resize: Availability::Unavailable,
+        caption_buttons: Availability::Unavailable,
         outgoing_drag: Availability::Unavailable,
         present: PointerKindSet::empty(),
     };
@@ -110,10 +120,36 @@ impl InputCapabilities {
         self.trackpad_gestures
     }
 
-    /// Input regions the OS honours, such as system-gesture exclusion.
+    /// Whether the OS honours `kind` regions: [`PlatformWindow::set_input_regions`](crate::PlatformWindow::set_input_regions)
+    /// hands it the regions of the kinds available here and drops the rest. A
+    /// [`WindowContent`](InputRegionKind::WindowContent) region takes its availability from
+    /// the move and resize regions it is cut out of: it is honoured where either is.
     #[must_use]
-    pub const fn input_regions(&self) -> Availability {
-        self.input_regions
+    pub const fn input_region(&self, kind: InputRegionKind) -> Availability {
+        match kind {
+            InputRegionKind::SystemGestureExclusion => self.system_gesture_exclusion,
+            InputRegionKind::WindowMove => self.window_move,
+            InputRegionKind::WindowResize(_) => self.window_resize,
+            InputRegionKind::CaptionButton(_) => self.caption_buttons,
+            InputRegionKind::WindowContent => {
+                if self.window_move.is_available() {
+                    self.window_move
+                } else {
+                    self.window_resize
+                }
+            }
+        }
+    }
+
+    /// Whether the OS honours input regions of any kind: where it honours none,
+    /// [`PlatformWindow::set_input_regions`](crate::PlatformWindow::set_input_regions) is
+    /// [`Unsupported`](crate::Unsupported).
+    #[must_use]
+    pub const fn honours_input_regions(&self) -> bool {
+        self.system_gesture_exclusion.is_available()
+            || self.window_move.is_available()
+            || self.window_resize.is_available()
+            || self.caption_buttons.is_available()
     }
 
     /// Starting a drag that leaves the application for the OS. This is the one authoritative
@@ -177,10 +213,34 @@ impl InputCapabilitiesBuilder {
         })
     }
 
-    /// Input regions.
-    pub const fn input_regions(self, availability: Availability) -> Self {
+    /// [`InputRegionKind::SystemGestureExclusion`] regions.
+    pub const fn system_gesture_exclusion(self, availability: Availability) -> Self {
         Self(InputCapabilities {
-            input_regions: availability,
+            system_gesture_exclusion: availability,
+            ..self.0
+        })
+    }
+
+    /// [`InputRegionKind::WindowMove`] regions.
+    pub const fn window_move(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            window_move: availability,
+            ..self.0
+        })
+    }
+
+    /// [`InputRegionKind::WindowResize`] regions, from every edge.
+    pub const fn window_resize(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            window_resize: availability,
+            ..self.0
+        })
+    }
+
+    /// [`InputRegionKind::CaptionButton`] regions, of every button.
+    pub const fn caption_buttons(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            caption_buttons: availability,
             ..self.0
         })
     }

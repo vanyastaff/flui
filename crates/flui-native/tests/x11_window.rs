@@ -36,8 +36,7 @@ mod cases {
     use flui_native::testing::x11::run_for;
     use flui_native::{AppHandler, HostWindow, Platform as _, X11Platform};
     use flui_platform::{
-        Availability, CloseDecision, PlatformWindow, WindowCommand, WindowMode, WindowOptions,
-        WindowReveal,
+        CloseDecision, PlatformWindow, WindowCommand, WindowMode, WindowOptions, WindowReveal,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -507,8 +506,8 @@ mod cases {
         }
 
         /// An X11 window takes no input region: its input capabilities say so.
-        fn input_regions(&self) -> Availability {
-            Availability::Unavailable
+        fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE
         }
 
         fn has_native_surface(&self) -> bool {

@@ -1053,14 +1053,14 @@ unsafe fn layout_subtree_borrowed_impl(
         // a pacing defect elsewhere entirely — ADR-0058.)
         match classify_cache_miss(has_cached_constraints, constraints_match) {
             CacheMiss::FirstLayout => {
-                tracing::trace!(node_id = ?id, "first layout: no cached constraints");
+                tracing::trace!(node_id = id.as_u64(), "first layout: no cached constraints");
             }
             CacheMiss::ConstraintsChanged => {
-                tracing::trace!(node_id = ?id, "relayout: constraints changed");
+                tracing::trace!(node_id = id.as_u64(), "relayout: constraints changed");
             }
             CacheMiss::GeometryClearedUnderMatchingConstraints => {
                 tracing::warn!(
-                    node_id = ?id,
+                    node_id = id.as_u64(),
                     "layout short-circuit: clean node, matching constraints, but geometry was \
                      cleared without clearing them; proceeding with layout (invariant violation)"
                 );
@@ -1250,7 +1250,7 @@ unsafe fn layout_subtree_borrowed_impl(
                     );
                     descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
-                        parent = ?id,
+                        parent = id.as_u64(),
                         ?child_id,
                         ?err,
                         "layout_dirty_root: descendant layout failed; \
@@ -1348,7 +1348,7 @@ unsafe fn layout_subtree_borrowed_impl(
                             descendant_error_for_sliver_cb
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                             tracing::error!(
-                                parent = ?id,
+                                parent = id.as_u64(),
                                 ?child_id,
                                 ?err,
                                 "layout_dirty_root: sliver descendant layout failed; \
@@ -1396,7 +1396,7 @@ unsafe fn layout_subtree_borrowed_impl(
                             descendant_error_for_intrinsics_cb
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                             tracing::error!(
-                                parent = ?id,
+                                parent = id.as_u64(),
                                 ?child_id,
                                 ?err,
                                 "layout_dirty_root: box child intrinsic query failed; \
@@ -1511,7 +1511,7 @@ unsafe fn layout_subtree_borrowed_impl(
                 descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed);
             if had_descendant_error {
                 tracing::debug!(
-                    parent = ?id,
+                    parent = id.as_u64(),
                     "layout_dirty_root: a descendant errored during this walk; \
                      keeping parent NEEDS_LAYOUT set for next-frame retry"
                 );
@@ -2026,7 +2026,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                         );
                         descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                         tracing::error!(
-                            parent = ?id,
+                            parent = id.as_u64(),
                             ?child_id,
                             ?err,
                             "layout_dirty_root: sliver descendant layout failed; \
@@ -2068,7 +2068,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                             descendant_error_for_box_cb
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                             tracing::error!(
-                                parent = ?id,
+                                parent = id.as_u64(),
                                 ?child_id,
                                 ?err,
                                 "layout_dirty_root: box descendant layout failed from sliver parent; \
@@ -2106,7 +2106,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                         descendant_error_for_intrinsic_cb
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                         tracing::error!(
-                            parent = ?id,
+                            parent = id.as_u64(),
                             ?child_id,
                             ?err,
                             "layout_dirty_root: box intrinsic query failed from sliver parent; \
@@ -2194,7 +2194,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 
         if descendant_error_flag.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::debug!(
-                parent = ?id,
+                parent = id.as_u64(),
                 "layout_dirty_root: a sliver descendant errored during this walk; \
                  keeping parent NEEDS_LAYOUT set for next-frame retry"
             );

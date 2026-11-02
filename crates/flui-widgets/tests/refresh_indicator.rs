@@ -768,7 +768,7 @@ pub(crate) fn a_first_command_without_the_refresh_intent_is_reported() {
     assert!(
         log.records()
             .iter()
-            .any(|record| record.target == "flui::a11y"
+            .any(|record| record.target == "flui.a11y"
                 && record.message.contains("does not perform RefreshIntent")),
         "the misplaced command is reported:\n{log}"
     );

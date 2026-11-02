@@ -303,8 +303,8 @@ impl WindowFixture for Fixture {
         true
     }
 
-    fn input_regions(&self) -> Availability {
-        self.mock().window_system().input_regions
+    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        self.mock().window_system().input_capabilities
     }
 
     /// A headless window has no native surface.

@@ -779,7 +779,7 @@ gesture through `CommandHandle::perform` (from `handle(ctx)` in the widget's
 around the row's `Focus`, the control's press and the menu item's
 `MenuItem::perform`. A command's key that the platform reserves (traversal,
 Escape, Back, closing a window or tab, typing and text editing, including the
-Cocoa Control-letter bindings) is dropped with a `flui::a11y` warning;
+Cocoa Control-letter bindings) is dropped with a `flui.a11y` warning;
 `ShowContextMenuIntent`'s keys are root bindings of `DefaultFocusTraversal`
 (Menu and Shift+F10, none on Apple platforms), and the in-crate
 `gesture_key_collision_table` checks every platform's defaults against the
@@ -830,7 +830,7 @@ the borrow ends, so a resolver or the captures of a leaving registration may
 register, leave and read the link
 (`a_companion_link_follows_its_registrations`). A read answers for the
 companions registered when it began. The alternatives are checked twice: a
-post-frame callback queued by `init_state` warns on `flui::a11y` when the link
+post-frame callback queued by `init_state` warns on `flui.a11y` when the link
 has no registration by then (the companion may mount before or after the
 behavioural widget in the same frame, which is why the question waits for the
 frame to end; `unfulfilled_companion_alternatives_are_reported`), and
@@ -865,7 +865,7 @@ first item), Tab cycles inside its scope, Escape is the scope's
 `DismissIntent`, a tap outside hits the barrier, closing restores the focus
 the area's route remembered, and the page below is hidden from assistive
 technology while the menu is up. The area therefore needs a `Navigator`
-above it; without one a request is a `flui::a11y` warning. The panel is a
+above it; without one a request is a `flui.a11y` warning. The panel is a
 `Menu` node of `MenuItem` rows, each at least the touch minimum target high,
 as wide as the widest item (`IntrinsicWidth`); Down and Up wrap, Home and End
 go to the ends, Enter, Space and a click choose. Choosing closes the menu
@@ -2886,7 +2886,7 @@ is stateless. The gesture arena's lower-level callback aliases do not change
 (ADR-0086 §4). Without
 `on_press` the node is disabled and advertises no click, and a tap does
 nothing. A press may return a write's
-`Result`; a refused write is logged on `flui::signals`. Inside the detector an
+`Result`; a refused write is logged on `flui.signals`. Inside the detector an
 `Actions` maps `ActivateIntent` and `ButtonActivateIntent` to the press and
 consumes `ActivationPressIntent` (Space's key-down), above a `Focus` that can
 take focus only with `on_press` and a `FocusRing` that shows while focus is

@@ -151,7 +151,7 @@ impl LocalRenderInvalidationHandle {
         {
             inbox.layout_during_paint.set(Some(self.record.id));
             tracing::error!(
-                id = ?self.record.id,
+                id = self.record.id.as_u64(),
                 "a render object requested layout during paint; the mark applies next frame"
             );
         }
