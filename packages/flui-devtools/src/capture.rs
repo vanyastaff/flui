@@ -289,6 +289,11 @@ impl Capture {
         self.shared.epoch
     }
 
+    /// What identifies this capture in the extensions of the spans it watches.
+    fn owner(&self) -> usize {
+        Arc::as_ptr(&self.shared) as usize
+    }
+
     /// The layer that fills this capture, behind its own filter: it admits the frame, segment
     /// and phase spans and no events. A log layer with an `INFO` filter beside it does not
     /// starve it, and installing it does not switch `DEBUG` on for the rest of the process.
@@ -493,25 +498,103 @@ impl std::fmt::Debug for CaptureLayer {
     }
 }
 
-fn owning_frame<'a, S>(span: &SpanRef<'a, S>) -> Option<SpanRef<'a, S>>
+/// One value per capture, kept in a span's extensions.
+///
+/// A span's extensions hold one value per type, and two capture layers on one registry see the
+/// same spans, so each layer's state is filed under the capture that owns it.
+struct Slots<T>(Vec<(usize, T)>);
+
+fn slot_has<'a, T, S>(span: &SpanRef<'a, S>, owner: usize) -> bool
+where
+    T: Send + Sync + 'static,
+    S: LookupSpan<'a>,
+{
+    slot_read::<T, _, S>(span, owner, |_| ()).is_some()
+}
+
+fn slot_read<'a, T, R, S>(
+    span: &SpanRef<'a, S>,
+    owner: usize,
+    read: impl FnOnce(&T) -> R,
+) -> Option<R>
+where
+    T: Send + Sync + 'static,
+    S: LookupSpan<'a>,
+{
+    let extensions = span.extensions();
+    let slots = extensions.get::<Slots<T>>()?;
+    slots
+        .0
+        .iter()
+        .find(|(slot_owner, _)| *slot_owner == owner)
+        .map(|(_, value)| read(value))
+}
+
+fn slot_modify<'a, T, R, S>(
+    span: &SpanRef<'a, S>,
+    owner: usize,
+    modify: impl FnOnce(&mut T) -> R,
+) -> Option<R>
+where
+    T: Send + Sync + 'static,
+    S: LookupSpan<'a>,
+{
+    let mut extensions = span.extensions_mut();
+    let slots = extensions.get_mut::<Slots<T>>()?;
+    slots
+        .0
+        .iter_mut()
+        .find(|(slot_owner, _)| *slot_owner == owner)
+        .map(|(_, value)| modify(value))
+}
+
+/// Files `value` under `owner`, replacing what that owner had.
+fn slot_put<'a, T, S>(span: &SpanRef<'a, S>, owner: usize, value: T)
+where
+    T: Send + Sync + 'static,
+    S: LookupSpan<'a>,
+{
+    let mut extensions = span.extensions_mut();
+    if let Some(slots) = extensions.get_mut::<Slots<T>>() {
+        slots.0.retain(|(slot_owner, _)| *slot_owner != owner);
+        slots.0.push((owner, value));
+    } else {
+        extensions.insert(Slots(vec![(owner, value)]));
+    }
+}
+
+fn slot_take<'a, T, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<T>
+where
+    T: Send + Sync + 'static,
+    S: LookupSpan<'a>,
+{
+    let mut extensions = span.extensions_mut();
+    let slots = extensions.get_mut::<Slots<T>>()?;
+    let at = slots
+        .0
+        .iter()
+        .position(|(slot_owner, _)| *slot_owner == owner)?;
+    Some(slots.0.swap_remove(at).1)
+}
+
+fn owning_frame<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<SpanRef<'a, S>>
 where
     S: LookupSpan<'a>,
 {
     span.scope()
         .skip(1)
-        .find(|ancestor| ancestor.extensions().get::<FrameState>().is_some())
+        .find(|ancestor| slot_has::<FrameState, S>(ancestor, owner))
 }
 
-fn presentation_of<'a, S>(span: &SpanRef<'a, S>) -> Option<u64>
+/// The presentation segment a span runs in, looked for up to the frame that owns it: an enclosing
+/// frame is another runtime's, and its presentation is not this span's.
+fn presentation_of<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<u64>
 where
     S: LookupSpan<'a>,
 {
-    span.scope().find_map(|ancestor| {
-        ancestor
-            .extensions()
-            .get::<SegmentPresentation>()
-            .map(|segment| segment.0)
-    })?
+    span.scope()
+        .take_while(|ancestor| !slot_has::<FrameState, S>(ancestor, owner))
+        .find_map(|ancestor| slot_read::<SegmentPresentation, _, S>(&ancestor, owner, |s| s.0))?
 }
 
 impl<S> Layer<S> for CaptureLayer
@@ -521,67 +604,68 @@ where
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let metadata = attrs.metadata();
         let Some(span) = ctx.span(id) else { return };
+        let owner = self.capture.owner();
         if is_frame(metadata) {
             let mut fields = Fields::default();
             attrs.record(&mut fields);
-            let outermost = owning_frame(&span).is_none();
-            span.extensions_mut().insert(FrameState {
-                start: None,
-                thread: std::thread::current().id(),
-                entries: 0,
-                runtime: fields.runtime,
-                period: fields.period_us.map(Duration::from_micros),
-                outermost,
-                ended: Vec::new(),
-            });
+            let outermost = owning_frame(&span, owner).is_none();
+            slot_put(
+                &span,
+                owner,
+                FrameState {
+                    start: None,
+                    thread: std::thread::current().id(),
+                    entries: 0,
+                    runtime: fields.runtime,
+                    period: fields.period_us.map(Duration::from_micros),
+                    outermost,
+                    ended: Vec::new(),
+                },
+            );
         } else if is_segment(metadata) {
             let mut fields = Fields::default();
             attrs.record(&mut fields);
-            span.extensions_mut()
-                .insert(SegmentPresentation(fields.presentation));
+            slot_put(&span, owner, SegmentPresentation(fields.presentation));
         }
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
-        let mut extensions = span.extensions_mut();
-        if let Some(state) = extensions.get_mut::<FrameState>() {
-            let mut fields = Fields::default();
-            values.record(&mut fields);
+        let mut fields = Fields::default();
+        values.record(&mut fields);
+        slot_modify(&span, self.capture.owner(), |state: &mut FrameState| {
             if fields.runtime.is_some() {
                 state.runtime = fields.runtime;
             }
             if let Some(micros) = fields.period_us {
                 state.period = Some(Duration::from_micros(micros)).filter(|d| !d.is_zero());
             }
-        }
+        });
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         let metadata = span.metadata();
+        let owner = self.capture.owner();
         if is_frame(metadata) {
-            if let Some(state) = span.extensions_mut().get_mut::<FrameState>() {
+            slot_modify(&span, owner, |state: &mut FrameState| {
                 state.entries += 1;
                 if state.entries == 1 {
                     state.start = Some(Instant::now());
                     state.thread = std::thread::current().id();
                 }
-            }
+            });
             return;
         }
         if !is_segment(metadata) && Phase::of(metadata).is_none() {
             return;
         }
-        if span.extensions().get::<Closed>().is_some() {
+        if slot_has::<Closed, S>(&span, owner) {
             return;
         }
         // Only spans inside an entered frame count: a phase outside any frame is not a frame.
-        let in_open_frame = owning_frame(&span).is_some_and(|frame| {
-            frame
-                .extensions()
-                .get::<FrameState>()
-                .is_some_and(|state| state.entries > 0)
+        let in_open_frame = owning_frame(&span, owner).is_some_and(|frame| {
+            slot_read(&frame, owner, |state: &FrameState| state.entries > 0).unwrap_or(false)
         });
         if !in_open_frame {
             return;
@@ -594,44 +678,40 @@ where
         let covered = span
             .scope()
             .skip(1)
-            .take_while(|ancestor| ancestor.extensions().get::<FrameState>().is_none())
+            .take_while(|ancestor| !slot_has::<FrameState, S>(ancestor, owner))
             .any(|ancestor| {
                 (ancestor.metadata().target(), ancestor.metadata().name()) == key
-                    && ancestor.extensions().get::<Visit_>().is_some()
+                    && slot_has::<Visit_, S>(&ancestor, owner)
             });
         if covered {
             return;
         }
-        let mut extensions = span.extensions_mut();
-        if let Some(visit) = extensions.get_mut::<Visit_>() {
-            // Re-entered without closing: the visit already running measures the full extent.
-            visit.entries += 1;
-            return;
+        // Re-entered without closing: the visit already running measures the full extent.
+        let reentered = slot_modify(&span, owner, |visit: &mut Visit_| visit.entries += 1);
+        if reentered.is_none() {
+            slot_put(
+                &span,
+                owner,
+                Visit_ {
+                    start: Instant::now(),
+                    thread: std::thread::current().id(),
+                    entries: 1,
+                },
+            );
         }
-        extensions.insert(Visit_ {
-            start: Instant::now(),
-            thread: std::thread::current().id(),
-            entries: 1,
-        });
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         let metadata = span.metadata();
+        let owner = self.capture.owner();
         if is_frame(metadata) {
-            let finished = {
-                let mut extensions = span.extensions_mut();
-                let last = extensions.get_mut::<FrameState>().is_some_and(|state| {
-                    state.entries = state.entries.saturating_sub(1);
-                    state.entries == 0
-                });
-                if last {
-                    extensions.remove::<FrameState>()
-                } else {
-                    None
-                }
-            };
-            if let Some(state) = finished {
+            let last = slot_modify(&span, owner, |state: &mut FrameState| {
+                state.entries = state.entries.saturating_sub(1);
+                state.entries == 0
+            })
+            .unwrap_or(false);
+            if last && let Some(state) = slot_take::<FrameState, S>(&span, owner) {
                 self.finish_frame(state);
             }
             return;
@@ -641,24 +721,21 @@ where
             return;
         }
         // The outermost exit ends the visit: a clone retained by user code cannot extend it.
-        let visit = {
-            let mut extensions = span.extensions_mut();
-            let last = extensions.get_mut::<Visit_>().map(|visit| {
-                visit.entries = visit.entries.saturating_sub(1);
-                visit.entries == 0
-            });
-            match last {
-                Some(true) => {
-                    let visit = extensions.remove::<Visit_>();
-                    let _ = extensions.replace(Closed);
-                    visit
-                }
-                Some(false) => None,
-                // Covered or unowned visits must not become new work later.
-                None => {
-                    let _ = extensions.replace(Closed);
-                    None
-                }
+        let last = slot_modify(&span, owner, |visit: &mut Visit_| {
+            visit.entries = visit.entries.saturating_sub(1);
+            visit.entries == 0
+        });
+        let visit = match last {
+            Some(true) => {
+                let visit = slot_take::<Visit_, S>(&span, owner);
+                slot_put(&span, owner, Closed);
+                visit
+            }
+            Some(false) => None,
+            // Covered or unowned visits must not become new work later.
+            None => {
+                slot_put(&span, owner, Closed);
+                None
             }
         };
         let Some(visit) = visit else { return };
@@ -666,15 +743,15 @@ where
             target: metadata.target(),
             name: metadata.name(),
             phase,
-            presentation: presentation_of(&span),
+            presentation: presentation_of(&span, owner),
             start: visit.start,
             duration: visit.start.elapsed(),
             thread: visit.thread,
         };
-        if let Some(frame) = owning_frame(&span)
-            && let Some(state) = frame.extensions_mut().get_mut::<FrameState>()
-        {
-            state.ended.push(ended);
+        if let Some(frame) = owning_frame(&span, owner) {
+            slot_modify(&frame, owner, |state: &mut FrameState| {
+                state.ended.push(ended);
+            });
         }
     }
 }
@@ -1029,5 +1106,56 @@ mod tests {
             [Phase::Build],
             "the inner frame's build is its own"
         );
+    }
+
+    /// Two captures on one registry see the same spans; neither may disturb the other's state.
+    #[test]
+    fn two_captures_on_one_registry_each_see_every_frame() {
+        let (first, second) = (Capture::new(), Capture::new());
+        let subscriber = tracing_subscriber::registry()
+            .with(first.layer())
+            .with(second.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(runtime(1), &[presentation(1)]);
+        });
+
+        for capture in [&first, &second] {
+            let frames = capture.frames();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(
+                phase_partitions(capture, Phase::Layout),
+                [Partition::new(Some(runtime(1)), Some(presentation(1)))]
+            );
+        }
+    }
+
+    /// The enclosing frame's presentation is another runtime's: a nested frame's phase without a
+    /// segment of its own has no presentation.
+    #[test]
+    fn a_nested_frames_phase_does_not_inherit_the_enclosing_presentation() {
+        let capture = capturing(|| {
+            let _outer = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _segment = tracing::debug_span!(
+                target: "flui.frame",
+                "presentation",
+                presentation = presentation(1).as_u64()
+            )
+            .entered();
+            let _inner = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _layout = tracing::debug_span!(target: "flui.frame", "layout").entered();
+        });
+
+        let inner = capture
+            .frames()
+            .into_iter()
+            .find(|frame| !frame.is_outermost())
+            .expect("the nested frame");
+        let layout = inner
+            .spans()
+            .iter()
+            .find(|span| span.phase() == Some(Phase::Layout))
+            .expect("the inner layout");
+        assert_eq!(layout.partition().presentation(), None);
     }
 }

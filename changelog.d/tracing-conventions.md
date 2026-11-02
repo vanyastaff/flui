@@ -32,3 +32,6 @@
   that owns it, and a sink that panics no longer takes the frame from the sinks after it. The
   runtime's presentation span now also covers a presentation's animation sampling, `submit` and
   `commit`, and the trace export writes a `presentation` argument on events that ran for one.
+- Several `Capture`s can watch one registry, a nested frame's work no longer takes the enclosing
+  frame's presentation, and the trace export writes `frame_ms` and `jank` counters for a frame
+  that reported no display period (judged against 60 Hz).

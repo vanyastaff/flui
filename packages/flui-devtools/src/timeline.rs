@@ -641,12 +641,14 @@ impl Timeline {
                 "tid": tid,
                 "args": begin_event_args(event),
             }));
-            if event.category == EventCategory::Frame
-                && let Some(period_us) = event
+            if event.category == EventCategory::Frame {
+                // A frame that reported no display period is judged against 60 Hz, as the
+                // profiler judges it.
+                let period_us = event
                     .args
                     .get("period_us")
                     .and_then(serde_json::Value::as_u64)
-            {
+                    .unwrap_or(0);
                 let frame_us = saturating_micros_u128(event.duration_micros);
                 let end = saturating_micros_u128(event.start_micros + event.duration_micros);
                 let line_us = if period_us == 0 { 16_667 } else { period_us };
@@ -785,5 +787,37 @@ fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
             .partition()
             .presentation()
             .map(flui_sdk::foundation::PresentationId::as_u64),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::Capture;
+    use tracing::dispatcher::Dispatch;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    /// A frame that reported no display period is still a `frame_ms` and `jank` counter.
+    #[test]
+    fn a_frame_without_a_display_period_still_gets_counters() {
+        let capture = Capture::new();
+        let timeline = Timeline::over(&capture);
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+        });
+
+        let trace: serde_json::Value =
+            serde_json::from_str(&timeline.export_chrome_trace()).expect("the export is JSON");
+        let events = trace["traceEvents"].as_array().expect("traceEvents");
+        for counter in ["frame_ms", "jank"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["ph"] == "C" && event["name"] == counter),
+                "no {counter} counter in {events:?}"
+            );
+        }
     }
 }
