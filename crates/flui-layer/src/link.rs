@@ -115,6 +115,24 @@ pub fn resolve_follower_transform(tree: &LayerTree, follower_layer_id: LayerId) 
     }
 }
 
+/// Where the leader publishing under `link` has its top-left corner, in the
+/// coordinates of `tree`'s root: what moves when a scroll or a transform
+/// above the leader moves it while its size stays.
+///
+/// Returns `None` when no leader publishes under `link`, or when a transform
+/// on its chain is singular or not finite, or a follower on it resolves to
+/// nothing.
+pub fn leader_origin(tree: &LayerTree, link: LayerLink) -> Option<Point<f64>> {
+    let leader_id = tree.leader(link)?;
+    let mut chain = Matrix4::IDENTITY;
+    for id in tree.ancestors(leader_id) {
+        let layer = tree.get_layer(id)?;
+        chain = chain_transform(tree, id, layer, 0).ok()? * chain;
+    }
+    let (x, y) = chain.project_plane_point(0.0, 0.0)?;
+    (x.is_finite() && y.is_finite()).then(|| Point::new(x, y))
+}
+
 fn resolve_at_depth(
     tree: &LayerTree,
     follower_layer_id: LayerId,

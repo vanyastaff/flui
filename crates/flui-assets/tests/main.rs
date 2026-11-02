@@ -22,11 +22,5 @@ mod lanes;
 #[path = "load_contract.rs"]
 mod load_contract;
 
-#[cfg(all(feature = "images", feature = "network"))]
+#[cfg(feature = "images")]
 mod network_load;
-
-#[cfg(feature = "network")]
-mod network_support;
-
-#[cfg(feature = "network")]
-mod network_loader;

@@ -17,6 +17,8 @@ pub(crate) mod dev_agent;
 pub mod direct;
 pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
+#[cfg(feature = "http")]
+pub(crate) mod http_host;
 mod launch;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;

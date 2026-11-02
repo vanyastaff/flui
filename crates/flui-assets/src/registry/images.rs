@@ -29,6 +29,14 @@
 //! lanes. Only a subscriber whose own lanes are shutting down answers
 //! [`AssetError::LanesRefused`].
 //!
+//! # A load waits for its slot off the lanes
+//!
+//! A load bound for lanes is spawned on their IO lane only once it holds its
+//! load slot: queued, it is a start the slot queue calls on the thread that
+//! freed a slot, so loads waiting for one take no place in the lane's
+//! admission window. Lanes with no room by then park the run and tell every
+//! subscriber; the first one polled claims it and drives it where it is polled.
+//!
 //! # Decoding never runs on the IO lane
 //!
 //! Bytes are read first; the decode runs on the compute lane behind the
@@ -57,10 +65,11 @@ use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
 use flui_platform::executor::{Executor, SpawnError};
+use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
-use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation};
+use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation, Slot, Start};
 use crate::Image;
 use crate::error::{AssetError, Result};
 
@@ -89,7 +98,7 @@ pub(crate) fn default_decode_threads() -> NonZeroUsize {
 const FILE_READ_CHUNK: usize = 256 * 1024;
 
 /// The largest encoded image file a load reads: 256 MiB, the same bound
-/// `NetworkLoader::load_url` puts on a response body. A larger file fails
+/// a network image's request puts on its response body. A larger file fails
 /// before it is buffered.
 const MAX_ENCODED_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -108,25 +117,109 @@ const MAX_HANDOVERS: u8 = 4;
 pub enum ImageSource {
     /// An asset path, read from the file system.
     Asset(Arc<str>),
-    /// An HTTP or HTTPS URL.
-    #[cfg(feature = "network")]
-    Network(Arc<str>),
+    /// An HTTP or HTTPS URL, as one client's authority answers it.
+    Network(NetworkSource),
 }
 
 impl ImageSource {
+    /// The image at `url` as `http` fetches it: two clients with different
+    /// authorities may answer one URL with different images, so they never
+    /// share a decoded image or a load (ADR-0118, ADR-0280 §6).
+    #[must_use]
+    pub fn network(url: impl Into<Arc<str>>, http: &Http) -> Self {
+        Self::Network(NetworkSource {
+            url: url.into(),
+            authority: Some(http.authority()),
+        })
+    }
+
     /// The path or URL, for error messages.
     pub(crate) fn label(&self) -> &Arc<str> {
         match self {
             Self::Asset(path) => path,
-            #[cfg(feature = "network")]
-            Self::Network(url) => url,
+            Self::Network(network) => &network.url,
         }
+    }
+}
+
+/// A network image's URL and the authority of the client that fetches it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetworkSource {
+    url: Arc<str>,
+    /// `None` for a load with no client: it fails, and shares nothing with
+    /// a load that has one.
+    authority: Option<HttpAuthority>,
+}
+
+impl NetworkSource {
+    /// The URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
 /// The background lanes a load runs on, or none to run it where its
 /// [`ImageLoad`] is polled.
-pub(crate) type Lanes = Option<Arc<dyn Executor>>;
+type Lanes = Option<Arc<dyn Executor>>;
+
+/// What an image load runs on: the caller's background lanes and HTTP
+/// client.
+///
+/// A request that becomes a load's lead runs it on its own services, so a
+/// load handed over runs on those of the request that took it.
+///
+/// ```rust,ignore
+/// let services = LoadServices::new().with_lanes(lanes).with_http(http);
+/// let load = registry.load_network_image(url, services);
+/// ```
+#[derive(Clone, Default)]
+pub struct LoadServices {
+    lanes: Lanes,
+    http: Option<Http>,
+}
+
+impl LoadServices {
+    /// No lanes and no HTTP client: a file load runs where its
+    /// [`ImageLoad`] is polled, and a network load answers
+    /// [`AssetError::HttpUnavailable`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read on the IO lane of `lanes` and decode on their compute lane.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_lanes(mut self, lanes: Arc<dyn Executor>) -> Self {
+        self.lanes = Some(lanes);
+        self
+    }
+
+    /// Fetch network images with `http`.
+    #[must_use = "the builder returns the updated services"]
+    pub fn with_http(mut self, http: Http) -> Self {
+        self.http = Some(http);
+        self
+    }
+
+    /// The source of a load of `url` with these services' client, or with
+    /// none.
+    pub(crate) fn network_source(&self, url: Arc<str>) -> ImageSource {
+        ImageSource::Network(NetworkSource {
+            url,
+            authority: self.http.as_ref().map(Http::authority),
+        })
+    }
+}
+
+impl std::fmt::Debug for LoadServices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadServices")
+            .field("lanes", &self.lanes.is_some())
+            .field("http", &self.http.is_some())
+            .finish()
+    }
+}
 
 /// The bytes of one source, read on the IO lane.
 type Fetch = Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>;
@@ -157,10 +250,44 @@ impl LoadTicket {
 struct Pending {
     ticket: Arc<LoadTicket>,
     subscribers: usize,
-    waiters: Vec<oneshot::Sender<Result<Image>>>,
+    /// The lead's first, as admitted.
+    waiters: Vec<Waiter>,
     /// Dropping it cancels a load spawned on the IO lane; `None` while the
-    /// load runs inside its lead's [`ImageLoad`], or before its spawn returns.
+    /// load waits for its load slot, runs inside a subscriber's
+    /// [`ImageLoad`], or before its spawn returns.
     cancel: Option<oneshot::Sender<()>>,
+    /// The run the lead's lanes had no room for when its load slot came
+    /// free, for the first subscriber polled to drive.
+    parked: Option<Run>,
+}
+
+/// One subscriber's ends of its channels.
+struct Waiter {
+    /// Settles the subscriber.
+    settle: oneshot::Sender<Delivery>,
+    /// Tells the subscriber the run is parked for it to claim; taken when
+    /// it is told. Apart from `settle`, so the outcome still reaches a
+    /// subscriber told after another claimed and finished the run.
+    claim: Option<oneshot::Sender<()>>,
+}
+
+/// What a subscriber's settle channel delivers. A channel closed with none
+/// means the load closed unsettled, and the subscriber takes it over.
+enum Delivery {
+    /// The load's outcome.
+    Settled(Result<Image>),
+    /// The lead's lanes are shutting down and took no run (to the lead
+    /// only; the other subscribers take the load over).
+    Refused(SpawnError),
+}
+
+/// Where a run takes its load slot from.
+enum LoadSlot {
+    /// Awaited when the run starts.
+    Reserved(Reservation),
+    /// Granted already, and taken when the run starts: a run dropped
+    /// unstarted leaves it for its starter to give back.
+    Held(Arc<Mutex<Option<Slot>>>),
 }
 
 struct State {
@@ -200,10 +327,6 @@ pub(crate) struct DecodedImages {
     /// One slot per decode allowed to run at once, handed out in admission
     /// order.
     decodes: Arc<OrderedSlots>,
-    /// One HTTP connection pool per registry, initialized on the first IO
-    /// lane that fetches an image.
-    #[cfg(feature = "network")]
-    network: Arc<tokio::sync::OnceCell<crate::NetworkLoader>>,
 }
 
 /// Loads a registry lets read or wait to decode per decode thread: enough to
@@ -213,11 +336,16 @@ pub(crate) const LOADS_PER_DECODE_THREAD: usize = 4;
 
 impl std::fmt::Debug for DecodedImages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
+        // Read under the lock and written after it: the formatter's writer
+        // is the caller's code, which may call back here.
+        let (images, bytes, pending) = {
+            let state = self.state.lock();
+            (state.entries.len(), state.bytes, state.pending.len())
+        };
         f.debug_struct("DecodedImages")
-            .field("images", &state.entries.len())
-            .field("bytes", &state.bytes)
-            .field("pending", &state.pending.len())
+            .field("images", &images)
+            .field("bytes", &bytes)
+            .field("pending", &pending)
             .field("budget", &self.budget)
             .finish_non_exhaustive()
     }
@@ -229,20 +357,22 @@ enum Admission {
     Cached(Image),
     /// The request joined a load already in flight.
     Joined(Subscription),
-    /// The request starts a load: run `run`, which settles `subscription`'s
-    /// waiters among the rest.
+    /// The request starts a load with no lanes: run `run` where it is
+    /// polled, which settles `subscription`'s waiters among the rest.
     Lead {
         subscription: Subscription,
         run: Run,
     },
+    /// The request starts a load on its lanes: call `start` with the slot
+    /// granted now, or the queue calls it once one is freed for it.
+    Started {
+        subscription: Subscription,
+        start: Option<(Slot, Start)>,
+    },
 }
 
 impl DecodedImages {
-    pub(crate) fn new(
-        budget: usize,
-        decode_threads: NonZeroUsize,
-        #[cfg(feature = "network")] network: Option<crate::NetworkLoader>,
-    ) -> Self {
+    pub(crate) fn new(budget: usize, decode_threads: NonZeroUsize) -> Self {
         Self {
             state: Mutex::new(State {
                 entries: lru::LruCache::unbounded(),
@@ -255,8 +385,6 @@ impl DecodedImages {
                 decode_threads.get().saturating_mul(LOADS_PER_DECODE_THREAD),
             )),
             decodes: Arc::new(OrderedSlots::new(decode_threads.get())),
-            #[cfg(feature = "network")]
-            network: Arc::new(tokio::sync::OnceCell::new_with(network)),
         }
     }
 
@@ -266,16 +394,16 @@ impl DecodedImages {
     }
 
     /// Serves `source` from the cache, joins its load in flight, or starts
-    /// one on `lanes`.
-    pub(crate) fn load(self: &Arc<Self>, source: ImageSource, lanes: Lanes) -> ImageLoad {
+    /// one on `services`.
+    pub(crate) fn load(self: &Arc<Self>, source: ImageSource, services: LoadServices) -> ImageLoad {
         let mut load = ImageLoad {
             state: LoadState::Unadmitted,
             images: Arc::clone(self),
             source,
-            lanes,
+            services,
             handovers: 0,
         };
-        if load.lanes.is_some() {
+        if load.services.lanes.is_some() {
             load.admit();
         }
         load
@@ -283,21 +411,33 @@ impl DecodedImages {
 
     /// Serves `source` from the cache, joins its load in flight, or opens a
     /// new pending entry and builds the run that settles it.
-    fn admit(self: &Arc<Self>, source: &ImageSource, lanes: &Lanes) -> Admission {
+    fn admit(self: &Arc<Self>, source: &ImageSource, services: &LoadServices) -> Admission {
         let mut state = self.state.lock();
         if let Some(image) = state.entries.get(source) {
             return Admission::Cached(image.clone());
         }
-        let (tx, rx) = oneshot::channel();
+        let (waiter, channels) = Waiter::new();
         if let Some(pending) = state.pending.get_mut(source) {
             pending.subscribers = pending
                 .subscribers
                 .checked_add(1)
                 .expect("BUG: an image load has more subscribers than addressable memory");
-            pending.waiters.push(tx);
             let ticket = Arc::clone(&pending.ticket);
+            // A run parked before this request joined is its to claim too.
+            // Told on a channel nobody polls yet, so no waker runs here.
+            let waiter = if pending.parked.is_some() {
+                waiter.tell_parked()
+            } else {
+                waiter
+            };
+            pending.waiters.push(waiter);
             drop(state);
-            return Admission::Joined(Subscription::new(rx, Arc::clone(self), source, ticket));
+            return Admission::Joined(Subscription::new(
+                channels,
+                Arc::clone(self),
+                source,
+                ticket,
+            ));
         }
         let order = state.next_order;
         state.next_order = order
@@ -312,37 +452,113 @@ impl DecodedImages {
             Pending {
                 ticket: Arc::clone(&ticket),
                 subscribers: 1,
-                waiters: vec![tx],
+                waiters: vec![waiter],
                 cancel: None,
+                parked: None,
             },
         );
-        // Reserved under the lock that assigned `order`, so load slots follow
-        // admission order however late each load first runs. A load with no
-        // lanes is admitted only once polled, so it reserves no slot while
-        // its caller holds it unpolled. The slot queue's lock never takes
-        // this one, so the nesting cannot invert.
-        let load_slot = self.loads.reserve(order);
-        drop(state);
         let completion = Completion {
             images: Arc::clone(self),
             source: source.clone(),
             ticket: Arc::clone(&ticket),
             settled: false,
         };
+        let subscription = Subscription::new(channels, Arc::clone(self), source, ticket);
+        // Reserved under the lock that assigned `order`, so load slots follow
+        // admission order however late each load first runs. A load with no
+        // lanes is admitted only once polled, so it reserves no slot while
+        // its caller holds it unpolled. A load on lanes is spawned on them
+        // only once it holds its slot: queued, it holds no place in their
+        // admission window. The slot queue's lock never takes this one, so
+        // the nesting cannot invert.
+        if let Some(lanes) = &services.lanes {
+            let start = Self::start(completion, Arc::clone(lanes), services.clone());
+            let start = self.loads.reserve_start(order, start);
+            drop(state);
+            return Admission::Started {
+                subscription,
+                start,
+            };
+        }
+        let load_slot = self.loads.reserve(order);
+        drop(state);
         Admission::Lead {
-            subscription: Subscription::new(rx, Arc::clone(self), source, ticket),
-            run: self.run(completion, load_slot, lanes.clone()),
+            subscription,
+            run: Self::run(completion, LoadSlot::Reserved(load_slot), services.clone()),
         }
     }
 
+    /// Spawns a load that holds its load slot on `lanes`' IO lane. Lanes
+    /// with no room for it park the run for a subscriber to claim and drive;
+    /// lanes shutting down refuse the lead, and the rest take the load over.
+    /// A load whose subscribers all left while it waited, or that no one is
+    /// left to drive, hands the slot back: the queue passes it on in its own
+    /// loop, never from inside this start.
+    fn start(completion: Completion, lanes: Arc<dyn Executor>, services: LoadServices) -> Start {
+        Box::new(move |slot: Slot| {
+            if completion.ticket.is_cancelled() {
+                return Some(slot);
+            }
+            let images = Arc::clone(&completion.images);
+            let source = completion.source.clone();
+            let ticket = Arc::clone(&completion.ticket);
+            // Taken by the run when it first runs; until then a run dropped
+            // unstarted gives the slot back here.
+            let held = Arc::new(Mutex::new(Some(slot)));
+            let run = Self::run(completion, LoadSlot::Held(Arc::clone(&held)), services);
+            // Shared with the spawned task, so a refused spawn hands the run
+            // back instead of dropping it.
+            let shared = Arc::new(Mutex::new(Some(run)));
+            let (cancel, cancelled) = oneshot::channel();
+            let task: Run = {
+                let shared = Arc::clone(&shared);
+                Box::pin(async move {
+                    let run = shared.lock().take();
+                    if let Some(run) = run {
+                        until_cancelled(run, cancelled).await;
+                    }
+                })
+            };
+            let unrun = match lanes.spawn_io(task) {
+                Ok(()) => {
+                    images.attach(&source, &ticket, cancel);
+                    return None;
+                }
+                Err(SpawnError::Saturated | SpawnError::Unavailable) => {
+                    let run = shared.lock().take();
+                    match run.map(|run| images.park_run(&source, &ticket, run)) {
+                        // Parked with its slot, held until the run that
+                        // claims it finishes.
+                        Some(None) => return None,
+                        Some(Some(unparked)) => Some(unparked),
+                        None => None,
+                    }
+                }
+                Err(reason) => {
+                    images.refuse_lead(&source, &ticket, reason);
+                    shared.lock().take()
+                }
+            };
+            let slot = held.lock().take();
+            // Dropped after the lead heard why, with its slot out: it closes
+            // the load, and the rest take it over.
+            drop(unrun);
+            slot
+        })
+    }
+
     /// Reads the source, decodes it and settles every waiter.
-    fn run(&self, completion: Completion, load_slot: Reservation, lanes: Lanes) -> Run {
-        let fetch = self.fetch(&completion.source);
+    fn run(completion: Completion, load_slot: LoadSlot, services: LoadServices) -> Run {
+        let fetch = fetch(&completion.source, services.http);
+        let lanes = services.lanes;
         Box::pin(async move {
             // Granted before the read starts and held until the decode
             // returns: reads past admission, and the encoded bytes waiting
             // to decode, are bounded by count.
-            let _load = load_slot.granted().await;
+            let _load: Option<Slot> = match load_slot {
+                LoadSlot::Reserved(reservation) => Some(reservation.granted().await),
+                LoadSlot::Held(held) => held.lock().take(),
+            };
             let outcome = match fetch.await {
                 Ok(bytes) => {
                     completion
@@ -354,45 +570,6 @@ impl DecodedImages {
             };
             completion.settle(outcome);
         })
-    }
-
-    /// The bytes of `source`, read where the run is polled.
-    #[cfg_attr(
-        not(feature = "network"),
-        expect(
-            clippy::unused_self,
-            reason = "only a network fetch reads the registry's client"
-        )
-    )]
-    fn fetch(&self, source: &ImageSource) -> Fetch {
-        match source {
-            ImageSource::Asset(path) => Box::pin(read_in_chunks(Arc::clone(path))),
-            #[cfg(feature = "network")]
-            ImageSource::Network(url) => {
-                let network = Arc::clone(&self.network);
-                let url = Arc::clone(url);
-                Box::pin(async move {
-                    // reqwest's connections live on a tokio reactor; on a
-                    // lane without one it would panic at the first poll.
-                    if tokio::runtime::Handle::try_current().is_err() {
-                        return Err(AssetError::ReactorUnavailable {
-                            url: url.to_string(),
-                        });
-                    }
-                    let loader = network
-                        .get_or_try_init(|| async {
-                            crate::NetworkLoader::try_new().map_err(|error| {
-                                AssetError::LoadFailed {
-                                    path: url.to_string(),
-                                    reason: format!("HTTP client initialization failed: {error}"),
-                                }
-                            })
-                        })
-                        .await?;
-                    loader.load_url(&url).await
-                })
-            }
-        }
     }
 
     /// Records the cancel signal of the load `ticket` names, spawned on an IO
@@ -407,6 +584,74 @@ impl DecodedImages {
         }
         // Otherwise `cancel` drops after the lock, cancelling a load that
         // settled already or whose last subscriber left.
+    }
+
+    /// Parks the run of the load `ticket` names for the first of its
+    /// subscribers polled next to claim, and tells every one of them; the run
+    /// back when no subscriber is left to tell.
+    fn park_run(&self, source: &ImageSource, ticket: &Arc<LoadTicket>, run: Run) -> Option<Run> {
+        let told = {
+            let mut state = self.state.lock();
+            match state.pending.get_mut(source) {
+                Some(pending)
+                    if Arc::ptr_eq(&pending.ticket, ticket) && !pending.waiters.is_empty() =>
+                {
+                    pending.parked = Some(run);
+                    pending
+                        .waiters
+                        .iter_mut()
+                        .filter_map(|waiter| waiter.claim.take())
+                        .collect::<Vec<oneshot::Sender<()>>>()
+                }
+                _ => return Some(run),
+            }
+        };
+        // Told outside the lock: a send wakes its subscriber's task. One
+        // that left changes nothing; one never polled again leaves the run
+        // to the others, and every one still hears the outcome. A waker that
+        // panics leaves the rest told; the first panic is raised once every
+        // one is (ADR-0281).
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        for claim in told {
+            first.contain(|| {
+                let _ = claim.send(());
+            });
+        }
+        first.resume();
+        None
+    }
+
+    /// Tells the lead of the load `ticket` names that its lanes refused the
+    /// load; the caller then drops the run, and the rest take it over.
+    fn refuse_lead(&self, source: &ImageSource, ticket: &Arc<LoadTicket>, reason: SpawnError) {
+        let lead = {
+            let mut state = self.state.lock();
+            match state.pending.get_mut(source) {
+                Some(pending)
+                    if Arc::ptr_eq(&pending.ticket, ticket) && !pending.waiters.is_empty() =>
+                {
+                    Some(pending.waiters.remove(0))
+                }
+                _ => None,
+            }
+        };
+        // Sent and dropped outside the lock. A lead that left before hearing
+        // it changes nothing.
+        if let Some(lead) = lead {
+            let _ = lead.settle.send(Delivery::Refused(reason));
+        }
+    }
+
+    /// Takes the run parked for `subscription`'s load, unless another
+    /// subscriber claimed it first.
+    fn claim(&self, subscription: &Subscription) -> Option<Run> {
+        let mut state = self.state.lock();
+        match state.pending.get_mut(&subscription.source) {
+            Some(pending) if Arc::ptr_eq(&pending.ticket, &subscription.ticket) => {
+                pending.parked.take()
+            }
+            _ => None,
+        }
     }
 
     /// Settles the load `ticket` names: removes its entry, keeps a decoded
@@ -446,12 +691,24 @@ impl DecodedImages {
             waiters, cancel, ..
         } = pending;
         drop(cancel);
-        if let Some(outcome) = outcome {
-            for waiter in waiters {
+        // Each waiter answered, or closed when there is no outcome so it takes
+        // the load over, in turn. Its outcome is sent, and its claim channel
+        // closed, each under containment of its own: a waker that panics
+        // costs no subscriber its outcome, and the first panic is raised
+        // once every one is answered (ADR-0281).
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        for waiter in waiters {
+            let Waiter { settle, claim } = waiter;
+            let delivery = outcome.clone().map(Delivery::Settled);
+            first.contain(move || {
                 // A waiter whose subscriber left before completion is closed.
-                let _ = waiter.send(outcome.clone());
-            }
+                if let Some(delivery) = delivery {
+                    let _ = settle.send(delivery);
+                }
+            });
+            first.contain(move || drop(claim));
         }
+        first.resume();
     }
 
     /// Adds `image` under `source` and evicts down to the budget.
@@ -575,6 +832,40 @@ impl DecodedImages {
             }
         }
     }
+}
+
+/// The bytes of `source`, read where the run is polled; a network image is
+/// fetched with `http`.
+fn fetch(source: &ImageSource, http: Option<Http>) -> Fetch {
+    match source {
+        ImageSource::Asset(path) => Box::pin(read_in_chunks(Arc::clone(path))),
+        ImageSource::Network(network) => Box::pin(fetch_over_http(Arc::clone(&network.url), http)),
+    }
+}
+
+/// The body of a `GET` for `url`, within [`MAX_ENCODED_FILE_BYTES`].
+async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
+    let Some(http) = http else {
+        return Err(AssetError::HttpUnavailable {
+            url: url.to_string(),
+        });
+    };
+    let failed = |source: HttpError| AssetError::Http {
+        url: url.to_string(),
+        source,
+    };
+    let response = http
+        .send(HttpRequest::get(url.as_ref()).with_body_limit(MAX_ENCODED_FILE_BYTES))
+        .await
+        .map_err(failed)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AssetError::HttpStatus {
+            url: url.to_string(),
+            status,
+        });
+    }
+    response.into_body().into_bytes().await.map_err(failed)
 }
 
 /// Reads the file at `path` one [`FILE_READ_CHUNK`] at a time, yielding
@@ -706,10 +997,10 @@ pub struct ImageLoad {
     state: LoadState,
     images: Arc<DecodedImages>,
     source: ImageSource,
-    /// The lanes this subscriber leads a load on, should it have to;
-    /// `None` once they refused for want of room, so the next lead runs
+    /// What this subscriber leads a load on, should it have to; without
+    /// lanes once they refused for want of room, so the next lead runs
     /// here.
-    lanes: Lanes,
+    services: LoadServices,
     /// Loads closed under this subscriber so far.
     handovers: u8,
 }
@@ -734,29 +1025,80 @@ enum LoadState {
 
 /// A subscriber's claim on a pending load; dropping it unsubscribes.
 struct Subscription {
-    rx: oneshot::Receiver<Result<Image>>,
+    rx: oneshot::Receiver<Delivery>,
+    /// Told when the load's run is parked; `None` once told or closed.
+    claim: Option<oneshot::Receiver<()>>,
     images: Arc<DecodedImages>,
     source: ImageSource,
     ticket: Arc<LoadTicket>,
 }
 
+/// A subscriber's ends of the channels its [`Waiter`] sends on.
+struct Channels {
+    settle: oneshot::Receiver<Delivery>,
+    claim: oneshot::Receiver<()>,
+}
+
+impl Waiter {
+    fn new() -> (Self, Channels) {
+        let (settle, settle_rx) = oneshot::channel();
+        let (claim, claim_rx) = oneshot::channel();
+        (
+            Self {
+                settle,
+                claim: Some(claim),
+            },
+            Channels {
+                settle: settle_rx,
+                claim: claim_rx,
+            },
+        )
+    }
+
+    /// This waiter, already told a run is parked.
+    fn tell_parked(mut self) -> Self {
+        if let Some(claim) = self.claim.take() {
+            let _ = claim.send(());
+        }
+        self
+    }
+}
+
 impl Subscription {
     fn new(
-        rx: oneshot::Receiver<Result<Image>>,
+        channels: Channels,
         images: Arc<DecodedImages>,
         source: &ImageSource,
         ticket: Arc<LoadTicket>,
     ) -> Self {
         Self {
-            rx,
+            rx: channels.settle,
+            claim: Some(channels.claim),
             images,
             source: source.clone(),
             ticket,
         }
     }
 
-    /// The outcome once the load settles; `None` when it closed unsettled.
-    fn poll_outcome(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Image>>> {
+    /// Whether this subscriber should look for a parked run: it was told one
+    /// is parked, or its claim channel closed without telling, which leaves
+    /// it to look rather than miss a run. Looking finds nothing when none is
+    /// parked for its load.
+    fn poll_told(&mut self, cx: &mut Context<'_>) -> bool {
+        let Some(claim) = &mut self.claim else {
+            return false;
+        };
+        match Pin::new(claim).poll(cx) {
+            Poll::Pending => false,
+            Poll::Ready(_) => {
+                self.claim = None;
+                true
+            }
+        }
+    }
+
+    /// What the load delivers; `None` when it closed unsettled.
+    fn poll_outcome(&mut self, cx: &mut Context<'_>) -> Poll<Option<Delivery>> {
         Pin::new(&mut self.rx).poll(cx).map(std::result::Result::ok)
     }
 }
@@ -770,39 +1112,62 @@ impl Drop for Subscription {
 impl ImageLoad {
     /// Joins or starts the load of this subscriber's source.
     fn admit(&mut self) {
-        self.state = match self.images.admit(&self.source, &self.lanes) {
+        self.state = match self.images.admit(&self.source, &self.services) {
             Admission::Cached(image) => LoadState::Ready(Some(Ok(image))),
             Admission::Joined(subscription) => LoadState::Waiting(subscription),
-            Admission::Lead { subscription, run } => {
-                let Some(lanes) = &self.lanes else {
-                    self.state = LoadState::Leading {
-                        run: Some(run),
-                        subscription,
-                    };
-                    return;
-                };
-                let (cancel, cancelled) = oneshot::channel();
-                match lanes.spawn_io(Box::pin(until_cancelled(run, cancelled))) {
-                    Ok(()) => {
-                        self.images
-                            .attach(&self.source, &subscription.ticket, cancel);
-                        LoadState::Waiting(subscription)
-                    }
-                    // The refused run closed the entry as it dropped. Lanes
-                    // with no room now still have a thread here: lead again,
-                    // on it, once polled.
-                    Err(SpawnError::Saturated | SpawnError::Unavailable) => {
-                        drop(subscription);
-                        self.lanes = None;
-                        LoadState::Unadmitted
-                    }
-                    Err(reason) => LoadState::Ready(Some(Err(AssetError::LanesRefused {
-                        path: self.source.label().to_string(),
-                        reason,
-                    }))),
+            Admission::Lead { subscription, run } => LoadState::Leading {
+                run: Some(run),
+                subscription,
+            },
+            Admission::Started {
+                subscription,
+                start,
+            } => {
+                // A slot free now: spawn here. Lanes with no room, or
+                // shutting down, answer through the subscription.
+                if let Some((slot, start)) = start {
+                    drop(start(slot));
                 }
+                LoadState::Waiting(subscription)
             }
         };
+    }
+
+    /// Acts on what the load delivered: its outcome, its run to drive here,
+    /// or the refusal of this subscriber's lanes. `None` once it drives the
+    /// run.
+    fn deliver(&mut self, delivery: Delivery) -> Result<Image> {
+        match delivery {
+            Delivery::Settled(outcome) => outcome,
+            Delivery::Refused(reason) => Err(AssetError::LanesRefused {
+                path: self.source.label().to_string(),
+                reason,
+            }),
+        }
+    }
+
+    /// Drives the load's parked run here, if this subscriber was just told
+    /// of it and no other claimed it first.
+    fn claim_parked(&mut self, cx: &mut Context<'_>) -> bool {
+        let LoadState::Waiting(subscription) = &mut self.state else {
+            return false;
+        };
+        if !subscription.poll_told(cx) {
+            return false;
+        }
+        let Some(run) = self.images.claim(subscription) else {
+            return false;
+        };
+        let LoadState::Waiting(subscription) =
+            std::mem::replace(&mut self.state, LoadState::Unadmitted)
+        else {
+            unreachable!("BUG: the state was waiting under the same borrow");
+        };
+        self.state = LoadState::Leading {
+            run: Some(run),
+            subscription,
+        };
+        true
     }
 
     /// Takes over a load closed unsettled, or answers once it has been
@@ -840,6 +1205,9 @@ impl Future for ImageLoad {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
+            if self.claim_parked(cx) {
+                continue;
+            }
             let settled = match &mut self.state {
                 LoadState::Unadmitted => {
                     self.admit();
@@ -864,7 +1232,9 @@ impl Future for ImageLoad {
             };
             match settled {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(outcome)) => return Poll::Ready(outcome),
+                Poll::Ready(Some(delivery)) => {
+                    return Poll::Ready(self.deliver(delivery));
+                }
                 Poll::Ready(None) => self.hand_over(),
             }
         }

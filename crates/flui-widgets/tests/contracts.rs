@@ -701,6 +701,67 @@ fn editable_text_handles() {
     );
 }
 
+/// The selection menu of `SelectionArea`: the toolbar a touch selection
+/// shows, the popup a secondary click, the menu key or assistive technology
+/// opens, what each offers, and an enclosing menu for an area without one.
+#[test]
+fn selection_area_menu() {
+    run_cases(
+        "selection_area_menu",
+        &[
+            ("selection_area_menu::an_area_s_long_press_shows_its_toolbar", crate::selection_area_menu::an_area_s_long_press_shows_its_toolbar as fn()),
+            ("selection_area_menu::an_area_s_secondary_click_opens_its_popup", crate::selection_area_menu::an_area_s_secondary_click_opens_its_popup),
+            ("selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup", crate::selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup),
+            ("selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go", crate::selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go),
+            ("selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one", crate::selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one),
+            ("selection_area_menu::an_area_rebuilt_without_its_menu_takes_its_toolbar_away", crate::selection_area_menu::an_area_rebuilt_without_its_menu_takes_its_toolbar_away),
+        ],
+    );
+}
+
+/// The selection menu of `EditableText`: the toolbar a touch selection
+/// shows, the popup a secondary click, the menu key or assistive technology
+/// opens, what each offers, and what keeps them away.
+#[test]
+fn selection_menu() {
+    run_cases(
+        "selection_menu",
+        &[
+            ("selection_menu::a_long_press_shows_the_toolbar_whose_copy_writes_the_clipboard", crate::selection_menu::a_long_press_shows_the_toolbar_whose_copy_writes_the_clipboard as fn()),
+            ("selection_menu::the_toolbar_offers_only_what_the_field_can_do", crate::selection_menu::the_toolbar_offers_only_what_the_field_can_do),
+            ("selection_menu::a_secondary_click_opens_the_popup_on_the_selection", crate::selection_menu::a_secondary_click_opens_the_popup_on_the_selection),
+            ("selection_menu::the_menu_key_and_assistive_technology_open_the_popup", crate::selection_menu::the_menu_key_and_assistive_technology_open_the_popup),
+            ("selection_menu::added_commands_follow_the_editing_commands", crate::selection_menu::added_commands_follow_the_editing_commands),
+            ("selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go", crate::selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go),
+            ("selection_menu::a_policy_or_no_menu_keeps_the_menu_away", crate::selection_menu::a_policy_or_no_menu_keeps_the_menu_away),
+            ("selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar", crate::selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar),
+            ("selection_menu::an_assistive_click_on_the_toolbar_takes_it_away", crate::selection_menu::an_assistive_click_on_the_toolbar_takes_it_away),
+            ("selection_menu::the_toolbar_follows_a_scroll", crate::selection_menu::the_toolbar_follows_a_scroll),
+            ("selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar", crate::selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar),
+            ("selection_menu::a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more", crate::selection_menu::a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more),
+            ("selection_menu::the_toolbar_reads_in_the_field_s_direction", crate::selection_menu::the_toolbar_reads_in_the_field_s_direction),
+            ("selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup", crate::selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup),
+            ("selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu", crate::selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu),
+            ("selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup", crate::selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup),
+            ("selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away", crate::selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away),
+        ],
+    );
+}
+
+/// `ToolbarItems`: a toolbar's row, the overflow button, and the controller
+/// a design package holds.
+#[test]
+fn toolbar_items() {
+    run_cases(
+        "toolbar_items",
+        &[
+            ("toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides", crate::toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides as fn()),
+            ("toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change", crate::toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change),
+            ("toolbar_items::nothing_in_a_toolbar_takes_the_focus", crate::toolbar_items::nothing_in_a_toolbar_takes_the_focus),
+        ],
+    );
+}
+
 /// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
 /// of a handle moves its end, and a tap, Esc or the mouse hides them.
 #[test]

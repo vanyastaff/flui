@@ -7,6 +7,7 @@ mod linked_paragraph;
 mod primary_selection;
 mod rich_text;
 mod selection_area;
+mod selection_menu;
 mod selection_style;
 mod text;
 
@@ -21,9 +22,17 @@ pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{CaretHandle, EditableText, EditableTextState, SubmitCallback};
 pub use rich_text::RichText;
 pub use selection_area::{
-    DefaultSelectionHandles, DotHandles, HandleInfo, HandleSide, SelectError, SelectedText,
-    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
-    SelectionHandles, SelectionInput,
+    DotHandles, HandleInfo, HandleSide, SelectError, SelectedText, SelectionArea, SelectionChange,
+    SelectionChangeCause, SelectionContainer, SelectionController, SelectionHandles,
+    SelectionInput,
+};
+pub use selection_menu::{
+    DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
+    ToolbarItems, ToolbarItemsController, ToolbarItemsState,
+};
+pub(crate) use selection_menu::{
+    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, reading_commands,
+    show_menu_action, toolbar,
 };
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;

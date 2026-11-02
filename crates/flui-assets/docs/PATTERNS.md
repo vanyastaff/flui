@@ -114,7 +114,7 @@ absent-owner fallback through weak ownership; it cannot resurrect the registry.
 ## Source and presentation boundaries
 
 An `Asset` selects bytes, validates its descriptor and decodes its typed data.
-`BytesFileLoader` and `NetworkLoader` supply byte sources; they are not generic
+`BytesFileLoader` and the caller's HTTP client supply byte sources; they are not generic
 cache-key-to-asset factories. Embedded constructors take an identifier and owned
 bytes. Ordinary registry loads cache loaded results, including decoded images.
 

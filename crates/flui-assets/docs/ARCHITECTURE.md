@@ -249,8 +249,8 @@ pub trait Asset: Send + Sync + 'static {
 ### Byte sources and decoding
 
 `Asset::load` owns source selection and decoding. `BytesFileLoader` reads real
-file bytes for `FontAsset` and `ImageAsset`; `NetworkLoader` fetches bytes for the
-network image bridge. Embedded assets own their bytes through `from_bytes`.
+file bytes for `FontAsset` and `ImageAsset`; the caller's HTTP client fetches bytes for
+network images. Embedded assets own their bytes through `from_bytes`.
 There is no separate generic loader trait: a key alone cannot specify how to
 construct an arbitrary asset's decoded data.
 
@@ -364,26 +364,16 @@ hot-reload = ["notify"]
   `AssetKey::as_str` rejects borrowing a name beyond the owning key's lifetime.
   ADR-0121 records this ownership contract.
 
-- Default network image loads share a lazily initialized HTTP client per registry,
-  constructed on the Tokio runtime of the IO lane that first fetches. Initialization
-  returns a typed error and remains retryable. `NetworkLoader::try_new` is fallible
-  rather than hiding external initialization failures in a panic; `Default` is not a
-  construction contract. Hosts supply a client builder that creates a fresh
-  configured pool, preserving its HTTP policy through capacity transitions. A load
-  whose IO lane has no Tokio reactor answers `AssetError::ReactorUnavailable`
-  instead of the client's panic.
-  `network_loads_reuse_connections_and_recover_after_decode_errors` checks real
-  connection reuse after invalid image bytes, a configured client, independent
-  registry pool ownership, lanes replaced between loads and the missing reactor.
-  Fresh configured pools cannot import another runtime's existing connection
-  drivers (ADR-0118).
-- Network bytes are transferred into their owned vector through `Bytes`' consuming
-  conversion, allowing buffer reuse where its ownership permits. Text remains
-  strict UTF-8, preserving a BOM and ignoring charset replacement decoding. HTTP
-  admission remains limited to 2xx; `error_for_status` would also admit 3xx.
-  `network_loader_preserves_transport_and_text_contracts_after_failures` exercises
-  HTTP status errors, redirects, malformed text, truncated bodies, a configured
-  body deadline and recovery through the public loader.
+- A network image is fetched with the HTTP client its caller passes in
+  `LoadServices` (the host's `HttpCapability`, ADR-0280); this crate links no
+  HTTP stack and keeps no connection pool. The client drives the request, so the
+  lane a load runs on needs no async runtime, and a load with no lanes fetches
+  where it is polled. A load without a client answers `AssetError::HttpUnavailable`,
+  a failed request `AssetError::Http` and a status other than 2xx
+  `AssetError::HttpStatus`; none is kept, so a later request retries. Each request
+  limits its body to 256 MiB. `network_loads_fetch_with_the_callers_client_and_recover_after_errors`
+  covers recovery after invalid image bytes, no lanes, an error status, a failed
+  request, no client and a load handed over to the next request's client.
 
 - Decoded data need not implement `Clone`. Registry caches and cloned strong/weak
   handles share `Arc` ownership, while the opt-in `clone_data` operation requires
@@ -400,7 +390,7 @@ hot-reload = ["notify"]
 
 - Byte-source selection and decoding belong to `Asset::load`. File-backed image
   and font assets use `BytesFileLoader`; embedded constructors own their source
-  bytes, and network image loads use `NetworkLoader` before image decoding.
+  bytes, and network image loads fetch with the caller's HTTP client before decoding.
   `font_sources_preserve_bytes_and_recover_after_load_errors` and
   `image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions` pin
   file/embedded equivalence, invalid sources, missing sources and recovery.
@@ -468,14 +458,19 @@ registry keeps their decoded images in its own LRU, bounded by pixel bytes
 image larger than the budget is handed to its waiters and not kept.
 `cached_image` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two registries are two
-images (ADR-0250).
+images (ADR-0250). A network source is its URL with the `HttpAuthority` of the
+client that fetches it, so two clients answered different images at one URL
+never share a decoded image or a load (ADR-0280 §6); a load without a client
+shares nothing with one that has one.
 
-A load runs on the lanes its first request hands it (an
+A load runs on the `LoadServices` its first request hands it: lanes (an
 `Arc<dyn flui_platform::executor::Executor>`, the UI runtime's for the `Image`
-widget): read on the IO lane, decoded on the compute lane. The registry starts
-no runtime or thread (ADR-0279). With no lanes, or lanes refusing it for want of
-room, the load runs inside the requesting `ImageLoad`, on the thread that polls
-it; lanes shutting down answer `AssetError::LanesRefused`.
+widget) and an HTTP client (`flui_platform::http::Http`, the host's for that
+widget, ADR-0280): read or fetched on the IO lane, decoded on the compute lane.
+The registry starts no runtime or thread (ADR-0279). With no lanes, or lanes
+refusing it for want of room, the load runs inside the requesting `ImageLoad`,
+on the thread that polls it; lanes shutting down answer
+`AssetError::LanesRefused`.
 
 A request for a source already loading joins that load. The load is the
 registry's: every `ImageLoad` waiting on it is a subscriber, and only when the
@@ -501,7 +496,13 @@ one of four load slots per decode thread. A load bound for lanes is admitted whe
 it is requested; a load with no lanes runs only while its request polls it, so it
 is admitted at its first poll: loads a caller holds unpolled keep no slot from
 the one it awaits, and open no entry that a request for the same source would
-wait on with nobody driving it. A load
+wait on with nobody driving it. A load bound for lanes is spawned on their IO
+lane only once it holds its slot: a queued one is a start the slot queue calls,
+on the thread that freed the slot, so loads waiting for a slot spend none of
+the IO lane's admission window and other IO work is never refused for them. If
+the lanes have no room by then, the run is parked and every subscriber told; the
+first one polled claims it and drives it where it is polled; if they are shutting down, the lead
+answers `AssetError::LanesRefused` and the rest take the load over. A load
 waits for its slot before it reads and holds it until its decode
 returns, so the reads in flight and the encoded bytes waiting to decode are
 bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a file
@@ -542,12 +543,16 @@ waiting behind a running decode, the earlier-admitted network load goes first)
 and `loads_past_admission_are_bounded_by_count` (one decode thread: while a
 decode holds its slot only three more requests go out, and the next starts
 when it returns).
+`a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane` (one decode
+thread: six held loads put four tasks on the IO lane, a freed slot spawns the
+next; lanes with no room park the run for the subscriber polled first, even
+when the lead is never polled again; lanes shutting down refuse only the lead,
+and a long queue of them is refused in turn on a small stack).
 
-`NetworkLoader::try_new` gives up on a connection after `CONNECT_TIMEOUT`, on a
-silent response after `READ_TIMEOUT`, and on any request after
-`REQUEST_TIMEOUT` (a server that drips one byte per read timeout would
-otherwise hold a load slot forever); `load_url` refuses a body over
-`MAX_BODY_BYTES`.
+A network image's request carries `HttpRequest`'s default deadline (two minutes,
+body included), so a server that drips one byte at a time cannot hold a load
+slot forever, and its 256 MiB body limit; the host's built-in client also gives
+up on a connection and on a silent response after 30 seconds.
 
 Every image decode, typed or registry-kept, reads the header first and refuses an
 image whose RGBA8 pixels would pass 256 MiB (128 MiB on Android, iOS and the

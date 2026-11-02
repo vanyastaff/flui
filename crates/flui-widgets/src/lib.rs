@@ -192,11 +192,11 @@ pub use icon::{
 };
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
-#[cfg(feature = "network-images")]
+#[cfg(feature = "asset-images")]
 pub use image::NetworkImage;
 pub use image::{
     DecodeJob, DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider,
-    ImageProviderError, ImageState, MemoryImage, Texture, TextureState,
+    ImageProviderError, ImageServices, ImageState, MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
@@ -232,6 +232,7 @@ pub use motion::{
     ParticleEmitter, ParticleEmitterState, Shimmer, ShimmerBand, ShimmerState, Skeleton,
     SkeletonState, Transition, Trigger,
 };
+pub use popup_menu::PlainSelectionMenu;
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
@@ -320,11 +321,13 @@ pub use swipe::{
     SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };
 pub use text::{
-    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionHandles, DefaultSelectionStyle,
+    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
-    RawTextField, RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea,
-    SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
-    SelectionHandles, SelectionInput, SelectionStyle, SubmitCallback, Text, TextEditingController,
+    PopupOrigin, RawTextField, RawTextFieldState, RichText, SelectError, SelectedText,
+    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
+    SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
+    SelectionStyle, SubmitCallback, Text, TextEditingController, ToolbarItems,
+    ToolbarItemsController, ToolbarItemsState,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
@@ -420,7 +423,7 @@ pub mod prelude {
         ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
         ContentShape, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
         CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
-        DefaultFocusTraversalState, DefaultSelectionHandles, DefaultSelectionStyle,
+        DefaultFocusTraversalState, DefaultSelectionControls, DefaultSelectionStyle,
         DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
         DotHandles, DragSlot, Draggable, DropTarget, EditableText, EditableTextState, ExcludeFocus,
         ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible,

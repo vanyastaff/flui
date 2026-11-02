@@ -123,6 +123,12 @@ impl WidgetHost {
         self.ui_runtime.dispatch(PlatformInput::Keyboard(event));
     }
 
+    /// Deliver an input-method event, as the platform delivers one between
+    /// frames.
+    pub(super) fn dispatch_ime(&self, event: flui_platform::ImeEvent) {
+        self.ui_runtime.dispatch(PlatformInput::Ime(event));
+    }
+
     /// The shallowest mounted element of `view_type` below the harness root
     /// (the UI runtime's root scopes above it are never a caller's view), with its
     /// depth.

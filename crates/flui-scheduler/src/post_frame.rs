@@ -184,6 +184,8 @@ pub struct OwnerFrame {
     post_frame: Rc<PostFrameQueue>,
     tasks: Rc<TaskStore>,
     pub(crate) cleanup: Rc<OwnerCleanup>,
+    /// The id the `frame` span reports as its `runtime`, set by the owner that knows it.
+    trace_runtime: Cell<Option<u64>>,
 }
 
 /// Shared cleanup metadata. Only the execution owner retains it persistently;
@@ -258,7 +260,20 @@ impl OwnerFrame {
             post_frame,
             tasks,
             cleanup,
+            trace_runtime: Cell::new(None),
         })
+    }
+
+    /// Name the owner of this frame's drives. Every `frame` span a drive opens reports `id` as
+    /// its `runtime` field from the moment it opens, before any frame callback runs, so a tracing
+    /// layer can tell the frames of several runtimes apart even when a callback panics.
+    pub fn set_trace_runtime(&self, id: u64) {
+        self.trace_runtime.set(Some(id));
+    }
+
+    /// The id the `frame` span reports as its `runtime`, if the owner named one.
+    pub(crate) fn trace_runtime(&self) -> Option<u64> {
+        self.trace_runtime.get()
     }
 
     /// A widget's handle to this frame's tasks: `Weak`, so it keeps nothing
