@@ -25,6 +25,7 @@ use flui_view::{BoxedView, Child, RenderView, View, ViewExt, impl_render_view};
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
+use crate::text::MenuHost;
 use crate::{Container, Positioned, Stack};
 
 /// Which end of a selection a handle moves, in reading order.
@@ -145,6 +146,8 @@ pub(super) struct HandleState {
     watches: RefCell<Vec<LeaderWatch>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
+    /// The area's selection menu, whose toolbar shows over shown handles.
+    pub(super) menu: Rc<MenuHost>,
     /// Whether the missing overlay was already reported.
     warned: Cell<bool>,
 }
@@ -159,6 +162,7 @@ impl Default for HandleState {
             look: RefCell::new(None),
             watches: RefCell::new(Vec::new()),
             grip: Cell::new(None),
+            menu: Rc::new(MenuHost::default()),
             warned: Cell::new(false),
         }
     }
@@ -205,6 +209,7 @@ impl HandleState {
     /// fails there (held in `failure`) leaves nothing shown.
     pub(super) fn hide(&self, failure: &mut FirstPanic) -> bool {
         self.grip.set(None);
+        self.menu.stop_toolbar();
         let was_shown = self.shown.replace(false);
         let entry = self.entry.borrow_mut().take();
         if let Some(entry) = entry {
@@ -263,6 +268,14 @@ impl StatelessView for HandlesView {
                     .into_iter()
                     .zip(heights)
                     .filter_map(|(side, height)| handle(&model, side, height?, ctx))
+                    .chain(
+                        model
+                            .handles
+                            .menu
+                            .toolbar_shown()
+                            .then(|| super::menu::toolbar(&model))
+                            .flatten(),
+                    )
                     .collect()
             })
             .unwrap_or_default();
@@ -312,7 +325,10 @@ impl SelectionModel {
                     .get(index)
                     .and_then(LeaderWatch::geometry)
                     .map(|geometry| geometry.size);
-                if size.replace(now) != now && model.handles.shown.get() {
+                // The toolbar is placed against the overlay, so a move
+                // places it again.
+                let resized = size.replace(now) != now;
+                if model.handles.shown.get() && (resized || model.handles.menu.toolbar_shown()) {
                     let mut failure = FirstPanic::new();
                     model.handles.refresh(&mut failure);
                     failure.resume();
@@ -359,9 +375,14 @@ fn handle(
                 .on_end(move |_cx, details| {
                     if let Some(model) = end.upgrade() {
                         // A release ends where the finger lifted, which no
-                        // update may have reported yet.
+                        // update may have reported yet. The drag ends, and
+                        // the toolbar shows again, though that last move's
+                        // listener panics; the first failure resumes after.
+                        let mut failure = FirstPanic::new();
                         if details.reason == GestureEndReason::Completed {
-                            model.handle_dragged(side, details.global_position);
+                            failure.contain(|| {
+                                model.handle_dragged(side, details.global_position);
+                            });
                         }
                         // A drag of the other handle that began since holds
                         // the grip now.
@@ -372,7 +393,9 @@ fn handle(
                             .is_some_and(|(gripped, _)| gripped == side)
                         {
                             model.handles.grip.set(None);
+                            failure.contain(|| model.handle_released());
                         }
+                        failure.resume();
                     }
                 }),
         )

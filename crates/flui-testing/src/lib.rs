@@ -141,6 +141,7 @@ pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
+pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{
     AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,

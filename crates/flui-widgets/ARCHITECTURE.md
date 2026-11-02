@@ -1238,13 +1238,17 @@ paint commands, including RTL and obscured cases.
 The registry keeps the decoded images and the loads in flight (ADR-0250), so
 `AssetImage` and `NetworkImage` share a decode only with providers on the same
 registry. Their `ImageCacheKey` holds the registry's weak allocation identity
-beside the source (ADR-0118): HTTP headers and policies can change the response
-at the same URL, and equal paths in two registries are two images. Clones sharing
-one registry still share keys. Retained keys cannot retain the registry's HTTP
+beside the source (ADR-0118): equal paths in two registries are two images.
+Clones sharing one registry still share keys. Two HTTP clients can be answered
+different images at one URL, so the registry keeps a network image under its
+client's `HttpAuthority` as well (ADR-0280 §6), and `NetworkImage::cached`
+probes with the client its `Image` acquired; the key leaves the client out,
+since it does not change while that `Image` is mounted. Retained keys cannot retain the registry's HTTP
 pool or runtime, and their addresses cannot alias a later owner. A custom
 provider keys by a typed value (`ImageCacheKey::custom`), never equal to a
 built-in key or to a value of another type.
-**Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`.
+**Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`,
+`one_registry_keeps_two_clients_images_of_one_url_apart` (`flui-assets`).
 
 ### 1. `DropTarget` registers one `DropReceiver` for its whole life
 
