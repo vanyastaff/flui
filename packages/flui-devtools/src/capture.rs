@@ -654,7 +654,19 @@ where
     Some(slots.0.swap_remove(at).1)
 }
 
-fn owning_frame<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<SpanRef<'a, S>>
+/// The nearest frame span around `span`, open or already closed: work inside a frame that has
+/// finished is not an enclosing frame's, so the search never looks past it.
+fn owning_frame<'a, S>(span: &SpanRef<'a, S>) -> Option<SpanRef<'a, S>>
+where
+    S: LookupSpan<'a>,
+{
+    span.scope()
+        .skip(1)
+        .find(|ancestor| is_frame(ancestor.metadata()))
+}
+
+/// The nearest enclosing frame that is still open, past any that has closed.
+fn enclosing_open_frame<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<SpanRef<'a, S>>
 where
     S: LookupSpan<'a>,
 {
@@ -670,7 +682,7 @@ where
     S: LookupSpan<'a>,
 {
     span.scope()
-        .take_while(|ancestor| !slot_has::<FrameState, S>(ancestor, owner))
+        .take_while(|ancestor| !is_frame(ancestor.metadata()))
         .find_map(|ancestor| slot_read::<SegmentPresentation, _, S>(&ancestor, owner, |s| s.0))?
 }
 
@@ -685,7 +697,7 @@ where
         if is_frame(metadata) {
             let mut fields = Fields::default();
             attrs.record(&mut fields);
-            let outermost = owning_frame(&span, owner).is_none();
+            let outermost = enclosing_open_frame(&span, owner).is_none();
             slot_put(
                 &span,
                 owner,
@@ -770,7 +782,7 @@ where
             return;
         }
         // Only spans inside an entered frame count: a phase outside any frame is not a frame.
-        let in_open_frame = owning_frame(&span, owner).is_some_and(|frame| {
+        let in_open_frame = owning_frame(&span).is_some_and(|frame| {
             slot_read(&frame, owner, |state: &FrameState| state.entries > 0).unwrap_or(false)
         });
         if !in_open_frame {
@@ -784,7 +796,7 @@ where
         let covered = span
             .scope()
             .skip(1)
-            .take_while(|ancestor| !slot_has::<FrameState, S>(ancestor, owner))
+            .take_while(|ancestor| !is_frame(ancestor.metadata()))
             .any(|ancestor| {
                 (ancestor.metadata().target(), ancestor.metadata().name()) == key
                     && slot_has::<Visit_, S>(&ancestor, owner)
@@ -868,7 +880,7 @@ where
             duration: visit.start.elapsed(),
             thread: visit.thread,
         };
-        if let Some(frame) = owning_frame(&span, owner) {
+        if let Some(frame) = owning_frame(&span) {
             slot_modify(&frame, owner, |state: &mut FrameState| {
                 state.ended.push(ended);
             });
@@ -1056,6 +1068,30 @@ mod tests {
         assert_eq!(capture.runtimes(), [Some(runtime(1)), Some(runtime(2))]);
     }
 
+    /// A phase span created inside a nested frame but first entered after that frame has closed is
+    /// no work of the enclosing frame.
+    #[test]
+    fn a_deferred_phase_of_a_closed_nested_frame_is_not_charged_to_the_enclosing_frame() {
+        let capture = capturing(|| {
+            let _outer = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let deferred = {
+                let _inner = tracing::debug_span!(target: "flui.frame", "frame").entered();
+                tracing::debug_span!(target: "flui.frame", "layout")
+            };
+            let _entered = deferred.entered();
+        });
+
+        let outer = capture
+            .frames()
+            .into_iter()
+            .find(CapturedFrame::is_outermost)
+            .expect("the enclosing frame");
+        assert!(
+            outer.spans().is_empty(),
+            "the deferred layout is not the enclosing frame's: {:?}",
+            outer.spans()
+        );
+    }
     /// The span budget bounds what the retained frames hold, not only the flat span list.
     #[test]
     fn the_span_capacity_bounds_the_retained_frames_contents() {
