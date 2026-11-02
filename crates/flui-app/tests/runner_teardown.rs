@@ -279,6 +279,10 @@ fn runner_teardown() {
                 "session_end_never_blocks_for_work_in_progress",
                 session_end_never_blocks_for_work_in_progress,
             ),
+            (
+                "a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok",
+                a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok,
+            ),
         ],
     );
 }
@@ -2057,6 +2061,8 @@ struct NoteShared {
     /// Run once from the next `build`, while the window's UI runtime is
     /// checked out to its frame.
     during_build: Option<Box<dyn FnOnce()>>,
+    /// Run once when the window's observer is told `Detached`.
+    at_detached: Option<Box<dyn FnOnce()>>,
     lifecycle: Option<flui_view::LifecycleSubscription>,
     notices: Option<flui_view::HostNoticeSubscription>,
 }
@@ -2080,7 +2086,20 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
         let lifecycle = ctx.lifecycle_handle().expect("a bound lifecycle");
         let counted = Rc::clone(&self.0.0);
         let (_, subscription) = lifecycle
-            .subscribe(move |_| counted.borrow_mut().observed += 1)
+            .subscribe(move |state| {
+                let at_detached = {
+                    let mut shared = counted.borrow_mut();
+                    shared.observed += 1;
+                    if state == flui_view::AppLifecycleState::Detached {
+                        shared.at_detached.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(at_detached) = at_detached {
+                    at_detached();
+                }
+            })
             .expect("the lifecycle is open");
         let counted = Rc::clone(&self.0.0);
         let notices = lifecycle
@@ -2386,4 +2405,61 @@ pub(crate) fn session_end_never_blocks_for_work_in_progress() {
     let driver = note.drive_io_after(Duration::ZERO);
     note.run.join().expect("the run returns Ok");
     drop(driver);
+}
+
+/// A write the exit's flush cannot finish by its deadline costs the exit no
+/// more than its budget and leaves the file whole: the run returns `Ok` with
+/// code 0, and the file holds the value stored before, never part of the
+/// later one (ADR-0258 §7). The later value is published by a `Detached`
+/// observer, after the close was accepted, so no hold kept the window open.
+///
+/// Red-check: let the exit's flush wait for a write in flight without its
+/// deadline — the run does not return, and the exit watchdog ends the process
+/// with the hung code.
+pub(crate) fn a_write_past_the_deadline_leaves_a_whole_file_and_exits_ok() {
+    let note = NoteRun::start();
+    let notes = note.notes();
+    notes
+        .set(Note("stored before the close".to_owned()))
+        .expect("the loaded document takes the value");
+    for _ in 0..100 {
+        if notes.status() == flui_view::persist::SaveStatus::Clean {
+            break;
+        }
+        note.pools.run_until_idle();
+        note.run.run_owner_turn();
+    }
+    assert_eq!(notes.status(), flui_view::persist::SaveStatus::Clean);
+    assert!(note.stores("stored before the close"));
+
+    note.shared.borrow_mut().at_detached = Some(Box::new(move || {
+        notes
+            .set(Note("published at Detached".to_owned()))
+            .expect("the document takes a value at Detached");
+    }));
+    let window = note
+        .run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+    assert!(window.simulate_close(), "nothing holds the close");
+    note.run.run_owner_turn();
+    // The IO pool never runs again: the later write stays in flight.
+    let started = Instant::now();
+    let report = note
+        .run
+        .join()
+        .expect("a flush past its deadline is no run error");
+    let took = started.elapsed();
+    assert_eq!(report.exit, RunExit::Returned);
+    assert_eq!(report.code(), 0);
+    assert!(
+        took < Duration::from_secs(7),
+        "the exit took {took:?}, past the six-second budget"
+    );
+    assert!(
+        holds(walk_for_notes(note.root.path()), "stored before the close"),
+        "the file holds the earlier value whole"
+    );
 }
