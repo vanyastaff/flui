@@ -118,8 +118,11 @@ not. While the walk is under a node that reported a `WindowMove` region, such a 
 `WindowContent` region over its box after its own regions, so a button or a field in the bar keeps
 its presses and nobody marks it by hand. A caption button or resize region between the two keeps
 its subtree's presses its own (the system answers them), and
-`InputRegionSink::pass_presses_through` (`RenderPressPassThrough`) keeps a subtree moving the
-window until a move area below it starts cutting out again.
+`InputRegionSink::pass_presses_through` keeps a subtree moving the window until a move area below
+it starts cutting out again: `RenderPressPassThrough` says it, and so does an ignoring
+`RenderIgnorePointer` or `RenderSliverIgnorePointer`, whose subtree no press reaches. Inside a
+cut-out such a node adds a `WindowMove` region over its box, so a handle inside a button still
+moves the window.
 
 §6. **Widgets.** `flui-widgets` marks the regions: `WindowTitleBar` (`WindowMove`),
 `WindowCaptionButton::{minimize, maximize, close}` (`CaptionButton`, a `RawButton` named after

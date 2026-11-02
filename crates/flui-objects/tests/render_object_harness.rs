@@ -8388,6 +8388,77 @@ fn harness_press_pass_through_disabled_cuts_out_again() {
     );
 }
 
+/// A press that reaches no press taker moves the window again: a pass-through inside a
+/// press-taking listener marks its own box a move area over the listener's cut-out, and a
+/// listener under an ignoring `IgnorePointer` is not cut out, until it stops ignoring.
+fn harness_input_regions_give_back_presses_no_press_taker_receives() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let at = |left: f64, top: f64| StackParentData::new().with_top(top).with_left(left);
+    let claiming = |child| {
+        let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+        let _ = listener.set_claims_presses(true);
+        box_node(listener).child(child)
+    };
+    let button_with_handle = claiming(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::green(40.0, 20.0)))
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)))
+                    .with_stack_parent_data(at(20.0, 0.0)),
+            ),
+    );
+    let ignored = box_node(RenderIgnorePointer::new(true))
+        .child(claiming(box_node(RenderColoredBox::green(20.0, 20.0))))
+        .label("ignore");
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(RenderStack::new())
+                    .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+                    .child(button_with_handle.with_stack_parent_data(at(10.0, 6.0)))
+                    .child(ignored.with_stack_parent_data(at(100.0, 6.0))),
+            ),
+        ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    let bar = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 200.0, 32.0),
+    );
+    let button = InputRegion::new(
+        InputRegionKind::WindowContent,
+        Rect::from_ltrb(10.0, 6.0, 50.0, 26.0),
+    );
+    let handle = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(30.0, 6.0, 50.0, 26.0),
+    );
+    assert_eq!(run.owner().input_regions(), vec![bar, button, handle]);
+
+    let ignore = run.id("ignore");
+    run.update_paint::<RenderIgnorePointer>(ignore, |ignore| {
+        assert!(
+            ignore.set_ignoring(false).needs_paint(),
+            "the regions are collected on composited frames"
+        );
+    });
+    run.pump();
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            bar,
+            button,
+            handle,
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0),
+            ),
+        ]
+    );
+}
+
 /// A region under a follower is reported at the follower's composite-resolved
 /// position (its leader's anchor), where it is painted and hit-tested, not at
 /// its tree-relative position.
@@ -13901,6 +13972,10 @@ fn family_pointer() {
             (
                 "press_pass_through_disabled_cuts_out_again",
                 harness_press_pass_through_disabled_cuts_out_again,
+            ),
+            (
+                "input_regions_give_back_presses_no_press_taker_receives",
+                harness_input_regions_give_back_presses_no_press_taker_receives,
             ),
         ],
     );

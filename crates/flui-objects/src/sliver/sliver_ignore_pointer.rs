@@ -53,13 +53,16 @@ impl RenderSliverIgnorePointer {
         self.ignoring
     }
 
-    /// Updates the `ignoring` flag and reports semantics when changed.
+    /// Updates the `ignoring` flag and reports semantics when changed. The input regions say
+    /// whether presses reach the subtree and are collected on composited frames, so a change
+    /// marks paint too.
     pub fn set_ignoring(&mut self, ignoring: bool) -> flui_rendering::RenderUpdateImpact {
         if self.ignoring == ignoring {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.ignoring = ignoring;
         flui_rendering::RenderUpdateImpact::SEMANTICS
+            .union(flui_rendering::RenderUpdateImpact::PAINT)
     }
 }
 
@@ -108,6 +111,18 @@ impl RenderSliver for RenderSliverIgnorePointer {
 
         // Defer to the child at its committed sliver paint offset.
         ctx.hit_test_child_at_layout_offset(0)
+    }
+
+    /// Presses here reach nothing of the subtree, so under an application's title bar a
+    /// press-taking descendant keeps moving the window instead of leaving a dead cut-out.
+    fn describe_input_regions(
+        &self,
+        _size: flui_foundation::geometry::Size,
+        regions: &mut flui_rendering::input_regions::InputRegionSink,
+    ) {
+        if self.ignoring {
+            regions.pass_presses_through();
+        }
     }
 }
 

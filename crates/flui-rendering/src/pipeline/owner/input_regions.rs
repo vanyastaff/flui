@@ -84,34 +84,42 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 .render_object()
                 .describe_input_regions(size, &mut walk.sink),
         }
-        // A node is inside the move area of the nearest ancestor that reported one, unless
-        // a nearer one passed presses through; a press-claiming node there is cut out.
-        let scope = walk.scope;
-        let child_scope = match walk.sink.take_presses() {
-            Presses::Claimed if scope == MoveScope::InMove => {
-                walk.sink.add(
-                    InputRegionKind::WindowContent,
-                    Rect::from_origin_size(Point::ZERO, size),
-                );
-                scope
-            }
-            Presses::PassedThrough => MoveScope::PassedThrough,
-            Presses::Claimed | Presses::Unclaimed => scope,
-        };
         // A move area starts cutting out below it. A caption button or a resize border is
         // chrome of its own: the button that draws it takes its presses through the system,
-        // so nothing below it is cut out of the move area it lies in.
-        let child_scope = if walk
+        // so nothing below it is cut out of the move area it lies in. Read before this
+        // node's cut-out or move region joins its own.
+        let starts_move = walk
             .sink
-            .reports(|kind| kind == InputRegionKind::WindowMove)
-        {
-            MoveScope::InMove
-        } else if walk.sink.reports(|kind| {
+            .reports(|kind| kind == InputRegionKind::WindowMove);
+        let ends_move = walk.sink.reports(|kind| {
             matches!(
                 kind,
                 InputRegionKind::CaptionButton(_) | InputRegionKind::WindowResize(_)
             )
-        }) {
+        });
+        // A node is inside the move area of the nearest ancestor that reported one, unless
+        // a nearer one passed presses through: a press-claiming node there is cut out, and a
+        // node passing presses through inside a cut-out moves the window again.
+        let scope = walk.scope;
+        let own_box = Rect::from_origin_size(Point::ZERO, size);
+        let child_scope = match (walk.sink.take_presses(), scope) {
+            (Presses::Claimed, MoveScope::InMove) => {
+                walk.sink.add(InputRegionKind::WindowContent, own_box);
+                MoveScope::CutOut
+            }
+            (Presses::PassedThrough, MoveScope::CutOut) => {
+                walk.sink.add(InputRegionKind::WindowMove, own_box);
+                MoveScope::PassedThrough
+            }
+            (Presses::PassedThrough, MoveScope::InMove | MoveScope::PassedThrough) => {
+                MoveScope::PassedThrough
+            }
+            (Presses::PassedThrough, MoveScope::Outside)
+            | (Presses::Claimed | Presses::Unclaimed, _) => scope,
+        };
+        let child_scope = if starts_move {
+            MoveScope::InMove
+        } else if ends_move {
             MoveScope::Outside
         } else {
             child_scope
@@ -281,6 +289,9 @@ enum MoveScope {
     /// The nearest ancestor that said anything reported a move area: press-claiming nodes
     /// are cut out of it.
     InMove,
+    /// Below a press-claiming node cut out of a move area: the cut-out covers its
+    /// descendants, and a node passing presses through moves the window again.
+    CutOut,
     /// The nearest ancestor that said anything passed presses through to the move area.
     PassedThrough,
 }

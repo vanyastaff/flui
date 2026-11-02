@@ -28,12 +28,6 @@ impl RenderPressPassThrough {
         }
     }
 
-    /// Whether presses pass through now.
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-
     /// Passes presses through, or stops. The input regions are collected on composited
     /// frames, so a change marks paint.
     pub fn set_enabled(&mut self, enabled: bool) -> RenderUpdateImpact {

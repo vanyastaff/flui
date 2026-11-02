@@ -123,17 +123,11 @@ impl RenderListener {
         self.behavior = behavior;
     }
 
-    /// Whether the listener takes presses: it has a pointer-down handler or adds
+    /// Says whether the listener takes presses: it has a pointer-down handler or adds
     /// recognizers to the gesture arena. Under an application's title bar such a listener is
     /// cut out of the move area, so it is pressed rather than dragging the window; a
-    /// hover-only listener is not.
-    #[must_use]
-    pub const fn claims_presses(&self) -> bool {
-        self.claims_presses
-    }
-
-    /// Says whether the listener takes presses. The input regions are collected on
-    /// composited frames, so a change marks paint.
+    /// hover-only listener is not. The input regions are collected on composited frames, so
+    /// a change marks paint.
     pub fn set_claims_presses(&mut self, claims: bool) -> flui_rendering::RenderUpdateImpact {
         if self.claims_presses == claims {
             return flui_rendering::RenderUpdateImpact::NONE;

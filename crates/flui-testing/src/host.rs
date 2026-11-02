@@ -1934,7 +1934,8 @@ impl HeadlessHost {
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work()
-                || self.background_runs_next_pump())
+                || self.background_runs_next_pump()
+                || self.observations_pending())
         {
             return Some(Duration::ZERO);
         }
@@ -1969,6 +1970,17 @@ impl HeadlessHost {
     #[must_use]
     pub fn pending_background(&self) -> usize {
         self.scripted.background.pending()
+    }
+
+    /// Whether a window changed since the host last told the UI runtime: the next pump
+    /// delivers the change, so the host is not settled.
+    fn observations_pending(&self) -> bool {
+        self.presentation_ids().into_iter().any(|presentation| {
+            self.window_of(HeadlessWindowId(presentation))
+                .chrome
+                .lock()
+                .unobserved
+        })
     }
 
     /// Whether the next pump runs background work: a parked future waits
@@ -2009,6 +2021,7 @@ impl HeadlessHost {
                 && !runtime.scheduler().is_frame_scheduled()
                 && !runtime.has_pending_work()
                 && self.pending_background() == 0
+                && !self.observations_pending()
                 && runtime.next_wake().is_none()
             {
                 return Ok(frames);

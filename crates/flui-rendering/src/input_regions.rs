@@ -28,7 +28,8 @@
 //! ([`InputRegionSink::claim_presses`]) inside a [`InputRegionKind::WindowMove`] area an
 //! ancestor reported is cut out of it as [`InputRegionKind::WindowContent`]: the buttons and
 //! fields of an application's title bar are pressed, the rest of the bar moves the window.
-//! [`InputRegionSink::pass_presses_through`] keeps a subtree's presses moving the window.
+//! [`InputRegionSink::pass_presses_through`] keeps a subtree's presses moving the window,
+//! inside a press taker's cut-out too.
 
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use smallvec::SmallVec;
@@ -78,7 +79,7 @@ impl InputRegionSink {
     /// Says presses anywhere in the reporting node's subtree move the window as the move
     /// area around it does: the press-claiming nodes below it are not cut out of the move
     /// area. A [`InputRegionKind::WindowMove`] area reported below it starts cutting out
-    /// again.
+    /// again. Inside a press taker already cut out, the node's box moves the window again.
     pub fn pass_presses_through(&mut self) {
         self.presses = Presses::PassedThrough;
     }
