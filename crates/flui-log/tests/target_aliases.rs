@@ -111,3 +111,17 @@ fn the_aliases_leave_other_directives_alone() {
         Vec::<&str>::new()
     );
 }
+
+#[test]
+fn an_alias_keeps_the_order_of_the_directives_around_it() {
+    // The later explicit opt-out wins over the alias of the earlier old spelling.
+    assert_eq!(
+        admitted("off,flui::signals=trace,flui.signals=off"),
+        Vec::<&str>::new()
+    );
+    // And the other way round, the later old spelling wins over the earlier new one.
+    assert_eq!(
+        admitted("off,flui.signals=off,flui::signals=trace"),
+        ["flui.signals"]
+    );
+}

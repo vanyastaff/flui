@@ -170,14 +170,39 @@ impl PipelineOwner<Layout> {
                     continue;
                 };
                 // One span per relayout root, not per node: the walk below it is the root's cost.
-                let root_span = tracing::trace_span!(
-                    target: "flui.frame",
-                    "layout_root",
-                    node = dirty_node.id.as_u64(),
-                )
-                .entered();
+                //
+                // A subscriber is user code and may panic as the span opens or closes. The batch is
+                // already taken from the scheduler, so either failure first puts the unlaid nodes
+                // back and leaves the phase, and only then resumes the panic.
+                let root_span = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tracing::trace_span!(
+                        target: "flui.frame",
+                        "layout_root",
+                        node = dirty_node.id.as_u64(),
+                    )
+                    .entered()
+                })) {
+                    Ok(span) => span,
+                    Err(payload) => {
+                        let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+                        self.scheduler
+                            .retain_layout_batch(&dirty_nodes[index..], false);
+                        self.scheduler.recycle_layout_batch(dirty_nodes);
+                        std::panic::resume_unwind(payload)
+                    }
+                };
                 let laid_out = self.layout_dirty_root(dirty_node.id, constraints);
-                drop(root_span);
+                if let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(root_span)))
+                {
+                    // The node was laid out; queueing it again is harmless, because an entry
+                    // whose layout flag is already clear is skipped.
+                    let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+                    self.scheduler
+                        .retain_layout_batch(&dirty_nodes[index..], false);
+                    self.scheduler.recycle_layout_batch(dirty_nodes);
+                    std::panic::resume_unwind(payload)
+                }
                 match laid_out {
                     Ok(_) => {
                         self.layout_poison.note_success(dirty_node.id);

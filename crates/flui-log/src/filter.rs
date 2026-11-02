@@ -211,12 +211,14 @@ pub const TARGET_ALIASES: &[(&str, &str)] = &[
     ("flui::a11y", "flui.a11y"),
 ];
 
-/// `directives` with the replacement of every aliased target appended.
+/// `directives` with the replacement of every aliased target added right after its directive.
 ///
 /// `flui_animation::diagnostics=debug` also admits `flui.animation.diagnostics=debug`. A bare
-/// level (`info`) and a directive that names no old target pass through unchanged.
+/// level (`info`) and a directive that names no old target pass through unchanged. The
+/// replacement sits beside its original, not at the end, because a later directive for the same
+/// target wins: `flui::signals=trace,flui.signals=off` stays off.
 fn with_aliases(directives: &str) -> String {
-    let mut out = directives.to_owned();
+    let mut out = Vec::new();
     let mut depth = 0_u32;
     let mut start = 0;
     let mut pieces = Vec::new();
@@ -234,6 +236,7 @@ fn with_aliases(directives: &str) -> String {
     pieces.push(&directives[start..]);
     for piece in pieces {
         let piece = piece.trim();
+        out.push(piece.to_owned());
         let target_end = piece.find(['=', '[']).unwrap_or(piece.len());
         let target = &piece[..target_end];
         for (old, new) in TARGET_ALIASES {
@@ -243,11 +246,12 @@ fn with_aliases(directives: &str) -> String {
             if !(rest.is_empty() || rest.starts_with("::")) {
                 continue;
             }
-            out.push(',');
-            out.push_str(new);
-            out.push_str(&rest.replace("::", "."));
-            out.push_str(&piece[target_end..]);
+            out.push(format!(
+                "{new}{}{}",
+                rest.replace("::", "."),
+                &piece[target_end..]
+            ));
         }
     }
-    out
+    out.join(",")
 }

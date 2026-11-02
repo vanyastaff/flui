@@ -867,14 +867,32 @@ impl UiRuntime {
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
             producer.stage_agent_layer_reads(scene.tree());
-            let render_verdict = match catch_unwind(AssertUnwindSafe(|| {
+            // The verdict is kept apart from the span's teardown: a subscriber that panics when
+            // the `submit` span exits must not lose a verdict the sink already returned.
+            let mut submitted = None;
+            let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
-                sink.submit(scene)
-            })) {
-                Ok(verdict) => verdict,
-                Err(payload) => {
+                submitted = Some(sink.submit(scene));
+            }));
+            let render_verdict = match (submitted, span_outcome) {
+                (Some(verdict), Ok(())) => verdict,
+                // The sink answered and only the subscriber failed: settle what the verdict owes,
+                // then resume that failure with the first panic of the frame.
+                (Some(verdict), Err(payload)) => {
+                    super::input::preserve_first_input_panic(
+                        &mut hover_panic,
+                        Some(payload),
+                        "submit span",
+                    );
+                    verdict
+                }
+                // The sink panicked, or the span failed before it was called.
+                (None, Err(payload)) => {
                     producer.restore_staged_agent_layer_reads();
                     resume_unwind(payload);
+                }
+                (None, Ok(())) => {
+                    unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
             // Before anything else that can panic: the staged layer reads are answered if the
