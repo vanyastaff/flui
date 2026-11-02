@@ -192,6 +192,8 @@ mod text_field;
 mod text_field_widget;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "toolbar_items.rs"]
+mod toolbar_items;
 #[path = "transition_route.rs"]
 mod transition_route;
 #[path = "transitions.rs"]

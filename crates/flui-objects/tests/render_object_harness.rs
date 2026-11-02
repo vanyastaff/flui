@@ -67,6 +67,7 @@
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
 //! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count, semantics_blocked_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
+//! | `RenderToolbarItems` | `harness_toolbar_items_*` | yes | yes | yes | yes | split, semantics |
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
@@ -257,6 +258,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderFlow",
     "RenderTable",
     "RenderTheater",
+    "RenderToolbarItems",
     "RenderAbsorbPointer",
     "RenderContentShape",
     "RenderHitSlop",
@@ -7999,6 +8001,120 @@ fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
     );
 }
 
+/// Three 30-wide items and a 10-wide overflow button. In 70 the row holds
+/// two items and the button, and the third is not hit or announced;
+/// expanded, the button and the third stand in a column; in 200 every item
+/// shows and the button does not. Live and dry layout agree, and the
+/// intrinsics follow the split the layout makes.
+fn harness_toolbar_items_hide_what_does_not_fit_behind_the_button() {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    let painted = |run: &FrameRun| {
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+    let item = |label: &'static str, inner: &'static str, color: [f32; 4], width: f64| {
+        box_node(
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
+        )
+        .label(label)
+        .child(box_node(RenderColoredBox::new(color, Size::new(width, 20.0))).label(inner))
+    };
+    let tester = |split: &ToolbarItemsSplit, expanded: bool, max_width: f64| {
+        RenderTester::mount(
+            box_node(RenderToolbarItems::new(split.clone()).with_expanded(expanded))
+                .child(item("a", "a_box", RED, 30.0))
+                .child(item("b", "b_box", RED, 30.0))
+                .child(item("c", "c_box", BLUE, 30.0))
+                .child(item("more", "more_box", GREEN, 10.0)),
+        )
+        .with_constraints(BoxConstraints::new(0.0, max_width, 0.0, 100.0))
+    };
+    let announced = |split: &ToolbarItemsSplit, expanded: bool, max_width: f64| {
+        let run = tester(split, expanded, max_width)
+            .with_semantics_enabled()
+            .run_to_semantics();
+        let mut labels = run
+            .semantics_owner()
+            .expect("semantics enabled")
+            .tree()
+            .iter()
+            .filter_map(|(_, node)| node.label().map(ToString::to_string))
+            .collect::<Vec<String>>();
+        labels.sort();
+        labels
+    };
+    let narrow = BoxConstraints::new(0.0, 70.0, 0.0, 100.0);
+
+    let split = ToolbarItemsSplit::new();
+    assert_eq!(split.row_len(), None, "nothing is laid out yet");
+    assert_eq!(split.hidden(), 0..0);
+    let mut run = tester(&split, false, 70.0).run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(70.0, 20.0));
+    assert_eq!(run.dry_layout(root, narrow), Size::new(70.0, 20.0));
+    assert_eq!(split.row_len(), Some(2));
+    assert_eq!(split.hidden(), 2..3);
+    assert_eq!(run.offset(run.id("more")), Offset::new(60.0, 0.0));
+    assert_eq!(run.hit_first(65.0, 10.0), Some(run.id("more_box")));
+    assert_eq!(run.hit_first(35.0, 10.0), Some(run.id("b_box")));
+    assert_eq!(
+        run.hit_first(5.0, 10.0),
+        Some(run.id("a_box")),
+        "a hidden item is not hit where it was left"
+    );
+    assert_eq!(run.min_intrinsic_width(root, 100.0), 40.0);
+    assert_eq!(run.max_intrinsic_width(root, 100.0), 90.0);
+    assert_eq!(run.max_intrinsic_height(root, 70.0), 20.0);
+    assert_eq!(announced(&split, false, 70.0), ["a", "b", "more"]);
+    let commands = painted(&run);
+    assert!(
+        commands.contains("#FF0000FF") && !commands.contains("#0000FFFF"),
+        "the row paints its items, not the left-over one; commands:\n{commands}"
+    );
+
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_expanded(true),
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(root), Size::new(30.0, 40.0));
+    assert_eq!(run.dry_layout(root, narrow), Size::new(30.0, 40.0));
+    assert_eq!(run.offset(run.id("c")), Offset::new(0.0, 20.0));
+    assert_eq!(
+        run.box_geometry(run.id("more")),
+        Size::new(30.0, 20.0),
+        "a column's children span its width"
+    );
+    assert_eq!(run.hit_first(5.0, 25.0), Some(run.id("c_box")));
+    assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("more_box")));
+    assert_eq!(run.max_intrinsic_height(root, 70.0), 40.0);
+    assert_eq!(announced(&split, true, 70.0), ["c", "more"]);
+    let commands = painted(&run);
+    assert!(
+        commands.contains("#0000FFFF") && !commands.contains("#FF0000FF"),
+        "the column paints the left-over item, not the row's; commands:\n{commands}"
+    );
+
+    let wide = ToolbarItemsSplit::new();
+    let run = tester(&wide, false, 200.0).run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(90.0, 20.0));
+    assert_eq!(wide.row_len(), Some(3));
+    assert_eq!(wide.hidden(), 3..3);
+    assert_eq!(run.hit_first(85.0, 10.0), Some(run.id("c_box")));
+    assert_eq!(announced(&wide, true, 200.0), ["a", "b", "c"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderToolbarItems",
+        &["expanded", "text_direction", "row_len"],
+    );
+}
+
 // ── RenderStack dry layout ────────────────────────────────────────────────────
 
 // ============================================================================
@@ -13809,6 +13925,10 @@ fn family_multi_child() {
             (
                 "theater_skips_leading_children_in_layout_paint_and_hit_test",
                 harness_theater_skips_leading_children_in_layout_paint_and_hit_test,
+            ),
+            (
+                "toolbar_items_hide_what_does_not_fit_behind_the_button",
+                harness_toolbar_items_hide_what_does_not_fit_behind_the_button,
             ),
         ],
     );

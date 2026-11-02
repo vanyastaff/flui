@@ -10,6 +10,10 @@
 //! the menu key or assistive technology opens its popup.
 //! [`SelectionMenuPolicy`] says which touches show the toolbar.
 
+mod toolbar_items;
+
+pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItemsState};
+
 use std::fmt;
 use std::rc::Rc;
 

@@ -326,7 +326,8 @@ pub use text::{
     PopupOrigin, RawTextField, RawTextFieldState, RichText, SelectError, SelectedText,
     SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
     SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    SelectionStyle, SubmitCallback, Text, TextEditingController,
+    SelectionStyle, SubmitCallback, Text, TextEditingController, ToolbarItems,
+    ToolbarItemsController, ToolbarItemsState,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

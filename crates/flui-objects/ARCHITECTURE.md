@@ -21,6 +21,21 @@ recorded so far.
 
 ## Mapping decisions
 
+### A toolbar row hides by the outcome of its layout
+
+`RenderToolbarItems` measures every item and its overflow button each layout,
+then shows the leading items that fit, with the button when some are left over.
+Its expanded column holds the button and the left-over items. Children it
+leaves out are laid out but not painted, not hit-tested and not visited for
+semantics (`visits_child_for_semantics`). An offstage child, a `RenderWrap` or
+a layout delegate cannot hide a child by what layout decides. The row keeps its
+first item even when that item and the button do not fit, and clips it, so a lone
+command stays reachable. Each layout writes the row length to the
+`ToolbarItemsSplit` it holds, so the widget above can offer the left-over items
+another way after the frame. Harness row
+`harness_toolbar_items_hide_what_does_not_fit_behind_the_button` checks the
+split, both layouts, dry layout, intrinsics, paint, hits and semantics.
+
 ### Cross-axis sliver tracks preserve the scrolling protocol
 
 Content and positively weighted flexible tracks use a dedicated parent-data

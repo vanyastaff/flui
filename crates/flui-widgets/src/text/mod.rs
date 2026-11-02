@@ -28,6 +28,7 @@ pub use selection_area::{
 };
 pub use selection_menu::{
     DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
+    ToolbarItems, ToolbarItemsController, ToolbarItemsState,
 };
 pub(crate) use selection_menu::{MenuChoice, editing_commands};
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
