@@ -128,3 +128,98 @@ impl std::fmt::Debug for MemoryStore {
             .finish()
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::fmt::Write as _;
+
+    use super::*;
+
+    #[test]
+    fn copies_preserve_bytes_per_name_and_scope() {
+        let store = MemoryStore::default();
+        let names = [
+            StorageName::from_static("document"),
+            StorageName::machine_local("document"),
+            StorageName::from_static("settings"),
+        ];
+        for (index, name) in names.iter().enumerate() {
+            let original = format!("original-{index}").into_bytes();
+            let replacement = format!("replacement-{index}").into_bytes();
+            for (copy_index, bytes) in [&original, &replacement].into_iter().enumerate() {
+                let version = store
+                    .write(name, bytes, WriteMode::Replace)
+                    .expect("write source");
+                let copied = store.copy_aside(name).expect("copy source");
+                assert_eq!(
+                    copied.kept_as,
+                    format!("{}.corrupt-{}", name.as_str(), copy_index + 1)
+                );
+                assert_eq!(copied.version, version);
+                assert_eq!(
+                    store
+                        .read(name, 64)
+                        .expect("source survives copy")
+                        .bytes
+                        .as_ref(),
+                    Some(bytes)
+                );
+            }
+            store
+                .write(name, b"latest", WriteMode::Replace)
+                .expect("replace source after copies");
+            assert_eq!(
+                store.values.lock().kept.get(name),
+                Some(&vec![original, replacement])
+            );
+        }
+        let values = store.values.lock();
+        assert_eq!(values.kept.len(), names.len());
+        for name in names {
+            assert_eq!(
+                values.stored.get(&name).map(Vec::as_slice),
+                Some(b"latest".as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn debug_releases_storage_before_calling_the_writer() {
+        struct ReadingWriter<'a> {
+            store: &'a MemoryStore,
+            output: String,
+        }
+
+        impl std::fmt::Write for ReadingWriter<'_> {
+            fn write_str(&mut self, text: &str) -> std::fmt::Result {
+                // Fail before the reentrant read could deadlock if Debug holds the lock.
+                assert!(self.store.values.try_lock().is_some());
+                assert_eq!(
+                    self.store
+                        .read(&StorageName::from_static("document"), 64)
+                        .expect("the formatter may read the store")
+                        .bytes
+                        .as_deref(),
+                    Some(b"document bytes".as_slice()),
+                );
+                self.output.push_str(text);
+                Ok(())
+            }
+        }
+
+        let store = MemoryStore::default();
+        store
+            .write(
+                &StorageName::from_static("document"),
+                b"document bytes",
+                WriteMode::Replace,
+            )
+            .expect("seed store");
+        let mut writer = ReadingWriter {
+            store: &store,
+            output: String::new(),
+        };
+        write!(&mut writer, "{store:?}").expect("formatting succeeds");
+        assert_eq!(writer.output, "MemoryStore { values: 1, kept: 0 }");
+    }
+}
