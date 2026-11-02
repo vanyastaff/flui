@@ -75,7 +75,10 @@ impl<'runtime> PresentationSampling<'runtime> {
         self.recovery
             .scope()
             .run_classified(FailureClass::Unknown, action);
-        drop(span);
+        // Closing it is instrumentation too, and gets the same containment.
+        self.recovery
+            .scope()
+            .run_classified(FailureClass::Unknown, |_| drop(span.take()));
         if self.first.is_none()
             && let Some(class) = self.recovery.first_failure_class()
         {
