@@ -4665,14 +4665,30 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 
-`Platform::data_dirs` answers where an application keeps its data, so the host
+`Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
 `storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
-backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
-one record per name in the IndexedDB database `flui-storage`, keyed
-`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+backs up. Headless never touches the user's directories: it answers with a
+memory store per application that the platform owns, or with the root a test
+names with `with_data_root`, where the test reads back the bytes written.
+`DataStore` hides which of the two, with `FileStore`'s calls.
+
+`flui-app`'s `headless_storage_reaches_app_lifecycle` acquires storage from a
+mounted widget and reads and publishes through the runner's IO lane. It checks
+the configured directory's precedence over the application ID, sharing with the
+platform's store, isolation between applications and platforms, and disk readback
+after a fresh platform starts. A handle retained after the run ends refuses new
+requests, and a subsequent unconfigured run inherits no storage. The native
+`file_store_contract` covers versions, limits and copy names;
+`copies_preserve_bytes_per_name_and_scope` also checks the retained backup bytes
+after their source is replaced. `debug_releases_storage_before_calling_the_writer`
+checks that a formatter may read the store without a lock held across its call.
+
+On wasm32
+`FileStore` keeps the native methods, returning futures: one record per name in
+the IndexedDB database `flui-storage`, keyed `<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
 connection it opens and closes, so an idle connection never blocks another
 tab's upgrade. A based write reads, compares and puts inside one readwrite
 transaction; the browser runs readwrite transactions over one store one at a
