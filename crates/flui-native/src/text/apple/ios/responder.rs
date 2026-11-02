@@ -605,7 +605,7 @@ impl TextInputView {
         if let Some(delegate) = delegate {
             match change {
                 DocumentChange::Text | DocumentChange::Composition => {
-                    delegate.textWillChange(Some(input))
+                    delegate.textWillChange(Some(input));
                 }
                 DocumentChange::Selection => delegate.selectionWillChange(Some(input)),
             }
@@ -643,7 +643,7 @@ impl InputContext for ResponderContext {
         if let Some(view) = self.view.load() {
             match change {
                 DocumentChange::Text | DocumentChange::Composition => {
-                    view.text_changed_under_keyboard()
+                    view.text_changed_under_keyboard();
                 }
                 DocumentChange::Selection => view.selection_changed_under_keyboard(),
             }
