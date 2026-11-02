@@ -457,6 +457,29 @@ mod tests {
         assert_eq!(profile_second.frame_history().len(), 2);
     }
 
+    /// A phase measured between frames is no frame's work.
+    #[test]
+    fn a_hand_measured_phase_outside_the_frame_is_not_charged_to_it() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .is_none(),
+            "work done before the frame began is not the frame's: {stats:?}"
+        );
+        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+    }
+
     /// A phase measured by hand part-way through a frame keeps its place in it.
     #[test]
     fn a_hand_measured_phase_keeps_its_offset_in_the_frame() {

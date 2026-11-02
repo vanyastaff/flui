@@ -225,9 +225,10 @@ struct ProfilerInner {
     frame_period: Option<Duration>,
     /// Current frame phases
     current_phases: Vec<PhaseInfo>,
-    /// Phases measured by hand while no frame was begun by the caller, with when each started:
+    /// Phases measured by hand while no frame was begun by the caller, with how long each ran and
+    /// when it started:
     /// a frame the capture closes places them against its own start.
-    unplaced: Vec<(FramePhase, Instant)>,
+    unplaced: Vec<(FramePhase, Duration, Instant)>,
     /// Frame history
     frame_history: VecDeque<FrameStats>,
     /// Total frames processed
@@ -318,16 +319,16 @@ impl ProfilerInner {
     }
 
     fn end_phase(&mut self, phase: FramePhase, duration: Duration, started: Instant) {
-        let start_offset = if let Some(frame_start) = self.frame_start {
-            frame_start.elapsed().saturating_sub(duration)
-        } else {
-            // No frame was begun by hand: a frame the capture closes places this phase.
+        let Some(frame_start) = self.frame_start else {
+            // No frame was begun by hand, so no frame owns this phase yet: it waits, with when it
+            // ran, for a captured frame it ran inside.
             if self.unplaced.len() >= MAX_UNPLACED_PHASES {
                 self.unplaced.remove(0);
             }
-            self.unplaced.push((phase, started));
-            Duration::ZERO
+            self.unplaced.push((phase, duration, started));
+            return;
         };
+        let start_offset = frame_start.elapsed().saturating_sub(duration);
         self.add_phase(phase, duration, start_offset);
     }
 
@@ -405,16 +406,17 @@ impl Profiler {
         let mut inner = self.inner.lock();
         inner.frame_period = frame.period();
         let frame_start = frame.span().start();
-        // Phases the application measured by hand during this frame sit where they started in it.
+        // Phases the application measured by hand belong to the frame they ran inside; one that
+        // ran between frames, or while another runtime's frame was excluded, is not this frame's.
         let frame_began = epoch + frame_start;
-        let mut placed = Vec::new();
-        for (phase, started) in std::mem::take(&mut inner.unplaced) {
-            if placed.contains(&phase) {
-                continue;
-            }
-            if let Some(recorded) = inner.current_phases.iter_mut().find(|p| p.phase == phase) {
-                recorded.start_offset = started.saturating_duration_since(frame_began);
-                placed.push(phase);
+        let frame_ended = frame_began + frame.span().duration();
+        for (phase, duration, started) in std::mem::take(&mut inner.unplaced) {
+            if started >= frame_began && started + duration <= frame_ended {
+                inner.add_phase(
+                    phase,
+                    duration,
+                    started.saturating_duration_since(frame_began),
+                );
             }
         }
         let mut phases: Vec<_> = frame
