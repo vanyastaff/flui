@@ -3,7 +3,7 @@
 use flui_rendering::constraints::AxisDirection;
 
 /// The direction in which boxes flow vertically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VerticalDirection {
     /// Boxes flow from top to bottom.

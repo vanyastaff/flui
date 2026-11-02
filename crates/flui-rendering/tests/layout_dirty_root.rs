@@ -171,7 +171,13 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
 #[derive(Debug)]
 struct InsetParent(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
-impl flui_foundation::Diagnosticable for InsetParent {}
+impl flui_foundation::inspect::Inspect for InsetParent {
+    fn kind(&self) -> &'static str {
+        "InsetParent"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for InsetParent {
     type Arity = flui_foundation::Single;
@@ -200,7 +206,13 @@ impl flui_rendering::traits::RenderBox for InsetParent {
 #[derive(Debug)]
 struct CountingLeaf(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
-impl flui_foundation::Diagnosticable for CountingLeaf {}
+impl flui_foundation::inspect::Inspect for CountingLeaf {
+    fn kind(&self) -> &'static str {
+        "CountingLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for CountingLeaf {
     type Arity = flui_foundation::Leaf;
@@ -281,7 +293,13 @@ pub(crate) fn adopted_nodes_lay_out_parents_before_children() {
 #[derive(Debug)]
 struct LooseColumn;
 
-impl flui_foundation::Diagnosticable for LooseColumn {}
+impl flui_foundation::inspect::Inspect for LooseColumn {
+    fn kind(&self) -> &'static str {
+        "LooseColumn"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for LooseColumn {
     type Arity = flui_foundation::Variable;

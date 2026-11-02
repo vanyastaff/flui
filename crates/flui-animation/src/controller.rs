@@ -90,16 +90,6 @@ impl<T> Opaque<T> {
     }
 }
 
-impl<T> Drop for Opaque<T> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.0.take());
-        }
-        // On an ordinary return the Option retires normally. If that
-        // destructor panics, other envelopes see unwind and retain theirs.
-    }
-}
-
 #[derive(Default)]
 struct RetiredSources {
     simulation: Option<Opaque<SimulationRun>>,

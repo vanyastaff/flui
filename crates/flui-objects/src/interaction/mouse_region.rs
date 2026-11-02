@@ -2,6 +2,7 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::inspect::Value;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
@@ -138,21 +139,34 @@ impl std::fmt::Debug for RenderMouseRegion {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderMouseRegion {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("cursor", self.cursor);
-        builder.add_flag(
-            "has_mouse_target",
-            self.mouse_target.is_some(),
-            "has_mouse_target",
-        );
-        builder.add_flag(
-            "valid_for_mouse_tracker",
-            self.valid_for_mouse_tracker,
-            "valid_for_mouse_tracker",
-        );
-        builder.add_flag("opaque", self.opaque, "opaque");
-        builder.add_enum("behavior", self.behavior);
+impl flui_foundation::inspect::Inspect for RenderMouseRegion {
+    fn kind(&self) -> &'static str {
+        "RenderMouseRegion"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.value(
+            "cursor",
+            match self.cursor {
+                CursorRequest::Defer => Value::Variant {
+                    ty: "CursorRequest",
+                    name: "Defer",
+                },
+                CursorRequest::Icon(icon) => Value::Variant {
+                    ty: "CursorIcon",
+                    name: icon.name(),
+                },
+            },
+        )
+        .default_value(Value::Variant {
+            ty: "CursorRequest",
+            name: "Defer",
+        });
+        out.field("has_mouse_target", &self.mouse_target.is_some())
+            .default(&false);
+        out.field("valid_for_mouse_tracker", &self.valid_for_mouse_tracker);
+        out.field("opaque", &self.opaque);
+        out.field("behavior", &self.behavior);
     }
 }
 

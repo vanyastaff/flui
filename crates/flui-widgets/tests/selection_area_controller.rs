@@ -19,7 +19,7 @@ use flui_widgets::{
     SizedBox, Text, WidgetsApp,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out, painted_selection, tight};
 
 const FIRST: &str = "Hello world";
 const SECOND: &str = "Grüße";
@@ -86,9 +86,8 @@ impl Scene {
     }
 
     /// The bytes of the paragraph showing `words` that paint highlighted.
-    fn painted(&self, words: &str) -> Option<String> {
-        let paragraph = self.paragraph(words);
-        self.laid.render_property(paragraph, "selection")
+    fn painted(&self, words: &str) -> Option<std::ops::Range<usize>> {
+        painted_selection(&self.laid, self.paragraph(words))
     }
 
     fn paragraph(&self, words: &str) -> flui_foundation::RenderId {
@@ -97,8 +96,9 @@ impl Scene {
             .into_iter()
             .find(|&paragraph| {
                 self.laid
-                    .render_property(paragraph, "text")
-                    .is_some_and(|text| text.contains(words))
+                    .render_node(paragraph)
+                    .get::<&str>("text")
+                    .is_ok_and(|text| text.contains(words))
             })
             .expect("a paragraph shows the words")
     }
@@ -185,11 +185,7 @@ pub(crate) fn a_controller_selects_reads_and_clears() {
             .map(|selected| selected.text),
         Some("Hello".to_owned())
     );
-    assert_eq!(
-        scene.painted(FIRST).as_deref(),
-        Some("Some(0..5)"),
-        "it paints"
-    );
+    assert_eq!(scene.painted(FIRST), Some(0..5), "it paints");
     assert_eq!(
         scene.last(),
         Some((Some("Hello".to_owned()), SelectionChangeCause::Programmatic))
@@ -222,11 +218,7 @@ pub(crate) fn a_controller_selects_reads_and_clears() {
     scene.controller.clear().expect("attached");
     scene.settle();
     assert_eq!(scene.controller.selection(), None);
-    assert_eq!(
-        scene.painted(FIRST).as_deref(),
-        Some("None"),
-        "nothing paints"
-    );
+    assert_eq!(scene.painted(FIRST), None, "nothing paints");
     assert_eq!(
         scene.last(),
         Some((None, SelectionChangeCause::Programmatic))
@@ -250,7 +242,7 @@ pub(crate) fn a_controller_selection_leaves_the_focus_where_it_is() {
         Modifiers::SHIFT,
     );
     assert!(!extended, "the unfocused area does not take Shift+Right");
-    assert_eq!(scene.painted(FIRST).as_deref(), Some("Some(0..5)"));
+    assert_eq!(scene.painted(FIRST), Some(0..5));
 }
 
 /// Ends the area does not present are refused, and so are bytes past a

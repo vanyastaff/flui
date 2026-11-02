@@ -75,7 +75,13 @@ impl RenderSliver for DirectionProbe {
     }
 }
 
-impl flui_foundation::Diagnosticable for DirectionProbe {}
+impl flui_foundation::inspect::Inspect for DirectionProbe {
+    fn kind(&self) -> &'static str {
+        "DirectionProbe"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 pub(crate) fn sliver_direction_matrix_eight_by_three() {
     let cases = [

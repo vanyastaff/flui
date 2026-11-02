@@ -35,6 +35,21 @@
 
 mod clipboard;
 
+#[cfg(any(windows, wayland_host, x11_host))]
+pub(crate) use clipboard::MAX_TEXT;
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    feature = "winit-backend"
+))]
+pub(crate) use clipboard::host_text;
+#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
+pub(crate) use clipboard::owned_text;
 pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 
@@ -59,7 +74,7 @@ use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
-use crate::storage::DataDirs;
+use crate::storage::DataStore;
 use crate::task::Task;
 use crate::text::TextInput;
 
@@ -393,8 +408,8 @@ pub trait Lifecycle<O> {
 
 /// The storage position.
 pub trait Storage<O> {
-    /// [`Platform::data_dirs`].
-    fn data_dirs(owner: &O, app: &AppDataDir) -> Option<DataDirs>;
+    /// [`Platform::data_store`].
+    fn data_store(owner: &O, app: &AppDataDir) -> Option<DataStore>;
 }
 
 /// The positions [`Absent`] is named with.
@@ -552,15 +567,21 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
     }
 }
 
-/// A host without a clipboard holds nothing: a read answers `None`, a write
+/// A host without a clipboard reads none: a read answers
+/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError), a write
 /// is dropped.
 impl SyncClipboard for Absent<position::Clipboard> {
-    fn read_now(&self) -> Option<String> {
-        None
+    fn read_now(&self) -> flui_platform::ClipboardRead {
+        Err(flui_platform::ClipboardError::Unavailable)
     }
 
-    fn write_now(&self, text: String) {
-        drop(text);
+    fn write_now(&self, write: flui_platform::ClipboardWrite) {
+        drop(write);
+    }
+
+    /// A dropped write is kept nowhere.
+    fn concealment(&self) -> flui_platform::Concealment {
+        flui_platform::Concealment::Honored
     }
 }
 
@@ -645,7 +666,7 @@ impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
 }
 
 impl<O> Storage<O> for Absent<position::Storage> {
-    fn data_dirs(_: &O, _: &AppDataDir) -> Option<DataDirs> {
+    fn data_store(_: &O, _: &AppDataDir) -> Option<DataStore> {
         None
     }
 }

@@ -372,7 +372,13 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
 #[derive(Debug)]
 struct PanicOnLayoutForReportBox;
 
-impl flui_foundation::Diagnosticable for PanicOnLayoutForReportBox {}
+impl flui_foundation::inspect::Inspect for PanicOnLayoutForReportBox {
+    fn kind(&self) -> &'static str {
+        "PanicOnLayoutForReportBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
     type Arity = flui_rendering::prelude::Leaf;
@@ -431,18 +437,21 @@ pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not
     );
 }
 
-struct OpaqueFailureDrop(Arc<std::sync::atomic::AtomicUsize>);
-impl Drop for OpaqueFailureDrop {
+struct CountedDrop(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for CountedDrop {
     fn drop(&mut self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        panic!("opaque failure destructor");
     }
 }
 
+/// How many opaque payloads `opaque_failure` raised in this child process.
+static OPAQUE_RAISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn opaque_failure(drops: &Arc<std::sync::atomic::AtomicUsize>) -> ! {
+    OPAQUE_RAISED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     std::panic::panic_any((
-        OpaqueFailureDrop(Arc::clone(drops)),
-        OpaqueFailureDrop(Arc::clone(drops)),
+        CountedDrop(Arc::clone(drops)),
+        CountedDrop(Arc::clone(drops)),
     ));
 }
 
@@ -475,21 +484,12 @@ pub(crate) fn run_opaque_frame_child(kind: &str) {
     let count = Arc::clone(&calls);
     let handler_drops = Arc::clone(&drops);
     let fail_handler = matches!(kind, "handler" | "competition");
-    let fail_captures = kind == "captures";
-    let captures = fail_captures.then(|| {
-        (
-            OpaqueFailureDrop(Arc::clone(&drops)),
-            OpaqueFailureDrop(Arc::clone(&drops)),
-        )
-    });
     ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
-        let _captures = &captures;
         assert!(matches!(report.kind, FrameFailureKind::SegmentPanic { .. }));
         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if fail_handler {
             opaque_failure(&handler_drops);
         }
-        assert!(!fail_captures, "handler failed with opaque captures");
     })));
     let armed = Rc::new(Cell::new(true));
     let probe = Rc::clone(&armed);
@@ -529,7 +529,11 @@ pub(crate) fn run_opaque_frame_child(kind: &str) {
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     drop(ui_runtime);
-    assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let dropped = drops.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        dropped == 2 * OPAQUE_RAISED.load(std::sync::atomic::Ordering::SeqCst) && dropped > 0,
+        "every opaque payload is destroyed, none is retained: {dropped}"
+    );
 }
 
 fn opaque_frame_child(kind: &str) {
@@ -562,7 +566,7 @@ fn opaque_frame_child(kind: &str) {
     );
 }
 
-pub(crate) fn a_segment_opaque_payload_is_retained_before_recovery() {
+pub(crate) fn a_segment_opaque_payload_is_dropped_and_the_frame_recovers() {
     opaque_frame_child("producer");
 }
 pub(crate) fn an_opaque_handler_failure_preserves_frame_recovery() {
@@ -573,10 +577,6 @@ pub(crate) fn opaque_diagnostics_cannot_suppress_the_frame_handler() {
 }
 pub(crate) fn competing_opaque_frame_failures_keep_one_report_and_retry() {
     opaque_frame_child("competition");
-}
-
-pub(crate) fn a_failed_handler_envelope_is_retained_through_ui_runtime_teardown() {
-    opaque_frame_child("captures");
 }
 
 /// A callback panic the host contained reaches the registered handler as

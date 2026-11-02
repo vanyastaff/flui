@@ -133,19 +133,26 @@ fn admitted_insets(insets: EdgeInsets) -> EdgeInsets {
     )
 }
 
-impl flui_foundation::Diagnosticable for RenderHitSlop {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("slop", self.slop);
+impl flui_foundation::inspect::Inspect for RenderHitSlop {
+    fn kind(&self) -> &'static str {
+        "RenderHitSlop"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("slop", &self.slop)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
         match &self.min_target {
             MinTarget::Fixed(length) => {
-                builder.add_double("min_target", admitted_length(*length), None);
+                out.field("min_target", &admitted_length(*length))
+                    .unit(flui_foundation::inspect::Unit::LogicalPx);
             }
             MinTarget::Settings(_) => {
                 for (name, kind) in [
                     ("min_target_touch", PointerKind::Touch),
                     ("min_target_mouse", PointerKind::Mouse),
                 ] {
-                    builder.add_double(name, self.min_target.resolve(kind), None);
+                    out.field(name, &self.min_target.resolve(kind))
+                        .unit(flui_foundation::inspect::Unit::LogicalPx);
                 }
             }
         }

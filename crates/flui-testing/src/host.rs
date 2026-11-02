@@ -39,6 +39,7 @@ use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId,
@@ -251,6 +252,16 @@ impl HeadlessWindow {
             .map(|input| input.ime_allowed.lock().clone())
     }
 
+    /// Every field status the UI runtime told the window's text input (a
+    /// field attached, or its status changed), in delivery order; `None` for
+    /// a window built without a text input.
+    #[must_use]
+    pub fn ime_field_statuses(&self) -> Option<Vec<TextStoreStatus>> {
+        self.text_input
+            .as_ref()
+            .map(|input| input.field_statuses.lock().clone())
+    }
+
     /// Every input-region set this window handed the OS, in device pixels and delivery
     /// order: one entry per change the backend's projection
     /// saw, none for a frame that re-sent an unchanged set (ADR-0217 §5).
@@ -433,6 +444,7 @@ impl PlatformDragSource for HeadlessOsDrags {
 struct RecordingTextInput {
     cursor_areas: Mutex<Vec<Bounds<f64>>>,
     ime_allowed: Mutex<Vec<bool>>,
+    field_statuses: Mutex<Vec<TextStoreStatus>>,
 }
 
 impl PlatformTextInput for RecordingTextInput {
@@ -442,6 +454,10 @@ impl PlatformTextInput for RecordingTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.cursor_areas.lock().push(area);
+    }
+
+    fn set_field_status(&self, status: TextStoreStatus) {
+        self.field_statuses.lock().push(status);
     }
 
     /// No input method composes in a headless window.

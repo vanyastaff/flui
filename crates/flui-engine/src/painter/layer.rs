@@ -175,6 +175,13 @@ impl WgpuPainter {
         ))
     }
 
+    /// Fail the frame for a layer filter this device path cannot draw.
+    pub(crate) fn reject_unsupported_image_filter(&mut self, reason: &'static str) {
+        self.current_segment
+            .budget
+            .record_error(crate::command_ir::RecordError::ImageFilter(reason));
+    }
+
     pub(crate) fn reject_image_filter_parameter(&mut self, error: crate::error::GeometryError) {
         self.current_segment
             .budget

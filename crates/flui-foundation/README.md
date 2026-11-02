@@ -9,7 +9,7 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits, and generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) for slots that are reused
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
 - **Change Notification**: `ChangeNotifier`, `ValueNotifier`, and the generic `Notifier<Arg>`
-- **Diagnostics**: `DiagnosticsNode` trees and the `Diagnosticable` trait
+- **Inspection**: the typed `inspect` model (`Inspect`, `SnapshotNode`) that render objects and layers describe themselves with
 - **Geometry**: `geometry` module — `Point`, `Offset`, `Size`, `Rect`, `RRect`, `EdgeInsets`, `Matrix4`, device-grid types and snapping (ADR-0098)
 - **Clocks and epochs**: `MonotonicClock` (`SystemClock`, `ManualClock`), `FrameEpoch`, `SurfaceGeneration`, `FrameStamp`
 - **WASM Support**: `WasmNotSendSync` trait for web compatibility
@@ -193,21 +193,18 @@ if platform.is_desktop() {
 }
 ```
 
-### Diagnostics
+### Inspection
 
 ```rust
-use flui_foundation::{DiagnosticsNode, DiagnosticsProperty, DiagnosticLevel};
+use flui_foundation::inspect::Inspect;
 
-// Build diagnostic tree
-let tree = DiagnosticsNode::new("MyWidget")
-    .property("width", 100)
-    .property("height", 50)
-    .child(
-        DiagnosticsNode::new("Child")
-            .property("text", "Hello")
-    );
-
-println!("{}", tree);
+#[derive(Inspect)]
+struct MyWidget {
+    width: f64,
+    height: f64,
+}
+// A tree walk (`snapshot(&tree, SnapshotQuery::default())`) yields a `SnapshotNode`;
+// read a field by type: `node.get::<f64>("width")`.
 ```
 
 ## ID System Design

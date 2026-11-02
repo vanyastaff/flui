@@ -712,6 +712,7 @@ impl GpuReplay {
             if let Some(surf_tex) = surface_texture {
                 let blend_op = AdvancedBlendOp {
                     foreground: one_x_tile,
+                    foreground_sampling: wgpu::FilterMode::Nearest,
                     mode: op.blend,
                     device_bounds: composite_bounds,
                     opacity: 1.0,

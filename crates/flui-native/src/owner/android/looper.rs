@@ -311,7 +311,7 @@ impl AndroidLoop {
         );
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
-        let clipboard = H::clipboard(&app);
+        let clipboard = H::clipboard(&app, api);
         let activity_callbacks = H::activity(&app);
         let app_delivery = Arc::new(AppDelivery::new());
         Self {
@@ -1215,16 +1215,18 @@ impl host::Storage<AndroidLoop> for AndroidLoop {
     /// The app's private `files` directory, which Auto Backup copies, for
     /// data that follows the user; its sibling `no_backup`, which Android
     /// never backs up, for state that belongs to this device.
-    fn data_dirs(
+    fn data_store(
         owner: &AndroidLoop,
         app: &flui_platform::AppDataDir,
-    ) -> Option<crate::storage::DataDirs> {
+    ) -> Option<crate::storage::DataStore> {
         let files = owner.app.internal_data_path()?;
         let no_backup = files.parent()?.join("no_backup");
-        Some(crate::storage::DataDirs {
-            roaming: files.join(app.as_str()),
-            local: no_backup.join(app.as_str()),
-        })
+        Some(crate::storage::DataStore::on_disk(
+            crate::storage::DataDirs {
+                roaming: files.join(app.as_str()),
+                local: no_backup.join(app.as_str()),
+            },
+        ))
     }
 }
 

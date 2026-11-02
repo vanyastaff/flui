@@ -23,7 +23,7 @@
 use std::fmt::Debug;
 
 use flui_foundation::RenderId;
-use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::panic::payload_text;
 
 use super::{links::NodeLinks, state::RenderState};
 use crate::pipeline::handle::AttachmentEpoch;
@@ -511,11 +511,13 @@ impl<P: Protocol> RenderEntry<P> {
                             }))
                         {
                             // Reporting is secondary; do not retire its opaque failure or report it again.
-                            retain_opaque_payload(reporting_payload);
+                            flui_foundation::panic::discard_payload(reporting_payload);
                         }
                         // The reporting borrow has ended. Release known text
                         // payloads; arbitrary destruction remains retained.
-                        retain_opaque_payload(std::mem::ManuallyDrop::into_inner(payload));
+                        flui_foundation::panic::discard_payload(
+                            std::mem::ManuallyDrop::into_inner(payload),
+                        );
                         Err(crate::error::RenderError::poisoned(
                             debug_name,
                             crate::error::PoisonPhase::Layout,

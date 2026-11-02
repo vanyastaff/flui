@@ -43,5 +43,6 @@ These paths get findings only when near-certain and severe:
 ## What a review cannot see
 
 A review reads the code and does not run it. Native-platform and GPU changes are run by hand
-(CI executes Linux and wasm32 only), so when the PR body shows no run on the affected platform,
-say so once in the summary rather than as findings against each line.
+(CI executes Linux and wasm32 only) from the owner's device list, so a missing run on the
+affected platform is not a finding and does not go in the summary either; check only that the
+PR body names the platforms the change still needs a run on.

@@ -327,24 +327,23 @@ fn dispose_retires_source() {
     source_retirement(DrivenController::dispose);
 }
 
-struct Bomb(Rc<AtomicUsize>);
-impl Drop for Bomb {
+struct CountedDrop(Rc<AtomicUsize>);
+impl Drop for CountedDrop {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("opaque capture destructor");
     }
 }
 struct HostileSimulation {
     hook: Rc<Hook>,
-    _first: Bomb,
-    _second: Bomb,
+    _first: CountedDrop,
+    _second: CountedDrop,
     initial: bool,
 }
 
 struct HostileSlope {
     hook: Rc<Hook>,
-    _first: Bomb,
-    _second: Bomb,
+    _first: CountedDrop,
+    _second: CountedDrop,
 }
 
 impl Curve for HostileSlope {
@@ -358,7 +357,7 @@ impl Curve for HostileSlope {
     }
 }
 
-fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
+fn failed_source_is_dropped(status_fails: bool, retarget: bool) {
     let mut owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = owner.controller().clone();
@@ -374,8 +373,8 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
                     armed: AtomicBool::new(true),
                     replacement: Rc::new(Mutex::new(None)),
                 }),
-                _first: Bomb(drops.clone()),
-                _second: Bomb(drops.clone()),
+                _first: CountedDrop(drops.clone()),
+                _second: CountedDrop(drops.clone()),
             },
         )
         .expect("live curve");
@@ -405,11 +404,11 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
             "authoritative sample failure"
         })
     );
-    std::mem::forget(failure);
+    drop(failure);
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "failed source stays in custody"
+        2,
+        "failed source is dropped under the first failure"
     );
     assert!(matches!(poll(&mut original), Poll::Ready(Err(_))));
     if let Some(callback) = callback {
@@ -422,20 +421,20 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
     owner.dispose();
 }
 
-fn slope_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(false, false);
+fn slope_failure_drops_source() {
+    failed_source_is_dropped(false, false);
 }
 
-fn slope_cancellation_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(true, false);
+fn slope_cancellation_failure_drops_source() {
+    failed_source_is_dropped(true, false);
 }
 
-fn retarget_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(false, true);
+fn retarget_failure_drops_source() {
+    failed_source_is_dropped(false, true);
 }
 
-fn retarget_cancellation_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(true, true);
+fn retarget_cancellation_failure_drops_source() {
+    failed_source_is_dropped(true, true);
 }
 impl Simulation for HostileSimulation {
     fn x(&self, time: f64) -> f64 {
@@ -464,8 +463,8 @@ fn hostile_source_after_sample_failure(initial: bool) {
             armed: AtomicBool::new(true),
             replacement: Rc::new(Mutex::new(None)),
         }),
-        _first: Bomb(drops.clone()),
-        _second: Bomb(drops.clone()),
+        _first: CountedDrop(drops.clone()),
+        _second: CountedDrop(drops.clone()),
         initial,
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -483,11 +482,11 @@ fn hostile_source_after_sample_failure(initial: bool) {
             "authoritative sample failure"
         })
     );
-    std::mem::forget(payload);
+    drop(payload);
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "opaque aggregate retained after source failure"
+        2,
+        "source aggregate is dropped after source failure"
     );
     controller.set_value(0.0).expect("no build is running");
     let mut next = controller.forward().expect("subsequent run");
@@ -496,10 +495,10 @@ fn hostile_source_after_sample_failure(initial: bool) {
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
     lifecycle.dispose();
 }
-fn initial_failure_retains_hostile_source() {
+fn initial_failure_drops_source() {
     hostile_source_after_sample_failure(true);
 }
-fn sample_failure_retains_hostile_source() {
+fn sample_failure_drops_source() {
     hostile_source_after_sample_failure(false);
 }
 
@@ -645,7 +644,7 @@ fn callback_retirement_may_reenter() {
     lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
-fn status_failure_retains_retired_source_and_callback() {
+fn status_failure_drops_retired_source_and_callback() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -657,15 +656,15 @@ fn status_failure_retains_retired_source_and_callback() {
             armed: AtomicBool::new(false),
             replacement: Rc::new(Mutex::new(None)),
         }),
-        _first: Bomb(drops.clone()),
-        _second: Bomb(drops.clone()),
+        _first: CountedDrop(drops.clone()),
+        _second: CountedDrop(drops.clone()),
         initial: false,
     };
     let mut original = controller.animate_with(source).expect("source installed");
     let callback_id = Rc::new(Mutex::new(None));
     let callback_id_read = callback_id.clone();
-    let first = Bomb(drops.clone());
-    let second = Bomb(drops.clone());
+    let first = CountedDrop(drops.clone());
+    let second = CountedDrop(drops.clone());
     let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
         let id = callback_id_read
@@ -685,11 +684,11 @@ fn status_failure_retains_retired_source_and_callback() {
         payload.downcast_ref::<&str>().copied(),
         Some("authoritative status failure")
     );
-    std::mem::forget(payload);
+    drop(payload);
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "retired source and last callback snapshot retained"
+        4,
+        "retired source and last callback snapshot are dropped"
     );
     assert!(
         matches!(poll(&mut original), Poll::Ready(Err(_))),
@@ -735,7 +734,7 @@ fn ordinary_retirement_failure_preserves_new_run() {
         payload.downcast_ref::<&str>().copied(),
         Some("authoritative retirement failure")
     );
-    std::mem::forget(payload);
+    drop(payload);
     assert!(matches!(poll(&mut old), Poll::Ready(Err(_))));
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(
@@ -749,7 +748,7 @@ fn ordinary_retirement_failure_preserves_new_run() {
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
     lifecycle.dispose();
 }
-fn retirement_failure_retains_later_callback_envelope() {
+fn retirement_failure_drops_later_callback_envelope() {
     let mut owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = owner.controller().clone();
@@ -757,8 +756,8 @@ fn retirement_failure_retains_later_callback_envelope() {
         .animate_with(FailingRetirement)
         .expect("retiring source");
     let drops = Rc::new(AtomicUsize::new(0));
-    let first = Bomb(drops.clone());
-    let second = Bomb(drops.clone());
+    let first = CountedDrop(drops.clone());
+    let second = CountedDrop(drops.clone());
     controller
         .subscribe_status(std::rc::Rc::new(move |_| {
             let _opaque = (&first, &second);
@@ -770,11 +769,11 @@ fn retirement_failure_retains_later_callback_envelope() {
         payload.downcast_ref::<&str>().copied(),
         Some("authoritative retirement failure")
     );
-    std::mem::forget(payload);
+    drop(payload);
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "remaining callback envelope retained after first retirement failure"
+        2,
+        "remaining callback envelope is dropped after first retirement failure"
     );
     owner.dispose();
     assert!(controller.value().is_finite());
@@ -894,7 +893,7 @@ fn terminal_fixture(
 }
 
 fn terminal_owner_matrix(kind: TerminalOwner) {
-    for (panics, incoming) in [(false, false), (true, false), (true, true)] {
+    for panics in [false, true] {
         let drops = Rc::new(Mutex::new(Vec::new()));
         let probe = |label| TerminalProbe {
             label,
@@ -902,36 +901,21 @@ fn terminal_owner_matrix(kind: TerminalOwner) {
             panics,
         };
         let owner = terminal_fixture(kind, probe("terminal first"), probe("terminal second"));
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            if incoming {
-                let _owner = owner;
-                panic!("terminal incoming");
-            }
-            drop(owner);
-        }));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(owner)));
         if panics {
             let payload = outcome.expect_err("terminal failure propagates");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
-                Some(if incoming {
-                    "terminal incoming"
-                } else {
-                    "terminal first"
-                })
+                Some("terminal first")
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             assert!(outcome.is_ok());
         }
         assert_eq!(
             *drops.lock().expect("terminal observations"),
-            if incoming {
-                vec![]
-            } else if panics {
-                vec!["terminal first"]
-            } else {
-                vec!["terminal first", "terminal second"]
-            }
+            vec!["terminal first", "terminal second"],
+            "a failing destructor does not stop the next one"
         );
         // A new independent owner still releases its healthy resources.
         let next = Rc::new(Mutex::new(Vec::new()));
@@ -1035,47 +1019,13 @@ fn driven_terminal_cancels_before_retiring_callback() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("driven first")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(run.is_canceled());
     assert!(matches!(
         observer.forward(),
         Err(flui_animation::AnimationError::Disposed)
     ));
     assert_eq!(vsync.len(), 0, "cancellation precedes capture retirement");
-    assert_eq!(
-        *drops.lock().expect("driven retirement"),
-        vec!["driven first"]
-    );
-
-    let probe = TerminalProbe {
-        label: "driven retained",
-        drops: drops.clone(),
-        panics: true,
-    };
-    let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
-    driven
-        .controller()
-        .subscribe_status(std::rc::Rc::new(move |_| {
-            let _capture = &probe;
-        }))
-        .detach();
-    let run = driven.controller().forward().expect("live driven run");
-    run.when_complete_or_cancel(|outcome| {
-        assert!(outcome.is_err());
-        panic!("secondary driven continuation");
-    });
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let _driven = driven;
-        panic!("driven incoming");
-    }))
-    .expect_err("incoming driven failure");
-    assert_eq!(
-        flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("driven incoming")
-    );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(vsync.len(), 0);
-    assert!(run.is_canceled());
     assert_eq!(
         *drops.lock().expect("driven retirement"),
         vec!["driven first"]
@@ -1094,7 +1044,7 @@ fn driven_terminal_cancels_before_retiring_callback() {
         flui_foundation::panic::payload_text(&*failure),
         Some("primary driven continuation")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(vsync.is_empty());
     assert!(run.is_canceled());
     assert!(matches!(
@@ -1272,7 +1222,7 @@ fn parent_subscriptions_detach_all_after_failure() {
                 "value removal"
             })
         );
-        flui_foundation::panic::retain_opaque_payload(failure);
+        flui_foundation::panic::discard_payload(failure);
         assert!(parent.values.lock().expect("parent values").is_empty());
         assert!(parent.statuses.lock().expect("parent statuses").is_empty());
         assert_eq!(
@@ -1312,12 +1262,7 @@ fn switch_disposal_commits_before_reentrant_parent_removal() {
     );
 }
 fn split_owned_curves_retire_independently() {
-    for (panics, incoming, invalid) in [
-        (false, false, false),
-        (true, false, false),
-        (true, true, false),
-        (true, false, true),
-    ] {
+    for panics in [false, true] {
         let drops = Rc::new(Mutex::new(Vec::new()));
         let probe = |label| {
             TerminalCurve(TerminalProbe {
@@ -1327,46 +1272,26 @@ fn split_owned_curves_retire_independently() {
             })
         };
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let split = Split::with_curves(
-                if invalid { f64::NAN } else { 0.5 },
-                probe("split first"),
-                probe("split second"),
-            );
+            let split = Split::with_curves(0.5, probe("split first"), probe("split second"));
             assert_eq!(split.split(), 0.5);
             assert_eq!(split.begin_curve().transform(0.25), 0.25);
             assert_eq!(split.end_curve().transform(0.75), 0.75);
             assert_eq!(split.transform(0.75), 0.75);
-            if incoming {
-                let _split = split;
-                panic!("split incoming");
-            }
             drop(split);
         }));
         if panics {
             let payload = failure.expect_err("split failure");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
-                Some(if invalid {
-                    "curve parameter `split` is not finite"
-                } else if incoming {
-                    "split incoming"
-                } else {
-                    "split first"
-                })
+                Some("split first")
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             assert!(failure.is_ok());
         }
         assert_eq!(
             *drops.lock().expect("split observations"),
-            if incoming || invalid {
-                vec![]
-            } else if panics {
-                vec!["split first"]
-            } else {
-                vec!["split first", "split second"]
-            }
+            vec!["split first", "split second"]
         );
     }
     let next = Rc::new(Mutex::new(Vec::new()));
@@ -1409,13 +1334,13 @@ impl Curve for PartialCloneCurve {
         time
     }
 }
-fn split_partial_clone_retains_completed_field() {
+fn split_partial_clone_failure_drops_the_partial_clone() {
     let drops = Rc::new(Mutex::new(Vec::new()));
     let curve = |label, fail_clone| PartialCloneCurve {
         probe: TerminalProbe {
             label,
             drops: drops.clone(),
-            panics: true,
+            panics: false,
         },
         fail_clone,
     };
@@ -1430,22 +1355,13 @@ fn split_partial_clone_retains_completed_field() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("split clone failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert!(
-        drops.lock().expect("clone observations").is_empty(),
-        "partially cloned first curve retained during second clone failure"
-    );
+    flui_foundation::panic::discard_payload(failure);
     assert_eq!(split.transform(0.25), 0.25, "original remains usable");
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))
-        .expect_err("original retirement failure");
-    assert_eq!(
-        flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("cloned first")
-    );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    drop(split);
     assert_eq!(
         *drops.lock().expect("clone observations"),
-        vec!["cloned first"]
+        vec!["cloned first", "cloned first", "cloned second"],
+        "the partial clone and the original are each dropped once"
     );
 }
 
@@ -1458,7 +1374,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     let curve = TerminalCurve(TerminalProbe {
         label: "constructor curve",
         drops: drops.clone(),
-        panics: true,
+        panics: false,
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CurvedAnimation::new(parent.clone(), curve)
@@ -1468,8 +1384,11 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert!(drops.lock().expect("constructor custody").is_empty());
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(
+        *drops.lock().expect("constructor custody"),
+        vec!["constructor curve"]
+    );
     assert!(
         parent
             .values
@@ -1494,7 +1413,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         parent
             .values
@@ -1519,7 +1438,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent registration failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         current
             .values
@@ -1544,7 +1463,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         current.probe = Some(TerminalProbe {
             label: "current constructor owner",
             drops: drops.clone(),
-            panics: true,
+            panics: false,
         });
     }
     std::rc::Rc::get_mut(&mut next)
@@ -1552,7 +1471,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         .probe = Some(TerminalProbe {
         label: "next constructor owner",
         drops: drops.clone(),
-        panics: true,
+        panics: false,
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         AnimationSwitch::new(current, Some(next))
@@ -1562,8 +1481,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent value failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert!(drops.lock().expect("constructor custody").is_empty());
+    flui_foundation::panic::discard_payload(failure);
 
     let old = terminal_parent(false);
     let proxy = ProxyAnimation::new(old.clone());
@@ -1574,7 +1492,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         .probe = Some(TerminalProbe {
         label: "replacement constructor owner",
         drops: drops.clone(),
-        panics: true,
+        panics: false,
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         proxy.set_parent(replacement);
@@ -1584,11 +1502,21 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("parent status failure")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert!(drops.lock().expect("constructor custody").is_empty());
+    flui_foundation::panic::discard_payload(failure);
     old.fail_status.store(false, Ordering::SeqCst);
     assert_eq!(proxy.value(), 0.5);
     drop(proxy);
+    let mut dropped = drops.lock().expect("constructor custody").clone();
+    dropped.sort_unstable();
+    assert_eq!(
+        dropped,
+        [
+            "constructor curve",
+            "current constructor owner",
+            "next constructor owner",
+            "replacement constructor owner"
+        ]
+    );
 }
 
 #[cfg(feature = "serde")]
@@ -1685,11 +1613,19 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
     SERDE_CURVE_DROPS.store(0, Ordering::SeqCst);
     let failure = decode(0.5, "bomb first", SerdeInput::Failure).expect_err("partial decode error");
     assert_eq!(failure.to_string(), "second curve decode failure");
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        SERDE_CURVE_DROPS.load(Ordering::SeqCst),
+        1,
+        "the partial curve is destroyed and the error returned"
+    );
     let failure = decode(f64::NAN, "bomb first", SerdeInput::Text("bomb second"))
         .expect_err("invalid decoded range");
     assert_eq!(failure.to_string(), "curve parameter `split` is not finite");
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        SERDE_CURVE_DROPS.load(Ordering::SeqCst),
+        3,
+        "both decoded curves are destroyed and the error returned"
+    );
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("valid split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))
         .expect_err("decoded ordinary retirement");
@@ -1697,8 +1633,8 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("serde curve retirement")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 5);
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("incoming split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _split = split;
@@ -1709,14 +1645,14 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some("serde incoming")
     );
-    flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 1);
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 7);
 
     let split =
         decode(0.5, "healthy first", SerdeInput::Text("healthy second")).expect("next split");
     assert_eq!(split.transform(0.75), 0.75);
     drop(split);
-    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 3);
+    assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 9);
 }
 
 #[test]
@@ -1733,7 +1669,7 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
         ),
         (
             "split partial clone ownership",
-            split_partial_clone_retains_completed_field,
+            split_partial_clone_failure_drops_the_partial_clone,
         ),
         (
             "parent subscription terminal failures",
@@ -1773,25 +1709,25 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             callback_retirement_may_reenter,
         ),
         (
-            "status failure retains sources",
-            status_failure_retains_retired_source_and_callback,
+            "status failure drops sources",
+            status_failure_drops_retired_source_and_callback,
         ),
         (
             "ordinary retirement failure preserves new run",
             ordinary_retirement_failure_preserves_new_run,
         ),
         (
-            "retirement failure retains later callback",
-            retirement_failure_retains_later_callback_envelope,
+            "retirement failure drops later callback",
+            retirement_failure_drops_later_callback_envelope,
         ),
         ("position may read", position_may_read),
         (
-            "retarget failure retains hostile source",
-            retarget_failure_retains_hostile_source,
+            "retarget failure drops source",
+            retarget_failure_drops_source,
         ),
         (
-            "retarget cancellation failure retains hostile source",
-            retarget_cancellation_failure_retains_hostile_source,
+            "retarget cancellation failure drops source",
+            retarget_cancellation_failure_drops_source,
         ),
         ("velocity may read", velocity_may_read),
         ("velocity may replace", velocity_may_replace),
@@ -1801,13 +1737,10 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
         ("slope may replace", slope_may_replace),
         ("slope may stop", slope_may_stop),
         ("nested slope tick wins", nested_slope_tick_wins),
+        ("slope failure drops source", slope_failure_drops_source),
         (
-            "slope failure retains hostile source",
-            slope_failure_retains_hostile_source,
-        ),
-        (
-            "slope cancellation failure retains hostile source",
-            slope_cancellation_failure_retains_hostile_source,
+            "slope cancellation failure drops source",
+            slope_cancellation_failure_drops_source,
         ),
         ("completion may read", completion_may_read),
         ("completion may replace", completion_may_replace),
@@ -1824,14 +1757,8 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
         ("replacement retires source", replacement_retires_source),
         ("completion retires source", completion_retires_source),
         ("dispose retires source", dispose_retires_source),
-        (
-            "initial failure retains hostile source",
-            initial_failure_retains_hostile_source,
-        ),
-        (
-            "sample failure retains hostile source",
-            sample_failure_retains_hostile_source,
-        ),
+        ("initial failure drops source", initial_failure_drops_source),
+        ("sample failure drops source", sample_failure_drops_source),
     ];
     if let Some(selected) = child_process::selected_case() {
         cases

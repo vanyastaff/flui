@@ -82,12 +82,9 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     if let Some(role) = explicit_role(data.attrs.effective_role()) {
         return role;
     }
-    if data
-        .attrs
-        .label
-        .as_ref()
-        .is_some_and(|label| !label.is_empty())
-    {
+    // Static text: a label, or runs a selectable text with links publishes
+    // beneath its regions (ADR-0214 §2 as amended).
+    if data.attrs.text.is_some() || has_label(data.attrs) {
         Role::Label
     } else {
         Role::GenericContainer
@@ -729,6 +726,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         text: _,
         // Resolved against the runs beneath the node by `publish_view`.
         document_selection: _,
+        // Resolved against the enclosing text's runs by `publish_view`.
+        hosted_runs: _,
     } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
@@ -866,20 +865,19 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             .collect::<Vec<_>>(),
     );
 
-    if let Some((content, identities)) = published_text(data.attrs) {
-        let mut children = node.children().to_vec();
-        children.extend(identities.iter().map(|id| NodeId(id.as_u64())));
-        node.set_children(children);
-        if let Some(selection) = content.selection() {
-            let position = |at: crate::TextRunPosition| accesskit::TextPosition {
-                node: NodeId(identities[at.run].as_u64()),
-                character_index: at.character,
-            };
-            node.set_text_selection(accesskit::TextSelection {
-                anchor: position(selection.anchor),
-                focus: position(selection.focus),
-            });
-        }
+    // The runs are among the children: `publish_view` lists them where they
+    // are published, under the text or under the regions that hold them.
+    if let Some((content, identities)) = published_text(data.attrs)
+        && let Some(selection) = content.selection()
+    {
+        let position = |at: crate::TextRunPosition| accesskit::TextPosition {
+            node: NodeId(identities[at.run].as_u64()),
+            character_index: at.character,
+        };
+        node.set_text_selection(accesskit::TextSelection {
+            anchor: position(selection.anchor),
+            focus: position(selection.focus),
+        });
     }
     // A document's selection lies in the runs of the texts beneath it; its
     // own runs, if it had any, would already have set one.
@@ -908,13 +906,18 @@ pub(crate) fn published_text(
 
 /// Whether the node publishes as a role `accesskit_consumer` reads text
 /// ranges on (`Node::supports_text_ranges`): a text input, a document, or
-/// static text, which a node with no role and a label publishes as
+/// static text, which a node with no role and a label or runs publishes as
 /// ([`resolve_role`]).
 fn supports_text_ranges(attrs: &SemanticsAttributes) -> bool {
     let role = attrs.effective_role();
     role.is_text_input()
         || role == SemanticsRole::Document
-        || (role == SemanticsRole::None && attrs.label.as_ref().is_some_and(|l| !l.is_empty()))
+        || (role == SemanticsRole::None && (attrs.text.is_some() || has_label(attrs)))
+}
+
+/// Whether the node carries a non-empty label.
+fn has_label(attrs: &SemanticsAttributes) -> bool {
+    attrs.label.as_ref().is_some_and(|label| !label.is_empty())
 }
 
 /// Whether a text declares runs it cannot publish for want of

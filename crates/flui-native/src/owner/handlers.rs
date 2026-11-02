@@ -242,22 +242,15 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-        struct Hostile;
-        impl Drop for Hostile {
-            fn drop(&mut self) {
-                panic!("hostile payload drop");
-            }
-        }
         struct Capture(Arc<AtomicUsize>);
         impl Drop for Capture {
             fn drop(&mut self) {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                std::panic::panic_any(Hostile);
             }
         }
         // A teardown that runs a one-shot callback from a destructor, as the
         // Win32 run guard tells the application it quits: the callback is
-        // taken for good, so a failed call retains it rather than putting it
+        // taken for good, so a failed call does not put it
         // back for the guard's own drop.
         struct OneShot<'a>(&'a Mutex<Option<Box<dyn FnMut() + Send>>>);
         impl crate::owner::call_point::HandlerSlot for OneShot<'_> {
@@ -290,7 +283,7 @@ mod tests {
                 let guard = Guard(Mutex::new(Some(Box::new(move || {
                     let _ = &capture;
                     observed.fetch_add(1, Ordering::SeqCst);
-                    std::panic::panic_any(Hostile);
+                    panic!("callback failure");
                 }))));
                 assert!(!already_unwinding, "original bootstrap panic");
                 drop(guard);
@@ -307,8 +300,8 @@ mod tests {
                 assert!(outcome.is_ok());
             }
             assert_eq!(invoked.load(Ordering::SeqCst), 1);
-            // The call failed: its captures are retained, never dropped into
-            // a second failure (ADR-0127 §2).
+            // `call` still forgets the displaced handler after a failed call
+            // (a crate-local retention, ADR-0127 §2).
             assert_eq!(dropped.load(Ordering::SeqCst), 0);
         }
     }
@@ -549,7 +542,7 @@ mod tests {
         signal.close();
     }
 
-    /// The owner-thread machinery's contracts: hostile callback captures and
+    /// The owner-thread machinery's contracts: failing callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
     /// existing unwind), and the owner signal coalesces a burst and gives a

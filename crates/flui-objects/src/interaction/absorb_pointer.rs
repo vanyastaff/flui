@@ -63,9 +63,13 @@ impl Default for RenderAbsorbPointer {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAbsorbPointer {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("absorbing", self.absorbing, "absorbing");
+impl flui_foundation::inspect::Inspect for RenderAbsorbPointer {
+    fn kind(&self) -> &'static str {
+        "RenderAbsorbPointer"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("absorbing", &self.absorbing).default(&false);
     }
 }
 

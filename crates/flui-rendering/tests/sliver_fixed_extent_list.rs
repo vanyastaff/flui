@@ -44,7 +44,13 @@ impl FixedHitBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for FixedHitBox {}
+impl flui_foundation::inspect::Inspect for FixedHitBox {
+    fn kind(&self) -> &'static str {
+        "FixedHitBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -70,7 +76,13 @@ struct SliverHost {
     constraints: SliverConstraints,
 }
 
-impl flui_foundation::Diagnosticable for SliverHost {}
+impl flui_foundation::inspect::Inspect for SliverHost {
+    fn kind(&self) -> &'static str {
+        "SliverHost"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for SliverHost {
     type Arity = flui_foundation::Variable;
@@ -150,19 +162,21 @@ pub(crate) fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     assert_eq!(geometry.cache_extent, 115.0);
     assert!(geometry.has_visual_overflow);
 
-    // The Diagnosticable-backed dump surfaces the sliver's committed
-    // geometry (cross-protocol: sliver nodes carry a `geometry` property,
-    // box nodes carry `size`). Exercises `PipelineOwner::debug_diagnostics_tree`
-    // and the foundation `DiagnosticsNode` query getters.
-    let diagnostics = owner
-        .debug_diagnostics_tree()
-        .expect("laid-out tree has a diagnostics root");
-    let sliver = diagnostics
-        .find_descendant("RenderSliverFixedExtentList")
-        .expect("the host's sliver child appears in the diagnostics tree");
+    // The typed snapshot surfaces the sliver's committed geometry (cross-protocol: sliver
+    // nodes carry a `geometry` fact, box nodes carry `size`). Exercises
+    // `PipelineOwner::inspect` and the snapshot's fact getters.
+    let tree = flui_foundation::inspect::snapshot(
+        &owner.inspect(),
+        flui_foundation::inspect::SnapshotQuery::default(),
+    )
+    .expect("laid-out tree has a snapshot root");
+    let sliver = tree
+        .find_by_kind("RenderSliverFixedExtentList")
+        .unique()
+        .expect("the host's sliver child appears in the snapshot");
     assert!(
-        sliver.get_property("geometry").is_some(),
-        "the sliver self-reports its committed geometry in the dump",
+        sliver.fact("geometry").is_some(),
+        "the sliver reports its committed geometry as a fact",
     );
 
     for &child_id in &child_ids {

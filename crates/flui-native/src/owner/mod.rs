@@ -404,8 +404,8 @@ impl SharedPlatform {
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]
-    pub fn data_dirs(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataDirs> {
-        self.platform.data_dirs(app)
+    pub fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore> {
+        self.platform.data_store(app)
     }
 
     /// The data-transfer transport (ADR-0038).
@@ -660,7 +660,7 @@ impl WindowRequest {
                         .unwrap_or("non-string panic payload")
                 );
                 panic_boundary::contain_owner_callback(|| tracing::error!("{message}"));
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
                 Err(OpenWindowError::Backend { message })
             }
         }

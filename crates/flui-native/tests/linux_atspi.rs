@@ -62,6 +62,10 @@ mod cases {
             an_announcement_is_heard_at_its_urgency,
         ),
         (
+            "a_route_change_is_heard_by_its_name",
+            a_route_change_is_heard_by_its_name,
+        ),
+        (
             "focus_follows_the_tree_once_the_window_is_active",
             focus_follows_the_tree_once_the_window_is_active,
         ),
@@ -817,6 +821,48 @@ mod cases {
             .collect();
         assert_eq!(polite, [copied.as_str(), copied.as_str()], "{heard:?}");
         assert_eq!(assertive, [lost.as_str()], "{heard:?}");
+    }
+
+    /// A page pushed over another, and the page a pop uncovers, are heard by
+    /// name, politely: AT-SPI has no notice of a new screen, so the owner
+    /// speaks the route (ADR-0204 §5).
+    fn a_route_change_is_heard_by_its_name(session: &Session) {
+        let name = session.marked("Routes");
+        let mut fixture = Fixture::new(&name);
+        let ids = SemanticsIdentitySource::default()
+            .allocate(2)
+            .expect("a fresh source has identities");
+        let announcements = Announcements::new(ids[0], ids[1]);
+        announcements.set_listening(true);
+        fixture.owner.set_announcements(announcements);
+        let (home, settings) = (session.marked("Home"), session.marked("Settings"));
+        let page = |label: &str| {
+            let label = label.to_owned();
+            move |c: &mut SemanticsConfiguration| {
+                c.set_scopes_route(true);
+                c.set_names_route(true);
+                c.set_label(label);
+            }
+        };
+        fixture.add(Some(1), 2, (0.0, 0.0, 400.0, 300.0), page(&home));
+        fixture.owner.flush();
+        let _ = session.window(&name);
+
+        let heard = session.hear(|| {
+            fixture.add(Some(1), 3, (0.0, 0.0, 400.0, 300.0), page(&settings));
+            fixture.owner.flush();
+            let (window, pushed) = (fixture.id_of(1), fixture.id_of(3));
+            fixture.owner.remove_child(window, pushed);
+            fixture.owner.remove(pushed);
+            fixture.owner.flush();
+        });
+        let marked = heard.marked(&session.nonce);
+        let polite: Vec<&str> = marked
+            .iter()
+            .filter(|(politeness, _)| *politeness == 1)
+            .map(|(_, text)| text.as_str())
+            .collect();
+        assert_eq!(polite, [settings.as_str(), home.as_str()], "{heard:?}");
     }
 
     /// Once the window is the active one, each move of the tree's focus is

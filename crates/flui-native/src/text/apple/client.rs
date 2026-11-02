@@ -55,6 +55,17 @@ pub(crate) trait InputContext {
     /// The field's text moved: the candidate window asks for its rectangle
     /// again (`invalidateCharacterCoordinates`).
     fn invalidate_character_coordinates(&self);
+
+    /// Take (`true`) or give back (`false`) one hold on the process's
+    /// secure event input (`EnableSecureEventInput`): while any is held, no
+    /// other process's event tap sees the keys typed. The system counts
+    /// holds, so the client gives back exactly what it took. `false` when the
+    /// system refused, and the client's count stays as it was.
+    fn set_secure_input(&self, secure: bool) -> bool;
+
+    /// Whether the view's window is the key window, the one the keyboard
+    /// types into (`isKeyWindow`); `false` for a view in no window.
+    fn is_key_window(&self) -> bool;
 }
 
 /// One content view's text input: the store it serves and AppKit's context.
@@ -68,6 +79,9 @@ pub(crate) struct TextClient {
     /// client (`setMarkedText:` with text, until a commit, an unmark or a
     /// discard).
     marked: Cell<bool>,
+    /// Whether the client holds secure event input: while a protected field
+    /// has focus and the context is bound.
+    secure: Cell<bool>,
     /// The requests made while the client is inside a call into a store.
     queue: HostQueue<MirrorHostOp>,
     retired: Cell<bool>,
@@ -79,6 +93,7 @@ impl std::fmt::Debug for TextClient {
         f.debug_struct("TextClient")
             .field("focused", &self.focused.borrow().is_some())
             .field("marked", &self.marked.get())
+            .field("secure", &self.secure.get())
             .field("retired", &self.retired.get())
             .finish_non_exhaustive()
     }
@@ -132,6 +147,7 @@ impl TextClient {
             focused: RefCell::new(None),
             context: RefCell::new(None),
             marked: Cell::new(false),
+            secure: Cell::new(false),
             queue: HostQueue::new(),
             retired: Cell::new(false),
             this: this.clone(),
@@ -142,6 +158,8 @@ impl TextClient {
     pub(crate) fn bind(&self, context: Rc<dyn InputContext>) {
         if !self.retired.get() {
             *self.context.borrow_mut() = Some(context);
+            // A field may have taken focus before the view existed.
+            self.sync_secure_input();
         }
     }
 
@@ -152,6 +170,9 @@ impl TextClient {
             return;
         }
         self.queue.clear();
+        // Retired, the client wants no hold: what it took is given back
+        // while the context is still there to give it back through.
+        self.sync_secure_input();
         let context = self.context.borrow_mut().take();
         drop(context);
         let store = self.focused.borrow_mut().take();
@@ -189,6 +210,39 @@ impl TextClient {
         if let Some(context) = self.context() {
             context.invalidate_character_coordinates();
         }
+    }
+
+    /// Hold secure event input exactly while a protected field has focus in
+    /// the key window, as `NSSecureTextField` does: a password typed in FLUI
+    /// reaches no other process's event tap, and another application's
+    /// keyboard utilities work while this one is in the background. Called
+    /// wherever the answer can change: focus, the focused field's status,
+    /// the window's key status, binding and retirement.
+    fn sync_secure_input(&self) {
+        let wanted = {
+            // The store's `status` is application code, which may move
+            // focus: a request it makes waits in the queue, and the refocus
+            // the drain below runs syncs again with the focus it gives.
+            let _entered = self.queue.enter();
+            !self.retired.get()
+                && self
+                    .context()
+                    .is_some_and(|context| context.is_key_window())
+                && self.focused().is_some_and(|store| store.status().protected)
+        };
+        if wanted != self.secure.get()
+            && let Some(context) = self.context()
+            && context.set_secure_input(wanted)
+        {
+            self.secure.set(wanted);
+        }
+        self.drain();
+    }
+
+    /// The view's window became or stopped being the key window: the keys
+    /// typed reach this window's field only while it is.
+    pub(crate) fn key_window_changed(&self) {
+        self.sync_secure_input();
     }
 
     /// Apply the requests queued while the client was inside a store call.
@@ -245,6 +299,7 @@ impl TextClient {
             *self.focused.borrow_mut() = Some(Rc::clone(&store));
             contain_owner_callback(|| store.set_observer(Some(observer)));
         }
+        self.sync_secure_input();
         self.invalidate_character_coordinates();
     }
 
@@ -512,5 +567,9 @@ impl TextStoreObserver for ClientObserver {
         }
     }
 
-    fn status_changed(&self) {}
+    fn status_changed(&self) {
+        if let Some(client) = self.client.upgrade() {
+            client.sync_secure_input();
+        }
+    }
 }

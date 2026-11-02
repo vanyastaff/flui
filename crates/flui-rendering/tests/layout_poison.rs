@@ -59,7 +59,13 @@ struct FlakyLeaf {
     mode: FailMode,
 }
 
-impl flui_foundation::Diagnosticable for FlakyLeaf {}
+impl flui_foundation::inspect::Inspect for FlakyLeaf {
+    fn kind(&self) -> &'static str {
+        "FlakyLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderObject<BoxProtocol> for FlakyLeaf {
     fn perform_layout_raw(
@@ -292,7 +298,13 @@ struct RetainingLeaf {
     size_on_success: Arc<Mutex<Size>>,
 }
 
-impl flui_foundation::Diagnosticable for RetainingLeaf {}
+impl flui_foundation::inspect::Inspect for RetainingLeaf {
+    fn kind(&self) -> &'static str {
+        "RetainingLeaf"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderObject<BoxProtocol> for RetainingLeaf {
     fn perform_layout_raw(

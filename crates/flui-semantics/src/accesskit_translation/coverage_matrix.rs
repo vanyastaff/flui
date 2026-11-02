@@ -207,6 +207,9 @@ fn every_published_attribute_reads_through_the_consumer() {
         // texts beneath it; read through the consumer by the widget rows of
         // ADR-0214.
         document_selection: _,
+        // Published as `TextRun` children of the hosting region, read through
+        // the consumer by the link rows of `selection_area`.
+        hosted_runs: _,
     } = SemanticsAttributes::default();
     let States {
         toggled: _,

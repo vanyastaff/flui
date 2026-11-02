@@ -15,7 +15,8 @@ use flui_widgets::{
     Column, MergeSemantics, Row, SelectionArea, SelectionContainer, Semantics, SizedBox, Text,
 };
 
-use crate::common::{LaidOut, lay_out, loose};
+use crate::common::{LaidOut, lay_out, loose, painted_selection, rgba};
+use flui_foundation::inspect::Rgba;
 
 /// An adapter's view of the tree the presentation publishes now.
 fn consumer(laid: &LaidOut) -> accesskit_consumer::Tree {
@@ -880,47 +881,89 @@ pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
     );
 }
 
-/// A span's accessibility override still decides what is read: overridden
-/// or silenced text keeps its label and lends no runs to the document.
+/// A span's accessibility override is the reading of a region of its own,
+/// and the region holds the span's runs, its authored text: an
+/// abbreviation reads as its word and selects as its letters, a silenced
+/// span is a hidden region whose characters a selection across it still
+/// covers, and a link keeps its override as its name.
 ///
-/// Red-check: publish runs from the authored text regardless (the document
-/// reads "Dr." and "secret").
-pub(crate) fn span_overrides_keep_their_reading_in_a_selection_area() {
+/// Red-check: read a selectable text that overrides a span through its
+/// label (the text holds its runs itself, so no region holds "Hi ");
+/// publish no region for a silenced span (its runs have no owner, so the
+/// text keeps them all).
+pub(crate) fn span_overrides_read_their_override_and_hold_their_runs() {
     use flui_painting::typography::TextSpan;
     use flui_widgets::RichText;
 
-    let laid = mounted(SelectionArea::new(Column::new((
+    let (area, seen) = recorded_area(Column::new((
         RichText::new(TextSpan::new("Dr.").with_semantics_label("Doctor")),
         RichText::new(TextSpan::with_children(vec![
             TextSpan::new("Hi "),
             TextSpan::new("secret").with_semantics_label(""),
+            TextSpan::new(" there"),
         ])),
-        Text::new("Omega"),
-    ))));
-    let tree = consumer(&laid);
-    let state = tree.state();
-    let read = find_all(state, Role::Document)[0].document_range().text();
-    assert_eq!(read, "Omega", "only text read as written lends runs");
-    assert!(
-        find_all(state, Role::Label)
+        RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Read the "),
+            TextSpan::new("EULA")
+                .with_link("app://terms")
+                .with_semantics_label("license agreement"),
+        ]))
+        .on_link(|_cx, _link| {}),
+    )));
+    let mut laid = mounted(area);
+    let (document, hi, there) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let labels = find_all(state, Role::Label);
+        let doctor = labels
             .iter()
-            .any(|node| node.label().as_deref() == Some("Doctor")),
-        "the override is still the label"
+            .find(|node| node.label().as_deref() == Some("Doctor"))
+            .expect("the override is a region's reading");
+        assert_eq!(run_values(doctor), ["Dr."]);
+        let hi = labels
+            .iter()
+            .find(|node| run_values(node) == ["Hi "])
+            .expect("the text before the silenced span holds its runs");
+        let generic = find_all(state, Role::GenericContainer);
+        let silenced = labels
+            .iter()
+            .chain(&generic)
+            .find(|node| run_values(node) == ["secret"])
+            .expect("the silenced span holds its runs");
+        assert!(silenced.is_hidden(), "the silenced span reads as nothing");
+        assert_eq!(silenced.label(), None);
+        let there = labels
+            .iter()
+            .find(|node| run_values(node) == [" there"])
+            .expect("the text after the silenced span holds its runs");
+        let link = &find_all(state, Role::Link)[0];
+        assert_eq!(link.label().as_deref(), Some("license agreement"));
+        assert_eq!(run_values(link), ["EULA"]);
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(hi)[0],
+            runs_of(there)[0],
+        )
+    };
+    laid.invoke_semantics_action(selection_request(document, at(hi, 0), at(there, 6)))
+        .expect("a selection across the silenced span is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("Hi secret there"),
+        "the selection covers the silenced characters"
     );
 }
 
-/// The `selection` property of every paragraph, sorted so the rows read
+/// The painted selection of every paragraph, sorted so the rows read
 /// independently of render-tree order.
-fn painted_selections(laid: &LaidOut) -> Vec<String> {
-    let mut selections: Vec<String> = laid
+fn painted_selections(laid: &LaidOut) -> Vec<Option<std::ops::Range<usize>>> {
+    let mut selections: Vec<_> = laid
         .find_all_by_render_type("RenderParagraph")
         .into_iter()
-        .map(|id| {
-            laid.render_property(id, "selection")
-                .expect("a paragraph reports its selection")
-        })
+        .map(|id| painted_selection(laid, id))
         .collect();
-    selections.sort();
+    selections.sort_by_key(|range| range.as_ref().map(|range| (range.start, range.end)));
     selections
 }
 
@@ -949,7 +992,7 @@ pub(crate) fn a_selection_highlights_the_parts_it_covers() {
     laid.tick();
     assert_eq!(
         painted_selections(&laid),
-        ["Some(0..11)", "Some(0..2)", "Some(6..10)"],
+        [Some(0..2), Some(0..11), Some(6..10)],
         "each text paints its part, the middle one whole"
     );
     laid.invoke_semantics_action(selection_request(last[0], at(last[0], 1), at(last[0], 4)))
@@ -957,7 +1000,7 @@ pub(crate) fn a_selection_highlights_the_parts_it_covers() {
     laid.tick();
     assert_eq!(
         painted_selections(&laid),
-        ["None", "None", "Some(1..4)"],
+        [None, None, Some(1..4)],
         "the texts the selection left paint nothing"
     );
 }
@@ -991,13 +1034,13 @@ pub(crate) fn an_edited_text_keeps_its_highlight_current() {
     laid.pump_widget(view("Alpha beta gamma", "Gamma delta epsilon"));
     assert_eq!(
         painted_selections(&laid),
-        ["Some(0..19)", "Some(0..2)", "Some(6..16)"],
+        [Some(0..2), Some(0..19), Some(6..16)],
         "the edited texts highlight their new text"
     );
     laid.pump_widget(view("Alpha", "Gamma"));
     assert_eq!(
         painted_selections(&laid),
-        ["None", "Some(0..2)", "Some(0..5)"],
+        [None, Some(0..2), Some(0..5)],
         "a text shrunk under the selection's start highlights nothing"
     );
 }
@@ -1034,8 +1077,8 @@ pub(crate) fn the_highlight_colour_follows_the_area_style() {
         laid.tick();
         let paragraph = laid.find_all_by_render_type("RenderParagraph")[0];
         assert_eq!(
-            laid.render_property(paragraph, "selection_color"),
-            Some(format!("{expected:?}")),
+            laid.render_node(paragraph).get::<Rgba>("selection_color"),
+            Ok(rgba(expected)),
             "own style {own_style}, inherited {wrap}"
         );
     }
@@ -1108,4 +1151,255 @@ pub(crate) fn the_primary_selection_snaps_to_a_paragraph_rebuilt_since() {
         Some("東"),
         "byte 4 splits 京, so the end moves down to the boundary before it"
     );
+}
+
+/// The values of the text runs a node holds, in order.
+fn run_values(node: &accesskit_consumer::NodeRef<'_>) -> Vec<String> {
+    node.children()
+        .filter(|child| child.role() == Role::TextRun)
+        .map(|child| child.data().value().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// "Read the terms and the privacy notice", its two stretches of link
+/// routed, in an area that records what it selects.
+fn linked_area(width: f64) -> (LaidOut, Rc<RefCell<Vec<Option<String>>>>) {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::RichText;
+
+    let (area, seen) = recorded_area(
+        SizedBox::new(width, 400.0).child(
+            RichText::new(TextSpan::with_children(vec![
+                TextSpan::new("Read the "),
+                TextSpan::new("terms").with_link("app://terms"),
+                TextSpan::new(" and the "),
+                TextSpan::new("privacy notice").with_link("app://privacy"),
+            ]))
+            .on_link(|_cx, _link| {}),
+        ),
+    );
+    (mounted(area), seen)
+}
+
+/// Selectable text with links publishes runs too: each link and each
+/// stretch between links holds the runs of its own text, so an assistive
+/// selection reaches into a link and past it, and the links keep their
+/// nodes.
+///
+/// Red-check: cut no runs at link edges (a run spans "Read the terms", so
+/// no region holds runs); leave the runs on the paragraph (a link holds
+/// none).
+pub(crate) fn links_in_selectable_text_hold_their_own_runs() {
+    let (mut laid, seen) = linked_area(4000.0);
+    let (document, before, privacy) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let links = find_all(state, Role::Link);
+        assert_eq!(run_values(&links[0]), ["terms"]);
+        assert_eq!(run_values(&links[1]), ["privacy notice"]);
+        let before = find_all(state, Role::Label)
+            .into_iter()
+            .find(|node| run_values(node) == ["Read the "])
+            .expect("the text before the first link holds its runs");
+        let text = before.parent().expect("the stretch is in its text");
+        assert_eq!(
+            (text.data().value(), run_values(&text).len()),
+            (None, 0),
+            "the text's reading is its regions'"
+        );
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(&before)[0],
+            runs_of(&links[1])[0],
+        )
+    };
+    laid.invoke_semantics_action(selection_request(document, at(before, 5), at(privacy, 7)))
+        .expect("a selection into a link is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("the terms and the privacy")
+    );
+}
+
+/// A link that wraps holds a run on each of its lines, and an assistive
+/// selection from one to the other selects the whole link.
+///
+/// Red-check: leave the runs on the paragraph (the link holds none).
+pub(crate) fn a_wrapped_link_holds_a_run_on_each_line() {
+    let (mut laid, seen) = linked_area(60.0);
+    let (document, runs) = {
+        let tree = consumer(&laid);
+        let state = tree.state();
+        let privacy = find_all(state, Role::Link)
+            .into_iter()
+            .find(|link| link.label().as_deref() == Some("privacy notice"))
+            .expect("the second link is published");
+        let values = run_values(&privacy);
+        assert!(values.len() >= 2, "the link wraps: {values:?}");
+        assert_eq!(values.concat(), "privacy notice");
+        (
+            find_all(state, Role::Document)[0].locate().0,
+            runs_of(&privacy),
+        )
+    };
+    let last = *runs.last().expect("runs");
+    laid.invoke_semantics_action(selection_request(document, at(runs[0], 0), at(last, 99)))
+        .expect("a selection across the link's lines is accepted");
+    laid.tick();
+    assert_eq!(
+        seen.borrow().last().cloned().flatten().as_deref(),
+        Some("privacy notice")
+    );
+}
+
+/// The text of `linked_area`, its links routed to a handler that does
+/// nothing.
+fn linked_text() -> flui_widgets::RichText {
+    use flui_painting::typography::TextSpan;
+
+    flui_widgets::RichText::new(TextSpan::with_children(vec![
+        TextSpan::new("Read the "),
+        TextSpan::new("terms").with_link("app://terms"),
+        TextSpan::new(" and the "),
+        TextSpan::new("privacy notice").with_link("app://privacy"),
+    ]))
+    .on_link(|_cx, _link| {})
+}
+
+/// A link a clip leaves out of the tree leaves its runs with no region, so
+/// the text keeps every run, in an update to a live adapter as in a full
+/// tree, and no run is listed under two nodes.
+///
+/// Red-check: let the regions the clip kept hold their runs (the dropped
+/// link's runs reach no node, which the adapter refuses).
+pub(crate) fn a_clipped_link_leaves_its_runs_with_the_text() {
+    use flui_foundation::geometry::Rect;
+    use flui_widgets::ClipRect;
+
+    let view = |height: f64| {
+        recorded_area(
+            SizedBox::new(60.0, 400.0).child(
+                ClipRect::new()
+                    .clipper(Rect::from_ltwh(0.0, 0.0, 60.0, height))
+                    .child(linked_text()),
+            ),
+        )
+        .0
+    };
+    let mut laid = mounted(view(400.0));
+    let live = std::sync::Arc::new(std::sync::Mutex::new(consumer(&laid)));
+    let delivered = std::sync::Arc::clone(&live);
+    laid.pipeline_owner().with_mut(|owner| {
+        owner.set_semantics_update_callback(std::sync::Arc::new(move |packet| {
+            delivered
+                .lock()
+                .expect("consumer lock")
+                .update_and_process_changes(packet.clone(), &mut NoChanges);
+        }));
+    });
+    laid.pump_widget(view(18.0));
+    laid.tick();
+    let full = consumer(&laid);
+    let live = live.lock().expect("consumer lock");
+    for (tree, name) in [(&full, "full"), (&*live, "live")] {
+        let state = tree.state();
+        let links = find_all(state, Role::Link);
+        assert!(links.len() < 2, "{name}: the clip drops a link");
+        assert!(
+            links.iter().all(|link| run_values(link).is_empty()),
+            "{name}: no link holds runs while another lost its node"
+        );
+        let text = find_all(state, Role::Label)
+            .into_iter()
+            .find(|node| !run_values(node).is_empty())
+            .expect("one static text holds the runs");
+        assert_eq!(
+            run_values(&text).concat(),
+            "Read the terms and the privacy notice",
+            "{name}: the text holds every run"
+        );
+        assert_eq!(
+            find_all(state, Role::TextRun).len(),
+            run_values(&text).len(),
+            "{name}: each run is listed once"
+        );
+    }
+}
+
+/// A link that starts inside a grapheme cluster (a combining accent after
+/// plain text) cannot hold whole runs, so the text keeps them all.
+///
+/// Red-check: give each run to the region holding its first byte (the run
+/// "é" crosses into the link but is held by the text before it).
+pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
+    use flui_painting::typography::TextSpan;
+
+    let laid = mounted(SelectionArea::new(
+        flui_widgets::RichText::new(TextSpan::with_children(vec![
+            TextSpan::new("Cafe"),
+            TextSpan::new("\u{301} menu").with_link("app://menu"),
+        ]))
+        .on_link(|_cx, _link| {}),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    let links = find_all(state, Role::Link);
+    assert_eq!(links.len(), 1);
+    assert_eq!(run_values(&links[0]), Vec::<String>::new());
+    let text = links[0].parent().expect("the link is in its text");
+    assert_eq!(run_values(&text).concat(), "Cafe\u{301} menu");
+}
+
+/// Linked selectable text under a merging ancestor keeps its node, its link
+/// nodes and their runs: the merge stops at the text.
+///
+/// Red-check: let a linked selectable text be a plain boundary (the merge
+/// absorbs it and its links, and no run is published).
+pub(crate) fn linked_text_under_a_merging_ancestor_keeps_its_runs() {
+    let laid = mounted(SelectionArea::new(
+        MergeSemantics::new().child(linked_text()),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    let links = find_all(state, Role::Link);
+    assert_eq!(links.len(), 2, "each link keeps its node");
+    assert_eq!(run_values(&links[0]), ["terms"]);
+    assert_eq!(run_values(&links[1]), ["privacy notice"]);
+}
+
+/// Linked selectable text whose runs no transform can place publishes no
+/// runs, and its regions hold none, rather than tripping the assembly.
+///
+/// Red-check: check the regions' ranges against the published text (the
+/// debug assertion fires on the withheld runs).
+pub(crate) fn linked_text_too_large_to_place_withholds_its_runs() {
+    use flui_widgets::Transform;
+
+    let laid = mounted(SelectionArea::new(
+        Transform::scale(1e39, 1.0).child(linked_text()),
+    ));
+    let tree = consumer(&laid);
+    let state = tree.state();
+    assert_eq!(find_all(state, Role::TextRun).len(), 0);
+}
+
+/// A change handler that ignores the changes.
+struct NoChanges;
+
+impl accesskit_consumer::TreeChangeHandler for NoChanges {
+    fn node_added(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
+    fn node_updated(
+        &mut self,
+        _: &accesskit_consumer::NodeRef<'_>,
+        _: &accesskit_consumer::NodeRef<'_>,
+    ) {
+    }
+    fn focus_moved(
+        &mut self,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+    ) {
+    }
+    fn node_removed(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
 }

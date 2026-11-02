@@ -145,6 +145,8 @@ impl PlatformTextInput for CloseTextInput {
         self.recorder.set_ime_cursor_area(area);
     }
 
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     fn discard_composition(&self) {
         self.recorder.discard_composition();
     }

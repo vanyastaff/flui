@@ -171,7 +171,7 @@ fn finish_delivery<T>(inner: &Arc<Inner<T>>, failure: Option<Payload>, unwinding
     }
     if let Some(payload) = failure {
         if unwinding {
-            crate::panic::retain_opaque_payload(payload);
+            crate::panic::discard_payload(payload);
         } else {
             std::panic::resume_unwind(payload);
         }
@@ -558,7 +558,7 @@ impl<T> Drop for ClaimHandle<T> {
             // Drain it even if the owner callback failed, outside both locks.
             if let Err(payload) = self.inner.wake_task(unwinding || failure.is_some()) {
                 if failure.is_some() {
-                    crate::panic::retain_opaque_payload(payload);
+                    crate::panic::discard_payload(payload);
                 } else {
                     failure = Some(payload);
                 }

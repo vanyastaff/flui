@@ -438,14 +438,16 @@ impl Default for RenderStack {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderStack {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add(
-            "alignment",
-            format!("({}, {})", self.alignment.x, self.alignment.y),
-        );
-        builder.add_enum("fit", self.fit);
-        builder.add_enum("clip_behavior", self.clip_behavior);
+impl flui_foundation::inspect::Inspect for RenderStack {
+    fn kind(&self) -> &'static str {
+        "RenderStack"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("alignment", &self.alignment)
+            .unit(flui_foundation::inspect::Unit::Fraction);
+        out.field("fit", &self.fit);
+        out.field("clip_behavior", &self.clip_behavior);
     }
 }
 
@@ -811,17 +813,14 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIndexedStack {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        flui_foundation::Diagnosticable::debug_fill_properties(&self.stack, builder);
-        match self.index {
-            Some(index) => {
-                builder.add_int("index", index as i64, None);
-            }
-            None => {
-                builder.add("index", "null");
-            }
-        }
+impl flui_foundation::inspect::Inspect for RenderIndexedStack {
+    fn kind(&self) -> &'static str {
+        "RenderIndexedStack"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        flui_foundation::inspect::Inspect::inspect(&self.stack, out);
+        out.field("index", &self.index);
     }
 }
 

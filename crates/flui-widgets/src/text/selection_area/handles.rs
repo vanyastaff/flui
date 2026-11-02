@@ -28,6 +28,7 @@ use flui_view::{
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
+use crate::text::editable_text::CaretHandle;
 use crate::{Container, Positioned, Stack};
 
 /// Which end of a selection a handle moves, in reading order.
@@ -38,12 +39,12 @@ pub enum HandleSide {
     Start,
     /// The end a reader meets last.
     End,
+    /// The caret of an editable text with nothing selected, which the
+    /// handle moves.
+    Collapsed,
 }
 
 /// What a [`SelectionHandles`] builds one handle for.
-///
-/// More may come; an editable text's caret handle will be a third side,
-/// `Collapsed`, of [`HandleSide`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct HandleInfo {
@@ -100,35 +101,54 @@ impl SelectionHandles for DotHandles {
     }
 }
 
-/// Sets the [`SelectionHandles`] of the selection areas beneath it that set
-/// none of their own.
+/// Sets the [`SelectionHandles`] of the selection areas and editable texts
+/// beneath it that set none of their own, and when a tap in those texts
+/// shows a caret handle.
 #[derive(Clone)]
 pub struct DefaultSelectionHandles {
     handles: Rc<dyn SelectionHandles>,
+    caret_handle: Option<CaretHandle>,
     child: BoxedView,
 }
 
 impl std::fmt::Debug for DefaultSelectionHandles {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultSelectionHandles")
+            .field("caret_handle", &self.caret_handle)
             .field("child", &self.child)
             .finish_non_exhaustive()
     }
 }
 
 impl DefaultSelectionHandles {
-    /// `handles` for the areas in `child`.
+    /// `handles` for the areas and fields in `child`.
     pub fn new(handles: impl SelectionHandles, child: impl IntoView) -> Self {
         Self {
             handles: Rc::new(handles),
+            caret_handle: None,
             child: child.into_view().boxed(),
         }
+    }
+
+    /// Also set when a tap in an editable text beneath shows a caret
+    /// handle, in place of the platform's ([`CaretHandle::default`]).
+    #[must_use]
+    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
+        self.caret_handle = Some(caret_handle);
+        self
     }
 
     /// The handles the nearest `DefaultSelectionHandles` above `ctx` sets,
     /// registering a dependency on it.
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<dyn SelectionHandles>> {
         ctx.depend_on::<Self, _>(|scope| Rc::clone(&scope.handles))
+    }
+
+    /// The caret handle the nearest `DefaultSelectionHandles` above `ctx`
+    /// sets, if it sets one, registering a dependency on it.
+    pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
+        ctx.depend_on::<Self, _>(|scope| scope.caret_handle)
+            .flatten()
     }
 }
 
@@ -144,7 +164,7 @@ impl InheritedView for DefaultSelectionHandles {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.handles, &old.handles)
+        !Rc::ptr_eq(&self.handles, &old.handles) || self.caret_handle != old.caret_handle
     }
 }
 
@@ -153,7 +173,7 @@ impl_inherited_view!(DefaultSelectionHandles);
 /// What an area's handles look like: handles it was given, its own or a
 /// default's, else dots in its active colour.
 #[derive(Clone)]
-pub(super) enum Look {
+pub(crate) enum Look {
     /// Handles given to the area or to a `DefaultSelectionHandles` above it.
     Given(Rc<dyn SelectionHandles>),
     /// The dots an area without given handles draws.
@@ -161,7 +181,7 @@ pub(super) enum Look {
 }
 
 impl Look {
-    fn handles(&self) -> &dyn SelectionHandles {
+    pub(crate) fn handles(&self) -> &dyn SelectionHandles {
         match self {
             Self::Given(handles) => handles.as_ref(),
             Self::Dots(dots) => dots,
@@ -170,7 +190,7 @@ impl Look {
 
     /// Whether both build the same handles: the same given handles, or
     /// dots in one colour.
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Given(a), Self::Given(b)) => Rc::ptr_eq(a, b),
             (Self::Dots(a), Self::Dots(b)) => a == b,
@@ -221,7 +241,7 @@ impl HandleState {
     /// The link `side`'s end is published under.
     pub(super) fn link(&self, side: HandleSide) -> LayerLink {
         match side {
-            HandleSide::Start => self.links[0],
+            HandleSide::Start | HandleSide::Collapsed => self.links[0],
             HandleSide::End => self.links[1],
         }
     }

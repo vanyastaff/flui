@@ -12,12 +12,15 @@ use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
     PendingCompletions,
 };
+use flui_platform::{ClipboardError, ClipboardRead};
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::ConnectionExt as _;
+use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
 
 use super::X11Clipboard;
-use crate::host::NativeClipboard as _;
+use crate::clipboard::linux::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE};
+use crate::host::NativeClipboard;
+use crate::testing::clipboard::a_concealed_write_stays_out_of_history;
 
 /// How long a read may take before the case fails.
 const STEP: Duration = Duration::from_secs(10);
@@ -70,9 +73,9 @@ impl Answers {
     }
 
     /// Read `clipboard`, waiting for its answer.
-    fn read(&self, clipboard: &X11Clipboard) -> Option<String> {
-        let (mut completion, resolver): (Completion<Option<String>>, _) =
-            self.source.pending::<Option<String>>();
+    fn read(&self, clipboard: &dyn NativeClipboard) -> Option<Arc<str>> {
+        let (mut completion, resolver): (Completion<ClipboardRead>, _) =
+            self.source.pending::<ClipboardRead>();
         clipboard.read_text(resolver);
         let deadline = Instant::now() + STEP;
         loop {
@@ -82,7 +85,9 @@ impl Answers {
                 job.run(&scope);
             }
             if let Some(outcome) = completion.poll() {
-                return outcome.expect("the read is answered, not abandoned");
+                return outcome
+                    .expect("the read is answered, not abandoned")
+                    .expect("the X11 read succeeds");
             }
             assert!(Instant::now() < deadline, "timed out waiting for the read");
             std::thread::sleep(Duration::from_millis(5));
@@ -185,7 +190,7 @@ fn a_read_after_a_write_answers_the_write() {
     for round in 0..20 {
         let text = format!("after {round}");
         clipboard.write_text(text.clone());
-        assert_eq!(answers.read(&clipboard), Some(text));
+        assert_eq!(answers.read(&clipboard), Some(Arc::from(text)));
     }
 }
 
@@ -228,23 +233,23 @@ fn silent_owner() -> RustConnection {
 }
 
 /// Past [`MAX_READERS`](super::selection::MAX_READERS) reads waiting, a
-/// read answers nothing at once rather than wait for another copy of the
-/// text; the reads waiting go on waiting.
+/// read is refused at once rather than queue behind them; the reads
+/// waiting go on waiting.
 #[test]
-fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
+fn a_read_past_the_waiting_limit_is_refused_at_once() {
     let Some(_server) = server() else {
         return;
     };
     let _owner = silent_owner();
     let answers = Answers::new();
     let reader = X11Clipboard::start().expect("the X server answers");
-    let mut waiting: Vec<Completion<Option<String>>> = Vec::new();
+    let mut waiting: Vec<Completion<ClipboardRead>> = Vec::new();
     for _ in 0..super::selection::MAX_READERS {
-        let (completion, resolver) = answers.source.pending::<Option<String>>();
+        let (completion, resolver) = answers.source.pending::<ClipboardRead>();
         reader.read_text(resolver);
         waiting.push(completion);
     }
-    let (mut past, resolver) = answers.source.pending::<Option<String>>();
+    let (mut past, resolver) = answers.source.pending::<ClipboardRead>();
     reader.read_text(resolver);
     let deadline = Instant::now() + super::selection::TRANSFER_TIMEOUT / 2;
     let outcome = loop {
@@ -262,7 +267,10 @@ fn a_read_past_the_waiting_limit_answers_nothing_at_once() {
         );
         std::thread::sleep(Duration::from_millis(5));
     };
-    assert_eq!(outcome.expect("the read is answered"), None);
+    assert_eq!(
+        outcome.expect("the read is answered"),
+        Err(ClipboardError::Unavailable)
+    );
     for completion in &mut waiting {
         assert!(completion.poll().is_none(), "a waiting read was answered");
     }
@@ -310,9 +318,9 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
         });
         let source = CompletionSource::new(poster, PendingCompletions::new());
         let reader = X11Clipboard::start().expect("the X server answers");
-        let (_first, answer) = source.pending::<Option<String>>();
+        let (_first, answer) = source.pending::<ClipboardRead>();
         reader.read_text(answer);
-        let (_second, answer) = source.pending::<Option<String>>();
+        let (_second, answer) = source.pending::<ClipboardRead>();
         reader.read_text(answer);
         drop(reader);
         assert_eq!(
@@ -321,4 +329,115 @@ fn reads_waiting_at_the_end_are_each_abandoned() {
             "each waiting read is abandoned"
         );
     });
+}
+
+/// Ask the `CLIPBOARD` selection's owner for `target` as another client
+/// would, and answer what it wrote: its type and bytes, or `None` when it
+/// refused.
+fn convert(target: &[u8]) -> Option<(xproto::Atom, Vec<u8>)> {
+    let (requestor, screen) = RustConnection::connect(None).expect("the X server answers");
+    let root = requestor.setup().roots[screen].root;
+    let window = requestor.generate_id().expect("an id");
+    requestor
+        .create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            xproto::WindowClass::INPUT_ONLY,
+            x11rb::COPY_FROM_PARENT,
+            &xproto::CreateWindowAux::new(),
+        )
+        .expect("the request is sent");
+    let atom = |name: &[u8]| {
+        requestor
+            .intern_atom(false, name)
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers")
+            .atom
+    };
+    let (clipboard, target, property) = (atom(b"CLIPBOARD"), atom(target), atom(b"FLUI_TEST"));
+    requestor
+        .convert_selection(window, clipboard, target, property, x11rb::CURRENT_TIME)
+        .expect("the request is sent");
+    requestor.flush().expect("the request is sent");
+    let deadline = Instant::now() + STEP;
+    let answered = loop {
+        match requestor.poll_for_event().expect("the connection holds") {
+            Some(x11rb::protocol::Event::SelectionNotify(notify)) => {
+                break notify.property != x11rb::NONE;
+            }
+            Some(_) => {}
+            None => {
+                assert!(Instant::now() < deadline, "the owner never answered");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    };
+    if !answered {
+        return None;
+    }
+    let reply = requestor
+        .get_property(true, window, property, xproto::AtomEnum::ANY, 0, 1 << 16)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    Some((reply.type_, reply.value))
+}
+
+/// The atoms of a `TARGETS` answer.
+fn targets() -> Vec<xproto::Atom> {
+    let (_, bytes) = convert(b"TARGETS").expect("the owner answers TARGETS");
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|atom| u32::from_ne_bytes(*atom))
+        .collect::<Vec<xproto::Atom>>()
+}
+
+/// The atom `name` names on the server.
+fn atom(name: &str) -> xproto::Atom {
+    let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+    connection
+        .intern_atom(false, name.as_bytes())
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .atom
+}
+
+/// A concealed write pastes back, and the selection offers KDE's
+/// password-manager hint beside its text, which a clipboard manager reads as
+/// "keep it out of the history"; an ordinary write after it offers none.
+#[test]
+fn a_concealed_write_offers_the_password_manager_hint() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let clipboard = X11Clipboard::start().expect("the X server answers");
+    let hint = atom(CONCEALED_HINT);
+    assert_eq!(
+        a_concealed_write_stays_out_of_history(&clipboard, |clipboard| answers.read(clipboard)),
+        Ok(())
+    );
+    assert!(targets().contains(&hint), "TARGETS offers the hint");
+    assert_eq!(
+        convert(CONCEALED_HINT.as_bytes()),
+        Some((hint, CONCEALED_HINT_VALUE.to_vec()))
+    );
+
+    clipboard.write_text("plain".to_owned());
+    assert_eq!(answers.read(&clipboard).as_deref(), Some("plain"));
+    assert!(
+        !targets().contains(&hint),
+        "an ordinary write offers no hint"
+    );
+    assert_eq!(convert(CONCEALED_HINT.as_bytes()), None);
 }

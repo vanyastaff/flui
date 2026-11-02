@@ -1839,3 +1839,64 @@ fn a_revision_round_trips_as_its_number() {
     assert_eq!(read, revision);
     assert_ne!(read, Revision::NONE);
 }
+
+/// The listeners belong to the state that opened the document: its unmount
+/// drops them, so a listener holding a clone of the document lets both go.
+#[test]
+fn unmounting_the_opening_state_drops_the_listeners() {
+    let storage = MemoryStorage::new();
+    let (laid, notes) = mount(&storage);
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = notes.clone();
+    notes.add_listener(Rc::new(move || {
+        let _held = (&alive, reader.status());
+    }));
+    let weak = notes.downgrade();
+
+    drop(laid);
+    assert!(kept.upgrade().is_none(), "the listener goes at unmount");
+    let later = Rc::new(());
+    let added = Rc::downgrade(&later);
+    notes.add_listener(Rc::new(move || {
+        let _held = Rc::clone(&later);
+    }));
+    assert!(
+        added.upgrade().is_none(),
+        "a listener added after it is not kept"
+    );
+    drop(notes);
+    assert!(weak.upgrade().is_none(), "and nothing keeps the document");
+}
+
+/// A state that moves and comes back within one delivery is still told: a
+/// reader may have seen it in between. A retried write that fails the same
+/// way goes from failed to saving and back before the delivery runs.
+#[test]
+fn listeners_hear_a_change_that_came_back_before_the_delivery() {
+    let storage = MemoryStorage::new();
+    let (mut laid, notes, _guard) = loaded(&storage, "first");
+    storage.fail_next(StorageError::Full);
+    assert!(notes.set(Note("second".into())).is_ok());
+    laid.pump();
+    laid.pump();
+    let failed = SaveStatus::Failed(PersistError::Storage(StorageError::Full));
+    assert_eq!(notes.status(), failed);
+
+    let heard = listen(&notes);
+    storage.fail_next(StorageError::Full);
+    notes.retry();
+    assert_eq!(
+        notes.status(),
+        SaveStatus::Saving,
+        "a reader sees it saving"
+    );
+    laid.pump();
+    laid.pump();
+    assert_eq!(notes.status(), failed, "and the write fails again");
+    assert!(
+        heard.borrow().last() == Some(&failed),
+        "the listeners are told where it stands: {:?}",
+        heard.borrow()
+    );
+}

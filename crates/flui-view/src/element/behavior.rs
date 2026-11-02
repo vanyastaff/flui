@@ -140,6 +140,7 @@ where
             hit_test_handle: owner.hit_test_handle.clone(),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),
+            unmount_hooks: owner.unmount_hooks.clone(),
             reads: crate::reactive::ElementReads::new(owner.reactive.clone(), element_id),
         },
     ))
@@ -850,9 +851,7 @@ where
                 payload.as_ref(),
                 "disposing StatefulElement",
             );
-            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
-                payload,
-            ));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
     }
 
@@ -924,9 +923,7 @@ where
                 payload.as_ref(),
                 "deactivating StatefulElement",
             );
-            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
-                payload,
-            ));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
     }
 
@@ -1230,9 +1227,7 @@ where
                 payload.as_ref(),
                 "unmounting the render object of RenderElement",
             );
-            flui_foundation::panic::retain_opaque_payload(std::mem::ManuallyDrop::into_inner(
-                payload,
-            ));
+            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,

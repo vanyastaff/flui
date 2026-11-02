@@ -19,6 +19,7 @@ const EPSILON: f64 = 1e-6;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum BoxFit {
     /// Fill the target box by distorting the source's aspect ratio.
     ///
@@ -337,6 +338,7 @@ impl BoxFit {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum BoxShape {
     /// A rectangle, possibly with rounded corners.
     ///

@@ -423,6 +423,10 @@ pub struct BuildOwner {
     /// and cheap to clone into the split-borrow `ElementOwner`.
     pub(crate) keep_alive: super::KeepAliveHolds,
 
+    /// The hooks states registered to run when their elements unmount
+    /// (`LifecycleContext::on_unmount`).
+    pub(crate) unmount_hooks: super::UnmountHooks,
+
     /// The UI runtime's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
@@ -725,6 +729,7 @@ impl BuildOwner {
             inherited_dependencies: InheritedDependencies::default(),
             reactive: OwnerReactive(Some(crate::reactive::Reactive::new())),
             keep_alive: super::KeepAliveHolds::default(),
+            unmount_hooks: super::UnmountHooks::default(),
             tree_observer: OwnerTreeObserverSlot(None),
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
@@ -1276,6 +1281,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
+            unmount_hooks: self.unmount_hooks.clone(),
             frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
@@ -1827,6 +1833,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
+                    unmount_hooks: self.unmount_hooks.clone(),
                     frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2050,6 +2057,7 @@ impl BuildOwner {
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     inherited_dependencies: &mut self.inherited_dependencies,
                     keep_alive: self.keep_alive.clone(),
+                    unmount_hooks: self.unmount_hooks.clone(),
                     frame_wake: super::element_owner::FrameWake::AfterPass,
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2104,7 +2112,7 @@ impl BuildOwner {
         // render parent's children into element-slot order (no-op unless an
         // insert flagged a possible drift), so a render sibling that attached
         // before a component-deferred sibling does not invert their layout.
-        tree.reorder_render_children_after_build();
+        tree.reorder_render_children_after_build(&self.child_manager_registry);
 
         // Record onto whichever span is current — `build_scope`'s own "build"
         // span and `service_layout_builders`'s `during_layout` "build" span
@@ -2475,6 +2483,7 @@ impl BuildOwner {
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 inherited_dependencies: &mut self.inherited_dependencies,
                 keep_alive: self.keep_alive.clone(),
+                unmount_hooks: self.unmount_hooks.clone(),
                 frame_wake: super::element_owner::FrameWake::AfterPass,
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2684,6 +2693,7 @@ impl BuildOwner {
             pending_dependency_changes: &mut self.pending_dependency_changes,
             inherited_dependencies: &mut self.inherited_dependencies,
             keep_alive: self.keep_alive.clone(),
+            unmount_hooks: self.unmount_hooks.clone(),
             frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
@@ -2989,13 +2999,13 @@ fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
     if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
     {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         std::mem::forget(observer);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
         }));
         if let Err(payload) = reported {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -3115,17 +3125,7 @@ mod tests {
         );
     }
 
-    fn reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics() {
-        struct DropBomb;
-
-        impl Drop for DropBomb {
-            fn drop(&mut self) {
-                panic!("secondary payload drop");
-            }
-        }
-
-        struct AggregatePayload(DropBomb, DropBomb);
-
+    fn reentrant_retry_preserves_the_first_panic() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let scheduler_slot: Arc<Mutex<Option<ExternalBuildScheduler>>> = Arc::new(Mutex::new(None));
         let callback_slot = Arc::clone(&scheduler_slot);
@@ -3143,7 +3143,7 @@ mod tests {
                         reentrant.schedule(ElementId::new(1), RebuildReason::DependencyChange);
                         panic!("primary wake panic");
                     }
-                    2 => std::panic::panic_any(AggregatePayload(DropBomb, DropBomb)),
+                    2 => panic!("retry wake panic"),
                     _ => panic!("unexpected extra wake"),
                 },
             );
@@ -3152,7 +3152,7 @@ mod tests {
         *scheduler_slot.lock() = Some(scheduler);
 
         // The wake itself, as a scheduler requests it before containing it:
-        // the first panic resumes, the retry's payload is retained.
+        // the first panic resumes and the retry's panic is dropped.
         let fresh = inbox.admit_batch(
             &[ElementId::new(1)],
             RebuildReasons::from_reason(RebuildReason::StateChange),
@@ -3941,7 +3941,7 @@ mod tests {
                 ("exhausted_owner_tag_refusal_retains_the_supplied_focus_manager", exhausted_owner_tag_refusal_retains_the_supplied_focus_manager as fn()),
                 ("wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it", wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it as fn()),
                 ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
-                ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),
+                ("reentrant_retry_preserves_the_first_panic", reentrant_retry_preserves_the_first_panic as fn()),
                 ("direct_build_scheduling_retries_a_failed_wake", direct_build_scheduling_retries_a_failed_wake as fn()),
                 ("a_panicking_report_of_a_failed_wake_does_not_unwind", a_panicking_report_of_a_failed_wake_does_not_unwind),
                 ("nested_scope_quarantines_work_until_its_own_drain", nested_scope_quarantines_work_until_its_own_drain as fn()),

@@ -34,6 +34,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Offset};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_rendering::constraints::AxisDirection;
 
 use flui_rendering::{
@@ -341,9 +342,13 @@ impl Default for RenderSliverPadding {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverPadding {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_enum("padding", self.padding);
+impl Inspect for RenderSliverPadding {
+    fn kind(&self) -> &'static str {
+        "RenderSliverPadding"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("padding", &self.padding).unit(Unit::LogicalPx);
     }
 }
 

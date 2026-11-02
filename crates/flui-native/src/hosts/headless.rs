@@ -20,7 +20,6 @@ use crate::owner::headless::{
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::preferences::headless::HeadlessPreferences;
-use crate::storage::UserDataDirs;
 use crate::text::headless::FakeTextInput;
 use crate::window::headless::{FakeSystemChrome, HeadlessWindows, MockWindow};
 
@@ -44,7 +43,7 @@ impl Host for Headless {
     type Preferences = HeadlessPreferences;
     type Lifecycle = HeadlessHostEvents;
     type Chrome = FakeSystemChrome;
-    type Storage = UserDataDirs;
+    type Storage = crate::storage::HeadlessData;
 }
 
 impl HeadlessHost for Headless {

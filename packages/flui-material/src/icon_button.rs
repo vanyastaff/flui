@@ -18,17 +18,13 @@
 //! every button in this crate shares):
 //!
 //! - `background_color` — always `Colors.transparent`.
-//! - `foreground_color` — `disabled` → `onSurface@38%`; the oracle's
-//!   `selected` branch (`primary`) is skipped — `IconButton.isSelected`/
-//!   `selectedIcon` (the toggle variant) is a named V1 deferral, so no state
-//!   set this substrate produces ever contains `WidgetState::Selected` — the
-//!   fallback is always `onSurfaceVariant`.
-//! - `overlay_color` — the oracle's `resolveWith` closure nests a `selected`
-//!   branch (never reached here, same reasoning) around the unselected
-//!   pressed(10%)/hovered(8%) ramp (focus is the focus ring) — exactly
-//!   `crate::elevated_button::pressed_hovered_overlay`'s shape, so
-//!   this reuses that helper against `onSurfaceVariant` rather than
-//!   duplicating the chain. The oracle's unconditional `Colors.transparent`
+//! - `foreground_color` — `disabled` → `onSurface@38%`, `selected` →
+//!   `primary`, otherwise `onSurfaceVariant`.
+//! - `overlay_color` — the pressed(10%)/hovered(8%) ramp (focus is the focus
+//!   ring) over `primary` when selected and `onSurfaceVariant` otherwise —
+//!   exactly `crate::elevated_button::pressed_hovered_overlay`'s shape, so
+//!   this reuses that helper rather than duplicating the chain. The oracle's
+//!   unconditional `Colors.transparent`
 //!   fallback (vs. this crate's `None`, which leaves the `InkWell` at rest
 //!   when no interaction state is active) is a paint-equivalent
 //!   substitution: a transparent fill and no fill layer are visually
@@ -69,11 +65,11 @@
 //! `ButtonStyleButtonCore` would fold into `DefaultTextStyle`, just also fed
 //! into the icon's `IconTheme`.
 //!
-//! The coalesce is resolved against a states set built from `disabled` only
-//! (never a live, hover/press/focus-tracking one): standard `IconButton`'s
-//! `foreground_color` — whether the caller's override or the default table
-//! — depends only on `disabled`/`selected` (see above; `selected` is a named
-//! deferral), so a static enabled-or-disabled snapshot is sufficient here.
+//! The coalesce is resolved against a states set built from `disabled` and
+//! `selected` only (never a live, hover/press/focus-tracking one): standard
+//! `IconButton`'s `foreground_color` — whether the caller's override or the
+//! default table — depends only on `disabled`/`selected`, both of which come
+//! from the view, so that static snapshot is sufficient here.
 //! A caller whose override varies `foreground_color` by `Pressed`/`Hovered`/
 //! `Focused` would see that live variation reach `ButtonStyleButtonCore`'s
 //! `DefaultTextStyle` (for a `Text` child) but NOT this icon's `IconTheme`,
@@ -92,7 +88,7 @@
 //! `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
 //! a live, hover/press/focus-tracking `WidgetStatesController` — see
 //! `crate::button_style_button`'s docs) but this icon's `IconTheme` only
-//! ever sees the `disabled`/enabled snapshot, never a live
+//! ever sees the `disabled`/`selected` snapshot, never a live
 //! `Pressed`/`Hovered`/`Focused` re-resolution. Fixing this for real means
 //! sharing `ButtonStyleButtonCoreState`'s own `WidgetStatesController` with
 //! this icon color resolution — that controller is private to
@@ -101,15 +97,23 @@
 //! is no live states seam to read from at this call site today. A named
 //! divergence, not silently dropped, same as the widget-tier case above.
 //!
+//! # Toggle
+//!
+//! [`IconButton::selected`] makes the button a toggle: `Selected` joins the
+//! states every property resolves against, and the node reports
+//! [`Toggled`](flui_sdk::widgets::Toggled). [`IconButton::selected_icon`]
+//! names the icon shown while selected; the swap runs through the ambient
+//! [`SymbolEffect::replace`], so two glyph `Icon`s cross-fade and only the
+//! new label is heard. Two icons of different view types swap at once, and
+//! an effect the caller put on the icon itself wins over the ambient one.
+//!
 //! # Deferred, and named
 //!
 //! - **`filled`/`filled_tonal`/`outlined` variants** — each is a distinct
-//!   `_TokenDefaultsM3` table (`_FilledIconButtonDefaultsM3` and friends);
-//!   only the standard (transparent) variant ships.
-//! - **`isSelected`/`selectedIcon` (the toggle variant)** — no
-//!   `WidgetState::Selected` is ever asserted, so the oracle's `selected`
-//!   branches in `foreground_color`/`overlay_color` are unreachable dead
-//!   code paths in this port, not wrong ones.
+//!   `_TokenDefaultsM3` table (`_FilledIconButtonDefaultsM3` and friends),
+//!   with its own selected and unselected toggle colors; only the standard
+//!   (transparent) variant ships, so its table is the only one with a
+//!   `selected` branch.
 //! - **`icon_size` override**, `visual_density`, `alignment`, `splash_radius`,
 //!   `mouse_cursor`, `focus_node`/`autofocus`, `tooltip`, `on_hover`/
 //!   `on_long_press`, `states_controller` (external) — no override surface
@@ -118,7 +122,9 @@
 use std::sync::Arc;
 
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
+use flui_sdk::widgets::{
+    IconTheme, IconThemeData, SymbolEffect, WidgetState, WidgetStateProperty, WidgetStates,
+};
 use flui_sdk::{
     geometry::{EdgeInsets, Size},
     painting::Color,
@@ -149,13 +155,16 @@ pub struct IconButton {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
     identifier: Option<Arc<str>>,
+    selected: Option<bool>,
     icon: BoxedView,
+    selected_icon: Option<BoxedView>,
 }
 
 impl std::fmt::Debug for IconButton {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IconButton")
             .field("enabled", &self.on_pressed.is_some())
+            .field("selected", &self.selected)
             .field("style", &self.style)
             .finish_non_exhaustive()
     }
@@ -170,7 +179,9 @@ impl IconButton {
             on_pressed: None,
             style: None,
             identifier: None,
+            selected: None,
             icon: BoxedView::new(icon.into_view()),
+            selected_icon: None,
         }
     }
 
@@ -201,8 +212,41 @@ impl IconButton {
         self
     }
 
+    /// Makes this a toggle button, selected or not: a selected one takes the
+    /// `primary` color, and the node reports `Toggled`. A button never given
+    /// this is not a toggle and reports no `Toggled`. The press handler flips
+    /// the value; the button keeps none of its own.
+    ///
+    /// ```rust
+    /// use flui_material::IconButton;
+    /// use flui_sdk::widgets::{Icon, IconData};
+    ///
+    /// let favorite = true;
+    /// let _button = IconButton::new(Icon::new(IconData::new(0xE87E)))
+    ///     .selected_icon(Icon::new(IconData::new(0xE87D)))
+    ///     .selected(favorite)
+    ///     .on_pressed(|_cx| {});
+    /// ```
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// The icon shown while [`selected`](Self::selected); the swap cross-fades
+    /// through [`SymbolEffect::replace`] — see the module docs.
+    #[must_use]
+    pub fn selected_icon(mut self, icon: impl IntoView) -> Self {
+        self.selected_icon = Some(BoxedView::new(icon.into_view()));
+        self
+    }
+
     fn is_interactive(&self) -> bool {
         self.on_pressed.is_some()
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected == Some(true)
     }
 }
 
@@ -220,11 +264,13 @@ impl StatelessView for IconButton {
         // A static enabled-or-disabled snapshot — see the module docs'
         // "Icon color and size" section for why that's sufficient for
         // `foreground_color` specifically, and where it stops being exact.
-        let states = if self.is_interactive() {
-            WidgetStates::NONE
-        } else {
-            WidgetStates::from(WidgetState::Disabled)
-        };
+        let mut states = WidgetStates::NONE;
+        if !self.is_interactive() {
+            states = states.with_state(WidgetState::Disabled);
+        }
+        if self.is_selected() {
+            states = states.with_state(WidgetState::Selected);
+        }
 
         // The SAME widget-then-theme-then-default coalesce
         // `ButtonStyleButtonCore` performs internally (`resolve_property`)
@@ -247,15 +293,25 @@ impl StatelessView for IconButton {
         )
         .unwrap_or(Color::TRANSPARENT);
 
-        let themed_icon = IconTheme::new(
-            IconThemeData::default()
-                .color(icon_color)
-                .size(ICON_BUTTON_ICON_SIZE),
-            self.icon.clone(),
-        );
+        let mut icon_theme = IconThemeData::default()
+            .color(icon_color)
+            .size(ICON_BUTTON_ICON_SIZE);
+        let icon = match &self.selected_icon {
+            Some(selected_icon) => {
+                icon_theme = icon_theme.symbol_effect(SymbolEffect::replace());
+                if self.is_selected() {
+                    selected_icon.clone()
+                } else {
+                    self.icon.clone()
+                }
+            }
+            None => self.icon.clone(),
+        };
+        let themed_icon = IconTheme::new(icon_theme, icon);
 
         let mut core = ButtonStyleButtonCore::new(default, themed_icon.boxed())
-            .style(self.style.clone().unwrap_or_default());
+            .style(self.style.clone().unwrap_or_default())
+            .selected(self.selected);
         if let Some(theme_style) = theme_style {
             core = core.theme_style(theme_style);
         }
@@ -277,12 +333,19 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {
                 colors.on_surface.with_opacity(0.38)
+            } else if states.contains_state(WidgetState::Selected) {
+                colors.primary
             } else {
                 colors.on_surface_variant
             })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            pressed_hovered_overlay(states, colors.on_surface_variant)
+            let base = if states.contains_state(WidgetState::Selected) {
+                colors.primary
+            } else {
+                colors.on_surface_variant
+            };
+            pressed_hovered_overlay(states, base)
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
         padding: Some(WidgetStateProperty::all(Some(EdgeInsets::all(8.0)))),

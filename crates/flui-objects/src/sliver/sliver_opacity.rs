@@ -19,6 +19,7 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
     constraints::SliverGeometry,
@@ -194,14 +195,17 @@ impl Default for RenderSliverOpacity {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverOpacity {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_default_double("opacity", self.opacity, 1.0, None);
-        builder.add_flag(
-            "always_needs_compositing",
-            self.always_needs_compositing,
-            "always needs compositing",
-        );
+impl Inspect for RenderSliverOpacity {
+    fn kind(&self) -> &'static str {
+        "RenderSliverOpacity"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("opacity", &self.opacity)
+            .unit(Unit::Fraction)
+            .default(&1.0_f64);
+        out.field("always_needs_compositing", &self.always_needs_compositing)
+            .default(&false);
     }
 }
 

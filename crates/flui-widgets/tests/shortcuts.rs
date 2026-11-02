@@ -463,7 +463,7 @@ pub(crate) mod tab_tests {
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some(expected)
             );
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             assert_eq!(policy_drops.get(), expected_policy_drops);
             assert_eq!(
                 candidate_drops.get(),

@@ -27,7 +27,7 @@ the same bug found by a whole-demo snapshot names a demo.
 
 | Tier | Drives | Entry point | Enabled by |
 |------|--------|-------------|------------|
-| Diagnostics | Structured self-description of any node | `flui_foundation::{DiagnosticsNode, DiagnosticsBuilder}` | always |
+| Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), inspect-debug (every `Value::Debug(` site of `flui_foundation::inspect` is counted per file and the counts only go down, ADR-0242), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -168,6 +168,13 @@ token's whole path (asked, answered, handed back, the window left behind its
 cover) runs only against a sway started by hand. On Windows the Win32 window
 tests and the contract's share the desktop's foreground and run one at a time
 (test group `desktop-foreground`).
+
+`cargo xtask inspect-debug` counts the `Value::Debug(` sites of `flui_foundation::inspect`, the
+untyped escape hatch (R50), per file in `crates/`, `packages/` and `src/`, leaving out
+`flui-foundation`'s `inspect/` module, `flui-macros` and any `/tests/` path. The counts in
+`tools/xtask/allowlists/inspect-debug.toml` are exact, each with its reason and an ADR exit: a
+file above its count ("grew"), below it ("lower it") or gone is a finding. `--seed` prints the
+list.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
@@ -617,8 +624,8 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 |-------|-----|-------------|
 | `flui-rendering` | [crates/flui-rendering/docs/TESTING.md](../crates/flui-rendering/docs/TESTING.md) | `RenderTester`, `Probe`, `box_node` / `sliver_node`, multi-frame `FrameRun` |
 | `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
-| `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds`, `diagnostics` |
-| `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
+| `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds` |
+| `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `inspect::{Inspect, SnapshotNode}` for structured assertions (no `testing` module) |
 | `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
 | `flui-testing` (widgets) | [crates/flui-testing/ARCHITECTURE.md](../crates/flui-testing/ARCHITECTURE.md) | `widgets::{lay_out, LaidOut, settle_lazy}`, `widgets::harness::{mount, mount_with_ime}` — the canonical widget harness on the UI runtime, shared verbatim by `flui-widgets` / `flui-material` / `flui-cupertino` |
 
@@ -629,23 +636,21 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-rendering` | Real `PipelineOwner` trees (Box + Sliver), layout/frame depths, animation helpers. |
 | `flui-testing` | A whole headless frame on a virtual clock: gesture deadlines, animation ticks, async tasks, build/layout/paint/composite, semantics, scripted gesture replay. |
 | `flui-widgets` | A mounted widget tree: geometry probes, synthetic pointer/scroll input with per-contact identity, root swap, lazy-sliver settling. |
-| `flui-foundation` | Diagnostics substrate: `find_descendant`, `get_property`, typed property builders. |
+| `flui-foundation` | The `inspect` substrate: `Inspect`, `SnapshotNode::{get, get_fact, find_by_kind}`, `render`. |
 
-Diagnostics dumps are backed by `flui_foundation::Diagnosticable`: every node
-self-describes its own **user-config** properties (a `RenderFlex`'s
-`main_axis_alignment`, a `RenderPadding`'s `padding`), while `PipelineOwner`
-adds committed **runtime** fields (`offset`, `size`, sliver `geometry`) when
-building the tree. Property names use **snake_case** (Rust idiom, not Dart
-camelCase). Prefer typed builder helpers (`add_enum`, `add_default_double`,
-`add_flag`, `add_size`) over raw `format!("{:?}")` strings — defaults are
-hidden automatically and kinds format cleanly in dumps.
+Render-tree snapshots are backed by `flui_foundation::inspect::Inspect`: every
+node self-describes its own **user-config** fields (a `RenderFlex`'s
+`main_axis_alignment`, a `RenderPadding`'s `padding`) as typed values, while
+`PipelineOwner` adds committed **runtime** facts (`offset`, `size`, sliver
+`geometry`) when building the tree. Field names use **snake_case** (Rust idiom,
+not Dart camelCase). Prefer a typed `Value` or `#[derive(Inspect)]` over
+`Value::Debug`, which is counted as untyped in `SnapshotNode::debug_fields`.
 
-Structured assertions should use `Probe::property` / `property_f64` /
-`descendant_property` (or `DiagnosticsNode::get_property` /
-`find_descendant`) instead of substring-matching `Probe::dump()`. Use
-`to_string_deep_at_level(DiagnosticLevel::Info)` when fine-grained debug
-properties should be omitted.
-
+Structured assertions should read the typed snapshot, `Probe::render_snapshot()`
+or `Probe::node_snapshot(id)`, by type: `node.get::<f64>("width")`,
+`node.get_fact::<Size>("size")`, `tree.find_by_kind("RenderFlex")`, instead of
+substring-matching `Probe::dump()`. In a widget test, `LaidOut::render_node(id)`
+is the one-node snapshot.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
 
 ```bash
@@ -858,20 +863,20 @@ the state primitive. Five steps, each backed by a documented, facade-reachable A
 | Step | What it does | API |
 |------|--------------|-----|
 | 1. Mount | Bootstrap the tree headlessly | `flui::testing::HeadlessBinding::mount_root` |
-| 2. Inspect structure | Dump the render tree, check a known node is there | `flui::testing::rendering::render_diagnostics` over `HeadlessBinding::pipeline_owner().with(...)` + `flui::foundation::DiagnosticsNode::to_string_deep` |
+| 2. Inspect structure | Snapshot the render tree, check a known node is there | `flui::testing::rendering::render_snapshot` over `HeadlessBinding::pipeline_owner().with(...)`, read with `flui::foundation::inspect::SnapshotNode::{iter, find_by_kind, get}` |
 | 3. Inspect semantics | Find the button by its accessible label | `flui::testing::HeadlessBinding::{enable_semantics, a11y_tree}` + `flui::testing::a11y::A11yTree::find_by_label` |
 | 4. Drive | Tap the label's own bounds | `flui::testing::HeadlessBinding::replay` with `flui::testing::replay::PointerScript::tap` |
-| 5. Assert | Confirm the rendered count advanced | The diagnostics dump again, checked for the `RenderParagraph` `text` property |
+| 5. Assert | Confirm the rendered count advanced | The render snapshot again, with each `RenderParagraph`'s typed `text` field read by `SnapshotNode::get::<&str>("text")` |
 
 Step 4 is deliberately **not** `flui_testing::widgets::lay_out`'s
 `dispatch_pointer_down`/`find_text` convenience: those are widget-internal
 shortcuts this package's own tests use freely, but an outside agent driving the framework through
 its documented surface has only `HeadlessBinding::replay` and a hit-test
 target it found itself — semantics bounds, here — to tap with. Steps 2 and 5
-reuse the same diagnostics dump for a structural check and a content check
+reuse the same render snapshot for a structural check and a content check
 respectively; that reuse is deliberate, not laziness — the semantics tree
-carries a `Text`'s content as a label, but the diagnostics tree's `text`
-property is the reading of what the `RenderParagraph` actually rendered,
+carries a `Text`'s content as a label, but the snapshot's typed `text` field
+is the reading of what the `RenderParagraph` actually rendered,
 which is what step 5 is asserting.
 
 **A gap the first version of this test found, now closed:** the counter
@@ -894,8 +899,8 @@ is not in the tree yields `flui::testing::a11y::A11yQueryError::NotFound`, which
 names the search and lists the labels that *were* reachable. No test asserts it.
 
 Writing the test also found that the facade's `flui::testing::rendering`
-module did not re-export `render_diagnostics` (`flui-rendering`'s render-tree
-dump); it does now, and step 2 uses it.
+module did not re-export the render-tree reader; it now re-exports `render_snapshot`
+(`flui-rendering`'s typed snapshot of the render tree), and step 2 uses it.
 
 ## Determinism
 

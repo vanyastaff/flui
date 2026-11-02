@@ -51,7 +51,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_foundation::Variable;
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, grid_child_paint_offset},
@@ -347,14 +347,14 @@ impl Clone for RenderSliverGrid {
     }
 }
 
-impl Diagnosticable for RenderSliverGrid {
-    fn debug_fill_properties(&self, props: &mut DiagnosticsBuilder) {
-        props.add_int("item_count", self.item_count as i64, None);
-        props.add_int(
-            "attached_child_count",
-            self.attached_child_count as i64,
-            None,
-        );
+impl Inspect for RenderSliverGrid {
+    fn kind(&self) -> &'static str {
+        "RenderSliverGrid"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("item_count", &self.item_count);
+        out.field("attached_child_count", &self.attached_child_count);
     }
 }
 

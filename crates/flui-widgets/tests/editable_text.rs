@@ -2356,7 +2356,7 @@ pub(crate) mod text_store {
         let text = flui_foundation::panic::payload_text(&*payload)
             .unwrap_or("an opaque payload")
             .to_owned();
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         Some(text)
     }
 
@@ -3195,6 +3195,53 @@ pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
         obscured.purpose,
         TextInputPurpose::Url,
         "and leaves its purpose alone"
+    );
+}
+
+/// A push platform reads no store, so it is told the focused field's status
+/// as the field attaches and again each time obscuring or the purpose
+/// changes: what an iOS keyboard turns into secure entry and its layout.
+///
+/// Red-check: drop the observer `attach_entered` installs — only the
+/// attach-time status arrives.
+pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
+    use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+    use flui_widgets::SizedBox;
+
+    let controller = TextEditingController::new();
+    let focus = FocusNode::new();
+    let field = |purpose, obscured| {
+        SizedBox::new(60.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus))
+                .input_purpose(purpose)
+                .obscure_text(obscured),
+        )
+    };
+    let mut harness =
+        crate::common::harness::mount_with_push_ime(field(TextInputPurpose::Email, false));
+    harness.tick();
+    assert_eq!(harness.field_status_calls(), [], "no field has focus yet");
+
+    let _ = focus.request_focus();
+    harness.tick();
+    let email = TextStoreStatus::EDITABLE_SINGLE_LINE.with_purpose(TextInputPurpose::Email);
+    assert_eq!(harness.field_status_calls(), [email], "told as it attaches");
+
+    harness.swap_root(field(TextInputPurpose::Email, true));
+    harness.tick();
+    let protected = email.with_protected(true);
+    assert_eq!(
+        harness.field_status_calls().last(),
+        Some(&protected),
+        "obscuring reaches the platform"
+    );
+
+    harness.swap_root(field(TextInputPurpose::Url, true));
+    harness.tick();
+    assert_eq!(
+        harness.field_status_calls().last(),
+        Some(&protected.with_purpose(TextInputPurpose::Url)),
+        "and so does the purpose"
     );
 }
 

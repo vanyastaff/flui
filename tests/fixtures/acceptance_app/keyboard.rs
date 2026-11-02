@@ -82,7 +82,7 @@ fn first_tab_enters_the_current_route() {
 #[test]
 fn tab_order_covers_every_screen() {
     let home = ["Settings", "Compact rows: off", "New note", "Note 1"];
-    let note = ["Settings", "Back", "Title", "Save note"];
+    let note = ["Settings", "Back", "Title", "Save note", "Delete note"];
     let settings = ["Back"];
 
     let mut run = AppRun::start(app());

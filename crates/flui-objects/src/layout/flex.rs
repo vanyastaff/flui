@@ -16,7 +16,7 @@ use flui_rendering::{
 };
 
 /// Direction of the flex layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum FlexDirection {
     /// Children are laid out horizontally (Row).
     #[default]
@@ -26,7 +26,7 @@ pub enum FlexDirection {
 }
 
 /// How children are aligned along the main axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum MainAxisAlignment {
     /// Children are placed at the start.
     #[default]
@@ -46,7 +46,7 @@ pub enum MainAxisAlignment {
 pub use super::main_axis_size::MainAxisSize;
 
 /// How children are aligned along the cross axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum CrossAxisAlignment {
     /// Children are aligned at the start.
     #[default]
@@ -802,17 +802,24 @@ fn baseline_kind_index(baseline: TextBaseline) -> usize {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFlex {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("direction", self.direction);
-        properties.add_enum("main_axis_alignment", self.main_axis_alignment);
-        properties.add_default_enum("main_axis_size", self.main_axis_size, MainAxisSize::Max);
-        properties.add_enum("cross_axis_alignment", self.cross_axis_alignment);
+impl flui_foundation::inspect::Inspect for RenderFlex {
+    fn kind(&self) -> &'static str {
+        "RenderFlex"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("direction", &self.direction);
+        out.field("main_axis_alignment", &self.main_axis_alignment);
+        out.field("main_axis_size", &self.main_axis_size)
+            .default(&MainAxisSize::Max);
+        out.field("cross_axis_alignment", &self.cross_axis_alignment);
         if self.cross_axis_alignment == CrossAxisAlignment::Baseline {
-            properties.add_enum("text_baseline", self.text_baseline);
+            out.field("text_baseline", &self.text_baseline);
         }
-        properties.add_default_enum("text_direction", self.text_direction, TextDirection::Ltr);
-        properties.add_default_double("spacing", self.spacing, 0.0, Some("px"));
+        out.field("text_direction", &self.text_direction);
+        out.field("spacing", &self.spacing)
+            .unit(flui_foundation::inspect::Unit::LogicalPx)
+            .default(&0.0_f64);
     }
 }
 impl RenderBox for RenderFlex {

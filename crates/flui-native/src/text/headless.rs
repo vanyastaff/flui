@@ -77,6 +77,9 @@ impl PlatformTextInput for FakeTextInput {
         self.state.lock().cursor_area_calls.push(area);
     }
 
+    /// No input method learns from or shows a headless window's field.
+    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
+
     /// No input method composes in a headless window.
     fn discard_composition(&self) {}
 }

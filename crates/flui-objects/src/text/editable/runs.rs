@@ -35,6 +35,7 @@ impl RenderEditable {
                 self.local_rect_for_range(start..start)
                     .unwrap_or_else(|| Rect::from_origin_size(Point::ZERO, Size::ZERO))
             },
+            &[],
         )?;
         let content = TextContent::try_new(runs)?;
         match self.run_selection(&content) {

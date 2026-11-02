@@ -338,12 +338,12 @@ impl Mirror {
             .collect()
     }
 
-    /// The text of static text that publishes runs: the runs' text joined,
-    /// so that the page's offsets in its element are the runs'. `None` for
-    /// any other node.
+    /// The text of a node that publishes runs, static text or a link inside
+    /// selectable text: the runs' text joined, so that the page's offsets in
+    /// its element are the runs'. `None` for any other node.
     fn run_text(&self, id: NodeId) -> Option<String> {
         let node = &self.nodes.get(&id)?.node;
-        if node.role() != Role::Label {
+        if !matches!(node.role(), Role::Label | Role::Link) {
             return None;
         }
         let runs = self.runs(id);
@@ -450,6 +450,27 @@ impl Mirror {
         let runs = run_text.is_some();
         if runs {
             spec.text = run_text;
+            // The runs name the element: a link that holds runs is named by
+            // its content, as a leaf link is.
+            spec.attributes.retain(|&(name, _)| name != "aria-label");
+        } else if let Some(text) = spec.text.take_if(|_| {
+            entry
+                .parent
+                .is_some_and(|parent| self.run_text(parent).is_some())
+        }) {
+            // A region of a text whose runs the text kept (ADR-0282 §5): the
+            // text's element already shows its words, so the region shows
+            // none. A link is named by its words instead; static text needs
+            // no name of its own.
+            if entry.node.role() != Role::Label
+                && !spec
+                    .attributes
+                    .iter()
+                    .any(|&(name, _)| name == "aria-label")
+            {
+                spec.attributes.push(("aria-label", text));
+                spec.attributes.sort_by_key(|&(name, _)| name);
+            }
         }
         let entry = self
             .nodes
@@ -967,5 +988,136 @@ mod tests {
             .apply(partial(vec![(ROOT, root(&[]))], ROOT))
             .expect("the area goes");
         assert_eq!(kinds(&ops).last(), Some(&select(None)));
+    }
+
+    /// Selectable text with a link: the link and the text before it each
+    /// hold their runs and show their text, the paragraph, whose regions
+    /// carry its text, shows none, and the page's offsets in the link are
+    /// positions in its runs.
+    #[test]
+    fn a_link_in_selectable_text_shows_its_runs() {
+        const BEFORE: NodeId = NodeId(23);
+        const LINK: NodeId = NodeId(24);
+        // The text publishes no label of its own: its regions carry it.
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK]);
+        text.add_action(Action::SetTextSelection);
+        let mut before = Node::new(Role::Label);
+        before.set_label("Read the ");
+        before.set_value("Read the ");
+        before.set_children(vec![FIRST_RUN]);
+        let mut link = Node::new(Role::Link);
+        link.set_label("terms");
+        link.set_url("https://example.com/terms");
+        link.add_action(Action::Click);
+        link.set_children(vec![SECOND_RUN]);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[AREA])),
+                    (AREA, area(None)),
+                    (FIRST, text),
+                    (SECOND, paragraph("Bye", &[THIRD_RUN])),
+                    (BEFORE, before),
+                    (LINK, link),
+                    (FIRST_RUN, run("Read the ")),
+                    (SECOND_RUN, run("terms")),
+                    (THIRD_RUN, run("Bye")),
+                ],
+                ROOT,
+            ))
+            .expect("a document with a link");
+        let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
+        assert_eq!(text_of(FIRST), None, "the paragraph has no text of its own");
+        assert_eq!(text_of(BEFORE).as_deref(), Some("Read the "));
+        assert_eq!(text_of(LINK).as_deref(), Some("terms"));
+        assert!(
+            mirror.spec(LINK).is_some_and(|spec| spec.tag.name() == "a"
+                && spec
+                    .attributes
+                    .iter()
+                    .all(|&(name, _)| name != "aria-label")),
+            "an anchor named by its runs"
+        );
+        assert_eq!(mirror.text_position(LINK, 2), Some(at(SECOND_RUN, 2)));
+        assert_eq!(mirror.dom_position(at(SECOND_RUN, 5)), Some((LINK, 5)));
+        assert_eq!(mirror.selection_target(BEFORE, LINK), Some(FIRST));
+    }
+
+    /// A labelled wrapper over selectable text keeps its own text: it is
+    /// not its child's runs joined, so its label is still its content.
+    #[test]
+    fn a_labelled_wrapper_over_selectable_text_keeps_its_text() {
+        const WRAPPER: NodeId = NodeId(25);
+        let mut wrapper = Node::new(Role::Label);
+        wrapper.set_label("Shipping");
+        wrapper.set_value("Shipping");
+        wrapper.set_children(vec![FIRST]);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[WRAPPER])),
+                    (WRAPPER, wrapper),
+                    (FIRST, paragraph("Free delivery", &[FIRST_RUN])),
+                    (FIRST_RUN, run("Free delivery")),
+                ],
+                ROOT,
+            ))
+            .expect("a wrapper over selectable text");
+        assert_eq!(
+            mirror.spec(WRAPPER).and_then(|spec| spec.text.as_deref()),
+            Some("Shipping")
+        );
+        assert_eq!(
+            mirror.spec(FIRST).and_then(|spec| spec.text.as_deref()),
+            Some("Free delivery")
+        );
+    }
+
+    /// Selectable text whose regions could not hold its runs keeps them: its
+    /// element shows its words once, its link is named by its words and
+    /// shows none, and the stretch before the link shows none.
+    #[test]
+    fn a_text_that_kept_its_runs_shows_its_words_once() {
+        const BEFORE: NodeId = NodeId(23);
+        const LINK: NodeId = NodeId(24);
+        let mut text = Node::new(Role::Label);
+        text.set_children(vec![BEFORE, LINK, FIRST_RUN, SECOND_RUN]);
+        text.add_action(Action::SetTextSelection);
+        let mut before = Node::new(Role::Label);
+        before.set_label("Read the ");
+        before.set_value("Read the ");
+        let mut link = Node::new(Role::Link);
+        link.set_label("terms");
+        link.set_url("https://example.com/terms");
+        link.add_action(Action::Click);
+        let mut mirror = Mirror::new(ElementIds::new("t"));
+        mirror
+            .apply(full(
+                vec![
+                    (ROOT, root(&[FIRST])),
+                    (FIRST, text),
+                    (BEFORE, before),
+                    (LINK, link),
+                    (FIRST_RUN, run("Read the ")),
+                    (SECOND_RUN, run("terms")),
+                ],
+                ROOT,
+            ))
+            .expect("a text that kept its runs");
+        let text_of = |id| mirror.spec(id).and_then(|spec| spec.text.clone());
+        assert_eq!(text_of(FIRST).as_deref(), Some("Read the terms"));
+        assert_eq!(text_of(BEFORE), None);
+        assert_eq!(text_of(LINK), None);
+        assert!(
+            mirror.spec(LINK).is_some_and(|spec| spec
+                .attributes
+                .iter()
+                .any(|(name, value)| *name == "aria-label" && value == "terms")),
+            "the link is named by its words"
+        );
+        assert_eq!(mirror.text_position(FIRST, 10), Some(at(SECOND_RUN, 1)));
     }
 }

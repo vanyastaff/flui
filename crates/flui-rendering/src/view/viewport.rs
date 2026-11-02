@@ -10,7 +10,7 @@ use flui_foundation::geometry::Rect;
 use crate::{protocol::BoxProtocol, traits::RenderObject};
 
 /// The unit of measurement for a viewport's cache extent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 pub enum CacheExtentStyle {
     /// Treat the cache extent as logical pixels.
     #[default]
@@ -26,7 +26,7 @@ pub enum CacheExtentStyle {
 ///
 /// This can also be thought of as an ordering in the z-direction:
 /// whichever sliver is painted last (and hit-tested first) is on top.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 pub enum SliverPaintOrder {
     /// The first sliver paints on top, and the last sliver on bottom.
     ///

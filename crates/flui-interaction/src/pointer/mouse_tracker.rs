@@ -1447,14 +1447,6 @@ mod tests {
         pointer::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
     };
 
-    struct DropPanickingPayload;
-
-    impl Drop for DropPanickingPayload {
-        fn drop(&mut self) {
-            panic!("later payload drop");
-        }
-    }
-
     #[test]
     fn mouse_callback_panic_continues_later_callbacks_then_resumes_first_panic() {
         let lane = InteractionLane::try_new().expect("lane");
@@ -1474,8 +1466,8 @@ mod tests {
                 .register_mouse_region(MouseRegionCallbacks {
                     on_exit: Some(Rc::new(move |_device, _position| {
                         later_counter.set(later_counter.get() + 1);
-                        // A second failure whose payload panics when dropped.
-                        panic::panic_any(DropPanickingPayload);
+                        // A second, later failure.
+                        panic!("later exit panic");
                     })),
                     ..MouseRegionCallbacks::default()
                 })

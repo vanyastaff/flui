@@ -42,6 +42,14 @@ mod runner_teardown;
 #[path = "runner_close.rs"]
 mod runner_close;
 
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "headless_storage.rs"]
+mod headless_storage;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases

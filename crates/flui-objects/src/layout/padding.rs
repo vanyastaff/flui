@@ -101,9 +101,13 @@ impl RenderPadding {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderPadding {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_enum("padding", self.padding);
+impl flui_foundation::inspect::Inspect for RenderPadding {
+    fn kind(&self) -> &'static str {
+        "RenderPadding"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("padding", &self.padding);
     }
 }
 impl RenderBox for RenderPadding {
