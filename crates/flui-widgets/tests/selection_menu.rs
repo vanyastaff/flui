@@ -254,7 +254,7 @@ impl Scene {
             .nodes()
             .filter(|node| node.role() == role)
             .filter_map(|node| node.label().map(str::to_owned))
-            .collect()
+            .collect::<Vec<String>>()
     }
 
     /// The toolbar's buttons; empty while no toolbar shows.
@@ -309,7 +309,10 @@ fn start_of(prefix: &str) -> f64 {
 }
 
 fn strings(labels: &[&str]) -> Vec<String> {
-    labels.iter().map(|label| (*label).to_owned()).collect()
+    labels
+        .iter()
+        .map(|label| (*label).to_owned())
+        .collect::<Vec<String>>()
 }
 
 /// A long press selects a word and shows the toolbar over it with the

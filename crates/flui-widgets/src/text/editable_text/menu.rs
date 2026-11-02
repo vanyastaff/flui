@@ -219,7 +219,7 @@ impl FieldMenu {
             .iter()
             .filter(|item| item.is_enabled())
             .cloned()
-            .collect()
+            .collect::<Vec<MenuItem>>()
     }
 
     /// Whether opening the popup would show anything.
