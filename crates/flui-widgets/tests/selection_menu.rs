@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::focus::FocusNode;
-use flui_painting::typography::TextStyle;
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
@@ -20,9 +20,10 @@ use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, EditableText, Focus,
-    GestureCommand, HandleInfo, Intent, ScrollController, Scrollable, SelectionHandles,
-    SelectionMenuPolicy, SizedBox, Text, TextEditingController, WidgetsApp,
+    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, Directionality,
+    EditableText, Focus, GestureCommand, HandleInfo, Intent, ScrollController, Scrollable,
+    SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent, SizedBox, Text,
+    TextEditingController, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -150,14 +151,23 @@ impl Scene {
             Some(controls) => controls(DefaultSelectionControls::new(content)).boxed(),
             None => content,
         };
-        let (shout, whisper) = (Rc::clone(&self.log), Rc::clone(&self.log));
+        let (shout, whisper, menu) = (
+            Rc::clone(&self.log),
+            Rc::clone(&self.log),
+            Rc::clone(&self.log),
+        );
         let home = Actions::new(content)
             .action(CallbackAction::new(move |_cx, _: &Shout| {
                 shout.borrow_mut().push("shout");
             }))
             .action(CallbackAction::new(move |_cx, _: &Whisper| {
                 whisper.borrow_mut().push("whisper");
-            }));
+            }))
+            .action(CallbackAction::new(
+                move |_cx, _: &ShowContextMenuIntent| {
+                    menu.borrow_mut().push("menu");
+                },
+            ));
         // The field sits a toolbar's room below the top, so the toolbar
         // goes over the line.
         let room = Focus::new(SizedBox::new(400.0, 80.0)).focus_node(Rc::clone(&self.elsewhere));
@@ -390,6 +400,7 @@ pub(crate) fn the_menu_key_and_assistive_technology_open_the_popup() {
 
     scene.key(NamedKey::ContextMenu);
     assert_eq!(scene.popup(), strings(&EDITING));
+    assert!(scene.log.borrow().is_empty(), "the field answers the key");
     scene.key(NamedKey::Escape);
     assert_eq!(scene.popup(), Vec::<String>::new());
 
@@ -456,10 +467,12 @@ pub(crate) fn an_assistive_click_on_the_toolbar_takes_it_away() {
 }
 
 /// The toolbar moves with the selection when the page scrolls under it: a
-/// tap where Copy went copies.
+/// tap where Copy went copies. Scrolled to the window's top, it is placed
+/// again, under the line.
 ///
 /// Red-check: place the toolbar once where the selection was (the tap
-/// lands over it).
+/// lands over it); hear only a leader's resize (the scrolled toolbar
+/// leaves the window).
 pub(crate) fn the_toolbar_follows_a_scroll() {
     let scroll = ScrollController::new();
     let page = scroll.clone();
@@ -485,6 +498,19 @@ pub(crate) fn the_toolbar_follows_a_scroll() {
     scene.settle();
     scene.tap(copy - Offset::new(0.0, rise));
     assert_eq!(scene.laid.clipboard().text().as_deref(), Some("beta"));
+
+    // Scrolled up to the window's top, the line leaves no room over it:
+    // the toolbar is placed again, under the selection.
+    scene.long_press(scene.along(width_of("alpha be")));
+    scroll.jump_to(150.0).expect("no build is running");
+    scene.settle();
+    let tree = scene.tree();
+    let bar = tree.find(Role::Toolbar).expect("a toolbar shows");
+    let bar = tree.window_bounds(&bar).expect("the toolbar has bounds");
+    let line = scene.laid.absolute_offset(scene.editable()).dy;
+    assert!(bar.y0 > line, "the toolbar went under the line: {bar:?}");
+    scene.tap(scene.center_of(Role::Button, "Select all"));
+    assert_eq!(scene.controller.selection(), 0..WORDS.len());
 }
 
 /// A `DefaultSelectionControls` command and the field's own follow the
@@ -536,9 +562,11 @@ pub(crate) fn a_handle_drag_hides_the_toolbar_until_it_lets_go() {
 }
 
 /// A policy that shows the toolbar after no long press shows none, and a
-/// field with no menu opens no popup though the app gives one.
+/// field with no menu opens no popup though the app gives one, and leaves
+/// the menu key to an enclosing answer.
 ///
-/// Red-check: ignore the field's policy (the toolbar shows).
+/// Red-check: ignore the field's policy (the toolbar shows); bind the
+/// menu key in a field with no menu (the enclosing answer is not heard).
 pub(crate) fn a_policy_or_no_menu_keeps_the_menu_away() {
     let mut scene = Scene::with(|field| field.menu_policy(SelectionMenuPolicy::NEVER), None);
     scene.long_press(scene.along(width_of("alpha be")));
@@ -553,6 +581,9 @@ pub(crate) fn a_policy_or_no_menu_keeps_the_menu_away() {
     assert_eq!(scene.popup(), Vec::<String>::new());
     scene.long_press(scene.along(width_of("alpha be")));
     assert_eq!(scene.toolbar(), Vec::<String>::new());
+    // The menu key goes to the enclosing answer the field would hide.
+    scene.key(NamedKey::ContextMenu);
+    assert_eq!(*scene.log.borrow(), ["menu"]);
 }
 
 /// A tap on the caret's handle shows the toolbar with what a caret allows,
@@ -639,4 +670,40 @@ pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
     }
     scene.tap(scene.center_of(Role::Button, "Whisper to the far corner"));
     assert_eq!(*scene.log.borrow(), ["whisper"]);
+}
+
+/// A field reading right to left lays its toolbar out from the right,
+/// though the toolbar stands in an overlay above a left-to-right page.
+///
+/// Red-check: build the toolbar under the overlay's direction (Cut is left
+/// of Copy).
+pub(crate) fn the_toolbar_reads_in_the_field_s_direction() {
+    let mut scene = Scene::framed(
+        |field| field.menu_policy(SelectionMenuPolicy::ALWAYS),
+        None,
+        |page| Directionality::new(TextDirection::Rtl, page).boxed(),
+    );
+    scene.long_press(scene.along(390.0));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+    let (cut, copy) = (
+        scene.center_of(Role::Button, "Cut"),
+        scene.center_of(Role::Button, "Copy"),
+    );
+    assert!(cut.dx > copy.dx, "Cut starts the row from the right");
+}
+
+/// A field rebuilt with no menu while its popup is open closes the popup.
+///
+/// Red-check: close a replaced look's popup only at the next opening (it
+/// stays open).
+pub(crate) fn a_field_rebuilt_without_its_menu_closes_the_popup() {
+    let mut scene = Scene::plain();
+    let _ = scene.field_focus.request_focus();
+    scene.controller.set_selection(6, 10);
+    scene.settle();
+    scene.secondary_click(scene.along(width_of("alpha be")));
+    assert_eq!(scene.popup(), strings(&EDITING));
+
+    scene.rebuild(EditableText::no_menu);
+    assert_eq!(scene.popup(), Vec::<String>::new());
 }

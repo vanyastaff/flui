@@ -234,7 +234,7 @@ impl FieldHandles {
         if self.shown.get().is_none() || self.menu.look().is_none() || self.toolbar.replace(true) {
             return;
         }
-        let watches = self
+        let watches: Vec<(ChangeNotifier, ListenerId)> = self
             .menu
             .items()
             .iter()
@@ -255,9 +255,25 @@ impl FieldHandles {
         self.refresh(failure);
     }
 
-    /// The field's build resolved its menu again: a shown toolbar shows the
-    /// new items, follows their enablement, or goes with the look.
+    /// The field's build resolved its menu again: the popup of a replaced
+    /// look closes after the frame, and a shown toolbar shows the new
+    /// items, follows their enablement, or goes with the look.
     pub(super) fn menu_configured(self: &Rc<Self>) {
+        if self.menu.has_retired() {
+            let post_frame = self
+                .parts
+                .borrow()
+                .as_ref()
+                .and_then(|parts| parts.post_frame.clone());
+            if let Some(post_frame) = post_frame {
+                let menu = Rc::downgrade(&self.menu);
+                let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
+                    if let Some(menu) = menu.upgrade() {
+                        menu.close_retired();
+                    }
+                });
+            }
+        }
         if !self.toolbar.get() {
             return;
         }
@@ -302,16 +318,30 @@ impl FieldHandles {
         let pipeline = parts.pipeline.clone();
         *self.parts.borrow_mut() = Some(parts);
         if let (Some(pipeline), Some(post_frame)) = (&pipeline, &post_frame) {
-            let watches = self
+            let watches: Vec<LeaderWatch> = self
                 .links
-                .map(|link| {
+                .iter()
+                .enumerate()
+                .map(|(index, &link)| {
                     let watch = pipeline.watch_leader(link, post_frame.clone());
                     let handles = Rc::downgrade(self);
+                    // The handles follow a move by themselves; their look
+                    // depends on the leader's size, and the toolbar's
+                    // placement against the overlay on where it stands too.
+                    let size = Cell::new(watch.geometry().map(|geometry| geometry.size));
                     watch.add_listener(Rc::new(move || {
                         let Some(handles) = handles.upgrade() else {
                             return;
                         };
-                        if handles.shown.get().is_some() {
+                        let geometry = handles
+                            .watches
+                            .borrow()
+                            .get(index)
+                            .and_then(LeaderWatch::geometry);
+                        let resized = size.replace(geometry.map(|geometry| geometry.size))
+                            != geometry.map(|geometry| geometry.size);
+                        let placed = resized || handles.toolbar.get();
+                        if handles.shown.get().is_some() && placed {
                             let mut failure = FirstPanic::new();
                             handles.refresh(&mut failure);
                             failure.resume();
@@ -319,7 +349,7 @@ impl FieldHandles {
                     }));
                     watch
                 })
-                .to_vec();
+                .collect();
             *self.watches.borrow_mut() = watches;
         }
         let handles = Rc::downgrade(self);
@@ -926,7 +956,7 @@ impl StatelessView for HandlesView {
                     .filter_map(|&(side, link)| handle(&handles, side, link, ctx))
                     .collect();
                 if handles.toolbar.get() {
-                    shown.extend(toolbar(&handles, ctx));
+                    shown.extend(toolbar(&handles));
                 }
                 shown
             })
@@ -1036,7 +1066,7 @@ const TOOLBAR_BELOW_GAP: f64 = 32.0;
 /// with the selection (a scroll) and goes while the start is clipped out.
 /// Choosing an item, by a touch or by assistive technology, takes it away
 /// after the frame, once the item has performed.
-fn toolbar(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedView> {
+fn toolbar(handles: &Rc<FieldHandles>) -> Option<BoxedView> {
     let look = handles.menu.look()?;
     let offered = handles.menu.offered();
     if offered.is_empty() {
@@ -1070,12 +1100,17 @@ fn toolbar(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedVi
             });
         }
     });
-    let items: Vec<MenuItem> = offered
+    let items: Rc<[MenuItem]> = offered
         .into_iter()
         .map(|item| item.when_chosen(Rc::clone(&chosen)))
         .collect();
-    let layout = CustomSingleChildLayout::new(ToolbarLayout { over, under })
-        .child(look.toolbar(&items, ctx));
+    // The look builds under the field's reading direction, though the
+    // toolbar stands in the overlay.
+    let bar = crate::localization::Directionality::new(
+        handles.menu.direction(),
+        ToolbarLook { look, items },
+    );
+    let layout = CustomSingleChildLayout::new(ToolbarLayout { over, under }).child(bar);
     let room = SizedBox::new(room.width, room.height).child(layout);
     let pinned = LinkFollower::pinned(handles.links[0], Offset::new(-over.dx, -over.dy), room);
     Some(Positioned::new(pinned).left(0.0).top(0.0).boxed())
@@ -1110,6 +1145,34 @@ impl FieldHandles {
                 Some((moved, size))
             })
             .flatten()
+    }
+}
+
+/// The menu's toolbar as its look draws it, built where it stands so the
+/// look reads the context above it.
+#[derive(Clone)]
+struct ToolbarLook {
+    look: Rc<dyn crate::text::SelectionMenu>,
+    items: Rc<[MenuItem]>,
+}
+
+impl std::fmt::Debug for ToolbarLook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolbarLook")
+            .field("items", &self.items.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl View for ToolbarLook {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for ToolbarLook {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.look.toolbar(&self.items, ctx)
     }
 }
 

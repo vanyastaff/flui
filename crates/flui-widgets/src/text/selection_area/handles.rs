@@ -295,14 +295,24 @@ impl SelectionModel {
         if !watches.is_empty() {
             return;
         }
-        for link in self.handles.links {
+        for (index, link) in self.handles.links.into_iter().enumerate() {
             let watch = pipeline.watch_leader(link, post_frame.clone());
             let model = Rc::downgrade(self);
+            // The handles follow a move by themselves; only a new line
+            // height changes how they look.
+            let size = Cell::new(watch.geometry().map(|geometry| geometry.size));
             watch.add_listener(Rc::new(move || {
                 let Some(model) = Weak::upgrade(&model) else {
                     return;
                 };
-                if model.handles.shown.get() {
+                let now = model
+                    .handles
+                    .watches
+                    .borrow()
+                    .get(index)
+                    .and_then(LeaderWatch::geometry)
+                    .map(|geometry| geometry.size);
+                if size.replace(now) != now && model.handles.shown.get() {
                     let mut failure = FirstPanic::new();
                     model.handles.refresh(&mut failure);
                     failure.resume();

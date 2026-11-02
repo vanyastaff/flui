@@ -1476,9 +1476,15 @@ impl EditableTextState {
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
-                erased_action::<ShowContextMenuIntent>(ShowFieldMenu(Rc::downgrade(
-                    self.touch_handles.menu(),
-                ))),
+                erased_action::<ShowContextMenuIntent>(ShowFieldMenu {
+                    menu: Rc::downgrade(self.touch_handles.menu()),
+                    enclosing: enclosing
+                        .as_ref()
+                        .and_then(|chain| {
+                            chain.get(&std::any::TypeId::of::<ShowContextMenuIntent>())
+                        })
+                        .cloned(),
+                }),
             ],
         );
         // Register the new record before the old token drops: the old one is

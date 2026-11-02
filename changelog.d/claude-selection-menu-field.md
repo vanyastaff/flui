@@ -4,3 +4,4 @@
 - `SelectionMenuPolicy` says which touches show the toolbar. `SelectionMenuPolicy::for_platform` shows it after a long press only on macOS, and on every trigger elsewhere.
 - `MenuItem::is_enabled` and `MenuItem::enablement_changes` tell a menu look whether an item can perform now.
 - `DefaultSelectionControls` sets the handles (`handles`), the caret handle (`caret_handle`), the menu's look (`menu`, `no_menu`), its policy (`menu_policy`) and added commands (`command`) for a subtree. A nested one keeps what it doesn't set from the one above and adds its commands after the outer ones.
+- `LeaderGeometry::origin` is where a leader stands in the layer tree root's coordinates, so a `LeaderWatch` also hears a leader that a scroll or a transform moved without resizing it; `flui_layer::leader_origin` computes it.

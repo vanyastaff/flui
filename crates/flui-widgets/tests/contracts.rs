@@ -720,6 +720,8 @@ fn selection_menu() {
             ("selection_menu::the_toolbar_follows_a_scroll", crate::selection_menu::the_toolbar_follows_a_scroll),
             ("selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar", crate::selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar),
             ("selection_menu::a_toolbar_wider_than_the_window_wraps", crate::selection_menu::a_toolbar_wider_than_the_window_wraps),
+            ("selection_menu::the_toolbar_reads_in_the_field_s_direction", crate::selection_menu::the_toolbar_reads_in_the_field_s_direction),
+            ("selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup", crate::selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup),
         ],
     );
 }

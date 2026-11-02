@@ -11,14 +11,18 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
+use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 
 use flui_interaction::focus::FocusNode;
 use flui_platform::text_store::OwnerCalls;
 
 use super::{CompositionCommit, EditableText};
-use crate::interaction::actions::{Action, ActionChain, ShowContextMenuIntent};
+use crate::interaction::actions::{
+    Action, ActionChain, ActionOutcome, ErasedAction, ShowContextMenuIntent,
+};
 use crate::interaction::{GestureCommand, MenuCause, MenuItem, MenuPresenter, MenuRequest};
+use crate::localization::Directionality;
 use crate::semantics::Semantics;
 use crate::text::controller::TextEditingController;
 use crate::text::{
@@ -86,13 +90,16 @@ pub(super) struct FieldMenu {
     look: RefCell<Option<Rc<dyn SelectionMenu>>>,
     /// The popup of `look`, which keeps the menu it has open.
     popup: RefCell<Option<Rc<dyn SelectionPopup>>>,
-    /// Popups of looks a rebuild replaced, closed at the next event, since
+    /// Popups of looks a rebuild replaced, closed after the frame, since
     /// a build may not change the routes.
     retired: RefCell<Vec<Rc<dyn SelectionPopup>>>,
     presenter: RefCell<Option<MenuPresenter>>,
     policy: Cell<Option<SelectionMenuPolicy>>,
     items: RefCell<Option<Rc<[MenuItem]>>>,
     warned: Cell<bool>,
+    /// The reading direction at the field, which its toolbar keeps though
+    /// it is built in the overlay.
+    direction: Cell<TextDirection>,
 }
 
 impl FieldMenu {
@@ -106,6 +113,8 @@ impl FieldMenu {
         origin: &PopupOrigin,
     ) {
         let controls = DefaultSelectionControls::controls_of(ctx);
+        self.direction
+            .set(Directionality::maybe_of(ctx).unwrap_or_default());
         let decided = settings.look.is_some()
             || controls
                 .as_ref()
@@ -164,6 +173,11 @@ impl FieldMenu {
         self.look.borrow().clone()
     }
 
+    /// The reading direction at the field.
+    pub(super) fn direction(&self) -> TextDirection {
+        self.direction.get()
+    }
+
     /// Every item, offered or not.
     pub(super) fn items(&self) -> Rc<[MenuItem]> {
         self.items.borrow().clone().unwrap_or_else(|| Rc::from([]))
@@ -213,11 +227,20 @@ impl FieldMenu {
         }
     }
 
-    fn close_retired(&self) {
+    /// Whether a rebuild replaced a look whose popup waits to close.
+    pub(super) fn has_retired(&self) -> bool {
+        !self.retired.borrow().is_empty()
+    }
+
+    /// Closes the popups of looks a rebuild replaced; each closes though an
+    /// earlier one panicked, and the first panic resumes after.
+    pub(super) fn close_retired(&self) {
         let retired = std::mem::take(&mut *self.retired.borrow_mut());
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         for popup in retired {
-            popup.close();
+            failure.contain(|| popup.close());
         }
+        failure.resume();
     }
 }
 
@@ -247,23 +270,41 @@ pub(super) fn show_menu_action(
 }
 
 /// The menu key (`ShowContextMenuIntent`) in a focused field opens its
-/// popup; a field with no menu leaves the key to an enclosing answer.
+/// popup; while the field can't, the key goes to the answer the field
+/// would hide, so a field with no menu leaves it to an enclosing
+/// `ContextMenuArea` or app binding.
 #[derive(Clone)]
-pub(super) struct ShowFieldMenu(pub(super) Weak<FieldMenu>);
+pub(super) struct ShowFieldMenu {
+    pub(super) menu: Weak<FieldMenu>,
+    /// The enclosing chain's answer to the intent.
+    pub(super) enclosing: Option<ErasedAction>,
+}
+
+impl ShowFieldMenu {
+    fn field_opens(&self) -> Option<Rc<FieldMenu>> {
+        self.menu.upgrade().filter(|menu| menu.can_open())
+    }
+}
 
 impl Action<ShowContextMenuIntent> for ShowFieldMenu {
-    fn is_enabled(&self, _intent: &ShowContextMenuIntent) -> bool {
-        self.0.upgrade().is_some_and(|menu| menu.can_open())
+    fn is_enabled(&self, intent: &ShowContextMenuIntent) -> bool {
+        self.field_opens().is_some()
+            || self
+                .enclosing
+                .as_ref()
+                .is_some_and(|enclosing| enclosing.is_enabled(intent))
     }
 
-    fn invoke(
-        &self,
-        cx: &mut EventCx<'_>,
-        _intent: &ShowContextMenuIntent,
-    ) -> crate::interaction::actions::ActionOutcome {
-        use crate::interaction::actions::ActionOutcome;
-        match self.0.upgrade() {
-            Some(menu) if menu.open(cx, MenuCause::Key, None) => ActionOutcome::Performed,
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &ShowContextMenuIntent) -> ActionOutcome {
+        if let Some(menu) = self.field_opens() {
+            return if menu.open(cx, MenuCause::Key, None) {
+                ActionOutcome::Performed
+            } else {
+                ActionOutcome::NotPerformed
+            };
+        }
+        match &self.enclosing {
+            Some(enclosing) if enclosing.is_enabled(intent) => enclosing.invoke(cx, intent),
             _ => ActionOutcome::NotPerformed,
         }
     }

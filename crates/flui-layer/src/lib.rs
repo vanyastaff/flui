@@ -75,7 +75,7 @@ pub use layer::{
     PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer,
     TextureLayer, TransformLayer,
 };
-pub use link::{LayerLink, resolve_follower_transform};
+pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::Scene;
 pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
 pub use texture_registry::{

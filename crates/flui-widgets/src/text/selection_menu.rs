@@ -237,7 +237,7 @@ impl SelectionControls {
                 .iter()
                 .chain(self.commands.iter())
                 .cloned()
-                .collect(),
+                .collect::<Rc<[GestureCommand]>>(),
         }
     }
 
@@ -346,7 +346,7 @@ impl DefaultSelectionControls {
             .iter()
             .cloned()
             .chain(std::iter::once(command))
-            .collect();
+            .collect::<Rc<[GestureCommand]>>();
         self
     }
 
