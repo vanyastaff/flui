@@ -176,7 +176,7 @@ graph LR
 | R36 | `two_runtimes_keep_independent_documents` | P5 | L |
 
 Строки реестра при завершении сеанса (`session_end_during_a_write_writes_the_latest_registry_bytes`,
-`session_end_never_blocks_for_work_in_progress`) — teardown T14.
+`session_end_never_blocks_for_work_in_progress`) — сделаны в teardown T14 (`runner_teardown`).
 
 ## Ход исполнения
 
