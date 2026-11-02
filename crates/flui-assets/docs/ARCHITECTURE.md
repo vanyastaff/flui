@@ -488,8 +488,10 @@ the first becomes the new lead, on its own lanes. A load that panics answers its
 waiters with the failure instead, from a drop guard that sees the unwind.
 
 Decodes run at most `with_decode_threads` at once (half the cores, at most four),
-never on the IO lane. A compute lane with no room hands the decode back to where
-the load runs; lanes shutting down, by refusing the decode or dropping it unrun,
+never on the IO lane. A compute lane with no room is waited for through
+`Executor::room`, and the decode spawned again once it has room; a compute
+lane whose workers could not start hands the decode back to where the load runs;
+lanes shutting down, by refusing the decode or dropping it unrun,
 close the load unsettled for a waiter on other lanes to take over. At admission,
 on the calling thread and under the lock that assigns its order, a load reserves
 one of four load slots per decode thread. A load bound for lanes is admitted when

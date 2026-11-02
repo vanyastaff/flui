@@ -64,7 +64,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
-use flui_platform::executor::{Executor, SpawnError};
+use flui_platform::executor::{Executor, Lane, SpawnError};
 use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
@@ -764,9 +764,11 @@ impl DecodedImages {
 
     /// Decodes `bytes` on the compute lane once a decode slot is free, behind
     /// every load admitted earlier that is also waiting with its bytes; loads
-    /// still fetching are not waited for. Without lanes, or when the compute
-    /// lane refuses the job, it decodes where the run is polled. `None` when
-    /// every subscriber left before the decode started.
+    /// still fetching are not waited for. A compute lane with no room is
+    /// waited for, so the decode never runs on the IO lane that read the
+    /// bytes. Without lanes, or when the compute lane's workers could not
+    /// start, it decodes where the run is polled. `None` when every
+    /// subscriber left before the decode started.
     async fn decode(
         &self,
         source: &ImageSource,
@@ -806,31 +808,41 @@ impl DecodedImages {
         };
         // Shared with the job, so a refused job hands the decode back.
         let shared = Arc::new(Mutex::new(Some(decode)));
-        let (tx, rx) = oneshot::channel();
-        let job = {
-            let shared = Arc::clone(&shared);
-            Box::new(move || {
-                let decode = shared.lock().take();
-                if let Some(decode) = decode {
-                    let _ = tx.send(decode());
-                }
-            })
-        };
-        match lanes.spawn_compute(job) {
-            // `None` when the lane dropped the job unrun: it is shutting
-            // down, and the load closes unsettled for a waiter on other
-            // lanes to take over.
-            Ok(()) => rx.await.ok().flatten(),
-            // Lanes shutting down take no more work from this load, the
-            // decode included: it closes unsettled, as above.
-            Err(SpawnError::ShuttingDown) => None,
-            // Lanes with no room now: decode where the load runs, as a load
-            // given no lanes does.
-            Err(_refused) => {
-                let decode = shared.lock().take();
-                decode.and_then(|decode| decode())
+        loop {
+            let (tx, rx) = oneshot::channel();
+            let job = {
+                let shared = Arc::clone(&shared);
+                Box::new(move || {
+                    let decode = shared.lock().take();
+                    if let Some(decode) = decode {
+                        let _ = tx.send(decode());
+                    }
+                })
+            };
+            match lanes.spawn_compute(job) {
+                // `None` when the lane dropped the job unrun: it is shutting
+                // down, and the load closes unsettled for a waiter on other
+                // lanes to take over.
+                Ok(()) => return rx.await.ok().flatten(),
+                // Lanes shutting down take no more work from this load, the
+                // decode included: it closes unsettled, as above.
+                Err(SpawnError::ShuttingDown) => return None,
+                // A lane with no room now: wait for room rather than decode
+                // where the load runs, which may be an IO worker, then spawn
+                // again. Room is not reserved, so another caller may take it
+                // first.
+                Err(SpawnError::Saturated) => match lanes.room(Lane::Compute).await {
+                    Ok(()) => {}
+                    Err(SpawnError::ShuttingDown) => return None,
+                    Err(_unavailable) => break,
+                },
+                // Workers that could not start give no room to wait for:
+                // decode where the load runs, as a load given no lanes does.
+                Err(_unavailable) => break,
             }
         }
+        let decode = shared.lock().take();
+        decode.and_then(|decode| decode())
     }
 }
 

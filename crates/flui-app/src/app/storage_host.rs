@@ -457,6 +457,10 @@ mod tests {
                 job();
                 Ok(())
             }
+
+            fn room(&self) -> flui_runtime::execution::RoomFuture {
+                flui_runtime::execution::RoomFuture::ready(Ok(()))
+            }
         }
         struct Refusing(Mutex<Option<During>>);
         impl HostIoPool for Refusing {
@@ -467,6 +471,10 @@ mod tests {
                 }
                 drop(future);
                 Err(SpawnError::Saturated)
+            }
+
+            fn room(&self) -> flui_runtime::execution::RoomFuture {
+                flui_runtime::execution::RoomFuture::new(std::future::pending())
             }
         }
 

@@ -50,6 +50,10 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             job();
             Ok(())
         }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
+        }
     }
     impl HostIoPool for Pool {
         fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError> {
@@ -63,6 +67,10 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             ));
             drop(future);
             Err(SpawnError::Saturated)
+        }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     struct Capture(Arc<AtomicBool>);
@@ -199,12 +207,20 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
             job();
             Ok(())
         }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
+        }
     }
     impl HostIoPool for Pool {
         fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError> {
             self.0.fetch_add(1, Ordering::SeqCst);
             drop(future);
             Ok(())
+        }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
         }
     }
     struct Capture {
