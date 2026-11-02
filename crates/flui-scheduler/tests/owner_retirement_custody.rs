@@ -165,9 +165,11 @@ fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
         let _ = &outer;
     }));
     let inner = RejectedCapture;
-    other.set(Some(scheduler.schedule_frame_callback(Box::new(move |_| {
-        let _ = &inner;
-    }))));
+    other.set(Some(scheduler.schedule_frame_callback(Box::new(
+        move |_| {
+            let _ = &inner;
+        },
+    ))));
     let now = Instant::now();
     let failure = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
