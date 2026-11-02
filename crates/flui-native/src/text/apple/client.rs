@@ -31,11 +31,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Bounds, Point};
+use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    Composition, CompositionEnd, LockGrant, LockTiming, PointMode, Selection, TextChange,
-    TextStore, TextStoreEdit, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, commit_composition_in_place,
+    Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
+    TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost, TextStoreHostError,
+    TextStoreObserver, TextStoreRead, TextStoreStatus, commit_composition_in_place,
 };
 
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -68,7 +69,11 @@ pub(crate) trait InputContext {
     /// the input method did not make: never called for an edit it made
     /// through the client, which it already knows of. The input method may
     /// answer through the client, inside this call.
-    fn document_changed(&self, change: DocumentChange);
+    fn document_changed(&self, change: DocumentChange, marked_text: MarkedText);
+
+    /// The application is about to publish this change. Synchronous reads
+    /// still see the previous published document during this notice.
+    fn document_will_change(&self, change: DocumentChange);
 }
 
 /// What the application changed of the focused field's document.
@@ -78,6 +83,23 @@ pub(crate) enum DocumentChange {
     Text,
     /// Its selection alone.
     Selection,
+    /// The composition changed without a text or selection edit.
+    Composition,
+}
+
+/// Whether this application change ended the input method's marked text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkedText {
+    Preserve,
+    Discard,
+}
+
+/// The notification recipient for the publication currently on the stack.
+#[derive(Default)]
+enum PublicationContext {
+    #[default]
+    Idle,
+    Active(Option<Weak<dyn InputContext>>),
 }
 
 /// What [`TextClient::type_text`] made of the keyboard's text.
@@ -97,6 +119,7 @@ pub(crate) struct TextClient {
     /// The input method's context; `None` until the view binds it and after it
     /// retires.
     context: RefCell<Option<Rc<dyn InputContext>>>,
+    publication: RefCell<PublicationContext>,
     /// Whether the input method holds marked text it set through this
     /// client (`setMarkedText:` with text, until a commit, an unmark or a
     /// discard).
@@ -121,6 +144,65 @@ impl std::fmt::Debug for TextClient {
 fn clamped(range: Utf16Range, len: Utf16Offset) -> Utf16Range {
     Utf16Range::try_new(range.start().min(len), range.end().min(len))
         .expect("BUG: clamping both ends keeps them ordered")
+}
+
+/// Probe at most two UTF-16 units, keeping a surrogate pair whole. The
+/// store validates offsets before refusing a protected field's text, so
+/// protection never requires copying the password to answer this query.
+#[cfg(any(target_os = "ios", test))]
+fn scalar_range(
+    session: &dyn TextStoreRead,
+    at: Utf16Offset,
+    backward: bool,
+) -> Option<Utf16Range> {
+    use flui_platform::text_store::TextStoreError;
+    use flui_platform::text_store::utf16::OffsetError;
+
+    let valid = |range: Utf16Range| -> Result<(), TextStoreError> {
+        match session.text(range) {
+            Ok(_) | Err(TextStoreError::Protected) => Ok(()),
+            Err(error) => Err(error),
+        }
+    };
+    let len = session.document_len();
+    let mut at = at.min(len);
+    match valid(Utf16Range::collapsed(at)) {
+        Ok(()) => {}
+        Err(TextStoreError::Offset(OffsetError::SplitsSurrogatePair(_))) => {
+            at = Utf16Offset::new(at.get().saturating_sub(1));
+        }
+        Err(_) => return None,
+    }
+    if (backward && at == Utf16Offset::ZERO) || (!backward && at == len) {
+        return Some(Utf16Range::collapsed(at));
+    }
+    let start = if backward {
+        at.get().saturating_sub(1)
+    } else {
+        at.get()
+    };
+    let end = if backward {
+        at.get()
+    } else {
+        at.get().saturating_add(1).min(len.get())
+    };
+    let range = |start, end| {
+        Utf16Range::try_new(Utf16Offset::new(start), Utf16Offset::new(end))
+            .expect("BUG: bounded scalar probes are ordered")
+    };
+    let adjacent = range(start, end);
+    match valid(adjacent) {
+        Ok(()) => Some(adjacent),
+        Err(TextStoreError::Offset(OffsetError::SplitsSurrogatePair(_))) => {
+            let whole = if backward {
+                range(start.saturating_sub(1), end)
+            } else {
+                range(start, end.saturating_add(1).min(len.get()))
+            };
+            valid(whole).ok().map(|()| whole)
+        }
+        Err(_) => None,
+    }
 }
 
 /// The span an edit replaces: AppKit's `replacementRange:` when it gives
@@ -164,6 +246,7 @@ impl TextClient {
         Rc::new_cyclic(|this| Self {
             focused: RefCell::new(None),
             context: RefCell::new(None),
+            publication: RefCell::new(PublicationContext::Idle),
             marked: Cell::new(false),
             queue: HostQueue::new(),
             retired: Cell::new(false),
@@ -174,9 +257,19 @@ impl TextClient {
     /// The input method's context for this view, once the view exists.
     pub(crate) fn bind(&self, context: Rc<dyn InputContext>) {
         if !self.retired.get() {
-            *self.context.borrow_mut() = Some(context);
+            let previous = self.context.replace(Some(context));
+            let mut failure = FirstPanic::new();
+            if let Some(previous) = previous {
+                failure.contain(|| {
+                    let _entered = self.queue.enter();
+                    previous.field_changed(None);
+                });
+                failure.contain(|| drop(previous));
+            }
             // A field may have taken focus before the view existed.
-            self.sync_field();
+            failure.contain(|| self.sync_field());
+            self.drain_after(&mut failure);
+            failure.resume();
         }
     }
 
@@ -186,18 +279,27 @@ impl TextClient {
         if self.retired.replace(true) {
             return;
         }
-        self.queue.clear();
-        // Retired, the client serves no field: what the context took for
-        // one (a secure input hold, the keyboard) is given back while it is
-        // still there to give it back through.
-        self.sync_field();
+        // Withdraw authority before callbacks: even an interrupted keyboard
+        // notice cannot leave a retired client serving its previous field.
         let context = self.context.borrow_mut().take();
-        drop(context);
         let store = self.focused.borrow_mut().take();
-        if let Some(store) = store {
-            contain_owner_callback(|| store.set_observer(None));
-        }
         self.marked.set(false);
+        let mut failure = FirstPanic::new();
+        if let Some(context) = context {
+            failure.contain(|| {
+                let _entered = self.queue.enter();
+                context.field_changed(None);
+            });
+            failure.contain(|| drop(context));
+        }
+        if let Some(store) = store {
+            failure.contain(|| store.set_observer(None));
+            failure.contain(|| drop(store));
+        }
+        // Accepted completions still commit in place. When retirement is
+        // reentrant, the outer callback drains them after releasing its guard.
+        self.drain_after(&mut failure);
+        failure.resume();
     }
 
     /// The store the client serves now.
@@ -210,6 +312,86 @@ impl TextClient {
         self.context.borrow().clone()
     }
 
+    /// A publication never retargets a later notice to a replacement context.
+    fn document_context(&self) -> Option<Rc<dyn InputContext>> {
+        let current = self.context()?;
+        let recipient = match &*self.publication.borrow() {
+            PublicationContext::Idle => return Some(current),
+            PublicationContext::Active(recipient) => recipient.as_ref()?.upgrade()?,
+        };
+        Rc::ptr_eq(&current, &recipient).then_some(recipient)
+    }
+
+    fn publish_change(
+        &self,
+        change: TextStoreChange,
+        publish: &mut dyn FnMut(&mut OwnerCalls),
+        calls: &mut OwnerCalls,
+    ) {
+        let context = self.context();
+        let previous = self.publication.replace(PublicationContext::Active(
+            context.as_ref().map(Rc::downgrade),
+        ));
+        let entered = self.queue.enter();
+        let notices: &[DocumentChange] = match change {
+            TextStoreChange::Text(_) => &[DocumentChange::Text, DocumentChange::Selection],
+            TextStoreChange::Selection => &[DocumentChange::Selection],
+            TextStoreChange::Composition => {
+                &[DocumentChange::Composition, DocumentChange::Selection]
+            }
+            _ => &[],
+        };
+        for &change in notices {
+            if let Some(recipient) = self.document_context() {
+                calls.run(|| recipient.document_will_change(change));
+                calls.run(|| drop(recipient));
+            }
+        }
+        // Keep the caller's ledger through every Did callback. Catch only to
+        // restore this stack frame if publication itself unexpectedly unwinds.
+        if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| publish(calls)))
+        {
+            calls.keep(payload);
+        }
+        let retired = self.publication.replace(previous);
+        drop(retired);
+        drop(entered);
+        calls.run(|| drop(context));
+        while let Some(op) = self.queue.next() {
+            calls.run(|| self.run(op));
+        }
+    }
+
+    /// A keyboard callback may queue work, replace its context or retire the
+    /// client. Finish that work before resuming its first failure, and fence
+    /// the old context after a reentrant loss of authority.
+    fn notify_context(
+        &self,
+        context: Rc<dyn InputContext>,
+        notify: impl FnOnce(&dyn InputContext),
+    ) {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| {
+            let _entered = self.queue.enter();
+            notify(&*context);
+        });
+        let current = self.context();
+        if !current
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, &context))
+        {
+            failure.contain(|| {
+                let _entered = self.queue.enter();
+                context.field_changed(None);
+            });
+        }
+        failure.contain(|| drop(current));
+        failure.contain(|| drop(context));
+        self.drain_after(&mut failure);
+        failure.resume();
+    }
+
     /// Tell AppKit's context to forget its marked text, if it holds any, as
     /// a call into the focused store: what the input method does in answer
     /// (a commit, an unmark) edits the store under this call, and a host
@@ -218,15 +400,16 @@ impl TextClient {
         if !self.marked.replace(false) {
             return;
         }
-        if let Some(context) = self.context() {
-            let _entered = self.queue.enter();
-            context.discard_marked_text();
+        if let Some(context) = self.document_context() {
+            self.notify_context(context, |context| context.discard_marked_text());
         }
     }
 
     fn invalidate_character_coordinates(&self) {
         if let Some(context) = self.context() {
-            context.invalidate_character_coordinates();
+            self.notify_context(context, |context| {
+                context.invalidate_character_coordinates();
+            });
         }
     }
 
@@ -250,7 +433,7 @@ impl TextClient {
         // The input method's answer may come back into the client: no
         // borrow is held.
         if let Some(context) = self.context() {
-            context.field_changed(status);
+            self.notify_context(context, |context| context.field_changed(status));
         }
         self.drain();
     }
@@ -264,8 +447,14 @@ impl TextClient {
 
     /// Apply the requests queued while the client was inside a store call.
     fn drain(&self) {
+        let mut failure = FirstPanic::new();
+        self.drain_after(&mut failure);
+        failure.resume();
+    }
+
+    fn drain_after(&self, failure: &mut FirstPanic) {
         while let Some(op) = self.queue.next() {
-            self.run(op);
+            failure.contain(|| self.run(op));
         }
     }
 
@@ -291,6 +480,9 @@ impl TextClient {
     }
 
     fn refocus(&self, store: Option<Rc<dyn TextStore>>) {
+        // A context reached below may itself request focus. Commit this
+        // transition before applying that newer request.
+        let _entered = self.queue.enter();
         let same = match (&store, &self.focused()) {
             (Some(next), Some(current)) => Rc::ptr_eq(next, current),
             (None, None) => true,
@@ -336,11 +528,16 @@ impl TextClient {
     /// has focus or the store cannot grant one now.
     fn read<R: 'static>(&self, body: impl FnOnce(&dyn TextStoreRead) -> R + 'static) -> Option<R> {
         let store = self.focused()?;
-        let answer = {
-            let _entered = self.queue.enter();
-            read(&*store, body)
-        };
-        self.drain();
+        let mut failure = FirstPanic::new();
+        let answer = failure
+            .contain(|| {
+                let _entered = self.queue.enter();
+                read(&*store, body)
+            })
+            .flatten();
+        self.drain_after(&mut failure);
+        failure.contain(|| drop(store));
+        failure.resume();
         answer
     }
 
@@ -535,6 +732,23 @@ impl TextClient {
         self.read(|session| session.document_len())
     }
 
+    /// The scalar before or after a position in the focused field.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn extended_range(&self, at: Utf16Offset, backward: bool) -> Option<Utf16Range> {
+        self.read(move |session| scalar_range(session, at, backward))
+            .flatten()
+    }
+
+    /// The scalar under a point in the focused field.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn character_range_at_point(&self, point: Point<f64>) -> Option<Utf16Range> {
+        self.read(move |session| {
+            let at = session.index_at_point(point, PointMode::EXACT).ok()?;
+            scalar_range(session, at, false)
+        })
+        .flatten()
+    }
+
     /// `insertText:` from UIKit's keyboard: a lone line break is the Return
     /// key, which the field answers as a key press (a single-line field
     /// submits), as AppKit's `insertNewline:` and TSF send it; any other
@@ -557,18 +771,21 @@ impl TextClient {
     /// ended is one the input method must forget, and the input method is
     /// told of the change, which it did not make.
     fn application_edited(&self, change: DocumentChange) {
+        let mut marked_text = MarkedText::Preserve;
         if self.marked.get() {
             let composing = self.read(|session| session.composition().is_some());
             if composing == Some(false) {
-                self.discard_marked_text();
+                self.marked.set(false);
+                marked_text = MarkedText::Discard;
             }
         }
-        if let Some(context) = self.context() {
+        if let Some(context) = self.document_context() {
             // As a call into the focused store: what the input method does
             // in answer edits the store under it, and a host operation it
             // causes waits for it to return.
-            let _entered = self.queue.enter();
-            context.document_changed(change);
+            self.notify_context(context, |context| {
+                context.document_changed(change, marked_text);
+            });
         }
         self.drain();
     }
@@ -592,8 +809,10 @@ fn read<R: 'static>(
 impl TextStoreHost for TextClient {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         if let Some(op) = self.queue.defer(MirrorHostOp::Focus(store)) {
-            self.run(op);
-            self.drain();
+            let mut failure = FirstPanic::new();
+            failure.contain(|| self.run(op));
+            self.drain_after(&mut failure);
+            failure.resume();
         }
     }
 
@@ -632,6 +851,20 @@ struct ClientObserver {
 }
 
 impl TextStoreObserver for ClientObserver {
+    fn publish_change(
+        &self,
+        change: TextStoreChange,
+        publish: &mut dyn FnMut(&mut OwnerCalls),
+        calls: &mut OwnerCalls,
+    ) {
+        if let Some(client) = self.client.upgrade() {
+            client.publish_change(change, publish, calls);
+            calls.run(|| drop(client));
+        } else {
+            publish(calls);
+        }
+    }
+
     fn text_changed(&self, _change: TextChange) {
         if let Some(client) = self.client.upgrade() {
             client.application_edited(DocumentChange::Text);
@@ -641,6 +874,12 @@ impl TextStoreObserver for ClientObserver {
     fn selection_changed(&self) {
         if let Some(client) = self.client.upgrade() {
             client.application_edited(DocumentChange::Selection);
+        }
+    }
+
+    fn composition_changed(&self) {
+        if let Some(client) = self.client.upgrade() {
+            client.application_edited(DocumentChange::Composition);
         }
     }
 

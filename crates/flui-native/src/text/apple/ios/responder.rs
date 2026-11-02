@@ -37,7 +37,7 @@ use objc2_ui_kit::{
     UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
-use super::super::client::{DocumentChange, InputContext, TextClient, Typed};
+use super::super::client::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
@@ -404,7 +404,7 @@ define_class!(
         #[unsafe(method_id(characterRangeByExtendingPosition:inDirection:))]
         fn character_range_by_extending(&self, position: &UITextPosition, direction: UITextLayoutDirection) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView characterRangeByExtendingPosition:inDirection:", (), AfterPanic::Answer(|()| None), || {
-                let range = self.extended(offset(position)?, backward(direction));
+                let range = self.extended(offset(position)?, backward(direction))?;
                 Some(Retained::into_super(TextRange::new(self.mtm(), range)))
             })
         }
@@ -463,8 +463,8 @@ define_class!(
         #[unsafe(method_id(characterRangeAtPoint:))]
         fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
             os_entry("FluiTextInputView characterRangeAtPoint:", (), AfterPanic::Answer(|()| None), || {
-                let at = self.client().character_index(Point::new(point.x, point.y))?;
-                Some(Retained::into_super(TextRange::new(self.mtm(), self.extended(at, false))))
+                let range = self.client().character_range_at_point(Point::new(point.x, point.y))?;
+                Some(Retained::into_super(TextRange::new(self.mtm(), range)))
             })
         }
     }
@@ -523,15 +523,9 @@ impl TextInputView {
         (to <= self.end()).then(|| Retained::into_super(TextPosition::new(self.mtm(), to)))
     }
 
-    /// The unit before `at` (`backward`) or after it, inside the document;
-    /// empty at its end.
-    fn extended(&self, at: Utf16Offset, backward: bool) -> Utf16Range {
-        let other = if backward {
-            Utf16Offset::new(at.get().saturating_sub(1))
-        } else {
-            Utf16Offset::new(at.get().saturating_add(1))
-        };
-        self.range(at, other)
+    /// The scalar before or after `at`, read from the field's store.
+    fn extended(&self, at: Utf16Offset, backward: bool) -> Option<Utf16Range> {
+        self.client().extended_range(at, backward)
     }
 
     /// The rectangle of `range`'s first line in this view's points, from the
@@ -591,7 +585,6 @@ impl TextInputView {
         let delegate = self.delegate();
         let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
         if let Some(delegate) = &delegate {
-            delegate.textWillChange(Some(input));
             delegate.textDidChange(Some(input));
         }
     }
@@ -601,8 +594,21 @@ impl TextInputView {
         let delegate = self.delegate();
         let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
         if let Some(delegate) = &delegate {
-            delegate.selectionWillChange(Some(input));
             delegate.selectionDidChange(Some(input));
+        }
+    }
+
+    /// The previous published document is still readable during this notice.
+    fn document_will_change(&self, change: DocumentChange) {
+        let delegate = self.delegate();
+        let input = ProtocolObject::<dyn UITextInput>::from_ref(self);
+        if let Some(delegate) = delegate {
+            match change {
+                DocumentChange::Text | DocumentChange::Composition => {
+                    delegate.textWillChange(Some(input))
+                }
+                DocumentChange::Selection => delegate.selectionWillChange(Some(input)),
+            }
         }
     }
 }
@@ -633,12 +639,20 @@ impl InputContext for ResponderContext {
         }
     }
 
-    fn document_changed(&self, change: DocumentChange) {
+    fn document_changed(&self, change: DocumentChange, _marked_text: MarkedText) {
         if let Some(view) = self.view.load() {
             match change {
-                DocumentChange::Text => view.text_changed_under_keyboard(),
+                DocumentChange::Text | DocumentChange::Composition => {
+                    view.text_changed_under_keyboard()
+                }
                 DocumentChange::Selection => view.selection_changed_under_keyboard(),
             }
+        }
+    }
+
+    fn document_will_change(&self, change: DocumentChange) {
+        if let Some(view) = self.view.load() {
+            view.document_will_change(change);
         }
     }
 }

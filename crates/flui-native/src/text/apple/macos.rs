@@ -46,7 +46,7 @@ use flui_platform::text_store::{TextStoreHost, TextStoreStatus};
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 
-use super::client::{DocumentChange, InputContext, TextClient};
+use super::client::{DocumentChange, InputContext, MarkedText, TextClient};
 use super::secure_input::SecureHold;
 use crate::owner::apple::macos::content_view::{ViewText, with_content_view};
 use crate::owner::apple::macos::{ContentViewRef, on_owner_thread};
@@ -99,7 +99,7 @@ struct ViewInputContext {
     /// it retires, which the view's `dealloc` causes.
     view: *mut AnyObject,
     /// Whether this view holds secure event input.
-    secure: SecureHold,
+    secure: SecureHold<fn(bool) -> bool>,
 }
 
 impl ViewInputContext {
@@ -145,13 +145,19 @@ impl InputContext for ViewInputContext {
     /// focus in the key window.
     fn field_changed(&self, status: Option<TextStoreStatus>) {
         let wanted = status.is_some_and(|status| status.protected) && self.is_key_window();
-        self.secure.sync(wanted, Self::set_secure_input);
+        self.secure.sync(wanted);
     }
 
     /// AppKit asks its client for the document whenever it needs it, so an
     /// application's edit needs no notice beyond the marked text it ended
     /// and the coordinates it moved.
-    fn document_changed(&self, _change: DocumentChange) {}
+    fn document_changed(&self, _change: DocumentChange, marked_text: MarkedText) {
+        if marked_text == MarkedText::Discard {
+            self.discard_marked_text();
+        }
+    }
+
+    fn document_will_change(&self, _change: DocumentChange) {}
 }
 
 impl ViewInputContext {
@@ -200,7 +206,7 @@ impl ViewText for TextView {
     fn bind(&self, view: *mut AnyObject) {
         self.client.bind(Rc::new(ViewInputContext {
             view,
-            secure: SecureHold::default(),
+            secure: SecureHold::new(ViewInputContext::set_secure_input as fn(bool) -> bool),
         }));
     }
 
