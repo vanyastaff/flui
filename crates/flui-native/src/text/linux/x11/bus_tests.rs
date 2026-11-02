@@ -28,7 +28,7 @@ use x11rb::protocol::xproto::{self, FocusInEvent, NotifyDetail, NotifyMode};
 use zbus::object_server::SignalEmitter;
 use zbus::{ObjectServer, OwnedObjectPath, Variant, interface};
 
-use super::bus::{Bus, CREATE_TIMEOUT, Reach};
+use super::bus::{Bus, CREATE_TIMEOUT, MAX_HEARD, Reach};
 use super::{WindowText, X11Ime};
 use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
 use crate::text::TextInput;
@@ -146,13 +146,15 @@ const COMMITS: u32 = 'a' as u32;
 const SLOW: u32 = 'c' as u32;
 const DELETES: u32 = 'x' as u32;
 const ASKS: u32 = 'r' as u32;
+const FLOODS: u32 = 'm' as u32;
 const COMPOSES: u32 = 'p' as u32;
 const LATE: u32 = 'l' as u32;
 
 /// One input context of the stand-in: an engine that commits "あ" for `a`,
 /// lets `b` through, answers `c` after a second, composes "にほ" for `p`,
 /// commits "遅" for `l` after 400 ms, deletes three characters before the
-/// cursor and one after for `x`, and asks for the field for `r`.
+/// cursor and one after for `x`, asks for the field for `r`, and for `m`
+/// commits "x" more times than the owner queues before it answers.
 struct StandInContext {
     heard: Heard,
     content: (u32, u32),
@@ -209,7 +211,18 @@ impl StandInContext {
                     .expect("the stand-in asks for the field");
                 true
             }
-            COMMITS | COMPOSES | DELETES | ASKS => true,
+            FLOODS if !release => {
+                for _ in 0..=MAX_HEARD {
+                    Self::commit_text(&emitter, ibus_text("x"))
+                        .await
+                        .expect("the stand-in commits");
+                }
+                self.heard.lock().push("flooded".to_owned());
+                async_io::Timer::after(Duration::from_millis(150)).await;
+                self.heard.lock().push("answered".to_owned());
+                true
+            }
+            COMMITS | COMPOSES | DELETES | ASKS | FLOODS => true,
             _ => false,
         }
     }
@@ -940,6 +953,48 @@ fn a_key_a_full_hold_lets_go_retires_its_context() {
         rig.delivered().len(),
         MAX_HELD_KEYS + 1,
         "the window's keys go as typed with its context"
+    );
+    rig.settle("the field stated to a new context", || {
+        rig.heard_count("context for") == 2 && rig.heard_any("destroy")
+    });
+}
+
+/// An input method that sends more than the owner queues has its context
+/// retired: an answer past the gap does not take a key whose edit was
+/// dropped, which goes as typed.
+#[test]
+fn a_context_whose_edits_overflow_is_retired() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    // Delivered as of the press, so no deadline passes: only the gap
+    // retires the context.
+    let pressed = Instant::now();
+    rig.press('m');
+    let wait = |what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !rig.heard_any(what) {
+            assert!(Instant::now() < deadline, "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    wait("flooded");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // Past the bound by the mark of what was dropped.
+    while rig.ime.bus.inbox().queued() <= MAX_HEARD {
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the owner's queue overflowing"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    rig.ime.deliver(pressed);
+    wait("answered");
+    rig.ime.deliver(pressed);
+    assert!(
+        rig.delivered().iter().any(|(key, _)| *key == 'm'),
+        "the key goes as typed"
     );
     rig.settle("the field stated to a new context", || {
         rig.heard_count("context for") == 2 && rig.heard_any("destroy")

@@ -12,7 +12,7 @@
 //! Nothing here runs on the owner thread or reaches application code: what
 //! is heard waits in [`Inbox`] until the owner's turn takes it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,7 +42,7 @@ const MAX_COMMANDS: usize = 1024;
 /// The most things heard and not yet taken by the owner. Past it what the
 /// daemon sends is dropped, its keys' answers among it: those keys run out
 /// of time and are delivered as typed.
-const MAX_HEARD: usize = 4096;
+pub(super) const MAX_HEARD: usize = 4096;
 
 /// The most requests one context holds while the daemon makes it.
 const MAX_WAITING: usize = 256;
@@ -137,6 +137,9 @@ pub(crate) enum Heard {
     /// The engine asks for the field's state: one attached after the field
     /// last told it heard nothing of it.
     StateAsked(ContextId),
+    /// Something the context sent was dropped, the owner behind: nothing
+    /// more of it was queued, and the owner retires it.
+    Spilled(ContextId),
     /// The daemon answered the [`Request::FocusIn`] of this fence, or will
     /// not: what it sends from here is for the field it names.
     Fenced(ContextId, u64),
@@ -155,6 +158,7 @@ impl Heard {
             | Self::Preedit(context, ..)
             | Self::Delete(context, ..)
             | Self::StateAsked(context)
+            | Self::Spilled(context)
             | Self::Fenced(context, _)
             | Self::Lost(context) => *context,
         }
@@ -174,7 +178,7 @@ impl Heard {
 /// What the bus task heard, waiting for the owner's turn, and what wakes
 /// the owner for it.
 pub(crate) struct Inbox {
-    heard: Mutex<VecDeque<Heard>>,
+    heard: Mutex<Heards>,
     wake: Box<dyn Fn() + Send + Sync>,
     /// How many calls the task awaits an answer to, as its last turn left
     /// them.
@@ -182,26 +186,61 @@ pub(crate) struct Inbox {
     pub(crate) awaited: std::sync::atomic::AtomicUsize,
 }
 
+/// The queue the owner takes from, at most [`MAX_HEARD`] past the entries
+/// kept beyond it.
+#[derive(Default)]
+struct Heards {
+    queue: VecDeque<Heard>,
+    /// The contexts something was dropped of: until the owner takes their
+    /// [`Heard::Spilled`], nothing more of them is queued, so no answer or
+    /// edit applies past the gap.
+    spilled: HashSet<ContextId>,
+}
+
 impl Inbox {
     fn post(&self, heard: Heard) {
         {
-            let mut queue = self.heard.lock();
+            let mut heards = self.heard.lock();
+            let Heards { queue, spilled } = &mut *heards;
+            let context = heard.context();
             // A fence or a loss is kept past the bound: one comes of each
             // focus and each context the owner asked for, and without it the
             // owner would wait on that context for good.
             let kept = matches!(heard, Heard::Fenced(..) | Heard::Lost(_));
-            if queue.len() >= MAX_HEARD && !kept {
-                tracing::debug!(?heard, "the input method's messages are not taken: dropped");
+            if !kept && spilled.contains(&context) {
                 return;
             }
-            queue.push_back(heard);
+            if queue.len() >= MAX_HEARD && !kept {
+                tracing::debug!(
+                    ?heard,
+                    "the input method's messages are not taken: its context is retired"
+                );
+                // An edit or an answer lost leaves the rest of that context's
+                // stream wrong: it is retired, as one past a key's deadline.
+                // One mark per context, so the bound still holds.
+                spilled.insert(context);
+                queue.push_back(Heard::Spilled(context));
+            } else {
+                queue.push_back(heard);
+            }
         }
         (self.wake)();
     }
 
+    /// How many things heard wait for the owner.
+    #[cfg(test)]
+    pub(crate) fn queued(&self) -> usize {
+        self.heard.lock().queue.len()
+    }
+
     /// The first thing heard and not taken yet.
     pub(crate) fn take(&self) -> Option<Heard> {
-        self.heard.lock().pop_front()
+        let mut heards = self.heard.lock();
+        let heard = heards.queue.pop_front()?;
+        if let Heard::Spilled(context) = heard {
+            heards.spilled.remove(&context);
+        }
+        Some(heard)
     }
 }
 
@@ -250,7 +289,7 @@ impl Bus {
         let (commands, receiver) = mpsc::channel(MAX_COMMANDS);
         let (closes, closing) = mpsc::unbounded_channel();
         let inbox = Arc::new(Inbox {
-            heard: Mutex::new(VecDeque::new()),
+            heard: Mutex::new(Heards::default()),
             #[cfg(test)]
             awaited: std::sync::atomic::AtomicUsize::new(0),
             wake,

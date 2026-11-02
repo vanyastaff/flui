@@ -538,6 +538,18 @@ impl X11Ime {
     /// Apply what the bus heard.
     fn apply(&self, heard: Heard, failure: &mut FirstPanic) {
         let context = heard.context();
+        if let Heard::Spilled(_) = heard {
+            // The context's stream has a gap: it goes as one that left a key
+            // unanswered.
+            let window = self
+                .state
+                .with(|ime| ime.by_context(context).map(|held| held.window.id))
+                .flatten();
+            if let Some(window) = window {
+                self.replace_context(window, failure);
+            }
+            return;
+        }
         let target = self
             .state
             .with(|ime| {
@@ -615,7 +627,11 @@ impl X11Ime {
                 failure.contain(|| client.state_asked(&*wire));
                 return;
             }
-            Heard::Ready(_) | Heard::Answer(..) | Heard::Fenced(..) | Heard::Lost(_) => return,
+            Heard::Ready(_)
+            | Heard::Answer(..)
+            | Heard::Fenced(..)
+            | Heard::Lost(_)
+            | Heard::Spilled(_) => return,
         }
         // The batch states the preedit as it stands and applies at once.
         let (text, caret) = wire.preedit.borrow().clone();
