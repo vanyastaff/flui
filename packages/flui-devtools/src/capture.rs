@@ -293,9 +293,11 @@ fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
             .or_else(|| payload.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "a non-text panic payload".to_owned());
         // A subscriber is user code too.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Err(failed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(target: "flui.devtools", "a capture sink panicked: {text}");
-        }));
+        })) {
+            std::mem::forget(failed);
+        }
         // Forgotten, not dropped: its `Drop` may panic too.
         std::mem::forget(payload);
     }
@@ -1318,6 +1320,35 @@ mod tests {
         assert_eq!(*closed.lock(), [true, true], "both frames were captured");
     }
 
+    /// A subscriber that fails reporting the failure, with a payload whose destructor panics too,
+    /// still does not unwind out of the capture layer.
+    #[test]
+    fn a_failing_failure_report_does_not_unwind_out_of_the_layer() {
+        struct PanicOnDrop;
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                assert!(std::thread::panicking(), "payload destructor");
+            }
+        }
+        struct BadReporter;
+        impl<S: Subscriber> Layer<S> for BadReporter {
+            fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
+                std::panic::panic_any(PanicOnDrop);
+            }
+        }
+
+        let capture = Capture::new();
+        capture.on_frame(|_, _| panic!("a sink that fails"));
+        let subscriber = tracing_subscriber::registry()
+            .with(capture.layer())
+            .with(BadReporter);
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(runtime(1), &[]);
+        });
+
+        assert_eq!(capture.frames().len(), 1);
+    }
     /// A failing sink of one capture must not stop the capture layers after it from closing the
     /// frame: nothing unwinds through the registry.
     #[test]
