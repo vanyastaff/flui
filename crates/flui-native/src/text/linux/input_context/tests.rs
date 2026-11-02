@@ -81,7 +81,13 @@ fn keys_of_a_context_that_went_are_delivered_in_order() {
     hold.ask(('x', 1), now, |_| {});
     hold.ask(('y', 2), now, |_| {});
     hold.ask(('x', 3), now, |_| {});
+    assert!(hold.waits(|(window, _)| *window == 'x'));
     hold.release_where(|(window, _)| *window == 'x');
+    assert!(
+        !hold.waits(|(window, _)| *window == 'x'),
+        "no key of the window released still waits"
+    );
+    assert!(hold.waits(|(window, _)| *window == 'y'));
     assert_eq!(
         hold.ready(),
         [('x', 1)],
