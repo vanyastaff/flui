@@ -1067,3 +1067,24 @@ fn an_edit_for_the_field_before_an_unsent_focus_reaches_no_field() {
         rig.heard_count("focus in") == 2
     });
 }
+
+/// A press of the pointer, which may move the caret, comes after the keys
+/// typed before it: one still unanswered goes as typed first, and its late
+/// answer edits nothing.
+#[test]
+fn a_pointer_press_comes_after_the_keys_typed_before_it() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('c');
+    assert!(rig.delivered().is_empty(), "the key waits for its answer");
+    rig.ime.pointer_pressed(rig.window.xid);
+    assert_eq!(
+        rig.delivered(),
+        [('c', String::new())],
+        "typed before the press reaches the window"
+    );
+    rig.settle("the field stated to a new context", || {
+        rig.heard_count("context for") == 2 && rig.heard_any("destroy")
+    });
+}

@@ -96,3 +96,67 @@ fn a_handler_dropped_with_its_entry_may_set_a_cursor() {
         "the first window's handler went with its entry"
     );
 }
+
+/// The windows a pointer press reached, as the text input heard them.
+#[derive(Debug, Default)]
+struct PressesHeard {
+    windows: std::sync::Mutex<Vec<x11rb::protocol::xproto::Window>>,
+}
+
+impl crate::owner::linux::x11::LoopText for PressesHeard {
+    fn window_opened(
+        &self,
+        _: WindowRef,
+        _: WindowScale,
+        _: Option<Arc<dyn crate::owner::linux::x11::X11WindowText>>,
+    ) {
+    }
+
+    fn window_closed(&self, _: WindowRef) {}
+
+    fn event(&self, _: &x11rb::protocol::Event) {}
+
+    fn key(&self, key: crate::owner::linux::x11::X11Key) {
+        (key.deliver)();
+    }
+
+    fn pointer_pressed(&self, xid: x11rb::protocol::xproto::Window) {
+        self.windows
+            .lock()
+            .expect("BUG: the list is not poisoned")
+            .push(xid);
+    }
+
+    fn deliver(&self, _: web_time::Instant) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        None
+    }
+
+    fn release(&self) {}
+}
+
+/// A button press is told to the text input before the window hears it, so
+/// the keys the window holds are typed first.
+#[test]
+fn a_button_press_reaches_the_text_input_first() {
+    let Ok(connection) = X11Connection::connect() else {
+        eprintln!("no X server answers: nothing to run");
+        return;
+    };
+    let heard = Arc::new(PressesHeard::default());
+    let input = X11Input::new(&connection, Arc::clone(&heard) as _);
+    let xid = connection.root();
+    let press = x11rb::protocol::xinput::ButtonPressEvent {
+        event: xid,
+        detail: 1,
+        ..Default::default()
+    };
+    input.event(&x11rb::protocol::Event::XinputButtonPress(press.clone()));
+    input.event(&x11rb::protocol::Event::XinputButtonRelease(press));
+    assert_eq!(
+        *heard.windows.lock().expect("BUG: the list is not poisoned"),
+        [xid],
+        "the press is told, the release is not"
+    );
+}

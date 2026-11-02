@@ -781,6 +781,28 @@ impl LoopText for X11Ime {
         failure.resume();
     }
 
+    fn pointer_pressed(&self, xid: xproto::Window) {
+        // What the input method answered already counts first.
+        self.deliver(Instant::now());
+        let waiting = self
+            .state
+            .with(|ime| {
+                let id = ime.by_xid(xid)?.window.id;
+                ime.hold.waits(|key| key.window.id == id).then_some(id)
+            })
+            .flatten();
+        let Some(window) = waiting else {
+            return;
+        };
+        // A key still unanswered goes as typed now, as one past its
+        // deadline: its context is replaced, so a late edit for it types
+        // nothing.
+        let mut failure = FirstPanic::new();
+        self.replace_context(window, &mut failure);
+        self.deliver_ready(&mut failure);
+        failure.resume();
+    }
+
     fn key(&self, key: X11Key) {
         let now = Instant::now();
         let mut evicted = None;

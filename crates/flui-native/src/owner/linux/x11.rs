@@ -403,6 +403,11 @@ pub(crate) trait LoopText: Send + Sync {
     /// for it.
     fn key(&self, key: X11Key);
 
+    /// A pointer or touch press reaches the window of X id `xid`, which may
+    /// move its caret: the keys it holds are typed first, in order, so the
+    /// user's edits keep the order they were made in.
+    fn pointer_pressed(&self, xid: xproto::Window);
+
     /// Apply what the input method sent since the last turn, and deliver
     /// the keys whose answer came or whose time is out at `now`.
     fn deliver(&self, now: web_time::Instant);
@@ -436,6 +441,8 @@ impl LoopText for KeysAsTyped {
     fn key(&self, key: X11Key) {
         (key.deliver)();
     }
+
+    fn pointer_pressed(&self, _: xproto::Window) {}
 
     fn deliver(&self, _: web_time::Instant) {}
 

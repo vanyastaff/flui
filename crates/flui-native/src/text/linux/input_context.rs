@@ -139,6 +139,13 @@ impl<K> KeyHold<K> {
         }
     }
 
+    /// Whether a key `which` names still waits for its answer.
+    pub(crate) fn waits(&self, which: impl Fn(&K) -> bool) -> bool {
+        self.queue
+            .iter()
+            .any(|(key, fate)| matches!(fate, Fate::Asked { .. }) && which(key))
+    }
+
     /// The keys whose turn came, in order: the front of the queue up to the
     /// first key still waiting, those the input method took left out.
     pub(crate) fn ready(&mut self) -> Vec<K> {

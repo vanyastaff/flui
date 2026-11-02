@@ -2172,7 +2172,17 @@ mod live {
                     return false;
                 }
                 _ => match copied_event(event) {
-                    Some((window, xi)) => self.pointer_event(window, &xi),
+                    Some((window, xi)) => {
+                        if matches!(
+                            event,
+                            Event::XinputButtonPress(_) | Event::XinputTouchBegin(_)
+                        ) {
+                            // The keys the window holds are typed before
+                            // the press that may move its caret.
+                            self.text.pointer_pressed(window);
+                        }
+                        self.pointer_event(window, &xi)
+                    }
                     None => return false,
                 },
             };
