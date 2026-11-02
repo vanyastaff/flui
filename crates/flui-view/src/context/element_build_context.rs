@@ -593,6 +593,10 @@ impl LifecycleContext for ElementBuildContext {
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
         self.keep_alive_handle().hold()
     }
+    fn on_unmount(&self, hook: Box<dyn FnOnce()>) -> crate::UnmountHook {
+        let hooks = self.owner.read().unmount_hooks.clone();
+        hooks.register(self.element_id, hook)
+    }
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
         self.owner.read().keep_alive.handle(self.element_id)
     }
@@ -726,6 +730,8 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's keep-alive table, so an item can take a hold on the
     /// lazy sliver child it lives inside from `init_state`.
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
+    /// The presentation's unmount hooks, for `on_unmount` from `init_state`.
+    pub(crate) unmount_hooks: crate::owner::UnmountHooks,
     /// The owner's reactive graph with the building element as its reader:
     /// the sink every signal read in this build subscribes through.
     pub(crate) reads: ElementReads,
@@ -1100,6 +1106,11 @@ impl LifecycleContext for BuildCtx<'_> {
         // exactly as for `text_input_handle` and `focus_manager`, which are
         // acquired from `init_state` through this same context.
         self.keep_alive_handle().hold()
+    }
+    fn on_unmount(&self, hook: Box<dyn FnOnce()>) -> crate::UnmountHook {
+        self.capabilities
+            .unmount_hooks
+            .register(self.element_id, hook)
     }
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
         self.capabilities.keep_alive.handle(self.element_id)

@@ -91,7 +91,10 @@ pub enum ActionCall {
     /// `Some` asks a scrollable ancestor to reveal a descendant, with the
     /// geometry the owner resolved for it.
     ScrollIntoView(Option<Reveal>),
-    /// Scroll the node's content to this offset, in the node's coordinates.
+    /// Scroll the node's content to this offset, in the order its scroll
+    /// position is published to platforms: from the top or left edge, so a
+    /// scrollable that grows up or to the left mirrors it inside its extent
+    /// ([`SemanticsConfiguration::set_scroll_axis_direction`](crate::SemanticsConfiguration::set_scroll_axis_direction)).
     SetScrollOffset(Offset<f64>),
     /// Select this range of the node's text.
     SetTextSelection(TextSelection),

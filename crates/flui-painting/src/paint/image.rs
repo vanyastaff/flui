@@ -309,6 +309,7 @@ pub use crate::{BoxFit, FittedSizes};
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum ImageRepeat {
     /// Repeat the image in both the x and y directions until the box is filled.
     Repeat,

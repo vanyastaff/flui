@@ -8,6 +8,8 @@
   after a run on that platform (Confirmation): the AppKit and UIKit hosts of decision 5 are
   type-checked here and run on a Mac separately.
 - **Date:** 2026-10-20
+- **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
+  in part: the snapshot field `safe_area` is `insets: WindowInsets`.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a

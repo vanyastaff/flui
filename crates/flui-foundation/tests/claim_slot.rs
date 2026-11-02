@@ -54,7 +54,7 @@ fn assert_failure(result: std::thread::Result<()>, expected: &str) {
         flui_foundation::panic::payload_text(&*payload),
         Some(expected)
     );
-    flui_foundation::panic::retain_opaque_payload(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 fn next_request() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
@@ -158,20 +158,13 @@ fn replacement_retirement_keeps_the_new_registration() {
     next_request();
 }
 
-fn delivered_wake_failure(opaque: bool) {
+fn delivered_wake_failure() {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
     let drops = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&drops);
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
         &calls,
-        move || {
-            if opaque {
-                std::panic::panic_any((
-                    Bomb(Arc::clone(&payload_drops)),
-                    Bomb(Arc::clone(&payload_drops)),
-                ));
-            }
+        || {
             panic!("wake primary");
         },
         vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
@@ -181,11 +174,7 @@ fn delivered_wake_failure(opaque: bool) {
     let failure = catch_unwind(AssertUnwindSafe(|| {
         slot.deliver(53).expect("pending");
     }));
-    if opaque {
-        flui_foundation::panic::retain_opaque_payload(failure.expect_err("opaque wake failure"));
-    } else {
-        assert_failure(failure, "wake primary");
-    }
+    assert_failure(failure, "wake primary");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert_eq!(
@@ -218,20 +207,11 @@ fn successful_wake_retirement_preserves_the_delivery() {
 fn owner_disconnect(unwinding: bool, wake_fails: bool) {
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(|| {}));
     let drops = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&drops);
     let calls = Arc::new(AtomicUsize::new(0));
     let waker = executor(
         &calls,
         move || {
-            if wake_fails {
-                if unwinding {
-                    std::panic::panic_any((
-                        Bomb(Arc::clone(&payload_drops)),
-                        Bomb(Arc::clone(&payload_drops)),
-                    ));
-                }
-                panic!("disconnect wake");
-            }
+            assert!(!wake_fails, "disconnect wake");
         },
         vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
     );
@@ -269,19 +249,10 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
         assert!(!owner_fails, "abandonment primary");
     }));
     let calls = Arc::new(AtomicUsize::new(0));
-    let payload_drops = Arc::clone(&drops);
     let waker = executor(
         &calls,
         move || {
-            if task_fails {
-                if owner_fails || unwinding {
-                    std::panic::panic_any((
-                        Bomb(Arc::clone(&payload_drops)),
-                        Bomb(Arc::clone(&payload_drops)),
-                    ));
-                }
-                panic!("task primary");
-            }
+            assert!(!task_fails, "task primary");
         },
         vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
     );
@@ -343,10 +314,7 @@ fn unwinding_retains_an_unclaimed_result() {
 }
 
 fn wake_failure_retains_captures() {
-    delivered_wake_failure(false);
-}
-fn opaque_wake_failure() {
-    delivered_wake_failure(true);
+    delivered_wake_failure();
 }
 fn owner_disconnect_wake_failure() {
     owner_disconnect(false, true);
@@ -389,7 +357,6 @@ fn claim_slot_executor_and_owner_recovery() {
             "wake failure retains captures",
             wake_failure_retains_captures,
         ),
-        ("opaque wake failure", opaque_wake_failure),
         (
             "successful wake retirement",
             successful_wake_retirement_preserves_the_delivery,

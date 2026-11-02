@@ -2,9 +2,9 @@
 //!
 //! Three notifications only wake the owner, which samples every value again:
 //! the workspace's accessibility display options (reduce motion, increase
-//! contrast), the current locale (preferred languages), and the application
-//! becoming active. AppKit posts nothing when the double-click interval
-//! changes. The user changes it in System Settings, another application, so
+//! contrast), the current locale (preferred languages and regional formats),
+//! and the application becoming active. AppKit posts nothing when the
+//! double-click interval changes. The user changes it in System Settings, another application, so
 //! the interval is read again when this one is active again; a change written
 //! while it stays active (`defaults write`) waits for the next activation. A
 //! failed read schedules one wake for its retry; nothing polls.
@@ -34,7 +34,7 @@ use crate::{
     PlatformError,
     owner::sources::SystemPreferenceSource,
     owner::{panic_boundary::contain_owner_callback, signal::OwnerSignal},
-    preferences::{locales as preferred_locales, read::ReadAdmission},
+    preferences::{apple::regional, locales as preferred_locales, read::ReadAdmission},
 };
 
 /// What a loop keeps of AppKit's preferences: the observers, then the source,
@@ -266,12 +266,14 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
         .with_motion(motion)
         .with_high_contrast(workspace.accessibilityDisplayShouldIncreaseContrast());
     let languages = NSLocale::preferredLanguages();
-    Ok(
-        match preferred_locales::from_language_tags(
-            languages.iter().map(|language| language.to_string()),
-        ) {
-            Some(locales) => preferences.with_locales(locales),
-            None => preferences,
-        },
-    )
+    let locales = preferred_locales::from_language_tags(
+        languages.iter().map(|language| language.to_string()),
+    );
+    let preferences = preferences.with_regional(regional::sample(
+        locales.as_ref().and_then(|locales| locales.first()),
+    ));
+    Ok(match locales {
+        Some(locales) => preferences.with_locales(locales),
+        None => preferences,
+    })
 }

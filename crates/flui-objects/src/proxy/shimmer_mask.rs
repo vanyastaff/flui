@@ -55,9 +55,14 @@ impl RenderShimmerMask {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderShimmerMask {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_optional("progress", self.sweep().map(|sweep| sweep.progress));
+impl flui_foundation::inspect::Inspect for RenderShimmerMask {
+    fn kind(&self) -> &'static str {
+        "RenderShimmerMask"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("progress", &self.sweep().map(|sweep| sweep.progress))
+            .unit(flui_foundation::inspect::Unit::Fraction);
     }
 }
 

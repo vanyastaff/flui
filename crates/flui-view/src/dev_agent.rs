@@ -56,11 +56,12 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{
-    ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, LocateParams,
-    Matches, ReadQuery, Retry, Snapshot, Tree, WaitOutcome, WaitParams, WindowId,
+    ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, Event, EventFilter,
+    InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Retry, Snapshot, Tree,
+    WaitOutcome, WaitParams, WindowId,
 };
 
-use crate::__runtime::{AgentPort, PendingAnswer};
+use crate::__runtime::{AgentPort, EventSource, PendingAnswer};
 
 /// A development tool that serves the application's windows to an agent,
 /// installed by the application and called by the host on the owner thread.
@@ -112,6 +113,18 @@ pub trait DevAgentHook: Send + 'static {
 
     /// A window with content to read has opened.
     fn window_opened(&mut self, window: AgentWindow);
+}
+
+/// Which of a window's trees an inspection reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InspectTarget {
+    /// The element tree (`inspect.widgets`, ids `v3.2`).
+    Widgets,
+    /// The render tree (`inspect.render`, ids `r12`).
+    Render,
+    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.37`).
+    Layers,
 }
 
 /// The kind of handle a `gone` or `unknown_handle` fault names.
@@ -262,6 +275,47 @@ impl<T> fmt::Debug for AgentAnswer<T> {
     }
 }
 
+/// The events one subscription selects, in the order the window emitted them. Dropping it ends
+/// the subscription.
+///
+/// A subscription holds a bounded queue: when events outrun the reader, the ones that do not fit
+/// are counted and the next event that fits is preceded by a [`GapEvent`](flui_protocol::GapEvent)
+/// naming how many were missed. The stream ends with a `window` event saying the window closed.
+///
+/// Never wait on it on the owner thread, or inside a [`DevAgentHook`] method: the owner fills it
+/// at frame boundaries.
+#[must_use = "dropping the stream ends the subscription"]
+pub struct AgentEvents(Box<dyn EventSource>);
+
+impl AgentEvents {
+    pub(crate) fn new(source: Box<dyn EventSource>) -> Self {
+        Self(source)
+    }
+
+    /// The next event, if one is queued.
+    pub fn try_next(&mut self) -> Option<Event> {
+        self.0.try_next()
+    }
+
+    /// The next event, waiting up to `timeout` for one; `None` if none came by then, and once the
+    /// stream has ended. Never call this on the owner thread.
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Event> {
+        self.0.recv_timeout(timeout)
+    }
+
+    /// Whether the stream has ended and every event it queued was taken: the window closed.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+}
+
+impl fmt::Debug for AgentEvents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AgentEvents").finish_non_exhaustive()
+    }
+}
+
 /// One window an agent can read and act on, from any thread.
 ///
 /// Handed to [`DevAgentHook::window_opened`] by the host. `Clone + Send +
@@ -409,6 +463,47 @@ impl AgentWindow {
             .wait(params)
     }
 
+    /// Read one of this window's trees as the typed snapshot it describes itself with, or the
+    /// subtree under `params.root` (a tree-local handle such as `v3.2`, or a `p3/v3.2` reference
+    /// that must name this window). `params.window` is the caller's own bookkeeping: the read is
+    /// this window's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest, among them `unknown_handle` (a window)
+    /// for a reference to another window, `gone` for a root that is no longer in its tree, and
+    /// `busy` while a frame holds the tree.
+    pub fn inspect(
+        &self,
+        target: InspectTarget,
+        params: InspectParams,
+    ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .inspect(target, params)
+    }
+
+    /// Subscribe to this window's events: `filters` select the kinds, and a filter that names
+    /// another window selects nothing here. The answer is the stream once the owner has
+    /// registered it; events emitted after that reach it.
+    ///
+    /// The window emits `frame`, `semantics` and `window` events. `input` and `announcement` are
+    /// accepted as filters but not emitted yet, so a stream that selects only those stays silent
+    /// until the window closes, and a wait on them runs to its timeout.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`]; the answer carries the rest, among them `busy` when the window already
+    /// holds as many subscriptions as it admits.
+    pub fn subscribe(
+        &self,
+        filters: Vec<EventFilter>,
+    ) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .subscribe(filters)
+    }
+
     /// Read or change this window's animation playback through its owner inbox.
     /// Rate and step are applied together only after validation.
     ///
@@ -509,6 +604,21 @@ mod tests {
         }
 
         fn wait(&self, _params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
+            Err(AgentFault::window_gone())
+        }
+
+        fn subscribe(
+            &self,
+            _filters: Vec<EventFilter>,
+        ) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+            Err(AgentFault::window_gone())
+        }
+
+        fn inspect(
+            &self,
+            _target: InspectTarget,
+            _params: InspectParams,
+        ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
             Err(AgentFault::window_gone())
         }
 

@@ -98,6 +98,22 @@ pub fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
             == Some(offset)
 }
 
+/// The grapheme boundary at or before `offset`: `offset` itself when it is
+/// one, else the start of the cluster that holds it, so a selection end
+/// stored against an older text splits no user-perceived character of the
+/// current one.
+///
+/// `offset` is clamped to the text and need not be a `char` boundary.
+#[must_use]
+pub fn grapheme_floor(text: &str, offset: usize) -> usize {
+    let offset = offset.min(text.len());
+    if is_grapheme_boundary(text, offset) {
+        offset
+    } else {
+        previous_grapheme_boundary(text, offset)
+    }
+}
+
 /// The byte range of each extended grapheme cluster of `text`, in order.
 pub fn graphemes(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     pairs(grapheme_segmenter().segment_str(text))

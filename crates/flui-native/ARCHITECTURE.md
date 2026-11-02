@@ -29,7 +29,7 @@ trait depends on `flui-platform` instead.
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
   OS versions (`version/`), the storage position's vocabulary (`storage/`) and
   one directory per feature of the closed list: `window`, `input`, `text`,
-  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `preferences`,
+  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `preferences`,
   `lifecycle`. There is no directory of code shared across features and no
   directory per platform: what two platforms of a feature share is that
   feature's model, and each platform is a file (or, where one OS object or the
@@ -394,18 +394,29 @@ trait depends on `flui-platform` instead.
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
   its caret is: AppKit, winit, headless) or `Store` (the platform reads or
-  mirrors the field's store: TSF, Android, web), and
-  `Absent<position::Text>` answers none; each window's accessor goes through
-  it, as do its text sizing (`capture_sizing`, `invalidate_sizing`,
-  `fence_sizing`) and its going (`detach`). Where the text feature keeps a
+  mirrors the field's store: TSF, Android, web, Wayland's
+  `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
+  window's accessor goes through it, as do its text sizing
+  (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
+  (`detach`). Where the text feature keeps a
   window's state itself the handle is a key to it: Android's input method
   keeps each window's field by `owner::android::ActivityWindowId`, and the
-  Web's text input lives in the canvas window's owner-thread slot. Beside it,
+  Web's text input lives in the canvas window's owner-thread slot. On
+  Wayland the seats' input binds each seat's `zwp_text_input_v3` through the
+  owner's `SeatText` seam, which `text::linux::wayland` implements and the
+  table hands the input, and records its events in the seats' queue in order
+  with the keys around them, a seat or manager that goes queued behind what
+  its text input reported, so that reaches the field first; a window's text
+  reaches the input as an opaque
+  `SeatWindowText`, so neither the owner nor the input names the text
+  feature's platform file. Beside it,
   one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
   answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
-  `web.rs` (the pure `ime`, `input`), `winit.rs` and `headless.rs`. `cargo
+  `web.rs` (the pure `ime`, `input`), `linux/{text_input, wayland}.rs` (the
+  pure `text_input` client of `zwp_text_input_v3` over a wire trait, and its
+  Wayland objects), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
@@ -416,7 +427,24 @@ trait depends on `flui-platform` instead.
   (`input::android::keys`, `input::web::keys`), and a window's text input
   tells it whether the field composes. Tests of the model and the pure
   halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
-  `text::web::ime::tests`, `text::windows::geometry::tests`).
+  `text::web::ime::tests`, `text::windows::geometry::tests`,
+  `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
+  the Wayland client from a real input method on sway.
+- **`fonts` answers which system faces fall back, for a locale (ADR-0271
+  §3).** `fonts::system_fallback` is the one entry; the composition root hands
+  it to the font feed, which calls it on its own thread, never the owner's
+  and never in a frame. A platform that cannot answer gives
+  `SystemFallback::none`, never a panic. `fonts::linux` opens fontconfig with
+  `dlopen` for the query and closes it after; `fonts::android` reads
+  `fonts.xml` below API 29 (its parse runs on every host over AOSP's recorded
+  files) and asks `AFontMatcher` from API 29, looked up like the other NDK
+  functions (`owner::android::ndk::FontMatching`, all seven or none).
+  `fonts::windows` hands DirectWrite the sample through an
+  `IDWriteTextAnalysisSource` of its own, whose methods cross `os_entry`;
+  `fonts::apple` looks `CTFontCreateForStringWithLanguage` up at run time,
+  since the macOS floor predates it. What two platforms share and can be
+  decided without the OS (naming a face by file or family, reading a sample
+  around a position) is the model's, tested on every host.
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
   platform, and `[package.metadata.flui.modules]` lists the four as
@@ -1058,7 +1086,7 @@ trait depends on `flui-platform` instead.
   window that wants a frame draws its own (`client_frame`, see "A Wayland
   window draws its own frame on subsurfaces, not through the engine" below);
   only a compositor that draws a frame although asked not to (sway frames
-  every tiled window) makes `SetDecorated` `NotOnThisDevice`
+  every tiled window) makes `SetFrame` to the system frame or none `NotOnThisDevice`
   (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
@@ -1739,29 +1767,130 @@ and writes only what changed between two specs.
   inside its call, or an event fired synchronously by a change (a removed
   element's `focusout`, the host's own `focus()`), waits for the work before
   it, and no listener runs while the mirror is borrowed. The host listens on
-  itself for `click`, `focusin` and `contextmenu` of every element, so no
-  element keeps a listener. An event that finds the mirror borrowed is the
-  host's own and is dropped, and a `Focus` on the node the tree already
-  focuses is not echoed.
+  itself for `click`, `focusin`, `contextmenu`, `input` and `scroll` of every
+  element, so no element keeps a listener. An event that finds the mirror
+  borrowed is the host's own and is dropped, and a `Focus` on the node the
+  tree already focuses is not echoed.
+- **Where the browser must act, the element is the native one.** A link with
+  an address is an `<a href>`, so a screen reader reads and offers the
+  address; a `click` on it never navigates, it is the node's action. A slider
+  a user can move (a leaf taking a value or a step, its range finite) is an
+  `<input type="range">`, which the browser adjusts for a screen reader where
+  it adjusts no ARIA slider; the moved value asks for `SetValue` or a step,
+  and the input shows the node's value until the tree publishes the moved
+  one, written again whenever its range changes, which the input sanitizes it
+  against. A value or a maximum its step does not reach from the minimum gets
+  `step="any"`, as the input would snap or never reach it. A node mirrored as
+  another element later (a link given its address) gets a new element in its
+  old one's place, with its children. Both are out of the Tab order
+  (`tabindex="-1"`).
+- **A node that takes a scroll offset is a scroller.** Its element scrolls
+  (`overflow: auto`, no scrollbar to take its box, `direction: ltr` whatever
+  the page inherits) over an empty `flui-scroll-extent` as much larger than
+  its box as its published extent is long, and is scrolled to its published
+  position less its minimum, the order ADR-0273 publishes it in. Its
+  children are published where they are seen, so each is placed as far into
+  the content as it is scrolled. The browser scrolling it, for a screen
+  reader's swipe or to reveal its cursor's element, asks for
+  `SetScrollOffset` and scrolls back to the published position until the node
+  publishes the new one; a scroll to where the node already is (the host's own,
+  after a publish) asks for nothing. The host hears `scroll` in the capture
+  phase, since it does not bubble. A scroller is scrolled once the host is
+  shown: one published while the canvas, or an ancestor that leaves it no box,
+  was hidden is scrolled when it shows, which a `ResizeObserver` on the canvas
+  hears.
 - **The host is part of the canvas's focus area** (`EditorSlot::set_semantics`),
   so focus moving between the canvas, its editor and the host's elements is no
   window focus change. Keys on an element reach the window through
   `CanvasKeys`. The tree's focus moves the page's focus only while the page's
   focus is the window's, on the canvas or in the host (activating a focused
   placeholder puts it on the canvas); a focus whose element takes no DOM focus
-  puts it on the canvas, as does a text field: the window's text input
-  serves it there (an `EditContext` or the hidden editor), and the field's
-  element has no input surface.
+  puts it on the canvas, as does a node that takes text with no field of its
+  own (a date, a spin button): the window's text input serves it there (an
+  `EditContext` or the hidden editor).
+- **A text field is a native one** (`Tag::Line`, `Tag::Area`): an `<input>`
+  whose `type` lets a script set its caret and keeps the value it is given
+  (`text`, an address's too, `search`, `password`, `tel`), or a `<textarea>`,
+  valued as published. The host names the
+  tree's focused field in `FocusedField`, which `CanvasRef` hands the host and
+  the text input alike; while the text input serves a store, it serves it
+  through the named field instead of an editor of its own, so a screen reader
+  reads and edits the element the input method edits. The store is the source
+  of truth: the field's edits reach it first and its text is written back, the
+  host writes no published value over a served field, and a field no store is
+  served through shows its published value again after an edit and once the
+  text input releases it (`FocusedField::on_release`). The field's
+  hints are the store's status (`inputmode`, an `autocomplete` of its
+  purpose, `enterkeyhint`). The focus leaving the field, the field's removal
+  or the host's retirement moves the store back to the canvas, and the
+  element keeps no listener of the text input's. A hidden editor that takes
+  the store over takes the canvas's focus only, never another element's of the
+  host; the canvas forwards its focus to the host's field only while the host
+  names it, and a field the store moves to takes the canvas's focus. A field
+  shows the store's text as the browser's value sanitization lets it (a
+  single-line input drops line breaks, a textarea shows a CRLF as one line
+  feed) and maps its offsets to the store's
+  (`FieldValue`), so an edit next to a unit it cannot show keeps it; its
+  selection keeps its direction.
+- **Static text that publishes runs is selected as the page's selection**
+  (ADR-0214). Its element's text is the runs' text joined, not its value
+  (which may join a label to it), so an offset in the page's selection is a
+  position in the runs: `selection::position_at` and `selection::offset_of`
+  convert UTF-16 offsets to (run, character) and back, a character being as
+  many UTF-8 bytes as the run's `character_lengths` says; an offset inside a
+  surrogate pair or a cluster moves back to the character's start. The last
+  selection static text published (`Op::Select`) is set as the page's
+  selection, again when the text it lies in is written or its element moved,
+  but only while the page's selection is empty, a caret or already in the
+  host: a selection of the page's own text stays. A `selectionchange` with
+  both ends in such text asks `SetTextSelection` of the nearest node over both that takes it (the
+  paragraph, or the selection area), and the page shows the published
+  selection again until the node publishes the new one; the published
+  selection itself asks for nothing.
+- **A live region enters the page empty.** A browser reads out a change to
+  a live region it has seen, not one inserted with its text, so an element
+  that is `aria-live` polite or assertive and created or replaced with text
+  is created without it (`hold_live_text`) and given the text its node holds
+  then once the page has rendered it: each region counts two animation
+  frames of its own (`FrameWait`, `count_frame`), whichever callback of its
+  frame created it, and a published selection in its text is shown again
+  once it is written. That covers an announcement published before the host
+  existed (the announcer nodes of ADR-0204 §4 are live regions) and a live
+  region the tree adds with its content. A region removed before then is not
+  written; a background tab runs no frame, so its regions are given their
+  text when it is shown again.
 - A panic in a DOM listener traps the instance (wasm32 aborts), so no listener
   needs an OS-entry boundary. The browser reports no screen reader's cursor:
   `ASSISTIVE_FOCUS` is `Unreported`.
 
 `a_node_is_described_as_its_element`,
-`each_update_becomes_the_dom_operations_it_needs` and
-`an_update_that_cannot_stand_is_refused_and_changes_nothing` pin the mapping on
+`a_node_the_browser_must_act_on_is_its_native_element`,
+`a_text_field_is_a_native_field_of_its_kind`,
+`an_offset_in_the_text_is_a_run_and_a_character`,
+`a_paragraph_s_text_is_its_runs_and_its_offsets_their_positions`,
+`the_page_shows_the_published_selection`,
+`a_live_node_is_a_live_region`,
+`each_update_becomes_the_dom_operations_it_needs`,
+`a_scroller_scrolling_replaces_its_children`,
+`an_update_that_cannot_stand_is_refused_and_changes_nothing`,
+`a_field_shows_the_store_s_text_as_the_browser_holds_it` and
+`an_edit_of_the_shown_text_is_an_edit_of_the_store` pin the mapping on
 Linux. In headless Chrome,
 `the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
-`a_click_on_an_element_reaches_the_action_listener` and
+`a_click_on_an_element_reaches_the_action_listener`,
+`a_link_is_an_anchor_whose_click_is_the_node_s_action`,
+`moving_a_slider_s_input_asks_the_node_for_its_value`,
+`scrolling_a_scroller_asks_the_node_for_its_offset`,
+`a_focused_text_field_is_edited_through_its_element`,
+`the_store_goes_back_to_the_canvas_when_the_field_goes`,
+`a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor`,
+`the_canvas_keeps_the_focus_a_field_left`,
+`a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus`,
+`a_field_keeps_the_line_breaks_it_cannot_show`,
+`a_textarea_s_line_feed_is_the_store_s_crlf`,
+`a_field_s_selection_keeps_its_direction`,
+`the_page_s_selection_is_the_selection_of_static_text`,
+`a_live_region_is_given_its_text_once_rendered` and
 `the_semantics_host_stays_over_the_canvas_when_its_container_scrolls` drive
 constructed events. No screen reader has read the host.
 
@@ -1910,7 +2039,11 @@ Local cross-target clippy compiles these native paths; it does not execute their
 OS getters or external-setting notifications.
 
 Linux winit owners use one Settings portal connection on the existing background
-executor. Setting and service-owner subscriptions precede the initial read;
+executor. The calls are awaited there, but the connection's own I/O runs on
+zbus's `zruntime` thread: the workspace builds `zbus` without its `tokio`
+feature, so a capability crate that talks D-Bus reaches no Tokio (ADR-0154 §1),
+at the cost of that one extra thread. A `zbus` service handler runs on that
+thread too, outside any Tokio runtime. Setting and service-owner subscriptions precede the initial read;
 the accepted snapshot is committed before waking the owner. Initial bootstrap
 waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or stalled observations stay
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
@@ -3746,7 +3879,11 @@ loop hands over the answer, `INCR` a chunk at a time. At most four run at once
 and more wait their turn, starting as a fetch ends or its offer is retired;
 each is held to its limit before a byte is read and to five seconds between
 answers. Nothing is dispatched or completed under the transfer's lock, so a
-handler may fetch or conclude while it hears the drop.
+handler may fetch or conclude while it hears the drop, and a handler that
+panics as it hears a position still answers the source with a refusal before
+the panic goes on; the step's requests are answered whatever fails first, a
+waker's panic included, and the first failure goes on; a drop whose handler
+panics before concluding it is finished unaccepted.
 
 A window is a source too: its `drag_source` starts the runtime's OS session
 (`drag::x11::source`) when the drag leaves it with a button held, so the
@@ -3788,8 +3925,11 @@ on a connection of its own: `an_accepted_drop_is_fetched_and_finished`,
 `a_refused_drop_finishes_unaccepted_and_exits`,
 `a_drag_that_leaves_retires_its_offer`,
 `a_retired_offer_frees_its_fetches_for_the_requests_waiting`,
+`a_failing_drag_handler_still_answers_the_source`,
+`requests_are_answered_though_the_handler_and_a_waker_fail`,
+`a_drop_whose_handler_fails_finishes_unaccepted`,
 `an_incr_answer_is_read_in_chunks_and_held_to_its_limit` and
-`an_atom_the_server_cannot_name_is_not_kept`; a session from the window to
+`a_type_unnamed_or_named_past_a_media_type_is_refused_once`; a session from the window to
 another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_session_released_over_a_refusing_target_is_cancelled`,
 `a_session_with_no_button_held_does_not_start`,
@@ -3831,7 +3971,7 @@ The engine does not draw it, though that was the first shape asked for:
   `sctk-adwaita` draw it; a toolkit that draws its frame inside its content
   (GTK4's header bar, Chromium's views frame) draws an application's own
   title bar, which is the contract's custom title bar (gaps entry 10), not
-  the frame `decorated: true` promises;
+  the frame `WindowFrame::System` promises;
 - the engine drawing it from `flui-app` would split one host obligation over
   the host, the composition root and the raster lane, a second swapchain a
   window, and a commit order across threads, for a 37-pixel bar.
@@ -4269,6 +4409,15 @@ versions, out-of-range values and undeclared devices, and, with the feature,
 pins the capture's journal, session identity, panic containment and reentrant
 release and replacement.
 
+Its `app_title_bar_snapshots_keep_their_wire_values_and_replay` row records actual
+headless snapshots with shown, hidden and asymmetrically offset controls. It checks the
+wire fields independently, replays the exact payload and distinct frame capability
+slots, and refuses negative offsets; the format rejection row refuses both version 1
+and a future version. `window_state_contract` checks the same authored frames at open,
+after commands and after leaving fullscreen. On Windows, `native_window_commands`
+checks the system-frame fallback against the native caption style and refuses an
+unsupported app-titlebar command without changing the snapshot.
+
 ### A window's input waits behind its capability snapshot
 
 A window is opened with its handler (ADR-0254 §4), so nothing it delivers can
@@ -4616,14 +4765,30 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 
-`Platform::data_dirs` answers where an application keeps its data, so the host
+`Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
 `storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
-backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
-one record per name in the IndexedDB database `flui-storage`, keyed
-`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+backs up. Headless never touches the user's directories: it answers with a
+memory store per application that the platform owns, or with the root a test
+names with `with_data_root`, where the test reads back the bytes written.
+`DataStore` hides which of the two, with `FileStore`'s calls.
+
+`flui-app`'s `headless_storage_reaches_app_lifecycle` acquires storage from a
+mounted widget and reads and publishes through the runner's IO lane. It checks
+the configured directory's precedence over the application ID, sharing with the
+platform's store, isolation between applications and platforms, and disk readback
+after a fresh platform starts. A handle retained after the run ends refuses new
+requests, and a subsequent unconfigured run inherits no storage. The native
+`file_store_contract` covers versions, limits and copy names;
+`copies_preserve_bytes_per_name_and_scope` also checks the retained backup bytes
+after their source is replaced. `debug_releases_storage_before_calling_the_writer`
+checks that a formatter may read the store without a lock held across its call.
+
+On wasm32
+`FileStore` keeps the native methods, returning futures: one record per name in
+the IndexedDB database `flui-storage`, keyed `<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
 connection it opens and closes, so an idle connection never blocks another
 tab's upgrade. A based write reads, compares and puts inside one readwrite
 transaction; the browser runs readwrite transactions over one store one at a
@@ -4748,7 +4913,7 @@ filter `true`) while it is natively hidden. A hidden window is never sent `WM_PA
 `activate` or a mode that shows the window comes first. A mode set on a window still waiting for its
 first frame is staged in the slot, not shown early.
 
-**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `decorated` is the caption; a
+**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `WindowFrame::System` is the caption; a
 popup has neither, so a window without a frame reports `resizable: false` and gets its wish back with
 the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
 window's current DPI with the frame measured for the style the window has

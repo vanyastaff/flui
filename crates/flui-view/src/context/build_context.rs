@@ -462,6 +462,17 @@ pub trait LifecycleContext: BuildContext {
     /// its own — a task spawned into the wrong one would never run.
     fn async_driver(&self) -> Option<crate::AsyncDriver>;
 
+    /// The UI runtime's timer: [`Sleep`](crate::Sleep) futures that resolve
+    /// on the runtime's clock (the testing kit's virtual clock in a test),
+    /// for a task spawned on [`async_driver`](Self::async_driver) to await.
+    ///
+    /// `None` exactly when [`async_driver`](Self::async_driver) is: a tree
+    /// bound to no UI runtime has no clock to sleep on. Acquire it in a
+    /// lifecycle hook, like the driver.
+    fn timer(&self) -> Option<crate::TimerHandle> {
+        self.async_driver().map(|driver| driver.timer())
+    }
+
     /// The binding's post-frame capability — schedule work that must observe this
     /// frame's committed layout. The callback receives [`crate::FrameTiming`].
     ///
@@ -629,6 +640,22 @@ pub trait LifecycleContext: BuildContext {
     /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
     /// frame phase.
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
+
+    /// Run `hook` once when this element leaves the tree for good: right
+    /// after its state's `dispose`, in the order hooks were registered, at a
+    /// removal, a subtree eviction or a tree torn down at exit or session
+    /// end. A `GlobalKey` move is not an unmount and runs nothing.
+    ///
+    /// It is for a value the state opens whose clones may outlive the state,
+    /// so the value can drop what only the mounted state may keep (its
+    /// listeners, a queued delivery) without the state remembering to do it.
+    ///
+    /// Each hook runs contained: a panic does not keep the next hook or the
+    /// rest of the teardown from running, and is recorded as the element's
+    /// `dispose` failure. A hook registered while hooks run is refused (a
+    /// debug assertion). Dropping the returned [`UnmountHook`](crate::UnmountHook)
+    /// unregisters the hook without running it.
+    fn on_unmount(&self, hook: Box<dyn FnOnce()>) -> crate::UnmountHook;
 
     /// Presentation-local lifecycle observation. Acquire in `init_state` or
     /// `did_change_dependencies`, never in build/layout/paint. Bare owners

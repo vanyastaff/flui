@@ -92,10 +92,15 @@ const MAX_FETCHES: usize = 4;
 const RESERVED: usize = 4 * 1024 * 1024;
 
 /// The most types read of a source's `XdndTypeList`.
-const MAX_TYPES: u32 = 256;
+const MAX_TYPES: u32 = 100;
 
 /// The most atom names the transfer keeps, of the types sources offered.
 const MAX_NAMES: usize = 1024;
+
+/// The longest type name read as a type: a media type's type and subtype are
+/// at most 127 characters each (RFC 6838), so a longer name offers nothing,
+/// and no name held or compared is longer.
+const MAX_NAME_LEN: usize = 255;
 
 /// The most actions read of a source's `XdndActionList`.
 const MAX_ACTIONS: u32 = 16;
@@ -298,6 +303,40 @@ pub(crate) mod model {
                     }
                 }
                 Self::Bytes(format) => payload_of_bytes(format, bytes),
+            }
+        }
+    }
+
+    impl Kind {
+        /// How many bytes the payload [`payload`](Self::payload) makes of
+        /// `bytes` holds, measured without making it: a fetch refuses text
+        /// past its limit before ill-formed or wider text grows as it
+        /// decodes.
+        pub(crate) fn decoded_len(&self, bytes: &[u8]) -> usize {
+            match self {
+                Self::Text(form) => form.decoded_len(bytes),
+                Self::Html => {
+                    let utf16 = |pairs: &[u8], unit: fn([u8; 2]) -> u16| {
+                        let units = pairs.as_chunks::<2>().0.iter().map(|pair| unit(*pair));
+                        let (len, last) = char::decode_utf16(units)
+                            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+                            .fold((0, None), |(len, _), char| {
+                                (len + char.len_utf8(), Some(char))
+                            });
+                        // A trailing NUL is dropped.
+                        len - usize::from(last == Some('\0'))
+                    };
+                    match bytes {
+                        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+                        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+                        _ => TextForm::Utf8String.decoded_len(bytes),
+                    }
+                }
+                // A URI list's trailing NUL is dropped.
+                Self::Bytes(TransferFormat::UriList) => {
+                    bytes.strip_suffix(&[0]).unwrap_or(bytes).len()
+                }
+                Self::Bytes(_) => bytes.len(),
             }
         }
     }
@@ -687,9 +726,10 @@ struct State {
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
-    /// The name the server gave each atom a source offered that has one, at
-    /// most [`MAX_NAMES`]: an atom the server cannot name is asked again.
-    names: HashMap<xproto::Atom, String>,
+    /// What the server answered for each atom a source offered, at most
+    /// [`MAX_NAMES`]: its name, or `None` for one it cannot name or names
+    /// past [`MAX_NAME_LEN`], so a source repeating it costs no lookup.
+    names: HashMap<xproto::Atom, Option<String>>,
 }
 
 /// What a step leaves to do once the lock is let go: completers to resolve
@@ -922,8 +962,18 @@ impl X11Drag {
         }
     }
 
-    /// Do what a step left, with no lock held, and flush what it sent.
+    /// Do what a step left, with no lock held, and flush what it sent; a
+    /// panic of the window's handler resumes once the step's completions
+    /// are made.
     fn finish(&self, after: After) {
+        if let Err(failure) = self.try_finish(after) {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
+    /// [`Self::finish`], handing back the handler's panic, so a step that
+    /// owes the source an answer sends it before the panic goes on.
+    fn try_finish(&self, after: After) -> std::thread::Result<()> {
         if let Err(error) = self.connection.xcb().flush() {
             tracing::debug!(%error, "cannot send the XDND transfer's requests");
         }
@@ -931,20 +981,37 @@ impl X11Drag {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
         }
-        if let Some((target, event)) = after.dispatch {
-            target
-                .delivery
-                .dispatch_input(PlatformInput::DragDrop(event));
-        }
+        let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some((target, event)) = after.dispatch {
+                target
+                    .delivery
+                    .dispatch_input(PlatformInput::DragDrop(event));
+            }
+        }));
+        // A request accepted before the handler failed is still answered,
+        // each in its own containment: a waker that panics leaves the rest
+        // answered, and the first failure goes on; a later one is retained
+        // rather than dropped (ADR-0127 §2).
+        let mut failure = dispatched.err();
         for (completer, result) in after.completions {
-            completer.complete(result);
+            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                completer.complete(result);
+            }));
+            if let Err(payload) = completed {
+                if failure.is_none() {
+                    failure = Some(payload);
+                } else {
+                    std::mem::forget(payload);
+                }
+            }
         }
+        failure.map_or(Ok(()), Err)
     }
 
-    /// The names of `atoms` the server has not named to the transfer yet,
-    /// asked in one batch.
+    /// What the server names `atoms` that the transfer has not asked about
+    /// yet, asked in one batch, each atom once.
     fn learn_names(&self, atoms: &[xproto::Atom]) {
-        let unknown: Vec<xproto::Atom> = {
+        let mut unknown: Vec<xproto::Atom> = {
             let state = self.state.lock();
             atoms
                 .iter()
@@ -952,6 +1019,8 @@ impl X11Drag {
                 .filter(|atom| !state.names.contains_key(atom))
                 .collect()
         };
+        unknown.sort_unstable();
+        unknown.dedup();
         if unknown.is_empty() {
             return;
         }
@@ -960,12 +1029,17 @@ impl X11Drag {
             .iter()
             .map(|&atom| xcb.get_atom_name(atom).ok())
             .collect();
-        let named: Vec<(xproto::Atom, String)> = unknown
+        // A refusal is kept as `None` too: the server sends a name whole
+        // before its length is known, so one is asked for once.
+        let named: Vec<(xproto::Atom, Option<String>)> = unknown
             .into_iter()
             .zip(cookies)
-            .filter_map(|(atom, cookie)| {
-                let reply = cookie?.reply().ok()?;
-                Some((atom, String::from_utf8(reply.name).ok()?))
+            .map(|(atom, cookie)| {
+                let name = cookie
+                    .and_then(|cookie| cookie.reply().ok())
+                    .filter(|reply| reply.name.len() <= MAX_NAME_LEN)
+                    .and_then(|reply| String::from_utf8(reply.name).ok());
+                (atom, name)
             })
             .collect();
         let mut state = self.state.lock();
@@ -1052,7 +1126,7 @@ impl X11Drag {
         let mut state = self.state.lock();
         let named: Vec<(xproto::Atom, &str)> = types
             .iter()
-            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_str())))
+            .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_deref()?)))
             .collect();
         let offered: Arc<[(xproto::Atom, Kind)]> = model::representations(&named).into();
         if let Some(hover) = state.hover.as_mut().filter(|hover| hover.source == source) {
@@ -1176,10 +1250,12 @@ impl X11Drag {
                 None => None,
             }
         };
-        self.finish(after);
+        let dispatched = self.try_finish(after);
         // The window may have concluded the offer, or closed, from inside its
-        // callback: the answer is what is cached now.
-        let answer = over.and_then(|id| {
+        // callback: the answer is what is cached now. A handler that panicked
+        // gave none, and the source still waits for one: it hears a refusal
+        // before the panic goes on.
+        let answer = over.filter(|_| dispatched.is_ok()).and_then(|id| {
             let state = self.state.lock();
             let hovering = state
                 .hover
@@ -1191,6 +1267,9 @@ impl X11Drag {
         let action = answer.map(|action| self.atoms.actions.atom_of(action));
         self.send(source, self.atoms.status, model::status(window, action));
         self.flush();
+        if let Err(failure) = dispatched {
+            std::panic::resume_unwind(failure);
+        }
     }
 
     /// Refuse a drag over `window`.
@@ -1235,7 +1314,7 @@ impl X11Drag {
     /// source hears at once.
     fn drop_on(&self, source: xproto::Window, time: xproto::Timestamp) {
         let mut after = After::default();
-        let refused = {
+        let (refused, dropped) = {
             let mut state = self.state.lock();
             let Some(hover) = state.hover.as_ref().filter(|hover| hover.source == source) else {
                 return;
@@ -1269,16 +1348,51 @@ impl X11Drag {
                         position: offer.position,
                     },
                 ));
-                None
+                (None, Some(id))
             } else {
                 state.end_hover(&self.wire(), &mut after);
-                Some(window)
+                (Some(window), None)
             }
         };
         if let Some(window) = refused {
             self.send(source, self.atoms.finished, model::finished(window, None));
         }
-        self.finish(after);
+        let dispatched = self.try_finish(after);
+        if let (Err(_), Some(id)) = (&dispatched, dropped) {
+            // A handler that panicked as it heard the drop will not conclude
+            // it: the source, which waits for the finish, hears it refused.
+            self.abandon_drop(id);
+        }
+        if let Err(failure) = dispatched {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
+    /// Retire the dropped offer `id` the window will not conclude, and
+    /// finish it unaccepted; an offer the window concluded already is gone.
+    /// A failure on the way is retained: the window's goes on.
+    fn abandon_drop(&self, id: DataTransferId) {
+        let mut after = After::default();
+        let finished = {
+            let mut state = self.state.lock();
+            if state
+                .offers
+                .get(&id)
+                .is_some_and(|offer| offer.dropped.is_some())
+            {
+                state
+                    .retire(id, &self.wire(), &mut after)
+                    .map(|offer| (offer.source, offer.window))
+            } else {
+                None
+            }
+        };
+        if let Some((source, window)) = finished {
+            self.send(source, self.atoms.finished, model::finished(window, None));
+        }
+        if let Err(failure) = self.try_finish(after) {
+            std::mem::forget(failure);
+        }
     }
 
     /// The fetch converting into `requestor` read `read`, or failed.
@@ -1320,9 +1434,13 @@ impl X11Drag {
                 }
                 Ok(Read::Done(bytes)) => {
                     let bytes = fetch.incremental.take().unwrap_or(bytes);
-                    let payload = fetch.wanted.kind.payload(bytes);
-                    let len = usize::try_from(payload.byte_len()).unwrap_or(usize::MAX);
-                    Some(model::too_large(len, limit).map_or(Ok(payload), Err))
+                    // Measured before it is made, which can take more than
+                    // the bytes read.
+                    let len = fetch.wanted.kind.decoded_len(&bytes);
+                    Some(
+                        model::too_large(len, limit)
+                            .map_or_else(|| Ok(fetch.wanted.kind.payload(bytes)), Err),
+                    )
                 }
             };
             if let Some(outcome) = outcome {

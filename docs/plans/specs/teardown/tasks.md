@@ -4,7 +4,7 @@
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); смежная —
   [persistence/tasks.md](../persistence/tasks.md) (приложение приёмки P10, реестр сброса хоста P6)
 - **Итог:** из 17 задач прежнего плана сделаны T1, T3; T5 сделана платформенной серией; T6, T15,
-  T16 устарели; T8 и T14 сделаны в части. Осталось 13 задач, из них новые T18 (строки на
+  T16 устарели; T14 сделана, T8 — в части. Осталось 12 задач, из них новые T18 (строки на
   приложении приёмки) и T19 (нативный прогон через лейн `os` flui-driver). Сейчас можно начинать
   T2, T4 и T7; остальное — по колонке «Зависит от».
 - **Решения 2026-10-28** (по поручению владельца решены исследованием, записаны в ADR и в
@@ -103,7 +103,7 @@ graph LR
   `a_slow_observer_stops_the_session_end_delivery`,
   `a_refused_session_end_is_released_by_an_explicit_close`,
   `a_window_closed_during_the_query_does_not_hold_the_session`,
-  `a_session_end_handler_panic_with_a_panicking_payload_refuses`,
+  `a_session_end_handler_panic_refuses`,
   `a_cancelled_logoff_withdraws_only_the_session_entry`,
   `a_session_end_with_a_checked_out_runtime_calls_no_user_code`,
   `a_session_end_asks_the_handler_before_the_guard`,
@@ -112,10 +112,13 @@ graph LR
   `a_session_end_with_nothing_to_save_proceeds` (quit). S5 и S6: при ≥ 1 с и без извлечённых
   `Ending` сам разбирает UI-runtime (деструкторы приложения), затем отменяет сервисы и гасит пулы
   без ожидания; иначе оставляет всё системе — `session_end_tears_down_only_with_time_left`.
-  Остаток: строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
-  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
-  persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
-  байты пока нечем.
+  Строки с байтами реестра: `session_end_flushes_the_registry_within_the_framework_budget`,
+  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`,
+  `session_end_during_a_write_writes_the_latest_registry_bytes`,
+  `session_end_never_blocks_for_work_in_progress` (`runner_teardown`; `Persisted` на
+  `HeadlessPlatform::with_data_root`, пул IO — `DeterministicExecutors`, который поток теста
+  запускает через 200 мс, как занятый пул). Без сброса в `Ending` и со сбросом, который не ждёт
+  запись в полёте, байтов на диске нет; удержание работы, отказывающее `SessionEnd`, даёт `Block`.
 
 ## Устаревшие задачи
 
@@ -172,7 +175,7 @@ graph LR
 | R20 | `device_loss_on_the_closing_frame_still_exits_ok` | T10 | хар. | L |
 | R21 | `closing_during_composition_commits_before_detached`; нативная строка 3 | T13; T19 | fix | L, D |
 | R22 | `session_end_flushes_the_registry_within_the_framework_budget`, `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`; нативная строка 4 | T14; T19 | fix | L, D |
-| R23 | `a_vetoed_close_disposes_nothing`; есть `a_panicking_handler_vetoes_and_stays_registered`; строка со счётчиками `Drop` | T11; T18 | хар. | L, A |
+| R23 | `a_vetoed_close_disposes_nothing`; есть `a_panicking_handler_vetoes_and_stays_registered`; `a_held_close_drops_nothing_until_the_user_decides` | T11; T18 | хар. | L, A |
 | R24 | строка README | T17 | — | — |
 | — | `close_delivery_is_idempotent` (T8); `drop_ledger_counts_each_sentinel_once` (T18); контрактные тесты `flui-view` (T4); `a_cancelled_logoff_withdraws_only_the_session_entry` (T14) | — | fix | L |
 
@@ -313,8 +316,8 @@ graph LR
   наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
   `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
-- [ ] T14 — остаток: завершение сеанса
-- [ ] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
+- [x] T14 — завершение сеанса (строки выше, в «Сделано в части»)
+- [x] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
   - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
     `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
     приёмки; `facade_consumer` требует их по имени автоматически). Шов учёта `Drop` —
@@ -327,7 +330,10 @@ graph LR
     (`FailingEditor`), чтобы заголовок с Back оставался. Клавиша Back (Alt+Left) с экрана ошибки на
     всю страницу раньше никуда не доходила: действия маршрута стояли внутри его focus scope, а фокус
     лежит на самом scope; исправлено в `flui-widgets` (`back_keys_leave_a_page_with_nothing_focusable`).
-  - [ ] R23 со счётчиками `Drop` при вето: у приложения приёмки пока нет вето закрытия (guard
-    появляется со строками persistence P11); строка — вместе с ним.
+  - [x] R23 `a_held_close_drops_nothing_until_the_user_decides` (модуль `teardown`, хар.): закрытие,
+    удержанное сбоем Save, не роняет ни одного сторожа ни при самом закрытии, ни после Keep open,
+    ни при повторном закрытии; Close without saving закрывает окно, выход роняет всё. Вето
+    обработчиком и удержанием без приложения покрывает `a_vetoed_close_disposes_nothing`
+    (`runner_close`).
 - [ ] T17 — README, Win32-строка R5, закрытие
 - [ ] T19 — нативный прогон (после flui-driver FD11; фикстура `acceptance_app_faults`, ADR-0258)

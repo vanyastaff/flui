@@ -72,7 +72,13 @@ impl MediaQuerySource {
                     flui_foundation::geometry::WindowMetrics::logical,
                 ),
                 device_pixel_ratio,
-                view_padding: snapshot.safe_area,
+                view_padding: snapshot.insets.safe_area(),
+                view_insets: snapshot
+                    .insets
+                    .keyboard()
+                    .motion()
+                    .map_or(snapshot.insets.keyboard().target(), |motion| motion.from()),
+                system_gesture_insets: snapshot.insets.system_gestures(),
                 ..MediaQueryData::default()
             }),
             ..Self::default()

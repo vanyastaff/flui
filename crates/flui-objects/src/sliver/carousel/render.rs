@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Axis, Offset, Rect, Size};
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_painting::paint::Clip;
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -307,11 +307,16 @@ fn bounded_viewport(constraints: &SliverConstraints) -> Option<f64> {
     .then_some(viewport)
 }
 
-impl Diagnosticable for RenderSliverCarousel {
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        properties.add_int("item_count", self.item_count as i64, None);
-        properties.add_double("spacing", self.config.spacing, Some("px"));
-        properties.add_int("shown", self.shown.len() as i64, None);
+impl Inspect for RenderSliverCarousel {
+    fn kind(&self) -> &'static str {
+        "RenderSliverCarousel"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("item_count", &self.item_count);
+        out.field("spacing", &self.config.spacing)
+            .unit(Unit::LogicalPx);
+        out.field("shown", &self.shown.len());
     }
 }
 

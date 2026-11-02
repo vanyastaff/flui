@@ -49,6 +49,7 @@ use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::OwnerPreferences;
 
 mod languages;
+mod regional;
 #[cfg(test)]
 mod retry_tests;
 #[cfg(test)]
@@ -525,6 +526,7 @@ fn sample(
         MotionPreference::Reduce
     };
     let high_contrast = accessibility.HighContrast().map_err(native_error)?;
+    let locales = languages::sample()?;
     let snapshot = SystemPreferences::default()
         .with_text_scale(text_scale)
         .map_err(|error| PlatformError::Preferences {
@@ -532,7 +534,8 @@ fn sample(
         })?
         .with_motion(motion)
         .with_high_contrast(high_contrast)
-        .with_locales(languages::sample()?)
+        .with_regional(regional::sample(locales.first()))
+        .with_locales(locales)
         // This window-independent reading detects changes. Exact
         // presentation metrics are queried separately at its actual DPI.
         .with_gestures(

@@ -1,13 +1,15 @@
 //! The file store behind `AppConfig::with_storage_dir`: directories created on the
 //! first write, values replaced atomically, inaccessible paths reported apart
-//! from corrupt ones, and a write based on a stale version refused. Native
-//! only: on wasm32 the store is the page's IndexedDB.
+//! from corrupt ones, a write based on a stale version refused, and a value
+//! copied aside under a name no value can have. Native only: on wasm32 the
+//! store is the page's IndexedDB.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::ErrorKind;
 use std::path::Path;
 
 use flui_native::storage::{DataDirs, FileStore, data_dirs};
+use flui_native::{HeadlessPlatform, Platform};
 use flui_platform::{AppDataDir, StorageError, StorageName, StoredVersion, WriteMode};
 
 use crate::run_table;
@@ -363,6 +365,189 @@ fn a_target_held_without_delete_sharing_is_busy() {
     assert_eq!(staged_files(&dirs.roaming), Vec::<String>::new());
 }
 
+fn copy_aside_keeps_the_value_under_the_first_free_name() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    assert_eq!(store.copy_aside(&NOTES), Err(StorageError::NotFound));
+
+    store
+        .write(&NOTES, b"unreadable", WriteMode::Replace)
+        .expect("the value is stored");
+    // A copy an earlier run kept is never written over.
+    std::fs::write(dirs.roaming.join("notes.corrupt-1"), b"kept before").expect("an old copy");
+
+    let copied = store.copy_aside(&NOTES).expect("the value is copied");
+    assert_eq!(copied.kept_as, "notes.corrupt-2");
+    assert_eq!(copied.version, StoredVersion::of_bytes(b"unreadable"));
+    let again = store.copy_aside(&NOTES).expect("a second copy");
+    assert_eq!(again.kept_as, "notes.corrupt-3");
+    for (file, bytes) in [
+        ("notes.corrupt-1", &b"kept before"[..]),
+        ("notes.corrupt-2", b"unreadable"),
+        ("notes.corrupt-3", b"unreadable"),
+    ] {
+        assert_eq!(
+            std::fs::read(dirs.roaming.join(file)).expect("the copy reads"),
+            bytes,
+            "{file}"
+        );
+    }
+    let stored = store.read(&NOTES, 1024).expect("the value reads");
+    assert_eq!(
+        stored.bytes.as_deref(),
+        Some(&b"unreadable"[..]),
+        "the value stays"
+    );
+
+    // The copy's version is the base a fresh start writes over.
+    store
+        .write(&NOTES, b"fresh", WriteMode::IfUnchanged(copied.version))
+        .expect("the copied value is replaced");
+
+    // A machine-local value is copied within its own scope.
+    store
+        .write(&SESSION, b"session", WriteMode::Replace)
+        .expect("the session is stored");
+    let session = store.copy_aside(&SESSION).expect("the session is copied");
+    assert_eq!(session.kept_as, "notes.corrupt-1");
+    assert_eq!(
+        std::fs::read(dirs.local.join(".machine-local").join("notes.corrupt-1"))
+            .expect("the session copy reads"),
+        b"session"
+    );
+}
+
+/// Without a root a headless platform keeps each application's values in its
+/// own memory: every store it hands out for that application sees them,
+/// another application or another platform does not, and nothing reaches the
+/// user's data directories.
+fn a_headless_platform_keeps_values_in_memory_without_a_root() {
+    let app = AppDataDir::try_new("dev.flui.headless-memory").expect("a directory name");
+    let platform = HeadlessPlatform::new();
+    let store = platform
+        .data_store(&app)
+        .expect("headless always has a store");
+    store
+        .write(&NOTES, b"kept", WriteMode::Replace)
+        .expect("a memory write succeeds");
+
+    let again = platform.data_store(&app).expect("a second store");
+    let stored = again.read(&NOTES, 1024).expect("the value reads");
+    assert_eq!(
+        stored.bytes.as_deref(),
+        Some(&b"kept"[..]),
+        "one platform, one memory"
+    );
+    let other = HeadlessPlatform::new()
+        .data_store(&app)
+        .expect("another platform's store");
+    assert_eq!(
+        other.read(&NOTES, 1024).expect("reads").bytes,
+        None,
+        "another platform starts empty"
+    );
+    let neighbour = AppDataDir::try_new("dev.flui.headless-neighbour").expect("a directory name");
+    assert_eq!(
+        platform
+            .data_store(&neighbour)
+            .expect("the neighbour's store")
+            .read(&NOTES, 1024)
+            .expect("reads")
+            .bytes,
+        None,
+        "another application on the same platform keeps its own values"
+    );
+    if let Some(dirs) = data_dirs(&app) {
+        assert!(
+            !dirs.roaming.exists() && !dirs.local.exists(),
+            "the user's data directories are untouched: {dirs:?}"
+        );
+    }
+}
+
+/// A headless platform given a root keeps the values on disk under it, one
+/// directory per scope and application.
+fn a_headless_data_root_keeps_values_on_disk_under_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = AppDataDir::try_new("app").expect("a directory name");
+    let store = HeadlessPlatform::new()
+        .with_data_root(dir.path())
+        .data_store(&app)
+        .expect("a store under the root");
+    store
+        .write(&NOTES, b"roaming", WriteMode::Replace)
+        .expect("written");
+    store
+        .write(&SESSION, b"local", WriteMode::Replace)
+        .expect("written");
+    let dirs = separate_roots(dir.path());
+    assert_eq!(
+        std::fs::read(dirs.roaming.join("notes")).expect("the roaming file"),
+        b"roaming"
+    );
+    assert_eq!(
+        std::fs::read(dirs.local.join(".machine-local").join("notes")).expect("the local file"),
+        b"local"
+    );
+}
+
+/// The memory store answers as the file store does: a stale base is a
+/// conflict, the two scopes keep equal names apart, a copy aside takes the
+/// first free number in its scope, and a value over the limit is too large.
+fn the_memory_store_compares_and_copies_as_the_file_store_does() {
+    let app = AppDataDir::try_new("dev.flui.headless-semantics").expect("a directory name");
+    let store = HeadlessPlatform::new()
+        .data_store(&app)
+        .expect("headless always has a store");
+    let first = store
+        .write(
+            &NOTES,
+            b"one",
+            WriteMode::IfUnchanged(StoredVersion::ABSENT),
+        )
+        .expect("written over nothing");
+    store
+        .write(&NOTES, b"two", WriteMode::IfUnchanged(first))
+        .expect("written over its base");
+    assert_eq!(
+        store.write(&NOTES, b"three", WriteMode::IfUnchanged(first)),
+        Err(StorageError::Conflict),
+        "a stale base is refused"
+    );
+    store
+        .write(&SESSION, b"session", WriteMode::Replace)
+        .expect("the other scope");
+    assert_eq!(
+        store.read(&NOTES, 1024).expect("reads").bytes.as_deref(),
+        Some(&b"two"[..])
+    );
+    assert_eq!(
+        store.read(&SESSION, 1024).expect("reads").bytes.as_deref(),
+        Some(&b"session"[..])
+    );
+
+    assert_eq!(
+        store.copy_aside(&NOTES).expect("copied").kept_as,
+        "notes.corrupt-1"
+    );
+    let second = store.copy_aside(&NOTES).expect("copied again");
+    assert_eq!(second.kept_as, "notes.corrupt-2");
+    assert_eq!(second.version, StoredVersion::of_bytes(b"two"));
+    assert_eq!(
+        store.copy_aside(&SESSION).expect("copied").kept_as,
+        "notes.corrupt-1",
+        "each scope counts its own copies"
+    );
+    assert_eq!(
+        store.copy_aside(&StorageName::from_static("missing")),
+        Err(StorageError::NotFound)
+    );
+    assert!(matches!(
+        store.read(&NOTES, 2),
+        Err(StorageError::TooLarge { len: 3, limit: 2 })
+    ));
+}
 #[test]
 fn file_store_contract() {
     let mut cases: Vec<(&str, fn())> = vec![
@@ -398,9 +583,64 @@ fn file_store_contract() {
             "data_dirs_place_each_scope_under_the_application_name",
             data_dirs_place_each_scope_under_the_application_name,
         ),
+        (
+            "copy_aside_keeps_the_value_under_the_first_free_name",
+            copy_aside_keeps_the_value_under_the_first_free_name,
+        ),
+        (
+            "a_headless_platform_keeps_values_in_memory_without_a_root",
+            a_headless_platform_keeps_values_in_memory_without_a_root,
+        ),
+        (
+            "a_headless_data_root_keeps_values_on_disk_under_it",
+            a_headless_data_root_keeps_values_on_disk_under_it,
+        ),
+        (
+            "the_memory_store_compares_and_copies_as_the_file_store_does",
+            the_memory_store_compares_and_copies_as_the_file_store_does,
+        ),
     ];
     cases.extend(platform_cases());
     run_table("file_store_contract", &cases);
+}
+
+/// A stored value, a copy of it and the directories the store creates for
+/// them are reachable by their owner only, whatever the umask leaves to
+/// others.
+#[cfg(unix)]
+fn stored_values_and_their_copies_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode_of = |path: &Path| {
+        std::fs::metadata(path)
+            .expect("the entry exists")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dirs = separate_roots(dir.path());
+    let store = FileStore::new(dirs.clone());
+    store
+        .write(&NOTES, b"private", WriteMode::Replace)
+        .expect("the value is stored");
+    store
+        .write(&SESSION, b"private", WriteMode::Replace)
+        .expect("the machine-local value is stored");
+    let copied = store.copy_aside(&NOTES).expect("the value is copied");
+    for file in ["notes", copied.kept_as.as_str()] {
+        assert_eq!(mode_of(&dirs.roaming.join(file)), 0o600, "{file}");
+    }
+    let machine_local = dirs.local.join(".machine-local");
+    assert_eq!(mode_of(&machine_local.join("notes")), 0o600);
+    for created in [
+        dir.path().join("roaming"),
+        dirs.roaming.clone(),
+        dirs.local,
+        machine_local,
+    ] {
+        assert_eq!(mode_of(&created), 0o700, "{}", created.display());
+    }
 }
 
 /// The rows only this platform can run.
@@ -425,8 +665,14 @@ fn platform_cases() -> Vec<(&'static str, fn())> {
 /// The rows only this platform can run.
 #[cfg(unix)]
 fn platform_cases() -> Vec<(&'static str, fn())> {
-    vec![(
-        "a_stale_base_is_refused_without_reading_a_long_value",
-        a_stale_base_is_refused_without_reading_a_long_value,
-    )]
+    vec![
+        (
+            "a_stale_base_is_refused_without_reading_a_long_value",
+            a_stale_base_is_refused_without_reading_a_long_value,
+        ),
+        (
+            "stored_values_and_their_copies_are_owner_only",
+            stored_values_and_their_copies_are_owner_only,
+        ),
+    ]
 }

@@ -1,6 +1,6 @@
 //! The acceptance application in a window, for native runs.
 //!
-//! Run with `cargo run --example acceptance_app --features material`. The
+//! Run with `cargo run --example acceptance_app --features material,serde`. The
 //! application and its headless rows live in `tests/fixtures/acceptance_app/`;
 //! `acceptance_app_faults` runs it with an injected fault.
 
@@ -12,8 +12,5 @@
 mod app;
 
 fn main() -> Result<(), flui::LaunchError> {
-    flui::run_app(
-        app::AcceptanceApp::new(app::Faults::NONE),
-        flui::AppLaunch::new(),
-    )
+    flui::run_app(app::AcceptanceApp::new(app::Faults::NONE), app::launch())
 }

@@ -206,10 +206,23 @@ fn types_offer_each_format_once() {
 }
 
 /// Each kind's bytes make its payload: text decoded, HTML in UTF-8 or
-/// behind a UTF-16 mark, a URI list as its bytes without a trailing NUL.
+/// behind a UTF-16 mark, a URI list as its bytes without a trailing NUL;
+/// each measured exactly before it is made.
 #[test]
 fn bytes_make_their_payload() {
-    let table: [(&str, Kind, Vec<u8>, TransferPayload); 5] = [
+    let table: [(&str, Kind, Vec<u8>, TransferPayload); 7] = [
+        (
+            "ill-formed utf-8 text",
+            Kind::Text(TextForm::Utf8String),
+            vec![b'a', 0xFF, 0xFE, b'b'],
+            TransferPayload::Text("a\u{FFFD}\u{FFFD}b".to_owned()),
+        ),
+        (
+            "utf-16le html with a lone surrogate and a trailing NUL",
+            Kind::Html,
+            vec![0xFF, 0xFE, b'x', 0, 0x00, 0xD8, 0, 0],
+            TransferPayload::Html("x\u{FFFD}".to_owned()),
+        ),
         (
             "latin-1 text",
             Kind::Text(TextForm::Latin1),
@@ -245,6 +258,8 @@ fn bytes_make_their_payload() {
         ),
     ];
     for (case, kind, bytes, expected) in table {
+        let len = u64::try_from(kind.decoded_len(&bytes)).expect("a small payload");
+        assert_eq!(len, expected.byte_len(), "{case}: measured as made");
         assert_same!(kind.payload(bytes), expected, "{case}");
     }
 }
@@ -1053,11 +1068,11 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
     assert_same!(read, Ok(TransferPayload::Text("fresh".to_owned())));
 }
 
-/// An atom the server cannot name is not kept: a client sending fresh
-/// invalid atoms grows nothing in the transfer, and the type the server
-/// names still offers.
+/// A type the server cannot name, or names past the longest media type, is
+/// not offered, and is kept as refused, so a source repeating it costs no
+/// second lookup; the type the server names as a media type still offers.
 #[test]
-fn an_atom_the_server_cannot_name_is_not_kept() {
+fn a_type_unnamed_or_named_past_a_media_type_is_refused_once() {
     let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
@@ -1065,16 +1080,245 @@ fn an_atom_the_server_cannot_name_is_not_kept() {
     target.answer(Some(TransferActions::COPY));
     let source = Source::new();
     let atoms = &source.atoms;
-    let invalid = [0x0FFF_FFF0, 0x0FFF_FFF1];
-    source.enter(target.xid, &[invalid[0], atoms.utf8, invalid[1]]);
+    let long = format!("text/{}", "x".repeat(super::MAX_NAME_LEN));
+    let long = source
+        .connection
+        .intern_atom(false, long.as_bytes())
+        .expect("intern")
+        .reply()
+        .expect("interned")
+        .atom;
+    let dropped = [0x0FFF_FFF0, long, 0x0FFF_FFF1];
+    // The long name listed again and again is one lookup.
+    source.enter(
+        target.xid,
+        &[
+            dropped[0], atoms.utf8, dropped[1], dropped[1], dropped[1], dropped[2],
+        ],
+    );
     source.position(target.xid, (20, 30), 10, atoms.copy);
     source.expect_message(&target, atoms.status);
     let names = &target.drag.state.lock().names;
     assert!(
-        invalid.iter().all(|atom| !names.contains_key(atom)),
-        "kept {names:?}"
+        dropped.iter().all(|atom| names.get(atom) == Some(&None)),
+        "not refused: {names:?}"
     );
-    assert!(names.contains_key(&atoms.utf8));
+    assert!(matches!(names.get(&atoms.utf8), Some(Some(_))));
+    let heard = target.heard();
+    let Some(DragDropEvent::Entered { offer, .. }) = heard.first() else {
+        panic!("not entered: {heard:?}");
+    };
+    assert_eq!(offer.representations().len(), 1, "only the text offers");
+}
+
+/// A window whose handler panics as it hears of a drag still answers the
+/// source, with a refusal, before the panic goes on: at the enter and at a
+/// later movement.
+#[test]
+fn a_failing_drag_handler_still_answers_the_source() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.handler.react_to_input(|input| {
+        if let PlatformInput::DragDrop(event) = input {
+            panic!("the handler fails at {event:?}");
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    for (time, x) in [(10, 50), (11, 60)] {
+        source.position(target.xid, (x, 60), time, atoms.copy);
+        let deadline = Instant::now() + STEP;
+        let mut failed = false;
+        let status = loop {
+            failed |= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                target.deliver_events();
+            }))
+            .is_err();
+            if let Some(Event::ClientMessage(message)) = source.poll()
+                && message.type_ == atoms.status
+            {
+                assert!(failed, "the handler's panic went on");
+                break message.data.as_data32();
+            }
+            assert!(Instant::now() < deadline, "the source heard no status");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(status, model::status(target.xid, None));
+    }
+    let heard = target.heard();
+    assert!(
+        matches!(
+            heard.as_slice(),
+            [DragDropEvent::Entered { .. }, DragDropEvent::Moved { .. }]
+        ),
+        "the window heard {heard:?}"
+    );
+}
+
+/// Fails as it is woken.
+struct FailsAsWoken;
+
+impl std::task::Wake for FailsAsWoken {
+    fn wake(self: Arc<Self>) {
+        panic!("the request's waker fails");
+    }
+}
+
+/// A window whose handler panics as the drag leaves still has every request
+/// on the retired offer answered, though the first request's waker panics as
+/// it is answered: the handler's panic is the one that goes on.
+#[test]
+fn requests_are_answered_though_the_handler_and_a_waker_fail() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let drag = Arc::downgrade(&target.drag);
+    target.handler.react_to_input(move |input| {
+        match &input {
+            PlatformInput::DragDrop(DragDropEvent::Exited { .. }) => {
+                panic!("the handler fails as the drag leaves")
+            }
+            PlatformInput::DragDrop(DragDropEvent::Entered { offer, .. }) => {
+                if let Some(drag) = drag.upgrade() {
+                    drag.update_drop_feedback(
+                        offer.id(),
+                        DropFeedback {
+                            accept: Some(TransferActions::COPY),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let id = entered(&target.heard());
+
+    let mut failing = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let mut other = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let waker = Waker::from(Arc::new(FailsAsWoken));
+    assert!(
+        std::pin::Pin::new(&mut failing)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert!(
+        std::pin::Pin::new(&mut other)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+
+    source.send(target.xid, atoms.leave, [source.window, 0, 0, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    let failure = loop {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            target.deliver_events();
+        })) {
+            break payload;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the handler never heard the leave"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("the handler fails as the drag leaves")
+    );
+    std::mem::forget(failure);
+    for request in [&mut failing, &mut other] {
+        assert!(
+            std::pin::Pin::new(request)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            "a request on the retired offer is answered"
+        );
+    }
+}
+
+/// A window whose handler panics as it hears the drop it accepted, before
+/// concluding it, finishes the drop unaccepted before the panic goes on: the
+/// source does not wait for a finish no one will send, and the offer is
+/// stale.
+#[test]
+fn a_drop_whose_handler_fails_finishes_unaccepted() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let drag = Arc::downgrade(&target.drag);
+    target.handler.react_to_input(move |input| {
+        match &input {
+            PlatformInput::DragDrop(DragDropEvent::Dropped { .. }) => {
+                panic!("the handler fails at the drop")
+            }
+            PlatformInput::DragDrop(DragDropEvent::Entered { offer, .. }) => {
+                if let Some(drag) = drag.upgrade() {
+                    drag.update_drop_feedback(
+                        offer.id(),
+                        DropFeedback {
+                            accept: Some(TransferActions::COPY),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+        DispatchEventResult::default()
+    });
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    let id = entered(&target.heard());
+
+    source.send(target.xid, atoms.drop, [source.window, 0, 11, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    let mut failed = false;
+    let finished = loop {
+        failed |= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            target.deliver_events();
+        }))
+        .is_err();
+        if let Some(Event::ClientMessage(message)) = source.poll()
+            && message.type_ == atoms.finished
+        {
+            break message.data.as_data32();
+        }
+        assert!(Instant::now() < deadline, "the source heard no finish");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert!(failed, "the handler's panic went on");
+    assert_eq!(finished, model::finished(target.xid, None));
+    let mut request = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    assert!(matches!(
+        std::pin::Pin::new(&mut request).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(TransferError::StaleOffer(_)))
+    ));
 }
 
 // ============================================================================

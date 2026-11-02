@@ -52,7 +52,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand,
+    AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowFrame,
     WindowGeometry, WindowMode, WindowState,
 };
 
@@ -99,7 +99,7 @@ use crate::{
     owner::OpenWindowError,
     owner::slot::OwnerWeak,
     owner::window_delivery::{Retirement, WindowDelivery},
-    window::state::{ReportedFacts, WindowStateCell, mode_of},
+    window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none},
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
@@ -281,7 +281,7 @@ impl MacOSWindow {
         std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
     }
 
-    /// Create a new macOS window
+    /// Create a new macOS window, on the main thread `mtm` proves this is.
     ///
     /// `options.position` and `options.normal_geometry` are read as global
     /// logical pixels from the primary screen's top-left corner; a display
@@ -292,25 +292,14 @@ impl MacOSWindow {
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
     pub(crate) fn try_new(
+        mtm: MainThreadMarker,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        // A window's owner lane is the AppKit main queue — the one lane all
-        // other process AppKit traffic already serializes on (see
-        // `owner::apple::macos::owner_lane`) — and the window is made on the
-        // main thread, which that queue runs on.
-        Self::new_inner(
-            options,
-            handler,
-            windows_map,
-            windows,
-            view_hooks,
-            crate::owner::apple::macos::owner_queue(),
-            true,
-        )
+        Self::new_inner(mtm, options, handler, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -396,17 +385,23 @@ impl MacOSWindow {
     }
 
     fn new_inner(
+        _main: MainThreadMarker,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
-        owner: &'static dispatch::Queue,
-        owner_is_main: bool,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        // SAFETY: must run on the owner thread (enforced by the platform's
-        // event-loop ownership); all messaged objects are alive: the freshly allocated
-        // NSWindow is checked for NIL before further use.
+        // A window's owner lane is the AppKit main queue — the one lane all
+        // other process AppKit traffic already serializes on (see
+        // `owner::apple::macos::owner_lane`) — which runs on the main thread
+        // the window is made on.
+        let owner = crate::owner::apple::macos::owner_queue();
+        let owner_is_main = true;
+        // SAFETY: AppKit makes and configures an NSWindow only on the main
+        // thread, which the `MainThreadMarker` this takes proves this is; all
+        // messaged objects are alive: the freshly allocated NSWindow is
+        // checked for NIL before further use.
         unsafe {
             // Convert logical size to NSRect
             let frame = NSRect::new(
@@ -417,7 +412,9 @@ impl MacOSWindow {
             // Build window style mask
             let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
 
-            if options.decorated {
+            // No title bar of the application's here yet: one asked for opens
+            // with the system's frame.
+            if options.frame != WindowFrame::None {
                 style_mask |= NSWindowStyleMask::Titled;
             }
 
@@ -630,7 +627,7 @@ impl MacOSWindow {
                         .with_title(Some(options.title.clone()))
                         .with_constraints(SizeConstraints::new(options.min_size, options.max_size))
                         .with_resizable(options.resizable)
-                        .with_decorated(options.decorated),
+                        .with_frame(system_frame_or_none(options.frame != WindowFrame::None)),
                 )),
             });
 
@@ -1136,7 +1133,17 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             });
         }
         measure_placement_globally(owner.displays.as_ref(), &mut options);
+        // The loop is shared across threads (`host::Loop: Send + Sync`), so
+        // only asking AppKit proves this is the main thread the window's
+        // calls need; a release build keeps the check the assertion above
+        // compiles out.
+        let Some(main) = MainThreadMarker::new() else {
+            return Err(OpenWindowError::Backend {
+                message: "a macOS window opens on the main thread only".to_owned(),
+            });
+        };
         let window = MacOSWindow::try_new(
+            main,
             options,
             handler,
             Arc::clone(&owner.windows),
@@ -1166,7 +1173,9 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         // `keyWindow` answers `None` when no window is key. The window id is
         // the native `NSWindow` pointer, the same identity `MacOSWindow`
         // reports, so a caller can compare them.
-        let key_window = owner.app.keyWindow()?;
+        // Off the main thread no window is key to this thread's knowledge:
+        // the application is read only where a marker proves it may be.
+        let key_window = owner.app.get(MainThreadMarker::new()?).keyWindow()?;
         let ptr = objc2::rc::Retained::as_ptr(&key_window) as u64;
         Some(WindowId(ptr))
     }
@@ -1334,8 +1343,8 @@ impl PlatformWindow for MacOSWindow {
             WindowCommand::SetResizable(on) => {
                 self.set_style_bit(NSWindowStyleMask::Resizable, on)?;
             }
-            WindowCommand::SetDecorated(on) => {
-                self.set_style_bit(NSWindowStyleMask::Titled, on)?;
+            WindowCommand::SetFrame(frame) => {
+                self.set_style_bit(NSWindowStyleMask::Titled, frame.has_system_title_bar())?;
             }
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show_window()?,
@@ -1670,7 +1679,9 @@ impl MacOSWindow {
             .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(flags.resizable)
-            .with_decorated(mask.contains(NSWindowStyleMask::Titled))
+            .with_frame(system_frame_or_none(
+                mask.contains(NSWindowStyleMask::Titled),
+            ))
             .with_constraints(constraints_of_content_limits(
                 Size::new(min.width, min.height),
                 Size::new(max.width, max.height),
@@ -1691,7 +1702,7 @@ impl MacOSWindow {
                 ),
                 // A desktop window has no safe area and AppKit never
                 // suspends one.
-                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+                insets: flui_platform::WindowInsets::ZERO,
                 execution: flui_platform::WindowExecutionState::Running,
                 // Covered or on another space.
                 occluded: !occlusion_visible,

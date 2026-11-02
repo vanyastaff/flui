@@ -459,7 +459,10 @@ impl FrameRun {
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
-    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl flui_foundation::inspect::Inspect for FixedBox {
+    /// #     fn kind(&self) -> &'static str { "FixedBox" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
@@ -536,7 +539,10 @@ impl FrameRun {
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
-    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl flui_foundation::inspect::Inspect for FixedBox {
+    /// #     fn kind(&self) -> &'static str { "FixedBox" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
@@ -675,7 +681,10 @@ impl RenderTester {
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;
-    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl flui_foundation::inspect::Inspect for FixedBox {
+    /// #     fn kind(&self) -> &'static str { "FixedBox" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
@@ -695,7 +704,10 @@ impl RenderTester {
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;
-    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl flui_foundation::inspect::Inspect for FixedBox {
+    /// #     fn kind(&self) -> &'static str { "FixedBox" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;

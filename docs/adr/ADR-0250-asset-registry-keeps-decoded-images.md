@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-19
+- **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
+  for §2 only how a load is aborted and what a dropped load does to its waiters, and for §3
+  only where a decode runs
 - **Amends:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (removes the decoded-image
   `CACHE` global), [ADR-0118](ADR-0118-network-image-registry-identity.md) (registry identity now
   covers asset images too, and the key is opaque),
@@ -90,7 +93,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
   the over-budget image, both pressure levels).
 - `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (one shared HTTP connection,
   open while a waiter remains, closed by the last drop).
-- `bridged_decodes_leave_a_host_runtimes_async_workers_free`,
+- `decodes_leave_the_io_lane_free`,
   `abandoned_loads_never_decode_and_do_not_delay_a_live_one`,
   `decode_slots_go_to_the_earliest_admitted_ready_load` and
   `loads_past_admission_are_bounded_by_count`, in the `image_decode_scheduling` target,

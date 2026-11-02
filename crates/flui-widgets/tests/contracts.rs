@@ -140,6 +140,62 @@ fn drag_and_drop() {
     );
 }
 
+/// `ReorderableList`: a row moved by its handle and a touch long press,
+/// reported once, the drags that move nothing, the preview, the move commands
+/// and a dragged row that scrolls out of the built band.
+#[test]
+fn reorderable_list() {
+    run_cases(
+        "reorderable_list",
+        &[
+            (
+                "reorderable::a_handle_drag_reports_one_move_counted_after_removal",
+                crate::reorderable::a_handle_drag_reports_one_move_counted_after_removal as fn(),
+            ),
+            (
+                "reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle",
+                crate::reorderable::a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle,
+            ),
+            (
+                "reorderable::a_drag_that_does_not_drop_moves_nothing",
+                crate::reorderable::a_drag_that_does_not_drop_moves_nothing,
+            ),
+            (
+                "reorderable::the_preview_follows_the_drag_over_the_rows",
+                crate::reorderable::the_preview_follows_the_drag_over_the_rows,
+            ),
+            (
+                "reorderable::a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row",
+                crate::reorderable::a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row,
+            ),
+            (
+                "reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size",
+                crate::reorderable::a_drag_of_an_unlabelled_row_shows_a_plate_of_its_size,
+            ),
+            (
+                "reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis",
+                crate::reorderable::a_list_that_turns_horizontal_drags_along_its_new_axis,
+            ),
+            (
+                "reorderable::the_move_commands_move_a_row_and_announce_it",
+                crate::reorderable::the_move_commands_move_a_row_and_announce_it,
+            ),
+            (
+                "reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops",
+                crate::reorderable::a_dragged_row_scrolled_out_of_the_band_still_drops,
+            ),
+            (
+                "reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags",
+                crate::reorderable::a_long_press_on_selectable_text_selects_and_the_handle_still_drags,
+            ),
+            (
+                "reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus",
+                crate::reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus,
+            ),
+        ],
+    );
+}
+
 /// The editable-text capability: selection gestures, obscuring, IME, clipboard, keys.
 #[test]
 fn text_editing() {
@@ -167,12 +223,14 @@ fn text_editing() {
             ("editable_text::disabling_the_field_retires_its_selection_contact", crate::editable_text::disabling_the_field_retires_its_selection_contact),
             ("editable_text::replacing_the_controller_retires_the_old_selection_contact", crate::editable_text::replacing_the_controller_retires_the_old_selection_contact),
             ("editable_text::selection_drag_survives_a_same_controller_rebuild", crate::editable_text::selection_drag_survives_a_same_controller_rebuild),
+            ("editable_text::a_field_highlights_its_selection_with_the_inherited_style", crate::editable_text::a_field_highlights_its_selection_with_the_inherited_style),
             ("editable_text::foreign_release_preserves_the_selection_contact", crate::editable_text::foreign_release_preserves_the_selection_contact),
             ("editable_text::foreign_cancel_preserves_the_selection_contact", crate::editable_text::foreign_cancel_preserves_the_selection_contact),
             ("editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster", crate::editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster),
             ("editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag", crate::editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag),
             ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
             ("editable_text::the_store_reports_the_purpose_the_field_was_built_with", crate::editable_text::the_store_reports_the_purpose_the_field_was_built_with),
+            ("editable_text::a_push_platform_is_told_the_focused_fields_status", crate::editable_text::a_push_platform_is_told_the_focused_fields_status),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::a_field_measures_and_hit_tests_the_current_text_scale", crate::editable_text::a_field_measures_and_hit_tests_the_current_text_scale),
             ("editable_text::a_pointer_down_and_a_paste_commit_the_composition_first", crate::editable_text::a_pointer_down_and_a_paste_commit_the_composition_first),
@@ -420,6 +478,7 @@ fn focus_actions_and_shortcuts() {
             ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
             ("focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable", crate::focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable as fn()),
             ("focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag", crate::focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag as fn()),
+            ("focus::a_failing_frame_request_still_delivers_every_focus_edge", crate::focus::a_failing_frame_request_still_delivers_every_focus_edge as fn()),
             ("focus::a_refused_node_replacement_is_made_by_the_next_rebuild", crate::focus::a_refused_node_replacement_is_made_by_the_next_rebuild as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
@@ -574,18 +633,105 @@ fn selection_area_text_runs() {
             ("selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node", crate::selection_area::a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node),
             ("selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld", crate::selection_area::a_document_selection_snaps_into_its_texts_or_is_withheld),
             ("selection_area::links_in_a_selection_area_keep_their_own_nodes", crate::selection_area::links_in_a_selection_area_keep_their_own_nodes),
+            ("selection_area::links_in_selectable_text_hold_their_own_runs", crate::selection_area::links_in_selectable_text_hold_their_own_runs),
+            ("selection_area::a_wrapped_link_holds_a_run_on_each_line", crate::selection_area::a_wrapped_link_holds_a_run_on_each_line),
+            ("selection_area::a_clipped_link_leaves_its_runs_with_the_text", crate::selection_area::a_clipped_link_leaves_its_runs_with_the_text),
+            ("selection_area::a_link_inside_a_cluster_leaves_the_runs_with_the_text", crate::selection_area::a_link_inside_a_cluster_leaves_the_runs_with_the_text),
+            ("selection_area::linked_text_under_a_merging_ancestor_keeps_its_runs", crate::selection_area::linked_text_under_a_merging_ancestor_keeps_its_runs),
+            ("selection_area::linked_text_too_large_to_place_withholds_its_runs", crate::selection_area::linked_text_too_large_to_place_withholds_its_runs),
             ("selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start", crate::selection_area::an_assistive_end_inside_a_long_grapheme_snaps_to_its_start),
             ("selection_area::offstage_text_is_left_out_of_the_selection", crate::selection_area::offstage_text_is_left_out_of_the_selection),
             ("selection_area::a_panicking_wake_still_reports_the_committed_selection", crate::selection_area::a_panicking_wake_still_reports_the_committed_selection),
             ("selection_area::a_document_reads_its_texts_where_they_are_laid_out", crate::selection_area::a_document_reads_its_texts_where_they_are_laid_out),
             ("selection_area::blocked_text_refuses_assistive_selection", crate::selection_area::blocked_text_refuses_assistive_selection),
             ("selection_area::a_silenced_text_is_left_out_of_the_selection", crate::selection_area::a_silenced_text_is_left_out_of_the_selection),
-            ("selection_area::span_overrides_keep_their_reading_in_a_selection_area", crate::selection_area::span_overrides_keep_their_reading_in_a_selection_area),
+            ("selection_area::span_overrides_read_their_override_and_hold_their_runs", crate::selection_area::span_overrides_read_their_override_and_hold_their_runs),
             ("selection_area::the_highlight_colour_follows_the_area_style", crate::selection_area::the_highlight_colour_follows_the_area_style),
             ("selection_area::a_selection_highlights_the_parts_it_covers", crate::selection_area::a_selection_highlights_the_parts_it_covers),
             ("selection_area::an_edited_text_keeps_its_highlight_current", crate::selection_area::an_edited_text_keeps_its_highlight_current),
             ("selection_area::sort_keys_order_the_reported_text", crate::selection_area::sort_keys_order_the_reported_text),
             ("selection_area::a_line_limit_bounds_what_a_paragraph_reports", crate::selection_area::a_line_limit_bounds_what_a_paragraph_reports),
+        ],
+    );
+}
+
+/// A `SelectionController` reads and moves an area's selection, refuses ends the area
+/// does not present, and every change reaches the listener with what made it.
+#[test]
+fn selection_area_controller() {
+    run_cases(
+        "selection_area_controller",
+        &[
+            ("selection_area_controller::a_controller_selects_reads_and_clears", crate::selection_area_controller::a_controller_selects_reads_and_clears as fn()),
+            ("selection_area_controller::a_controller_selection_leaves_the_focus_where_it_is", crate::selection_area_controller::a_controller_selection_leaves_the_focus_where_it_is),
+            ("selection_area_controller::a_controller_refuses_ends_the_area_does_not_present", crate::selection_area_controller::a_controller_refuses_ends_the_area_does_not_present),
+            ("selection_area_controller::the_listener_hears_what_changed_the_selection", crate::selection_area_controller::the_listener_hears_what_changed_the_selection),
+            ("selection_area_controller::a_panicking_listener_still_lets_the_controller_notify", crate::selection_area_controller::a_panicking_listener_still_lets_the_controller_notify),
+            ("selection_area_controller::a_controller_refuses_a_change_during_a_build", crate::selection_area_controller::a_controller_refuses_a_change_during_a_build),
+        ],
+    );
+}
+
+/// `EditableText` by touch: a tap's caret handle, a long press's word and
+/// its handles, dragging a handle, and what takes the handles away.
+#[test]
+fn editable_text_handles() {
+    run_cases(
+        "editable_text_handles",
+        &[
+            ("editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves", crate::editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves as fn()),
+            ("editable_text_handles::a_caret_handle_follows_the_field_or_its_default", crate::editable_text_handles::a_caret_handle_follows_the_field_or_its_default),
+            ("editable_text_handles::a_caret_handle_hides_after_its_timeout", crate::editable_text_handles::a_caret_handle_hides_after_its_timeout),
+            ("editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends", crate::editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends),
+            ("editable_text_handles::a_key_a_mouse_or_the_focus_leaving_hides_the_handles", crate::editable_text_handles::a_key_a_mouse_or_the_focus_leaving_hides_the_handles),
+            ("editable_text_handles::a_long_press_in_an_obscured_field_selects_all_of_it", crate::editable_text_handles::a_long_press_in_an_obscured_field_selects_all_of_it),
+            ("editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles", crate::editable_text_handles::an_edit_that_keeps_the_offsets_still_hides_the_handles),
+            ("editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it", crate::editable_text_handles::a_finger_resting_on_the_caret_handle_keeps_it),
+            ("editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press", crate::editable_text_handles::the_focus_leaving_mid_press_cancels_the_long_press),
+            ("editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle", crate::editable_text_handles::a_new_caret_handle_timeout_applies_to_the_shown_handle),
+            ("editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles", crate::editable_text_handles::the_focus_leaving_before_a_tap_lifts_shows_no_handles),
+            ("editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag", crate::editable_text_handles::a_panic_on_the_last_drag_move_still_ends_the_drag),
+            ("editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press", crate::editable_text_handles::a_panic_on_a_long_press_release_still_ends_the_press),
+            ("editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact", crate::editable_text_handles::a_panic_on_the_long_press_selection_still_claims_the_contact),
+            ("editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it", crate::editable_text_handles::an_edit_in_reply_to_a_long_press_ends_it),
+            ("editable_text_handles::an_edit_during_a_long_press_ends_it", crate::editable_text_handles::an_edit_during_a_long_press_ends_it),
+            ("editable_text_handles::shown_handles_follow_a_new_line_height", crate::editable_text_handles::shown_handles_follow_a_new_line_height),
+        ],
+    );
+}
+
+/// A `SelectionArea` selects by touch: a long press shows a handle under each end, a drag
+/// of a handle moves its end, and a tap, Esc or the mouse hides them.
+#[test]
+fn selection_area_handles() {
+    run_cases(
+        "selection_area_handles",
+        &[
+            ("selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end", crate::selection_area_handles::a_long_press_selects_a_word_and_shows_a_handle_under_each_end as fn()),
+            ("selection_area_handles::dragging_a_handle_moves_its_end", crate::selection_area_handles::dragging_a_handle_moves_its_end),
+            ("selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles", crate::selection_area_handles::a_tap_esc_or_the_mouse_hides_the_handles),
+            ("selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay", crate::selection_area_handles::handles_come_from_the_area_then_the_default_and_need_an_overlay),
+            ("selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is", crate::selection_area_handles::an_end_at_a_text_edge_drags_from_where_its_handle_is),
+            ("selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits", crate::selection_area_handles::a_failing_wake_while_the_handles_follow_still_commits),
+            ("selection_area_handles::a_failing_primary_release_still_takes_the_handles_away", crate::selection_area_handles::a_failing_primary_release_still_takes_the_handles_away),
+            ("selection_area_handles::shown_handles_rebuild_with_a_new_direction", crate::selection_area_handles::shown_handles_rebuild_with_a_new_direction),
+            ("selection_area_handles::a_handle_released_past_its_last_move_ends_there", crate::selection_area_handles::a_handle_released_past_its_last_move_ends_there),
+            ("selection_area_handles::shown_handles_follow_their_text_laid_out_anew", crate::selection_area_handles::shown_handles_follow_their_text_laid_out_anew),
+            ("selection_area_handles::an_end_inside_a_new_cluster_sits_where_the_highlight_ends", crate::selection_area_handles::an_end_inside_a_new_cluster_sits_where_the_highlight_ends),
+            ("selection_area_handles::shown_handles_follow_an_inherited_style", crate::selection_area_handles::shown_handles_follow_an_inherited_style),
+            ("selection_area_handles::losing_the_focus_hides_the_handles", crate::selection_area_handles::losing_the_focus_hides_the_handles),
+            ("selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them", crate::selection_area_handles::a_failing_wake_as_the_handles_appear_still_shows_them),
+            ("selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles", crate::selection_area_handles::a_listener_taking_the_focus_away_leaves_no_handles),
+            ("selection_area_handles::failing_wakes_as_the_focus_leaves_are_reported_not_raised", crate::selection_area_handles::failing_wakes_as_the_focus_leaves_are_reported_not_raised),
+            ("selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging", crate::selection_area_handles::letting_go_of_one_handle_keeps_the_other_dragging),
+            ("selection_area_handles::shown_handles_rebuild_with_new_handles", crate::selection_area_handles::shown_handles_rebuild_with_new_handles),
+            ("selection_area_handles::a_panicking_listener_still_shows_the_handles", crate::selection_area_handles::a_panicking_listener_still_shows_the_handles),
+            ("selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch", crate::selection_area_handles::a_handle_scrolled_out_of_view_takes_no_touch),
+            ("selection_area_handles::shown_handles_follow_a_relayout_without_a_build", crate::selection_area_handles::shown_handles_follow_a_relayout_without_a_build),
+            ("selection_area_handles::a_controller_selection_hides_the_handles", crate::selection_area_handles::a_controller_selection_hides_the_handles),
+            ("selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles", crate::selection_area_handles::a_listener_selecting_elsewhere_leaves_no_handles),
+            ("selection_area_handles::a_long_press_extends_by_words_as_the_touch_moves", crate::selection_area_handles::a_long_press_extends_by_words_as_the_touch_moves),
+            ("selection_area_handles::losing_the_focus_ends_a_long_press_extension", crate::selection_area_handles::losing_the_focus_ends_a_long_press_extension),
         ],
     );
 }
@@ -698,6 +844,7 @@ fn scroll_physics_and_activity() {
             ("scroll::retiring_scroll_curves_preserves_newer_reentrant_commands", crate::scroll::retiring_scroll_curves_preserves_newer_reentrant_commands),
             ("scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers", crate::scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers),
             ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
+            ("scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge", crate::scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge),
             ("scroll::hover_holds_while_a_touch_scroll_is_latched", crate::scroll::hover_holds_while_a_touch_scroll_is_latched),
             ("scroll::constrained_sliver_updates_layout_without_replacing_the_child", crate::scroll::constrained_sliver_updates_layout_without_replacing_the_child),
             ("scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics", crate::scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics),
@@ -913,6 +1060,7 @@ fn router_and_widgets_app() {
         &[
             ("widgets_app::locale_override_removal_uses_the_nearest_current_preferences", crate::widgets_app::locale_override_removal_uses_the_nearest_current_preferences as fn()),
             ("router::popup_routes_are_admitted_and_leave_the_location_alone", crate::router::popup_routes_are_admitted_and_leave_the_location_alone as fn()),
+            ("router::a_named_page_is_announced_when_pushed_and_when_uncovered", crate::router::a_named_page_is_announced_when_pushed_and_when_uncovered),
             ("router::router_never_pops_its_last_page", crate::router::router_never_pops_its_last_page),
             ("router::router_opens_at_a_location_with_its_back_stack", crate::router::router_opens_at_a_location_with_its_back_stack),
             ("router::router_push_commits_before_a_reentrant_observer_pop", crate::router::router_push_commits_before_a_reentrant_observer_pop),
@@ -926,6 +1074,10 @@ fn router_and_widgets_app() {
             ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
             ("router::from_stack_restores_back_order", crate::router::from_stack_restores_back_order),
             ("router::stack_reads_every_committed_edit", crate::router::stack_reads_every_committed_edit),
+            ("router::stack_listeners_hear_each_committed_change_once", crate::router::stack_listeners_hear_each_committed_change_once),
+            ("router::a_stack_listener_may_navigate", crate::router::a_stack_listener_may_navigate),
+            ("router::an_unmounted_router_lets_go_of_its_listeners", crate::router::an_unmounted_router_lets_go_of_its_listeners),
+            ("router::a_frame_hook_panic_while_queueing_leaves_later_changes_told", crate::router::a_frame_hook_panic_while_queueing_leaves_later_changes_told),
             ("router::from_stack_opens_without_a_transition", crate::router::from_stack_opens_without_a_transition),
             ("router::stack_leaves_out_popups", crate::router::stack_leaves_out_popups),
             ("router::debug_prints_the_whole_stack", crate::router::debug_prints_the_whole_stack),
@@ -1255,6 +1407,7 @@ fn layout_and_render_object_wiring() {
             ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
             ("unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again", crate::unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again),
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
+            ("component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order", crate::component_child_ordering::a_lazy_list_item_keeps_its_containers_children_in_slot_order),
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
             ("layer_inspection::a_superellipse_clip_composites_and_updates_its_radius", crate::layer_inspection::a_superellipse_clip_composites_and_updates_its_radius),
@@ -1577,6 +1730,10 @@ fn gesture_alternatives() {
             (
                 "context_menu_area::context_menu_area_right_to_left",
                 crate::context_menu_area::context_menu_area_right_to_left,
+            ),
+            (
+                "reorderable::reorderable_list",
+                crate::reorderable::reorderable_list,
             ),
         ],
     );

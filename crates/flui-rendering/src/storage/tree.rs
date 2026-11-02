@@ -1205,7 +1205,13 @@ mod tests {
     /// exercise the slab slot / generation / ABA mechanics.
     #[derive(Debug, Default)]
     struct LeafStub;
-    impl flui_foundation::Diagnosticable for LeafStub {}
+    impl flui_foundation::inspect::Inspect for LeafStub {
+        fn kind(&self) -> &'static str {
+            "LeafStub"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
     impl RenderBox for LeafStub {
         type Arity = Leaf;
         type ParentData = BoxParentData;

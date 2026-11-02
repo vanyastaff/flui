@@ -36,8 +36,12 @@ enum Reach {
 #[derive(Debug)]
 struct Reaching(Reach);
 
-impl flui_foundation::Diagnosticable for Reaching {
-    fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for Reaching {
+    fn kind(&self) -> &'static str {
+        "Reaching"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {
         let cell = CELL
             .with_borrow(|cell| cell.as_ref().and_then(WeakPipelineCell::upgrade))
             .expect("the test keeps its cell alive");

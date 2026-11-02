@@ -111,8 +111,11 @@ pub struct AppConfig {
     /// Whether the window is resizable.
     pub resizable: bool,
 
-    /// Whether to show the window decorations.
-    pub decorations: bool,
+    /// What frames the window: the system's title bar, the application's, or none.
+    /// A desktop host that cannot take a title bar of the application's opens the window
+    /// with the system's frame. Hosts without a system frame, such as mobile and web,
+    /// retain their native frame policy.
+    pub frame: flui_platform::WindowFrame,
 
     /// What the window is created with on each operating system that has
     /// options of its own, each read only by that system's host (ADR-0254
@@ -336,7 +339,7 @@ impl Default for AppConfig {
             position: None,
             mode: WindowMode::Normal,
             resizable: true,
-            decorations: true,
+            frame: flui_platform::WindowFrame::System,
             os_options: flui_platform::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
             frame_latency: FrameLatency::Balanced,
@@ -480,10 +483,10 @@ impl AppConfig {
         self
     }
 
-    /// Set whether to show window decorations.
+    /// Set what frames the window.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_decorations(mut self, decorations: bool) -> Self {
-        self.decorations = decorations;
+    pub fn with_frame(mut self, frame: flui_platform::WindowFrame) -> Self {
+        self.frame = frame;
         self
     }
 
@@ -714,7 +717,7 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .with_title(config.title.clone())
             .with_size(config.size)
             .with_resizable(config.resizable)
-            .with_decorated(config.decorations)
+            .with_frame(config.frame)
             .with_min_size(config.min_size)
             .with_max_size(config.max_size)
             .with_position(config.position)

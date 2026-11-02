@@ -1,6 +1,5 @@
 //! Runtime validation for `SliverGeometry` layout results.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
@@ -70,7 +69,13 @@ impl BadGeometrySliver {
     }
 }
 
-impl Diagnosticable for BadGeometrySliver {}
+impl flui_foundation::inspect::Inspect for BadGeometrySliver {
+    fn kind(&self) -> &'static str {
+        "BadGeometrySliver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for BadGeometrySliver {
     type Arity = Leaf;

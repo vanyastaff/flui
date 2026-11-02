@@ -173,7 +173,7 @@ impl PanZoomRoute {
 // ============================================================================
 
 /// How an element takes part in hit testing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 pub enum HitTestBehavior {
     /// Receive events only if a child is hit.
     #[default]

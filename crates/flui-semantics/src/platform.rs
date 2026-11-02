@@ -84,6 +84,78 @@ pub enum AssistiveFocusSupport {
     Unreported,
 }
 
+/// How an adapter tells assistive technology that the innermost route of
+/// the window's tree changed (ADR-0204 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum RouteChangeSupport {
+    /// The adapter conveys a [`RouteChange`] through the platform's own
+    /// notice of a new screen or pane, told through
+    /// [`PlatformAccessibility::route_changed`].
+    Native,
+    /// The platform has no such notice: the semantics owner speaks the new
+    /// route's name as a polite announcement in the update that shows it.
+    #[default]
+    Announced,
+}
+
+/// How the innermost route of a published tree changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RouteChangeKind {
+    /// A route covered the one before it, which is still in the tree.
+    Pushed,
+    /// The route before it left the tree, and this route, published under it
+    /// before, is the innermost again.
+    Popped,
+    /// The route before it left the tree, and this one is new.
+    Replaced,
+}
+
+/// The innermost route of a published tree changed: the node that scopes it,
+/// its name, and how it changed. Raised once per flush that changes it, never
+/// for the first route a tree publishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteChange {
+    route: accesskit::NodeId,
+    name: Option<String>,
+    kind: RouteChangeKind,
+}
+
+impl RouteChange {
+    pub(crate) fn new(
+        route: accesskit::NodeId,
+        name: Option<String>,
+        kind: RouteChangeKind,
+    ) -> Self {
+        Self { route, name, kind }
+    }
+
+    /// The published node that scopes the route.
+    #[must_use]
+    pub fn route(&self) -> accesskit::NodeId {
+        self.route
+    }
+
+    /// The route's name: the label of the node that names it, or a modal
+    /// dialog's own name. `None` for a route nothing names.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// How the route changed.
+    #[must_use]
+    pub fn kind(&self) -> RouteChangeKind {
+        self.kind
+    }
+}
+
+/// Told each [`RouteChange`] once the update that shows it is delivered, by
+/// a semantics owner whose adapter conveys route changes
+/// [natively](RouteChangeSupport::Native).
+pub type RouteChangeSink = Arc<dyn Fn(RouteChange) + Send + Sync>;
+
 /// Platform capability for exposing one window's accessibility tree.
 pub trait PlatformAccessibility: Send + Sync {
     /// Hand the platform an update — incremental or self-contained.
@@ -126,5 +198,21 @@ pub trait PlatformAccessibility: Send + Sync {
     /// [`Unreported`](AssistiveFocusSupport::Unreported) never calls it.
     fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
         drop(listener);
+    }
+
+    /// How this adapter tells assistive technology that the innermost route
+    /// changed. Each adapter with a native notice of a new screen or pane
+    /// says [`Native`](RouteChangeSupport::Native); the rest leave the owner
+    /// to announce the route's name.
+    fn route_change_support(&self) -> RouteChangeSupport {
+        RouteChangeSupport::Announced
+    }
+
+    /// Convey `change` through the platform's notice of a new screen or pane,
+    /// after the update that shows the route was published. Called only on an
+    /// adapter whose [`route_change_support`](Self::route_change_support) is
+    /// [`Native`](RouteChangeSupport::Native).
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }

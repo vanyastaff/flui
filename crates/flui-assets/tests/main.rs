@@ -9,14 +9,21 @@ mod memory_trim;
 #[path = "image_asset_integration.rs"]
 mod image_asset_integration;
 
-#[path = "image_bridge.rs"]
-mod image_bridge;
+#[path = "image_load.rs"]
+mod image_load;
+
+#[cfg(feature = "images")]
+#[allow(
+    dead_code,
+    reason = "shared with the decode-scheduling binary, which uses the IO handle"
+)]
+mod lanes;
 
 #[path = "load_contract.rs"]
 mod load_contract;
 
 #[cfg(all(feature = "images", feature = "network"))]
-mod network_bridge;
+mod network_load;
 
 #[cfg(feature = "network")]
 mod network_support;

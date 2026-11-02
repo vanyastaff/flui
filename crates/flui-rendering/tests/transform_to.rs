@@ -14,7 +14,13 @@ use flui_rendering::testing::{Probe, RenderTester, box_node};
 /// A leaf of fixed size.
 #[derive(Debug, Default)]
 struct FixedBox;
-impl flui_foundation::Diagnosticable for FixedBox {}
+impl flui_foundation::inspect::Inspect for FixedBox {
+    fn kind(&self) -> &'static str {
+        "FixedBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl RenderBox for FixedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
@@ -32,7 +38,13 @@ impl RenderBox for FixedBox {
 /// committed offset) is the whole story.
 #[derive(Debug)]
 struct OffsetBox(Offset);
-impl flui_foundation::Diagnosticable for OffsetBox {}
+impl flui_foundation::inspect::Inspect for OffsetBox {
+    fn kind(&self) -> &'static str {
+        "OffsetBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 impl RenderBox for OffsetBox {
     type Arity = Single;
     type ParentData = BoxParentData;

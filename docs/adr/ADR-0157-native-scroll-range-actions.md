@@ -5,6 +5,9 @@
 - **Superseded-by:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: the axis no
   longer travels through `SemanticsSnapshot` or `SemanticsNodeData`, which are removed; it is
   the scroll group of `SemanticsAttributes`, read in place at publication.
+  [ADR-0273](ADR-0273-a-scroll-position-reaches-platforms-from-the-top-or-left-edge.md) for the
+  second paragraph of the decision: the range carries an `AxisDirection`, and a reversed one is
+  published from the top or left edge.
 - **Related:** ADR-0155
 
 ## Decision

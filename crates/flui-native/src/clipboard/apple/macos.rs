@@ -23,11 +23,12 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
+use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
 use objc2::rc::Retained;
-use objc2_app_kit::{NSPasteboard, NSPasteboardType};
+use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard};
+use crate::host::{NativeClipboard, SyncClipboard, host_text};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -148,8 +149,8 @@ impl crate::host::Clipboard<MacOSLoop> for MacOSClipboard {
 }
 
 impl SyncClipboard for MacOSClipboard {
-    fn read_now(&self) -> Option<String> {
-        self.with_pasteboard_on_owner(|pasteboard| {
+    fn read_now(&self) -> ClipboardRead {
+        let text = self.with_pasteboard_on_owner(|pasteboard| {
             let string_type = string_type();
 
             // `types()` is `None` only when the pasteboard has no types at
@@ -164,14 +165,41 @@ impl SyncClipboard for MacOSClipboard {
             let rust_string = ns_string.to_string();
             tracing::debug!(len = rust_string.len(), "Read text from clipboard");
             Some(rust_string)
-        })
+        });
+        text.map_or(Ok(None), host_text)
     }
 
-    fn write_now(&self, text: String) {
+    fn write_now(&self, write: ClipboardWrite) {
+        let concealed = write.is_concealed();
+        let text = write.into_text();
         self.with_pasteboard_on_owner(|pasteboard| {
             // Clear existing contents; the return value is the new change
-            // count, which this backend does not consume.
-            pasteboard.clearContents();
+            // count, which this backend does not consume. A concealed write
+            // also stays off the user's other devices' universal clipboard.
+            if concealed {
+                pasteboard
+                    .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+            } else {
+                pasteboard.clearContents();
+            }
+
+            // The markers go first, so a clipboard manager that looks while
+            // the write is under way sees them before the text; a write that
+            // could not mark itself leaves the pasteboard empty rather than
+            // hand the secret to the history (ADR-0152 §6).
+            if concealed {
+                let empty = NSString::new();
+                for marker in CONCEALMENT_TYPES {
+                    if !pasteboard.setString_forType(&empty, &NSPasteboardType::from_str(marker)) {
+                        pasteboard.clearContents();
+                        tracing::error!(
+                            marker,
+                            "a concealed clipboard write was dropped: its marker could not be set"
+                        );
+                        return;
+                    }
+                }
+            }
 
             let ns_string = NSString::from_str(&text);
             let string_type = string_type();
@@ -179,13 +207,26 @@ impl SyncClipboard for MacOSClipboard {
             let success = pasteboard.setString_forType(&ns_string, &string_type);
 
             if success {
-                tracing::debug!(len = text.len(), "Wrote text to clipboard");
+                tracing::debug!(len = text.len(), concealed, "Wrote text to clipboard");
             } else {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
             }
         });
     }
+
+    fn concealment(&self) -> Concealment {
+        Concealment::Honored
+    }
 }
+
+/// The pasteboard types nspasteboard.org defines for an entry a clipboard
+/// manager keeps out of its history: concealed (a secret, never shown) and
+/// transient (never recorded). Their value is unread; an empty string is
+/// written.
+const CONCEALMENT_TYPES: [&str; 2] = [
+    "org.nspasteboard.ConcealedType",
+    "org.nspasteboard.TransientType",
+];
 
 #[cfg(test)]
 mod tests {
@@ -197,6 +238,32 @@ mod tests {
         format!("flui.clipboard.{name}.{}", std::process::id())
     }
 
+    /// The scenario every host's clipboard runs: a concealed write pastes
+    /// back, with the types that keep it out of a clipboard manager's
+    /// history (ADR-0152 §6).
+    #[test]
+    fn a_concealed_write_stays_out_of_the_macos_history() {
+        let board = test_board("concealed");
+        let clipboard = MacOSClipboard::for_test(test_owner_queue(), board);
+        assert_eq!(
+            crate::testing::clipboard::a_concealed_write_stays_out_of_history(
+                &clipboard,
+                crate::testing::clipboard::read_at_once,
+            ),
+            Ok(())
+        );
+        let marked = clipboard.with_pasteboard_on_owner(|pasteboard| {
+            let types = pasteboard.types();
+            CONCEALMENT_TYPES.iter().all(|marker| {
+                types.as_ref().is_some_and(|types| {
+                    types
+                        .iter()
+                        .any(|kind| *kind == *NSPasteboardType::from_str(marker))
+                })
+            })
+        });
+        assert!(marked, "the concealed and transient types are on the board");
+    }
     #[test]
     fn test_concurrent_access_is_crash_free_and_serialized() {
         // ONE shared board for the whole hammer. The test lane serializes
@@ -207,7 +274,7 @@ mod tests {
         let sentinel = "stable-sentinel";
 
         let sentinel_guard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
-        sentinel_guard.write_now(sentinel.to_string());
+        sentinel_guard.write_now(ClipboardWrite::text(sentinel));
 
         let known_payloads: Vec<String> = std::iter::once(sentinel.to_string())
             .chain((0..8).map(|i| format!("payload-{i}")))
@@ -220,14 +287,18 @@ mod tests {
             let clipboard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
             let known_payloads = known_payloads.clone();
             threads.push(std::thread::spawn(move || {
-                clipboard.write_now(format!("payload-{i}"));
-                let read = clipboard.read_now();
+                clipboard.write_now(ClipboardWrite::text(format!("payload-{i}")));
+                let read = clipboard
+                    .read_now()
+                    .expect("a pasteboard read on the serialized lane succeeds");
                 assert!(
                     read.is_some(),
                     "Read must never be None on the serialized lane"
                 );
                 assert!(
-                    known_payloads.iter().any(|p| p == read.as_deref().unwrap()),
+                    known_payloads
+                        .iter()
+                        .any(|p| Some(p.as_str()) == read.as_deref()),
                     "Read must be one of the known complete payloads, got {read:?}"
                 );
             }));
@@ -239,7 +310,10 @@ mod tests {
         }
 
         let final_guard = MacOSClipboard::for_test(test_owner_queue(), board);
-        final_guard.write_now("final".to_string());
-        assert_eq!(final_guard.read_now().as_deref(), Some("final"));
+        final_guard.write_now(ClipboardWrite::text("final"));
+        assert_eq!(
+            final_guard.read_now().ok().flatten().as_deref(),
+            Some("final")
+        );
     }
 }

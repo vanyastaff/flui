@@ -95,10 +95,15 @@ fn glob_matches(glob: &str, name: &str) -> bool {
 #[derive(Debug)]
 pub(super) struct Rules {
     tiers: BTreeMap<String, Vec<Pattern>>,
+    /// The sets of the kinds that replace their tier's (ADR-0154 §1).
+    kinds: BTreeMap<String, Vec<Pattern>>,
     generic_ffi: Vec<(Pattern, String)>,
 }
 
-const REACH_KEYS: [&str; 2] = ["generic-ffi", "tier"];
+const REACH_KEYS: [&str; 3] = ["generic-ffi", "tier", "kind"];
+
+/// The `tier-kind`s whose crates have their own forbidden set.
+pub(super) const KIND_TABLES: [&str; 1] = ["capability"];
 const TIER_KEYS: [&str; 2] = ["extends", "forbid"];
 
 impl Rules {
@@ -159,12 +164,56 @@ impl Rules {
 
         let mut rules = Self {
             tiers: BTreeMap::new(),
+            kinds: BTreeMap::new(),
             generic_ffi,
         };
         for tier in tiers {
             let set = expand(tier, &tables, &mut Vec::new())?;
             rules.refuse_generic_ffi(&set, &format!("tier {tier}'s forbidden set"))?;
             rules.tiers.insert(tier.clone(), set);
+        }
+        // A kind's set replaces its tier's for the crates of that kind: a
+        // capability crate sits in tier `pkg` but may reach OS crates the
+        // tier forbids (ADR-0154 §1). Its table lists the whole set.
+        let kinds = match reach.get("kind") {
+            None => Map::new(),
+            Some(value) => value
+                .as_object()
+                .cloned()
+                .context("`[workspace.metadata.flui.reach.kind]` must be a table of kinds")?,
+        };
+        for (kind, table) in &kinds {
+            ensure!(
+                KIND_TABLES.contains(&kind.as_str()),
+                "`[workspace.metadata.flui.reach.kind.{kind}]` names no kind with its own set \
+                 (known: {})",
+                KIND_TABLES.join(", ")
+            );
+            let table = table
+                .as_object()
+                .with_context(|| format!("`reach.kind.{kind}` must be a table"))?;
+            refuse_unknown(
+                table,
+                &["forbid"],
+                &format!("[workspace.metadata.flui.reach.kind.{kind}]"),
+            )?;
+            let mut set = Vec::new();
+            for text in table
+                .get("forbid")
+                .and_then(Json::as_array)
+                .with_context(|| format!("`reach.kind.{kind}.forbid` must be a list of strings"))?
+            {
+                let text = text.as_str().with_context(|| {
+                    format!("`reach.kind.{kind}.forbid` must be a list of strings")
+                })?;
+                let pattern =
+                    Pattern::parse(text).with_context(|| format!("`reach.kind.{kind}.forbid`"))?;
+                if !set.contains(&pattern) {
+                    set.push(pattern);
+                }
+            }
+            rules.refuse_generic_ffi(&set, &format!("kind {kind}'s forbidden set"))?;
+            rules.kinds.insert(kind.clone(), set);
         }
         Ok(rules)
     }
@@ -194,9 +243,22 @@ impl Rules {
         Ok(())
     }
 
-    /// The expanded set of `tier`; empty for a tier without a table.
+    /// The expanded set of `tier`, or of a kind with its own set; empty for
+    /// a tier without a table.
     pub(super) fn tier_set(&self, tier: &str) -> &[Pattern] {
-        self.tiers.get(tier).map_or(&[], Vec::as_slice)
+        self.tiers
+            .get(tier)
+            .or_else(|| self.kinds.get(tier))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The name of the set that governs a crate of `tier` and `kind`: its
+    /// kind's, when the kind has one (ADR-0154 §1), else its tier's.
+    pub(super) fn set_name<'a>(&self, tier: &'a str, kind: Option<&'a str>) -> &'a str {
+        match kind {
+            Some(kind) if self.kinds.contains_key(kind) => kind,
+            _ => tier,
+        }
     }
 
     pub(super) fn is_generic_ffi(&self, name: &str) -> bool {

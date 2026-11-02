@@ -108,6 +108,83 @@ export function scrollContainer(top) {
     scroller.dispatchEvent(new Event('scroll'));
 }
 export function removeScroller() { document.getElementById('scroller')?.remove(); }
+function byId(id) { return host().querySelector(`[data-flui-id="${id}"]`); }
+// The element's tag and its `href`, or null.
+export function elementOf(id) {
+    const element = byId(id);
+    return element ? [element.tagName.toLowerCase(), element.getAttribute('href') ?? ''] : null;
+}
+export function locationHash() { return location.hash; }
+// Move a range input as the browser does for a screen reader: a new value, then `input`.
+export function moveSlider(id, value) {
+    const input = byId(id);
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+export function sliderValue(id) { return byId(id).value; }
+// Scroll an element as the browser does: its `scroll` event follows at the next frame.
+export function scrollNode(id, top) { byId(id).scrollTop = top; }
+export function scrollOf(id) { return byId(id).scrollTop; }
+export function topOf(id) { return byId(id).offsetTop; }
+export function scrollLeftOf(id) { return byId(id).scrollLeft; }
+export function styleScroller(style) { document.getElementById("scroller").style.cssText += style; }
+// A field's tag, value, selection, focus and the hints it gives the browser.
+export function fieldState(id) {
+    const field = byId(id);
+    return JSON.stringify(field ? {
+        tag: field.tagName.toLowerCase(), value: field.value, start: field.selectionStart,
+        end: field.selectionEnd, direction: field.selectionDirection,
+        focused: document.activeElement === field,
+        autocomplete: field.getAttribute("autocomplete"), inputmode: field.getAttribute("inputmode"),
+    } : null);
+}
+let held;
+// Keep a field's element, to type into it once the host has let it go.
+export function holdField(id) { held = byId(id); }
+// The input method types into a field (or the held one): its value becomes `value`.
+export function typeIntoField(id, value, caret, composing) {
+    const field = id == null ? held : byId(id);
+    field.value = value;
+    field.setSelectionRange(caret, caret);
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: composing,
+        inputType: composing ? "insertCompositionText" : "insertText" }));
+}
+// The user selects in a field, from `start` to `end` in `direction`.
+// A promise settled in the next animation frame, in the order it was asked.
+export function nextFrame() { return new Promise((settle) => requestAnimationFrame(() => settle())); }
+export function selectField(id, start, end, direction) {
+    const field = byId(id);
+    field.setSelectionRange(start, end, direction);
+    field.dispatchEvent(new Event("select", { bubbles: true }));
+}
+export function fieldComposition(id, type) { byId(id).dispatchEvent(new CompositionEvent(type, { bubbles: true })); }
+// Select as a screen reader does: the page's selection between two offsets of the text leading two
+// mirrored elements.
+export function selectText(anchor, anchorOffset, focus, focusOffset) {
+    getSelection().setBaseAndExtent(byId(anchor).firstChild, anchorOffset, byId(focus).firstChild,
+        focusOffset);
+}
+// The page's selection as [element, offset] ends, an element named by its identifier or "page".
+export function pageSelection() {
+    const selection = getSelection();
+    if (!selection.rangeCount) return JSON.stringify(null);
+    const end = (node, offset) => [node.parentElement.getAttribute('data-flui-id') ?? 'page', offset];
+    return JSON.stringify([end(selection.anchorNode, selection.anchorOffset),
+        end(selection.focusNode, selection.focusOffset)]);
+}
+// Select some of the page's own text, outside the host.
+export function selectPageText() {
+    const text = document.createElement('p');
+    text.id = 'page-text';
+    text.textContent = 'Page text';
+    document.body.append(text);
+    getSelection().setBaseAndExtent(text.firstChild, 0, text.firstChild, 4);
+}
+export function removePageText() { document.getElementById('page-text')?.remove(); }
+// A mirrored element's text, or null when there is none.
+export function textOf(id) { const element = byId(id); return element ? element.textContent : null; }
+// The text of the element `holdField` kept.
+export function heldText() { return held.textContent; }
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = placeholderLabel)]
@@ -143,6 +220,48 @@ extern "C" {
     fn scroll_container(top: f64);
     #[wasm_bindgen(js_name = removeScroller)]
     fn remove_scroller();
+    #[wasm_bindgen(js_name = elementOf)]
+    fn element_of(id: &str) -> Option<Vec<String>>;
+    #[wasm_bindgen(js_name = locationHash)]
+    fn location_hash() -> String;
+    #[wasm_bindgen(js_name = moveSlider)]
+    fn move_slider(id: &str, value: &str);
+    #[wasm_bindgen(js_name = sliderValue)]
+    fn slider_value(id: &str) -> String;
+    #[wasm_bindgen(js_name = scrollNode)]
+    fn scroll_node(id: &str, top: f64);
+    #[wasm_bindgen(js_name = scrollOf)]
+    fn scroll_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = topOf)]
+    fn top_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = scrollLeftOf)]
+    fn scroll_left_of(id: &str) -> f64;
+    #[wasm_bindgen(js_name = styleScroller)]
+    fn style_scroller(style: &str);
+    #[wasm_bindgen(js_name = fieldState)]
+    fn field_state(id: &str) -> String;
+    #[wasm_bindgen(js_name = holdField)]
+    fn hold_field(id: &str);
+    #[wasm_bindgen(js_name = typeIntoField)]
+    fn type_into_field(id: Option<&str>, value: &str, caret: u32, composing: bool);
+    #[wasm_bindgen(js_name = fieldComposition)]
+    fn field_composition(id: &str, kind: &str);
+    #[wasm_bindgen(js_name = nextFrame)]
+    fn next_frame() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = selectField)]
+    fn select_field(id: &str, start: u32, end: u32, direction: &str);
+    #[wasm_bindgen(js_name = selectText)]
+    fn select_text(anchor: &str, anchor_offset: u32, focus: &str, focus_offset: u32);
+    #[wasm_bindgen(js_name = pageSelection)]
+    fn page_selection() -> String;
+    #[wasm_bindgen(js_name = selectPageText)]
+    fn select_page_text();
+    #[wasm_bindgen(js_name = removePageText)]
+    fn remove_page_text();
+    #[wasm_bindgen(js_name = textOf)]
+    fn text_of(id: &str) -> Option<String>;
+    #[wasm_bindgen(js_name = heldText)]
+    fn held_text() -> String;
 }
 
 const ROOT: NodeId = NodeId(1);
@@ -453,16 +572,16 @@ async fn the_placeholder_and_the_host_are_hidden_with_the_canvas() {
     window.close_now();
 }
 
-/// A focused text field leaves the page's focus on the canvas, where the
-/// window's text input serves it.
+/// A focused node that takes text with no field of its own (a date) leaves
+/// the page's focus on the canvas, where the window's text input serves it.
 #[wasm_bindgen_test]
-fn a_focused_text_field_keeps_the_page_s_focus_on_the_canvas() {
+fn a_focused_node_taking_text_without_a_field_keeps_focus_on_the_canvas() {
     const FIELD: NodeId = NodeId(4);
     let with_field = |focus| {
         let mut tree = counter(0);
         tree.nodes[0].1.push_child(FIELD);
-        let mut field = Node::new(Role::TextInput);
-        field.set_label("Name");
+        let mut field = Node::new(Role::DateInput);
+        field.set_label("Date");
         field.add_action(Action::Focus);
         field.set_bounds(Rect::new(20.0, 120.0, 220.0, 150.0));
         tree.nodes.push((FIELD, field));
@@ -542,4 +661,952 @@ fn the_semantics_host_stays_over_the_canvas_when_its_container_scrolls() {
         window.close_now();
         remove_scroller();
     }
+}
+
+/// A window's tree of `nodes` under a root of the canvas's size, whose
+/// one child is the first of them.
+fn under_root(children: Vec<(NodeId, Node)>) -> TreeUpdate {
+    let mut root = Node::new(Role::Window);
+    root.set_children(
+        children
+            .iter()
+            .take(1)
+            .map(|(id, _)| *id)
+            .collect::<Vec<NodeId>>(),
+    );
+    root.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    let mut nodes = vec![(ROOT, root)];
+    nodes.extend(children);
+    TreeUpdate {
+        nodes,
+        tree: Some(TreeInfo::new(ROOT)),
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    }
+}
+
+/// The action listener's record.
+fn record_actions(
+    accessibility: &Arc<dyn PlatformAccessibility>,
+) -> Arc<Mutex<Vec<ActionRequest>>> {
+    let actions: Arc<Mutex<Vec<ActionRequest>>> = Arc::default();
+    let heard = Arc::clone(&actions);
+    accessibility.set_action_listener(Arc::new(move |request| {
+        heard.lock().expect("the record").push(request);
+    }));
+    actions
+}
+
+/// A link with a URL is an anchor a screen reader reads the address of,
+/// and a click on it is the node's action, never a navigation. A link given
+/// its address later gets an anchor in place of its element.
+#[wasm_bindgen_test]
+fn a_link_is_an_anchor_whose_click_is_the_node_s_action() {
+    const LINK: NodeId = NodeId(2);
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    let link = |url: Option<&str>| {
+        let mut node = Node::new(Role::Link);
+        node.set_label("Docs");
+        node.set_author_id("docs");
+        if let Some(url) = url {
+            node.set_url(url);
+        }
+        node.add_action(Action::Click);
+        node.set_bounds(Rect::new(20.0, 20.0, 120.0, 40.0));
+        node
+    };
+    accessibility.publish(under_root(vec![(LINK, link(None))]));
+    activate_placeholder();
+    assert_eq!(
+        element_of("docs"),
+        Some(vec!["flui-node".to_owned(), String::new()]),
+        "a link with no address is an ARIA one"
+    );
+
+    // Given an address, its element is replaced by an anchor.
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(LINK, link(Some("#flui-navigated")))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+
+    assert_eq!(
+        element_of("docs"),
+        Some(vec!["a".to_owned(), "#flui-navigated".to_owned()])
+    );
+    let before = location_hash();
+    click_node("docs");
+    assert_eq!(location_hash(), before, "the click followed no address");
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .iter()
+        .map(|request| (request.action, request.target_node))
+        .collect();
+    assert_eq!(asked, [(Action::Click, LINK)]);
+    window.close_now();
+}
+
+/// A slider a user can move is a range input; the browser moving it asks
+/// the node for the value and shows the node's own until the tree
+/// publishes the moved one.
+#[wasm_bindgen_test]
+fn moving_a_slider_s_input_asks_the_node_for_its_value() {
+    const SLIDER: NodeId = NodeId(2);
+    let slider = |value: f64| {
+        let mut node = Node::new(Role::Slider);
+        node.set_label("Volume");
+        node.set_author_id("volume");
+        node.set_numeric_value(value);
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(100.0);
+        node.set_numeric_value_step(5.0);
+        node.add_action(Action::SetValue);
+        node.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+        node
+    };
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    accessibility.publish(under_root(vec![(SLIDER, slider(30.0))]));
+    activate_placeholder();
+    assert_eq!(
+        element_of("volume").map(|tag| tag[0].clone()).as_deref(),
+        Some("input")
+    );
+    assert_eq!(slider_value("volume"), "30");
+
+    move_slider("volume", "55");
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .iter()
+        .map(|request| (request.action, request.target_node, request.data.clone()))
+        .collect();
+    assert_eq!(
+        asked,
+        [(
+            Action::SetValue,
+            SLIDER,
+            Some(accesskit::ActionData::NumericValue(55.0))
+        )]
+    );
+    assert_eq!(
+        slider_value("volume"),
+        "30",
+        "the node's value until it moves"
+    );
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(SLIDER, slider(55.0))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(slider_value("volume"), "55");
+    // A new minimum the old step would snap the value to.
+    let mut moved_range = slider(55.0);
+    moved_range.set_min_numeric_value(2.0);
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(SLIDER, moved_range)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    assert_eq!(slider_value("volume"), "55", "the published value stays");
+    window.close_now();
+}
+
+/// A node a platform scrolls to an offset is a scroller over content as
+/// long as its extent, scrolled as far as the node is, its children where
+/// they are seen, its offsets from the left edge on a right-to-left page.
+/// The browser scrolling it asks the node for the offset and goes back to
+/// where the node is until the node publishes the new one; the host's own
+/// scroll after a publish asks for nothing, and a scroller published while
+/// the canvas, or an ancestor of it, was hidden is scrolled once it is
+/// shown.
+#[wasm_bindgen_test]
+async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
+    const LIST: NodeId = NodeId(2);
+    const ITEM: NodeId = NodeId(3);
+    let list = |position: f64| {
+        let mut node = Node::new(Role::ScrollView);
+        node.set_author_id("list");
+        node.add_action(Action::SetScrollOffset);
+        node.set_scroll_x(100.0);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(200.0);
+        node.set_scroll_y(position);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(400.0);
+        node.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+        node.set_children(vec![ITEM]);
+        node
+    };
+    let item = |seen_at: f64| {
+        let mut node = Node::new(Role::Button);
+        node.set_label("Item");
+        node.set_author_id("item");
+        node.set_bounds(Rect::new(20.0, seen_at, 120.0, seen_at + 40.0));
+        node
+    };
+    let partial = |position: f64| TreeUpdate {
+        nodes: vec![(LIST, list(position)), (ITEM, item(220.0 - position))],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    };
+    // A page written right to left, which the host inherits.
+    scrolled_canvas("direction: rtl; height: auto; overflow: visible", "");
+    let (_platform, window, accessibility) = open_on_page(RecordingWindowHandler::new());
+    let actions = record_actions(&accessibility);
+    accessibility.publish(under_root(vec![(LIST, list(100.0)), (ITEM, item(120.0))]));
+    activate_placeholder();
+    assert_eq!(scroll_of("list"), 100.0);
+    assert_eq!(scroll_left_of("list"), 100.0, "from the left edge");
+    assert_eq!(top_of("item"), 220.0, "the item is where it is seen");
+
+    scroll_node("list", 250.0);
+    super::wait(50).await;
+    let asked: Vec<_> = actions
+        .lock()
+        .expect("the record")
+        .drain(..)
+        .map(|request| (request.action, request.target_node, request.data))
+        .collect();
+    assert_eq!(
+        asked,
+        [(
+            Action::SetScrollOffset,
+            LIST,
+            Some(accesskit::ActionData::SetScrollOffset(
+                accesskit::Point::new(100.0, 250.0)
+            ))
+        )]
+    );
+    assert_eq!(
+        scroll_of("list"),
+        100.0,
+        "where the node is, until it moves"
+    );
+
+    accessibility.publish(partial(300.0));
+    super::wait(50).await;
+    assert_eq!(
+        scroll_of("list"),
+        300.0,
+        "scrolled to the published position"
+    );
+    assert_eq!(top_of("item"), 220.0);
+    assert!(
+        actions.lock().expect("the record").is_empty(),
+        "the host's own scroll asks for nothing"
+    );
+
+    style_canvas("; display: none");
+    super::wait(0).await;
+    // A hidden scroller has no box to scroll to what is published.
+    accessibility.publish(partial(350.0));
+    style_canvas("; display: block");
+    super::wait(50).await;
+    assert_eq!(scroll_of("list"), 350.0, "scrolled once shown again");
+
+    style_scroller("; display: none");
+    super::wait(50).await;
+    accessibility.publish(partial(380.0));
+    style_scroller("; display: block");
+    super::wait(50).await;
+    assert_eq!(scroll_of("list"), 380.0, "scrolled once its ancestor shows");
+    assert!(actions.lock().expect("the record").is_empty());
+    window.close_now();
+    remove_scroller();
+}
+
+/// What a mirrored text field's element holds.
+#[derive(Debug, serde::Deserialize)]
+struct FieldState {
+    tag: String,
+    value: String,
+    start: u32,
+    end: u32,
+    direction: String,
+    focused: bool,
+    autocomplete: Option<String>,
+    inputmode: Option<String>,
+}
+
+fn field(id: &str) -> Option<FieldState> {
+    serde_json::from_str(&field_state(id)).expect("the page's answer")
+}
+
+const FIELD: NodeId = NodeId(2);
+const OTHER: NodeId = NodeId(3);
+
+/// A text field named "name" holding `value`, beside a button.
+fn form(value: &str, focus: NodeId) -> TreeUpdate {
+    let mut name = Node::new(Role::EmailInput);
+    name.set_label("Email");
+    name.set_author_id("name");
+    name.set_value(value);
+    name.add_action(Action::Focus);
+    name.set_bounds(Rect::new(20.0, 20.0, 220.0, 50.0));
+    let mut button = Node::new(Role::Button);
+    button.set_label("Send");
+    button.set_author_id("send");
+    button.add_action(Action::Focus);
+    button.set_bounds(Rect::new(20.0, 60.0, 120.0, 90.0));
+    let mut update = under_root(vec![(FIELD, name), (OTHER, button)]);
+    update.nodes[0].1.set_children(vec![FIELD, OTHER]);
+    update.focus = focus;
+    update
+}
+
+/// A window whose tree, published with the field focused, is mirrored, and
+/// the field's store, served.
+fn served_form(
+    store: &Rc<flui_testing::text_store_kit::InMemoryTextStore>,
+) -> (super::HostedCanvas, Arc<dyn PlatformAccessibility>) {
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    accessibility.publish(form(&store.text(), FIELD));
+    canvas.host.focus_store(Some(super::as_store(store)));
+    (canvas, accessibility)
+}
+
+/// While the tree's focus is a text field, its store is served through the
+/// field's own element: the page's focus is on it, the canvas has no
+/// editor, the store's text, selection and hints are the element's, the
+/// input method's edits there reach the store first (composing until
+/// `compositionend`), the application's edit made while it composes reaches
+/// the element, and a published value that lags the store is not written
+/// over it. Its keys reach the window once.
+#[wasm_bindgen_test]
+fn a_focused_text_field_is_edited_through_its_element() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    store.set_purpose(flui_platform::text_store::TextInputPurpose::Email);
+    let (canvas, accessibility) = served_form(&store);
+    let state = field("name").expect("the field's element");
+    assert_eq!(state.tag, "input");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+    assert_eq!(
+        (state.autocomplete.as_deref(), state.inputmode.as_deref()),
+        (Some("email"), Some("email")),
+        "filled and typed as an address"
+    );
+    assert_eq!(super::edit_context_text(), None, "no editor on the canvas");
+    assert!(super::editor().is_none(), "and none beside it");
+
+    field_composition("name", "compositionstart");
+    type_into_field(Some("name"), "abに", 3, true);
+    assert_eq!(store.text(), "abに");
+    assert!(store.composition().is_some(), "the inserted text composes");
+    // The tree publishes a value that lags the store.
+    accessibility.publish(form("a", FIELD));
+    assert_eq!(
+        field("name").expect("the field").value,
+        "abに",
+        "the store's"
+    );
+    store.app_replace(
+        flui_platform::text_store::Utf16Range::try_new(
+            flui_platform::text_store::Utf16Offset::ZERO,
+            flui_platform::text_store::Utf16Offset::new(2),
+        )
+        .expect("a range"),
+        "AB",
+    );
+    let state = field("name").expect("the field");
+    let caret = u32::try_from(store.selection().range().start().get()).expect("a short text");
+    assert_eq!(
+        (state.value.as_str(), state.start),
+        ("ABに", caret),
+        "the store's"
+    );
+    field_composition("name", "compositionend");
+    assert_eq!(store.composition(), None);
+    type_into_field(Some("name"), "ABにc", 4, false);
+    assert_eq!(store.text(), "ABにc");
+    let state = field("name").expect("the field");
+    assert_eq!((state.start, state.end), (4, 4));
+
+    let keys = canvas.keys.borrow().len();
+    super::key_at_focus("Enter", None);
+    assert_eq!(canvas.keys.borrow().len(), keys + 1, "delivered once");
+    assert_eq!(
+        canvas.last_key().key,
+        flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
+    );
+}
+
+/// Where the browser has no `EditContext`, the store the field served moves
+/// to a hidden editor when the tree's focus moves to another control, and
+/// that control keeps the page's focus: the editor takes the canvas's focus
+/// only.
+#[wasm_bindgen_test]
+async fn a_control_the_focus_moved_to_keeps_it_from_the_fallback_editor() {
+    let _hidden = super::EditContextHidden::hide();
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let (canvas, accessibility) = served_form(&store);
+    assert!(field("name").expect("the field").focused);
+    accessibility.publish(form("ab", OTHER));
+    super::wait(0).await;
+    assert!(
+        super::editor().is_some(),
+        "the store is served by the hidden editor"
+    );
+    assert_eq!(focused(), "send", "the button keeps the page's focus");
+    canvas.window.close_now();
+}
+
+/// The tree's focus leaving a served field for a node served on the canvas
+/// puts the page's focus on the canvas, and the field the host no longer
+/// names does not take it back: the store is served on the canvas, by its
+/// `EditContext` or, without one, by the hidden editor, which has the focus.
+#[wasm_bindgen_test]
+async fn the_canvas_keeps_the_focus_a_field_left() {
+    for edit_context in [true, false] {
+        let hidden = (!edit_context).then(super::EditContextHidden::hide);
+        let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+        let (canvas, accessibility) = served_form(&store);
+        assert!(field("name").expect("the field").focused);
+        accessibility.publish(form("ab", ROOT));
+        super::wait(0).await;
+        assert!(
+            !field("name").expect("the field stays").focused,
+            "the field left, with EditContext {edit_context}"
+        );
+        if edit_context {
+            assert_eq!(focused(), "canvas");
+            assert_eq!(super::edit_context_text().as_deref(), Some("ab"));
+        } else {
+            assert!(
+                super::editor().is_some_and(|editor| editor.focused),
+                "the hidden editor has the focus"
+            );
+        }
+        canvas.window.close_now();
+        drop(hidden);
+    }
+}
+
+/// Where the browser has no `EditContext`, the tree's focus moving from a
+/// node served on the canvas to a text field moves the page's focus from the
+/// hidden editor to the field, and what is typed there edits the store.
+#[wasm_bindgen_test]
+async fn a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus() {
+    let _hidden = super::EditContextHidden::hide();
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    accessibility.publish(form("ab", ROOT));
+    canvas.host.focus_store(Some(super::as_store(&store)));
+    assert!(
+        super::editor().is_some_and(|editor| editor.focused),
+        "served by the focused hidden editor"
+    );
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    assert!(super::editor().is_none(), "the hidden editor is gone");
+    assert!(
+        field("name").expect("the field").focused,
+        "the field has the focus"
+    );
+    type_into_field(Some("name"), "abc", 3, false);
+    assert_eq!(store.text(), "abc");
+    canvas.window.close_now();
+}
+
+/// A single-line field shows the store's text without the line breaks the
+/// browser drops from its value, and still serves the store: a selection or
+/// an edit there keeps them, whether the store held them from the start or
+/// the application put one in while the field served it.
+#[wasm_bindgen_test]
+async fn a_field_keeps_the_line_breaks_it_cannot_show() {
+    for start in ["a\nb", "ab"] {
+        let store = flui_testing::text_store_kit::InMemoryTextStore::new(start);
+        let (canvas, _accessibility) = served_form(&store);
+        if start == "ab" {
+            store.app_replace(
+                flui_platform::text_store::Utf16Range::try_new(
+                    flui_platform::text_store::Utf16Offset::new(1),
+                    flui_platform::text_store::Utf16Offset::new(1),
+                )
+                .expect("a range"),
+                "\n",
+            );
+        }
+        let state = field("name").expect("the field");
+        assert_eq!(
+            (state.value.as_str(), state.focused),
+            ("ab", true),
+            "{start:?}"
+        );
+        assert_eq!(super::edit_context_text(), None, "served by the field");
+        select_field("name", 1, 1, "none");
+        assert_eq!(store.text(), "a\nb", "a selection keeps it, from {start:?}");
+        assert_eq!(store.selection().range().start().get(), 2, "past it");
+        type_into_field(Some("name"), "abc", 3, false);
+        assert_eq!(store.text(), "a\nbc", "an edit keeps it, from {start:?}");
+        canvas.window.close_now();
+        super::wait(0).await;
+    }
+}
+
+/// A textarea shows a CRLF of the store as one line feed, and deleting it
+/// deletes both units from the store.
+#[wasm_bindgen_test]
+async fn a_textarea_s_line_feed_is_the_store_s_crlf() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("a\r\nb");
+    let canvas = super::HostedCanvas::open();
+    let accessibility = canvas
+        .window
+        .accessibility()
+        .expect("a canvas window has accessibility");
+    focus_canvas();
+    activate_placeholder();
+    let mut update = form("", FIELD);
+    let mut notes = Node::new(Role::MultilineTextInput);
+    notes.set_label("Notes");
+    notes.set_author_id("name");
+    notes.set_value(store.text());
+    notes.add_action(Action::Focus);
+    notes.set_bounds(Rect::new(20.0, 20.0, 220.0, 50.0));
+    update.nodes[1].1 = notes;
+    accessibility.publish(update);
+    canvas.host.focus_store(Some(super::as_store(&store)));
+    let state = field("name").expect("the field");
+    assert_eq!(
+        (state.tag.as_str(), state.value.as_str()),
+        ("textarea", "a\nb")
+    );
+    type_into_field(Some("name"), "ab", 1, false);
+    assert_eq!(store.text(), "ab", "the CRLF is gone");
+    canvas.window.close_now();
+    super::wait(0).await;
+}
+
+/// A backward selection in a field is the store's backward selection, its
+/// active end at the start, and the field shows the store's selection with
+/// its direction.
+#[wasm_bindgen_test]
+async fn a_field_s_selection_keeps_its_direction() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("abcd");
+    let (canvas, _accessibility) = served_form(&store);
+    select_field("name", 1, 3, "backward");
+    let selection = store.selection();
+    assert_eq!(
+        (selection.anchor.get(), selection.active.get()),
+        (3, 1),
+        "the active end is the start"
+    );
+    store.app_select(flui_platform::text_store::Selection {
+        anchor: flui_platform::text_store::Utf16Offset::new(4),
+        active: flui_platform::text_store::Utf16Offset::new(2),
+    });
+    let state = field("name").expect("the field");
+    assert_eq!(
+        (state.start, state.end, state.direction.as_str()),
+        (2, 4, "backward"),
+        "the application's selection"
+    );
+    // The browser fires the field's `select` event later.
+    super::wait(0).await;
+    let selection = store.selection();
+    assert_eq!(
+        (selection.anchor.get(), selection.active.get()),
+        (4, 2),
+        "the field's select event reads it back as it is"
+    );
+    canvas.window.close_now();
+}
+
+/// The store leaves the field's element when the tree's focus leaves the
+/// field, the field is removed or the window closes: it is served on the
+/// canvas again, the element loses its hints, and what is typed into the
+/// element after that never reaches the store; the host shows a field no
+/// store is served through as published, the value published while it was
+/// served included.
+#[wasm_bindgen_test]
+async fn the_store_goes_back_to_the_canvas_when_the_field_goes() {
+    let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
+    let (canvas, accessibility) = served_form(&store);
+    assert!(field("name").expect("the field").focused);
+
+    // A value published while the store is served is not written over it.
+    accessibility.publish(form("a", FIELD));
+    assert_eq!(field("name").expect("the field").value, "ab", "the store's");
+    // The tree's focus moves on while the store is still the focused one.
+    accessibility.publish(form("a", OTHER));
+    super::wait(0).await;
+    assert_eq!(
+        super::edit_context_text().as_deref(),
+        Some("ab"),
+        "served on the canvas"
+    );
+    let state = field("name").expect("the field stays");
+    assert_eq!(state.value, "a", "the value published while it was served");
+    assert_eq!(state.autocomplete, None, "its hints are gone");
+    type_into_field(Some("name"), "abz", 3, false);
+    assert_eq!(store.text(), "ab", "the element no longer edits the store");
+    assert_eq!(field("name").expect("the field").value, "a", "as published");
+
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    assert_eq!(super::edit_context_text(), None, "back on the field");
+    hold_field("name");
+    let mut root = Node::new(Role::Window);
+    root.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    accessibility.publish(TreeUpdate {
+        nodes: vec![(ROOT, root)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: ROOT,
+    });
+    super::wait(0).await;
+    assert!(field("name").is_none(), "the field is removed");
+    assert_eq!(
+        super::edit_context_text().as_deref(),
+        Some("ab"),
+        "served on the canvas again"
+    );
+    type_into_field(None, "abz", 3, false);
+    assert_eq!(store.text(), "ab", "the removed element keeps no listener");
+
+    accessibility.publish(form("ab", FIELD));
+    super::wait(0).await;
+    hold_field("name");
+    canvas.window.close_now();
+    super::wait(0).await;
+    type_into_field(None, "abz", 3, false);
+    assert_eq!(store.text(), "ab", "nothing listens once the window closed");
+}
+
+const AREA: NodeId = NodeId(20);
+const FIRST: NodeId = NodeId(21);
+const SECOND: NodeId = NodeId(22);
+const FIRST_RUN: NodeId = NodeId(31);
+const SECOND_RUN: NodeId = NodeId(32);
+const THIRD_RUN: NodeId = NodeId(33);
+
+fn text_run(text: &str) -> Node {
+    let mut node = Node::new(Role::TextRun);
+    node.set_value(text);
+    node.set_character_lengths(
+        text.chars()
+            .map(|character| u8::try_from(character.len_utf8()).expect("one character"))
+            .collect::<Vec<u8>>(),
+    );
+    node
+}
+
+fn at(node: NodeId, character_index: usize) -> accesskit::TextPosition {
+    accesskit::TextPosition {
+        node,
+        character_index,
+    }
+}
+
+fn between(
+    anchor: accesskit::TextPosition,
+    focus: accesskit::TextPosition,
+) -> accesskit::TextSelection {
+    accesskit::TextSelection { anchor, focus }
+}
+
+/// A selection area of two paragraphs publishing runs, "Hi 😀" and
+/// " there", then "Bye", holding `selection`.
+fn selectable(selection: Option<accesskit::TextSelection>) -> TreeUpdate {
+    let mut area = Node::new(Role::Document);
+    area.set_children(vec![FIRST, SECOND]);
+    area.add_action(Action::SetTextSelection);
+    area.set_bounds(Rect::new(0.0, 0.0, 300.0, 200.0));
+    if let Some(selection) = selection {
+        area.set_text_selection(selection);
+    }
+    let paragraph = |author: &str, runs: Vec<NodeId>, top: f64| {
+        let mut node = Node::new(Role::Label);
+        node.set_author_id(author);
+        node.set_children(runs);
+        node.add_action(Action::SetTextSelection);
+        node.set_bounds(Rect::new(20.0, top, 220.0, top + 20.0));
+        node
+    };
+    under_root(vec![
+        (AREA, area),
+        (FIRST, paragraph("first", vec![FIRST_RUN, SECOND_RUN], 20.0)),
+        (SECOND, paragraph("second", vec![THIRD_RUN], 60.0)),
+        (FIRST_RUN, text_run("Hi 😀")),
+        (SECOND_RUN, text_run(" there")),
+        (THIRD_RUN, text_run("Bye")),
+    ])
+}
+
+fn page_selection_ends() -> serde_json::Value {
+    serde_json::from_str(&page_selection()).expect("the page's answer")
+}
+
+/// Static text that publishes runs is selected as the page's selection
+/// both ways. The tree's selection is shown in the page. A screen reader's
+/// selection is asked, in run positions, of the paragraph or of the area
+/// over both ends, an end inside an emoji moving back to its start, and the
+/// page shows the published selection until the node publishes the new
+/// one. The host's own selection asks for nothing, and the page's own
+/// selection outside the host is left alone.
+#[wasm_bindgen_test]
+async fn the_page_s_selection_is_the_selection_of_static_text() {
+    let (_platform, window, accessibility) = open();
+    let actions = record_actions(&accessibility);
+    accessibility.publish(selectable(Some(between(
+        at(FIRST_RUN, 1),
+        at(THIRD_RUN, 2),
+    ))));
+    activate_placeholder();
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 1], ["second", 2]]),
+        "the tree's selection, across both paragraphs"
+    );
+    assert!(
+        actions.lock().expect("the record").is_empty(),
+        "shown, not asked"
+    );
+    let asked = || -> Vec<_> {
+        actions
+            .lock()
+            .expect("the record")
+            .drain(..)
+            .map(|request| (request.action, request.target_node, request.data))
+            .collect()
+    };
+
+    // From "Hi " to the end of the first run, which is where the second
+    // starts.
+    select_text("first", 3, "first", 5);
+    super::wait(50).await;
+    assert_eq!(
+        asked(),
+        [(
+            Action::SetTextSelection,
+            FIRST,
+            Some(accesskit::ActionData::SetTextSelection(between(
+                at(FIRST_RUN, 3),
+                at(SECOND_RUN, 0)
+            )))
+        )],
+        "asked of the paragraph"
+    );
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 1], ["second", 2]]),
+        "the published selection, until the node publishes another"
+    );
+    super::wait(50).await;
+    assert_eq!(asked(), [], "showing it again asks for nothing");
+
+    // Between the emoji's halves, then into the second paragraph.
+    select_text("first", 4, "second", 1);
+    super::wait(50).await;
+    assert_eq!(
+        asked(),
+        [(
+            Action::SetTextSelection,
+            AREA,
+            Some(accesskit::ActionData::SetTextSelection(between(
+                at(FIRST_RUN, 3),
+                at(THIRD_RUN, 1)
+            )))
+        )],
+        "asked of the area, from the emoji's start"
+    );
+
+    accessibility.publish(selectable(Some(between(
+        at(FIRST_RUN, 4),
+        at(SECOND_RUN, 3),
+    ))));
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["first", 5], ["first", 8]]),
+        "the emoji is two offsets"
+    );
+    assert_eq!(asked(), [], "the host's own selection asks for nothing");
+
+    // The paragraphs swap, their text and the selection unchanged: moving
+    // the elements drops the page's selection in them.
+    let in_second = between(at(THIRD_RUN, 1), at(THIRD_RUN, 2));
+    accessibility.publish(selectable(Some(in_second)));
+    super::wait(50).await;
+    let mut swapped = selectable(Some(in_second));
+    for (id, node) in &mut swapped.nodes {
+        if *id == AREA {
+            node.set_children(vec![SECOND, FIRST]);
+        }
+    }
+    accessibility.publish(swapped);
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["second", 1], ["second", 2]]),
+        "shown again once moved"
+    );
+    assert_eq!(asked(), []);
+
+    select_page_text();
+    super::wait(50).await;
+    accessibility.publish(selectable(Some(between(
+        at(THIRD_RUN, 0),
+        at(THIRD_RUN, 3),
+    ))));
+    super::wait(50).await;
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["page", 0], ["page", 4]]),
+        "the page's own selection stays"
+    );
+    assert_eq!(asked(), []);
+    remove_page_text();
+    window.close_now();
+}
+
+const STATUS: NodeId = NodeId(40);
+const ALERT: NodeId = NodeId(41);
+
+/// The window with a status line holding `text`, live where `live` says.
+fn status_line(text: Option<&str>, live: Option<accesskit::Live>) -> TreeUpdate {
+    let Some(text) = text else {
+        return under_root(vec![]);
+    };
+    let mut status = Node::new(Role::Label);
+    status.set_value(text);
+    status.set_author_id("status");
+    status.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+    if let Some(live) = live {
+        status.set_live(live);
+        status.set_live_atomic();
+    }
+    under_root(vec![(STATUS, status)])
+}
+
+/// A live region that enters the page with its text is created empty and
+/// given its text once the page has rendered it, since a region inserted
+/// with its text is not read out: a message published before the host
+/// existed, and a region the tree adds. The text it holds by then is the
+/// one written, a region removed before then is not written, and text that
+/// is not live is written at once. A region created while an earlier one
+/// waits counts its own frames, and a selection published in a region's
+/// text is shown once the text is written.
+#[wasm_bindgen_test]
+async fn a_live_region_is_given_its_text_once_rendered() {
+    let (_platform, window, accessibility) = open();
+    let polite = Some(accesskit::Live::Polite);
+    accessibility.publish(status_line(Some("Queued"), polite));
+    activate_placeholder();
+    assert_eq!(text_of("status").as_deref(), Some(""), "created empty");
+    super::wait(100).await;
+    assert_eq!(text_of("status").as_deref(), Some("Queued"), "then spoken");
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("One"), Some(accesskit::Live::Assertive)));
+    accessibility.publish(status_line(Some("Two"), Some(accesskit::Live::Assertive)));
+    assert_eq!(text_of("status").as_deref(), Some(""), "still waiting");
+    super::wait(100).await;
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Two"),
+        "the text it holds by then"
+    );
+
+    accessibility.publish(status_line(None, None));
+    accessibility.publish(status_line(Some("Gone"), polite));
+    hold_field("status");
+    accessibility.publish(status_line(None, None));
+    super::wait(100).await;
+    assert_eq!(text_of("status"), None, "removed");
+    assert_eq!(held_text(), "", "and never written");
+
+    accessibility.publish(status_line(Some("Plain"), None));
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Plain"),
+        "text that is not live is written at once"
+    );
+
+    // A region created in a frame whose wait for an earlier one has one
+    // frame to go waits two frames of its own: the frame callback before
+    // the page's takes the place of a region created there.
+    let regions = |lines: &[(NodeId, &str, &str)]| {
+        let mut nodes = Vec::new();
+        for &(id, author, text) in lines {
+            let mut node = Node::new(Role::Label);
+            node.set_value(text);
+            node.set_author_id(author);
+            node.set_bounds(Rect::new(20.0, 20.0, 220.0, 40.0));
+            node.set_live(accesskit::Live::Polite);
+            nodes.push((id, node));
+        }
+        let children = nodes.iter().map(|(id, _)| *id).collect::<Vec<NodeId>>();
+        let mut update = under_root(nodes);
+        update.nodes[0].1.set_children(children);
+        update
+    };
+    accessibility.publish(status_line(None, None));
+    let first = next_frame();
+    accessibility.publish(regions(&[(STATUS, "status", "Saving")]));
+    wasm_bindgen_futures::JsFuture::from(first)
+        .await
+        .expect("a frame");
+    let second = next_frame();
+    wasm_bindgen_futures::JsFuture::from(second)
+        .await
+        .expect("a frame");
+    accessibility.publish(regions(&[
+        (STATUS, "status", "Saving"),
+        (ALERT, "alert", "Offline"),
+    ]));
+    let third = next_frame();
+    wasm_bindgen_futures::JsFuture::from(third)
+        .await
+        .expect("a frame");
+    assert_eq!(
+        text_of("status").as_deref(),
+        Some("Saving"),
+        "the earlier region spoken"
+    );
+    assert_eq!(
+        text_of("alert").as_deref(),
+        Some(""),
+        "the later one not yet rendered"
+    );
+    super::wait(100).await;
+    assert_eq!(text_of("alert").as_deref(), Some("Offline"), "then spoken");
+
+    // A selection published in a live region's text is shown once the text
+    // is written.
+    accessibility.publish(status_line(None, None));
+    let mut update = selectable(Some(between(at(THIRD_RUN, 1), at(THIRD_RUN, 2))));
+    for (id, node) in &mut update.nodes {
+        if *id == SECOND {
+            node.set_live(accesskit::Live::Polite);
+        }
+    }
+    accessibility.publish(update);
+    super::wait(100).await;
+    assert_eq!(text_of("second").as_deref(), Some("Bye"), "spoken");
+    assert_eq!(
+        page_selection_ends(),
+        serde_json::json!([["second", 1], ["second", 2]]),
+        "and selected"
+    );
+    window.close_now();
 }

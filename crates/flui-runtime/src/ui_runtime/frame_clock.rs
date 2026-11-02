@@ -535,7 +535,7 @@ impl UiRuntime {
     }
 
     /// Check if there is pending work in ANY presentation this UI runtime hosts:
-    /// a pending build, pending gesture motion/deadlines, or a dirty render
+    /// a due task deadline, a pending build, pending gesture motion/deadlines, or a dirty render
     /// node. A presentation waiting out a dropped frame's backoff counts its
     /// frame work only once the wait is over.
     /// The runner's wake gate (`needs_redraw() || has_pending_work()`)
@@ -547,29 +547,35 @@ impl UiRuntime {
     /// and invokes no observer or diagnostics. Queued requests, including ones
     /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
-        self.presentations.iter().any(|presentation| {
-            // A presentation waiting out a dropped frame's backoff has its
-            // frame work counted once the wait is over, not before; one whose
-            // device rebuild was given up has none until a rebuild is asked
-            // for again.
-            let frame_work = match presentation.failure_retry_at() {
-                _ if presentation.device_abandoned() => false,
-                Some(at) => presentation.clock().now() >= at,
-                None => {
-                    presentation.has_pending_work_snapshot()
-                        || presentation.has_eligible_completion()
-                }
-            };
-            frame_work
-                || presentation.gestures().has_pending_motion()
-                || flui_interaction::__runtime::has_pending_deadlines_snapshot(
-                    presentation.gestures(),
-                )
-                || presentation.haptics().has_pending_delivery()
-                || presentation
-                    .frame_rate_hold()
-                    .is_some_and(|due| presentation.clock().now() >= due)
-        })
+        // A deadline a task sleeps until is owner work once it is due.
+        let deadline_due = self
+            .owner_frame
+            .next_deadline()
+            .is_some_and(|due| flui_foundation::MonotonicClock::now(&self.clock) >= due);
+        deadline_due
+            || self.presentations.iter().any(|presentation| {
+                // A presentation waiting out a dropped frame's backoff has its
+                // frame work counted once the wait is over, not before; one whose
+                // device rebuild was given up has none until a rebuild is asked
+                // for again.
+                let frame_work = match presentation.failure_retry_at() {
+                    _ if presentation.device_abandoned() => false,
+                    Some(at) => presentation.clock().now() >= at,
+                    None => {
+                        presentation.has_pending_work_snapshot()
+                            || presentation.has_eligible_completion()
+                    }
+                };
+                frame_work
+                    || presentation.gestures().has_pending_motion()
+                    || flui_interaction::__runtime::has_pending_deadlines_snapshot(
+                        presentation.gestures(),
+                    )
+                    || presentation.haptics().has_pending_delivery()
+                    || presentation
+                        .frame_rate_hold()
+                        .is_some_and(|due| presentation.clock().now() >= due)
+            })
     }
 
     /// Fold what every presentation wants of its display's refresh rate at the
@@ -599,7 +605,8 @@ impl UiRuntime {
     /// presentation's own armed gesture-arena
     /// deadline observation (e.g. a long-press hold or a double-tap give-up)
     /// and every dropped frame's retry deadline (see
-    /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP)).
+    /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP)), and the
+    /// earliest deadline an owner-local task sleeps until.
     /// This getter runs no extension query or diagnostics and is safe while
     /// the host holds its registry borrow. It is INDEPENDENT of every
     /// presentation's `FrameClock` state: a gated presentation's pending
@@ -645,6 +652,8 @@ impl UiRuntime {
                 ]
             })
             .flatten()
+            // A deadline a task sleeps until (`TimerHandle`).
+            .chain(self.owner_frame.next_deadline())
             .chain(self.drag.next_deadline().map(|deadline| {
                 // A drag's spring-loading deadline is an event time; wakes are instants.
                 let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);

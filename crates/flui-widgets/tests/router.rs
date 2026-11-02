@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
+use flui_foundation::notifier::Listenable;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
@@ -86,6 +87,7 @@ struct Probe {
     handle: Rc<RefCell<Option<Acquired>>>,
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     inits: Rc<Cell<usize>>,
+    driver: Rc<RefCell<Option<flui_scheduler::AsyncDriver>>>,
 }
 
 impl Probe {
@@ -95,6 +97,13 @@ impl Probe {
             .clone()
             .expect("the page was mounted")
             .expect("a Router<AppRoute> is above the page")
+    }
+
+    fn driver(&self) -> flui_scheduler::AsyncDriver {
+        self.driver
+            .borrow()
+            .clone()
+            .expect("the page's UI runtime runs tasks")
     }
 
     fn navigator(&self) -> NavigatorHandle {
@@ -137,6 +146,7 @@ impl ViewState<Page> for PageState {
         self.probe.inits.set(self.probe.inits.get() + 1);
         *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(cx));
         *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(cx);
+        *self.probe.driver.borrow_mut() = cx.async_driver();
     }
 
     fn build(&self, view: &Page, _cx: &dyn BuildContext) -> impl IntoView {
@@ -399,6 +409,7 @@ pub(crate) fn router_go_recomputes_its_prefix_after_popup_observer_navigation() 
 fn observer_panic_recovery(edit: fn(&RouterHandle<AppRoute>), expected: AppRoute) {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
+    let heard = listen(&router);
     let navigator = home.navigator();
     let home_id = navigator.current().expect("initial page");
     let during = router.clone();
@@ -414,6 +425,12 @@ fn observer_panic_recovery(edit: fn(&RouterHandle<AppRoute>), expected: AppRoute
         Some("observer failure")
     );
     assert_eq!(router.current(), expected);
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [vec![AppRoute::Home, expected]],
+        "the committed edit is told although an observer panicked"
+    );
     assert!(router.can_pop());
     assert_eq!(router.pop(), Ok(true), "the next operation remains usable");
     settle(&mut laid);
@@ -1894,5 +1911,232 @@ pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
         covered,
         Some(last_entering + 1),
         "the lower page is added, covering Home, in the frame the top's entrance settles"
+    );
+}
+
+/// A pushed page the router names is announced when it covers the one
+/// before, and the page it uncovers when it pops (ADR-0204 §5): the
+/// presentation's announcer speaks the route's name where the platform has
+/// no notice of a new screen.
+pub(crate) fn a_named_page_is_announced_when_pushed_and_when_uncovered() {
+    let (mut laid, home) = two_screen_app();
+    laid.pipeline_owner()
+        .with_mut(flui_rendering::pipeline::PipelineOwner::announcements)
+        .expect("the presentation has an announcement queue");
+    settle(&mut laid);
+    let router = home.handle();
+    let polite = |laid: &LaidOut| {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .announcement(flui_widgets::Urgency::Polite)
+            .map(str::to_owned)
+    };
+    assert_eq!(polite(&laid), None, "the first page is not announced");
+
+    router.push(AppRoute::Note { id: 7 }).expect("mounted");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 7"));
+
+    router.push(AppRoute::Note { id: 8 }).expect("mounted");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 8"));
+
+    assert_eq!(router.pop(), Ok(true), "a page to pop");
+    settle(&mut laid);
+    assert_eq!(polite(&laid).as_deref(), Some("Note page 7"));
+}
+
+/// A listener that holds its router's handle keeps nothing alive once the
+/// router unmounts: the router lets go of its listeners then, and refuses a
+/// listener added afterwards, even by a capture's `Drop` while it lets go.
+pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
+    /// Adds a listener holding the handle when it is dropped.
+    struct AddsOnDrop(RouterHandle<AppRoute>, Rc<()>);
+    impl Drop for AddsOnDrop {
+        fn drop(&mut self) {
+            let reader = self.0.clone();
+            let alive = Rc::clone(&self.1);
+            self.0.add_listener(Rc::new(move || {
+                let _held = (&alive, reader.stack());
+            }));
+        }
+    }
+
+    let (laid, home) = two_screen_app();
+    let router = home.handle();
+    let alive = Rc::new(());
+    let kept = Rc::downgrade(&alive);
+    let reader = router.clone();
+    let held = Rc::clone(&alive);
+    router.add_listener(Rc::new(move || {
+        let _held = (&held, reader.stack());
+    }));
+    let adds = AddsOnDrop(router.clone(), Rc::clone(&alive));
+    router.add_listener(Rc::new(move || {
+        let _held = &adds;
+    }));
+    drop(alive);
+    drop((router, home, laid));
+    assert!(
+        kept.upgrade().is_none(),
+        "the listener and the router state it holds are dropped"
+    );
+}
+
+/// A frame hook that panics while a stack change is being queued leaves
+/// nothing stuck: the committed edit stands and is told with the next one.
+pub(crate) fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    let driver = home.driver();
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        router.push(AppRoute::Note { id: 1 })
+    }))
+    .expect_err("the frame hook's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("frame hook failure")
+    );
+    driver.set_request_frame(|| {});
+
+    router
+        .push(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        *heard.borrow(),
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 1 },
+            AppRoute::Note { id: 2 }
+        ]],
+        "the next change is told, with the one the panic interrupted"
+    );
+}
+
+/// Record the stack each time `router` tells its listeners.
+fn listen(router: &RouterHandle<AppRoute>) -> Rc<RefCell<Vec<Vec<AppRoute>>>> {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&heard);
+    let reader = router.clone();
+    router.add_listener(Rc::new(move || log.borrow_mut().push(reader.stack())));
+    heard
+}
+
+/// A router's listeners hear each committed stack change once, on the next
+/// turn and before any transition ends: never from inside the navigation,
+/// once for the edits of one turn, and not at all for a stack that stands.
+pub(crate) fn stack_listeners_hear_each_committed_change_once() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    settle(&mut laid);
+    assert!(
+        heard.borrow().is_empty(),
+        "the opening stack is not a change"
+    );
+
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    assert!(heard.borrow().is_empty(), "never told from inside a push");
+    laid.pump();
+    assert_eq!(
+        *heard.borrow(),
+        [vec![AppRoute::Home, AppRoute::Note { id: 1 }]],
+        "told on the next turn, while the page is still entering"
+    );
+
+    router
+        .push(AppRoute::Tag { name: "x".into() })
+        .expect("mounted router");
+    router
+        .replace(AppRoute::NoteEdit { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow()[1..],
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 1 },
+            AppRoute::NoteEdit { id: 1 }
+        ]],
+        "two edits in one turn are told once"
+    );
+
+    router.go("/note/2/edit").expect("a known location");
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[2..],
+        [vec![
+            AppRoute::Home,
+            AppRoute::Note { id: 2 },
+            AppRoute::NoteEdit { id: 2 }
+        ]],
+        "a navigation that removes and adds pages is one change"
+    );
+    settle(&mut laid);
+
+    assert_eq!(router.pop(), Ok(true));
+    laid.pump();
+    assert_eq!(
+        heard.borrow()[3..],
+        [vec![AppRoute::Home, AppRoute::Note { id: 2 }]],
+        "a pop is told once it commits, before its exit transition ends"
+    );
+
+    settle(&mut laid);
+    router.go("/note/2").expect("a known location");
+    assert_eq!(router.pop(), Ok(true));
+    router
+        .push(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow()[4..],
+        [vec![AppRoute::Home, AppRoute::Note { id: 2 }]],
+        "a page replaced by an equal one is a new page"
+    );
+    let told = heard.borrow().len();
+    router.go("/note/2").expect("a known location");
+    settle(&mut laid);
+    assert_eq!(
+        heard.borrow().len(),
+        told,
+        "a stack that stands is not told"
+    );
+}
+
+/// A listener may navigate: what it does is told in the next delivery, and
+/// nothing recurses.
+pub(crate) fn a_stack_listener_may_navigate() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    let driver = router.clone();
+    router.add_listener(Rc::new(move || {
+        if driver.current() == (AppRoute::Note { id: 1 }) {
+            driver
+                .push(AppRoute::NoteEdit { id: 1 })
+                .expect("mounted router");
+        }
+    }));
+    router
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(
+        *heard.borrow(),
+        [
+            vec![AppRoute::Home, AppRoute::Note { id: 1 }],
+            vec![
+                AppRoute::Home,
+                AppRoute::Note { id: 1 },
+                AppRoute::NoteEdit { id: 1 }
+            ],
+        ],
+        "the listener's push is the next delivery"
     );
 }

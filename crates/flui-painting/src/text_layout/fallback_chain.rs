@@ -127,22 +127,25 @@ impl HostOrder {
 /// canonicalised, so a path through a symlink still matches), a
 /// [`FaceRef::Family`] by the collection's family name. A face the
 /// collection does not hold is left out. A face with colour glyph tables
-/// (`COLR`, `CBDT`, `sbix`) is left out of the script and common lists and
-/// kept in the emoji list only: in a text list it would shape the spaces and
-/// digits of ordinary text (the defect `font_resolve` exists for).
+/// (`COLR`, `CBDT`, `sbix`) is left out of the script and common lists: in a
+/// text list it would shape the spaces and digits of ordinary text (the
+/// defect `font_resolve` exists for). It goes to the emoji list instead,
+/// after the faces the host named there, so a host that does not tell its
+/// emoji face apart (Android 6's untagged `NotoColorEmoji.ttf`) still has it
+/// drawn.
 pub(crate) fn resolve(
     system: &SystemFallback,
     collection: &mut parley::fontique::Collection,
 ) -> HostOrder {
     let mut faces = FaceIndex::default();
+    let mut moved: Vec<parley::fontique::FamilyId> = Vec::new();
     let mut text_list = |faces: &mut FaceIndex, refs: &[FaceRef]| {
         let mut ids = Vec::new();
         for face in refs {
-            if let Some((id, colour)) = faces.resolve(face, collection)
-                && !colour
-                && !ids.contains(&id)
-            {
-                ids.push(id);
+            match faces.resolve(face, collection) {
+                Some((id, true)) if !moved.contains(&id) => moved.push(id),
+                Some((id, false)) if !ids.contains(&id) => ids.push(id),
+                _ => {}
             }
         }
         ids
@@ -159,6 +162,11 @@ pub(crate) fn resolve(
         if let Some((id, _)) = faces.resolve(face, collection)
             && !emoji.contains(&id)
         {
+            emoji.push(id);
+        }
+    }
+    for id in moved {
+        if !emoji.contains(&id) {
             emoji.push(id);
         }
     }
@@ -693,6 +701,42 @@ mod tests {
             )
         );
         assert_eq!(latn, common);
+        assert_eq!(emoji, [decoy, common].concat());
+    }
+
+    /// A colour face the host names only in a text list, as Android 6 does
+    /// with its untagged emoji family, leads the emoji generic and stays out
+    /// of every text list. Fails if the face is dropped instead of moved.
+    #[test]
+    fn a_colour_face_in_a_text_list_moves_to_the_emoji_generic() {
+        use super::super::system_fallback::{FaceRef, ScriptCode, SystemFallback};
+        use super::resolve;
+
+        const DECOY: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
+        let mut collection = fixture_collection();
+        collection.register_fonts(Blob::new(Arc::new(with_colour_table(DECOY))), None);
+
+        let family = |name: &str| FaceRef::Family(name.to_owned());
+        let system = SystemFallback::none("en-US")
+            .with_script(
+                ScriptCode::from_bytes(*b"Hani"),
+                vec![family("FLUI Decoy Emoji")],
+            )
+            .with_common(vec![family("FLUI Decoy Emoji"), family("Material Icons")]);
+        let order = resolve(&system, &mut collection);
+        install_into(&fixture(), &order, &mut collection);
+
+        let hani: Vec<FamilyId> = collection
+            .fallback_families(FallbackKey::new(Script::from_str_unchecked("Hani"), None))
+            .collect();
+        let emoji: Vec<_> = collection.generic_families(GenericFamily::Emoji).collect();
+        let common = ids(
+            &mut collection,
+            &["Material Icons", "Roboto", "CupertinoIcons"],
+        );
+        let decoy = ids(&mut collection, &["FLUI Decoy Emoji"]);
+
+        assert!(!hani.contains(&decoy[0]), "Hani: {hani:?}");
         assert_eq!(emoji, [decoy, common].concat());
     }
 }

@@ -150,6 +150,7 @@ pub mod task;
 pub mod async_driver;
 pub mod duration;
 pub mod id;
+pub mod timer;
 
 // Re-exports - Core types
 pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
@@ -179,6 +180,7 @@ pub use post_frame::{
     PresentationFrameError, PresentationFrameScope, PresentationScopeFactory,
 };
 pub use scheduler::execution::ExecutionError;
+pub use timer::{Sleep, TimerHandle};
 mod post_frame;
 
 mod completion_wake;

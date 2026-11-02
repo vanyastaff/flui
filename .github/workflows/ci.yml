@@ -344,6 +344,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The full-workspace build, examples and benches included, outgrew the
+      # ubuntu-26.04 runner's free disk (a link failed with "No space left on
+      # device"). The same reclaim as weekly.yml, before the cache restores.
+      - name: Free disk space (ubuntu)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
@@ -371,13 +381,18 @@ jobs:
       # dlopens libxkbcommon-x11, which the hosted runners do not ship. The
       # native X11 host's window conformance (`tests/x11_window.rs`) starts an
       # Xvfb and an openbox of its own, and its host loads libxcb at run time.
+      # The AT-SPI suite (`tests/linux_atspi.rs`) starts a session bus and the
+      # accessibility bus of its own (`dbus-daemon`, at-spi2-core), and
+      # `FLUI_REQUIRE_ATSPI` turns a missing one into a failure.
       #
       # Mesa's lavapipe (Vulkan) and llvmpipe (GL, through EGL) are the GPU the
       # readback suites render on: without an adapter they skip, and the
       # gpu-test steps below run them on each backend with a missing adapter
       # as a failure (ADR-0244 §1).
-      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, lavapipe and llvmpipe are available (flui-native X11 tests, GPU readbacks)
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+      - name: Ensure Xvfb, openbox, libxcb + xkbcommon, at-spi2-core, lavapipe and llvmpipe are available (flui-native X11 and AT-SPI tests, GPU readbacks)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb openbox libxcb1 libxkbcommon-x11-0 libxkbcommon0 dbus at-spi2-core mesa-vulkan-drivers libegl-mesa0 libgl1-mesa-dri
+          echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
       # The native Wayland host's tests (`cargo xtask test` runs them apart
       # from the Xvfb suite) need a compositor: a headless Weston on a socket
@@ -423,8 +438,8 @@ jobs:
       - name: cargo xtask build-all-targets (links the examples and benches)
         run: cargo xtask build-all-targets
 
-      # The disk peak is the build above; if this trends toward 0, reclaim
-      # space before the build (measured 2026-09-03: ~72 GB free after it).
+      # The disk peak is the build above; the reclaim before the build is what
+      # keeps it above 0 (it failed without one on 2026-10-30).
       - name: Disk usage after build
         run: df -h /
 
@@ -587,13 +602,17 @@ jobs:
           --locked --no-fail-fast
           --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images
 
-      # The one configuration the run above does not cover: without
-      # `asset-images`, `Image` is the `StatelessView` impl (image.rs, the
-      # `cfg(not(feature = "asset-images"))` blocks) that a consumer enabling
-      # `images` alone builds. Test names are not the configuration they run
-      # under, so this run stays.
+      # The one configuration the run above does not cover: `images` without
+      # `asset-images`, which a consumer decoding only `Image::memory` and
+      # `Image::file` builds (no `flui-assets`, no `AssetImage`). Test names
+      # are not the configuration they run under, so this run stays.
       - name: cargo nextest run (flui-widgets images only, Image tests)
         run: cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image
+
+      # Painting's optional serde admission rules need execution: neither the
+      # default test scope nor the image feature runs enable this feature.
+      - name: cargo nextest run (flui-painting serde value contract)
+        run: cargo nextest run -p flui-painting --locked --no-fail-fast --features serde --test painting_it -E 'test(=value_contract)'
 
       # The facade's non-default catalogs and localizations need no run here:
       # the `test` job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
@@ -639,6 +658,38 @@ jobs:
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
 
+      # The contract rides the release train until cargo-semver-checks shows it
+      # stable for two trains in a row (ADR-0153). A report, not a gate: before
+      # the first publication every change to the contract is a break.
+      - name: Install cargo-semver-checks
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-semver-checks@0.51
+
+      - name: cargo semver-checks flui-platform (report)
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        continue-on-error: true
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
+
+  # Nightly API contracts keep their rustdoc JSON output in one job, separately
+  # from stable documentation and the semver report.
+  api-contracts:
+    name: api-contracts
+    needs: [checks, plan]
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
       # rustdoc's JSON output is nightly-only. The gate runs it through
       # `rustup run nightly`, so the committed rust-toolchain.toml pin stays the
       # toolchain of every other step.
@@ -674,22 +725,6 @@ jobs:
           set -euo pipefail
           cargo xtask send-positions
           cargo xtask send-positions --self-test
-
-      # The contract rides the release train until cargo-semver-checks shows it
-      # stable for two trains in a row (ADR-0153). A report, not a gate: before
-      # the first publication every change to the contract is a break.
-      - name: Install cargo-semver-checks
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-semver-checks@0.51
-
-      - name: cargo semver-checks flui-platform (report)
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
-        continue-on-error: true
-        env:
-          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
@@ -1091,7 +1126,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1134,7 +1169,7 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc test-features
+            clippy wasm-check cross-typecheck test test-nested doc api-contracts test-features
           FULL_JOBS: >-
             feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}

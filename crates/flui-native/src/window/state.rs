@@ -7,8 +7,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
-use flui_platform::{WindowAppearance, WindowCapabilities, WindowExecutionState, WindowState};
+use flui_foundation::geometry::WindowMetrics;
+use flui_platform::{
+    WindowAppearance, WindowCapabilities, WindowExecutionState, WindowInsets, WindowState,
+};
 use parking_lot::Mutex;
 
 /// The facts a window reports beyond its geometry, mode and flags, as each
@@ -21,8 +23,9 @@ pub(crate) struct ReportedFacts {
     pub(crate) metrics: Option<WindowMetrics>,
     /// The user's theme as applied to the window (ADR-0222).
     pub(crate) appearance: WindowAppearance,
-    /// The safe-area insets in logical pixels.
-    pub(crate) safe_area: EdgeInsets,
+    /// The safe area, the soft keyboard and the system-gesture edges, in
+    /// logical pixels (ADR-0277).
+    pub(crate) insets: WindowInsets,
     /// Whether the platform lets the window run its UI (ADR-0035).
     pub(crate) execution: WindowExecutionState,
     /// Whether the window system says none of the window reaches the screen,
@@ -44,7 +47,7 @@ impl ReportedFacts {
         state
             .with_metrics(self.metrics)
             .with_appearance(self.appearance)
-            .with_safe_area(self.safe_area)
+            .with_insets(self.insets)
             .with_execution(self.execution)
             .with_occluded(self.occluded)
             .with_hovered(self.hovered)
@@ -60,6 +63,21 @@ impl ReportedFacts {
 #[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
+}
+
+/// The frame a window reports whose window system says only whether its own
+/// frame is on: [`WindowFrame::System`](flui_platform::WindowFrame::System) or
+/// [`WindowFrame::None`](flui_platform::WindowFrame::None). A host that
+/// draws no title bar of the application's
+/// ([`WindowCapabilities::app_title_bar`](WindowCapabilities::app_title_bar)
+/// `Unavailable`) has no third answer.
+#[cfg(any(windows, target_os = "macos", linux_host, winit_host))]
+pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::WindowFrame {
+    if decorated {
+        flui_platform::WindowFrame::System
+    } else {
+        flui_platform::WindowFrame::None
+    }
 }
 
 /// `size` held to `constraints` the way a resize by the user is: raised to the

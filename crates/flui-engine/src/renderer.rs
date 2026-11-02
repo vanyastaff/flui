@@ -2072,8 +2072,8 @@ impl Renderer {
     /// feature is off, the adapter lacks `TIMESTAMP_QUERY`, or fewer than
     /// `PENDING_FRAME_BUFFER_DEPTH` frames have been rendered.
     ///
-    /// Implements [`Diagnosticable`](flui_foundation::Diagnosticable): call
-    /// `profile.to_diagnostics_node()` to get a human-readable property tree.
+    /// Implements [`Inspect`](flui_foundation::inspect::Inspect): its passes and total read as
+    /// typed fields.
     #[must_use]
     pub fn latest_gpu_frame_profile(&self) -> Option<&crate::profiler::GpuFrameProfile> {
         #[cfg(feature = "gpu-profiler")]

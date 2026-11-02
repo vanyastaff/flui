@@ -55,6 +55,7 @@ mod numeric_range;
 pub mod owner;
 pub mod platform;
 mod reading_order;
+mod route_change;
 pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
 pub use platform::AssistiveFocusSupport;
 pub mod properties;
@@ -85,8 +86,8 @@ pub use reading_order::reading_order;
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
 pub use agent::{
-    Evaluation, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
-    WireReadError, counts_frames, waits_on_events,
+    Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
+    WireReadError, counts_frames,
 };
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit

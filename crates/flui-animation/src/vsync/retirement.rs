@@ -19,7 +19,7 @@ struct OutgoingRegistry {
 /// Preparation withdraws every seat and closes every kernel before any
 /// callback. No registry borrow survives. Finish after the presentation's other
 /// capabilities are withdrawn. Drop also completes accepted cancellation;
-/// during unwind it preserves the incoming failure and retains opaque captures.
+/// during unwind the incoming failure stays first and captures are dropped (ADR-0281).
 #[must_use = "finish cancellation after withdrawing presentation authority"]
 pub struct VsyncRetirement {
     recovery: Option<Retirement>,

@@ -8,6 +8,7 @@
 /// CSS/Skia semantics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum BlendMode {
     /// Drop both the source and the destination, leaving nothing.
     ///

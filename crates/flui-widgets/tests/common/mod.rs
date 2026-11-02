@@ -64,3 +64,15 @@ pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
     ))
     .expect("two labelled commands")
 }
+
+/// The byte range a `RenderParagraph` paints highlighted, read from its typed
+/// `selection_start` / `selection_end` fields; `None` when it paints no selection.
+#[allow(dead_code)]
+pub fn painted_selection(
+    laid: &LaidOut,
+    paragraph: flui_foundation::RenderId,
+) -> Option<std::ops::Range<usize>> {
+    let node = laid.render_node(paragraph);
+    let end = |name| usize::try_from(node.get::<u64>(name).ok()?).ok();
+    Some(end("selection_start")?..end("selection_end")?)
+}

@@ -1,7 +1,7 @@
 //! The acceptance application with one injected fault, for the native runs
 //! that check what a panic leaves behind.
 //!
-//! Run with `cargo run --example acceptance_app_faults --features material --
+//! Run with `cargo run --example acceptance_app_faults --features material,serde --
 //! <fault>`, where `<fault>` is a `Fault` name (`Fault::name` in
 //! `tests/fixtures/acceptance_app/app.rs`). A missing or unknown name exits
 //! with code 2, listing the names, before a window opens.
@@ -24,8 +24,5 @@ fn main() -> Result<(), flui::LaunchError> {
             eprintln!("acceptance_app_faults: {unknown}");
             std::process::exit(2);
         });
-    flui::run_app(
-        AcceptanceApp::new(Faults::from(fault)),
-        flui::AppLaunch::new(),
-    )
+    flui::run_app(AcceptanceApp::new(Faults::from(fault)), app::launch())
 }

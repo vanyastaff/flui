@@ -10,8 +10,8 @@ use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformHaptics,
-    PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowId, WindowMode,
-    WindowState,
+    PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId,
+    WindowMode, WindowState,
 };
 use flui_platform::{
     Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
@@ -269,7 +269,7 @@ impl WindowFixture for Fixture {
                 WindowCommand::SetTitle("reverted".to_owned()),
                 WindowCommand::Show,
                 WindowCommand::SetResizable(true),
-                WindowCommand::SetDecorated(true),
+                WindowCommand::SetFrame(WindowFrame::System),
             ] {
                 // The faulty window system reverts what it can, while the
                 // window is open; what it cannot revert stays.

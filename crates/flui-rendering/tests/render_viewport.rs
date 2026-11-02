@@ -58,7 +58,13 @@ impl FixedSliver {
     }
 }
 
-impl flui_foundation::Diagnosticable for FixedSliver {}
+impl flui_foundation::inspect::Inspect for FixedSliver {
+    fn kind(&self) -> &'static str {
+        "FixedSliver"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderSliver for FixedSliver {
     type Arity = Leaf;

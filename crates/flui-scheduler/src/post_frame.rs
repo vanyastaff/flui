@@ -243,6 +243,7 @@ impl OwnerFrame {
         }
         let waker = scheduler.frame_waker();
         tasks.set_request_frame(std::sync::Arc::new(move || waker.request_frame()));
+        tasks.deadlines.set_clock(scheduler.clock_source());
         let post_frame = scheduler.inner_post_frame_storage().borrow_mut().claim();
         let tasks = Rc::new(tasks);
         let cleanup = Rc::new(OwnerCleanup {
@@ -265,6 +266,14 @@ impl OwnerFrame {
     #[must_use]
     pub fn async_driver(&self) -> AsyncDriver {
         AsyncDriver::new(&self.tasks)
+    }
+
+    /// The earliest deadline a [`Sleep`](crate::Sleep) of this owner's
+    /// tasks waits for, if any: the host wakes for it, and the owner turn it
+    /// runs fires it.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<web_time::Instant> {
+        self.tasks.deadlines.next_deadline()
     }
 
     /// A `!Send` handle addressed directly at this frame's post-frame queue.
@@ -478,7 +487,7 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
     if first.is_none() {
         *first = Some(payload);
     } else {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 
@@ -495,7 +504,7 @@ impl Drop for OwnerFrame {
         });
         if let Some(payload) = first {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }
@@ -833,7 +842,7 @@ impl Drop for PresentationFrameScope {
     fn drop(&mut self) {
         if let Some(payload) = self.close() {
             if std::thread::panicking() {
-                flui_foundation::panic::retain_opaque_payload(payload);
+                flui_foundation::panic::discard_payload(payload);
             } else {
                 std::panic::resume_unwind(payload);
             }

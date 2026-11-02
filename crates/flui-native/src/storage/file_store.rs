@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_platform::{
-    StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason, WriteMode,
+    CopiedAside, StorageError, StorageName, Stored, StoredVersion, Unsupported, UnsupportedReason,
+    WriteMode,
 };
 
 use super::DataDirs;
@@ -26,6 +27,11 @@ const MACHINE_LOCAL_DIR: &str = ".machine-local";
 /// The start of every file this store stages a write in. Specific to this
 /// store, so a sweep never touches another program's temporary files.
 const STAGED_PREFIX: &str = ".flui-staged-";
+
+/// What joins a value's name and a copy's number in the name
+/// [`FileStore::copy_aside`] keeps the copy under. A [`StorageName`] cannot
+/// hold `.`, so no value is ever named like a copy.
+const COPY_INFIX: &str = ".corrupt-";
 
 /// How old a staged file must be before a based write sweeps it away as the
 /// leftover of a killed writer. A live write keeps its file younger than
@@ -160,7 +166,7 @@ impl FileStore {
     ) -> Result<StoredVersion, StorageError> {
         let root = self.root_of(name);
         let target = root.join(name.as_str());
-        fs::create_dir_all(root).map_err(|error| storage_error(&error))?;
+        create_owner_only_dirs(root).map_err(|error| storage_error(&error))?;
 
         // Held until this function returns: past the rename.
         let _lock = match mode {
@@ -186,9 +192,7 @@ impl FileStore {
             // `std` opens the file: it takes paths past 260 characters on
             // Windows, and marks nothing temporary on the file that becomes
             // the value.
-            .make_in(root, |path| {
-                OpenOptions::new().write(true).create_new(true).open(path)
-            })
+            .make_in(root, create_owner_only)
             .map_err(|error| storage_error(&error))?;
         if self.reach(Step::Staged).is_break() {
             return Err(interrupted(staged.into_temp_path()));
@@ -223,6 +227,49 @@ impl FileStore {
             return Err(StorageError::Cancelled);
         }
         Ok(StoredVersion::of_bytes(bytes))
+    }
+
+    /// Copy the value stored under `name` to the first free file
+    /// `<name>.corrupt-<n>` beside it, counting `n` from 1, and leave `name`
+    /// as it is.
+    ///
+    /// The copy's file is claimed with an exclusive create, so two copies,
+    /// from this process or another, never share it; it is flushed to the
+    /// disk before this returns. The value is read whole once, so the
+    /// returned version is the version of exactly the bytes copied.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::NotFound`] when `name` holds no value;
+    /// [`StorageError::Busy`], [`StorageError::Full`] and
+    /// [`StorageError::Inaccessible`] as for [`read`](Self::read) and
+    /// [`write`](Self::write). A copy that fails leaves no file behind.
+    pub fn copy_aside(&self, name: &StorageName) -> Result<CopiedAside, StorageError> {
+        let root = self.root_of(name);
+        let bytes = match fs::read(root.join(name.as_str())) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(StorageError::NotFound);
+            }
+            Err(error) => return Err(storage_error(&error)),
+        };
+        let (kept_as, mut file) = claim_copy(root, name)?;
+        let written = file
+            .write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| storage_error(&error));
+        drop(file);
+        if let Err(error) = written {
+            if let Err(removal) = fs::remove_file(root.join(&kept_as)) {
+                tracing::debug!(%removal, kept_as, "removing a failed copy failed");
+            }
+            return Err(error);
+        }
+        sync_directory(root);
+        Ok(CopiedAside {
+            kept_as,
+            version: StoredVersion::of_bytes(&bytes),
+        })
     }
 
     /// The root `name` lives under.
@@ -278,6 +325,20 @@ fn lock_root(root: &Path) -> Result<File, StorageError> {
         Err(TryLockError::WouldBlock) => Err(StorageError::Busy),
         Err(TryLockError::Error(error)) => Err(lock_error(&error)),
     }
+}
+
+/// Create the first free `<name>.corrupt-<n>` in `root`, exclusively; its
+/// file name and the open file.
+fn claim_copy(root: &Path, name: &StorageName) -> Result<(String, File), StorageError> {
+    for n in 1_u64.. {
+        let kept_as = format!("{}{COPY_INFIX}{n}", name.as_str());
+        match create_owner_only(&root.join(&kept_as)) {
+            Ok(file) => return Ok((kept_as, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(storage_error(&error)),
+        }
+    }
+    unreachable!("BUG: a root holds fewer than 2^64 copies of one value")
 }
 
 /// Whether `target` holds the value `base` names. The lengths are compared
@@ -336,6 +397,28 @@ fn sweep_stale_staged_files(root: &Path) {
             tracing::debug!(%error, path = %entry.path().display(), "removing a stale staged file failed");
         }
     }
+}
+
+/// Create `path`, which must not exist, for writing; on Unix readable and
+/// writable by its owner only, whatever the umask, as a value or a copy of
+/// one is the user's data.
+fn create_owner_only(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
+}
+
+/// Create `root` and every missing directory above it; on Unix each one it
+/// creates is reachable by its owner only, whatever the umask. Directories
+/// that exist keep their permissions.
+fn create_owner_only_dirs(root: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(root)
 }
 
 /// Make the rename itself durable where the file system needs the

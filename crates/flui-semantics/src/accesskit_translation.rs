@@ -82,12 +82,9 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     if let Some(role) = explicit_role(data.attrs.effective_role()) {
         return role;
     }
-    if data
-        .attrs
-        .label
-        .as_ref()
-        .is_some_and(|label| !label.is_empty())
-    {
+    // Static text: a label, or runs a selectable text with links publishes
+    // beneath its regions (ADR-0214 §2 as amended).
+    if data.attrs.text.is_some() || has_label(data.attrs) {
         Role::Label
     } else {
         Role::GenericContainer
@@ -224,6 +221,51 @@ fn live_politeness(live: Option<LiveSetting>, role: SemanticsRole) -> Option<acc
 /// role implies (ARIA 1.2: `alert` and `status` are atomic).
 fn live_atomic(atomic: Option<bool>, role: SemanticsRole) -> bool {
     atomic.unwrap_or(matches!(role, SemanticsRole::Alert | SemanticsRole::Status))
+}
+
+/// The scroll position and extents, along the node's axis and in the order
+/// AccessKit reads them, from the top or left edge (UI Automation's scroll
+/// percent, a browser's `scrollTop`). A scrollable that grows up or to the
+/// left publishes its pixels mirrored inside its extent, `min + max − pixels`;
+/// with an unbounded or unknown extent its position has no such place and is
+/// left out.
+fn publish_scroll(node: &mut Node, attrs: &SemanticsAttributes) {
+    use flui_foundation::geometry::{Axis, AxisDirection};
+
+    let direction = attrs
+        .scroll_axis_direction
+        .unwrap_or(AxisDirection::TopToBottom);
+    let (min, max) = (attrs.scroll_extent_min, attrs.scroll_extent_max);
+    let position = attrs.scroll_position.and_then(|pixels| {
+        if !direction.is_reversed() {
+            return Some(pixels);
+        }
+        let (min, max) = (min?, max?);
+        let mirrored = min + max - pixels;
+        mirrored.is_finite().then_some(mirrored)
+    });
+    let vertical = direction.axis() == Axis::Vertical;
+    if let Some(position) = position {
+        if vertical {
+            node.set_scroll_y(position);
+        } else {
+            node.set_scroll_x(position);
+        }
+    }
+    if let Some(min) = min {
+        if vertical {
+            node.set_scroll_y_min(min);
+        } else {
+            node.set_scroll_x_min(min);
+        }
+    }
+    if let Some(max) = max {
+        if vertical {
+            node.set_scroll_y_max(max);
+        } else {
+            node.set_scroll_x_max(max);
+        }
+    }
 }
 
 /// Translate one node's states onto the AccessKit node.
@@ -657,7 +699,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         heading_level: _,
         text_direction: _,
         scroll_position: _,
-        scroll_axis: _,
+        scroll_axis_direction: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
         // Published by `apply_collection`.
@@ -684,6 +726,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         text: _,
         // Resolved against the runs beneath the node by `publish_view`.
         document_selection: _,
+        // Resolved against the enclosing text's runs by `publish_view`.
+        hosted_runs: _,
     } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
@@ -787,34 +831,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         y1: data.rect.bottom(),
     });
 
-    match data
-        .attrs
-        .scroll_axis
-        .unwrap_or(flui_foundation::geometry::Axis::Vertical)
-    {
-        flui_foundation::geometry::Axis::Vertical => {
-            if let Some(position) = data.attrs.scroll_position {
-                node.set_scroll_y(position);
-            }
-            if let Some(max) = data.attrs.scroll_extent_max {
-                node.set_scroll_y_max(max);
-            }
-            if let Some(min) = data.attrs.scroll_extent_min {
-                node.set_scroll_y_min(min);
-            }
-        }
-        flui_foundation::geometry::Axis::Horizontal => {
-            if let Some(position) = data.attrs.scroll_position {
-                node.set_scroll_x(position);
-            }
-            if let Some(max) = data.attrs.scroll_extent_max {
-                node.set_scroll_x_max(max);
-            }
-            if let Some(min) = data.attrs.scroll_extent_min {
-                node.set_scroll_x_min(min);
-            }
-        }
-    }
+    publish_scroll(&mut node, data.attrs);
 
     apply_collection(&mut node, &data.attrs.collection);
 
@@ -848,20 +865,19 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             .collect::<Vec<_>>(),
     );
 
-    if let Some((content, identities)) = published_text(data.attrs) {
-        let mut children = node.children().to_vec();
-        children.extend(identities.iter().map(|id| NodeId(id.as_u64())));
-        node.set_children(children);
-        if let Some(selection) = content.selection() {
-            let position = |at: crate::TextRunPosition| accesskit::TextPosition {
-                node: NodeId(identities[at.run].as_u64()),
-                character_index: at.character,
-            };
-            node.set_text_selection(accesskit::TextSelection {
-                anchor: position(selection.anchor),
-                focus: position(selection.focus),
-            });
-        }
+    // The runs are among the children: `publish_view` lists them where they
+    // are published, under the text or under the regions that hold them.
+    if let Some((content, identities)) = published_text(data.attrs)
+        && let Some(selection) = content.selection()
+    {
+        let position = |at: crate::TextRunPosition| accesskit::TextPosition {
+            node: NodeId(identities[at.run].as_u64()),
+            character_index: at.character,
+        };
+        node.set_text_selection(accesskit::TextSelection {
+            anchor: position(selection.anchor),
+            focus: position(selection.focus),
+        });
     }
     // A document's selection lies in the runs of the texts beneath it; its
     // own runs, if it had any, would already have set one.
@@ -890,13 +906,18 @@ pub(crate) fn published_text(
 
 /// Whether the node publishes as a role `accesskit_consumer` reads text
 /// ranges on (`Node::supports_text_ranges`): a text input, a document, or
-/// static text, which a node with no role and a label publishes as
+/// static text, which a node with no role and a label or runs publishes as
 /// ([`resolve_role`]).
 fn supports_text_ranges(attrs: &SemanticsAttributes) -> bool {
     let role = attrs.effective_role();
     role.is_text_input()
         || role == SemanticsRole::Document
-        || (role == SemanticsRole::None && attrs.label.as_ref().is_some_and(|l| !l.is_empty()))
+        || (role == SemanticsRole::None && (attrs.text.is_some() || has_label(attrs)))
+}
+
+/// Whether the node carries a non-empty label.
+fn has_label(attrs: &SemanticsAttributes) -> bool {
+    attrs.label.as_ref().is_some_and(|label| !label.is_empty())
 }
 
 /// Whether a text declares runs it cannot publish for want of

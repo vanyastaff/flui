@@ -16,7 +16,6 @@
 
 use std::sync::Arc;
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::parley_text::ParagraphSpec;
@@ -110,10 +109,14 @@ impl RenderErrorBox {
     }
 }
 
-impl Diagnosticable for RenderErrorBox {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add("message", &self.message);
-        properties.add_optional("details", self.details.as_deref());
+impl flui_foundation::inspect::Inspect for RenderErrorBox {
+    fn kind(&self) -> &'static str {
+        "RenderErrorBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("message", &self.message);
+        out.field("details", &self.details);
     }
 }
 

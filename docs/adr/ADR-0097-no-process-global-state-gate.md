@@ -117,12 +117,15 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   `RefCell` or an atomic is not immutable data; nor is a type alias or a user type, which the
   scan cannot see through.
 - **Monotonic ID counters** are exempt: a non-`mut`, non-`pub` (private or `pub(…)`) static of
-  an atomic integer type, initialized with `<type>::new(<integer literal>)`, whose every mention
-  where it is visible (its fn body, its module's files and their descendants, or every file of
-  the target for `pub(…)`) is the declaration, `NAME.fetch_add(<integer literal ≥ 1>, …)` or a
-  `use` path segment without `as`. A counter that is `load`ed, `store`d, borrowed (`&NAME`),
-  named in a macro, or advanced any other way is a finding. The exemption is about isolation,
-  not determinism: an ID that reaches a snapshot is still process-ordered.
+  type `AtomicU64` or `AtomicI64`, initialized with `<type>::new(<integer literal>)`, whose every
+  mention where it is visible (its fn body, its module's files and their descendants, or every
+  file of the target for `pub(…)`) is the declaration, `NAME.fetch_add(<integer literal ≥ 1>, …)`
+  or a `use` path segment without `as`. A counter that is `load`ed, `store`d, borrowed (`&NAME`),
+  named in a macro, or advanced any other way is a finding. A narrower atomic can wrap within a
+  process's lifetime (2^32 `fetch_add` calls), and a wrapped ID compares equal to a live one, so a
+  32-bit or pointer-width counter is never exempt: it takes a `counter` entry, whose review checks
+  that it refuses exhaustion. The exemption is about isolation, not determinism: an ID that
+  reaches a snapshot is still process-ordered.
 - **The key** of a global is its item path inside the target, from the crate root without
   `crate::`: fn, impl self-type and trait names are segments, a macro is `name!`, and a bin
   target's items are prefixed with the bin's name (`text_layout::layout::FONT_SYSTEM`,

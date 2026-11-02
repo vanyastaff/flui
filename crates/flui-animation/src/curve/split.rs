@@ -21,7 +21,8 @@ pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
 }
 
 /// Decode owns each completed field until the complete split is admitted.
-/// Failed/partial decoding retains opaque curves so its error stays authoritative.
+/// Failed or partial decoding destroys each decoded curve under containment
+/// (ADR-0281 §3), so the decoding error stays the one returned.
 #[cfg(feature = "serde")]
 struct DecodedCurve<T>(Option<T>);
 
@@ -42,7 +43,12 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for DecodedCurve<T
 #[cfg(feature = "serde")]
 impl<T> Drop for DecodedCurve<T> {
     fn drop(&mut self) {
-        std::mem::forget(self.0.take());
+        if let Some(curve) = self.0.take()
+            && let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(curve)))
+        {
+            flui_foundation::panic::discard_payload(payload);
+        }
     }
 }
 

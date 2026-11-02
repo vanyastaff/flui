@@ -179,13 +179,14 @@ impl RenderTheater {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderTheater {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("skip_count", self.skip_count.to_string());
-        builder.add(
-            "semantics_blocked_count",
-            self.blocked_from_semantics.to_string(),
-        );
+impl flui_foundation::inspect::Inspect for RenderTheater {
+    fn kind(&self) -> &'static str {
+        "RenderTheater"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("skip_count", &self.skip_count);
+        out.field("semantics_blocked_count", &self.blocked_from_semantics);
     }
 }
 

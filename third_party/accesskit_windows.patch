@@ -1,0 +1,509 @@
+diff --git a/src/node.rs b/src/node.rs
+index f414f77..c3319c0 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -12,7 +12,7 @@
+ 
+ use accesskit::{
+     Action, ActionData, ActionRequest, AriaCurrent, HasPopup, Live, NodeId, Orientation, Point,
+-    Role, SortDirection, Toggled, TreeId,
++    Role, ScrollUnit, SortDirection, Toggled, TreeId,
+ };
+ use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree, TreeState};
+ use std::{
+@@ -645,6 +645,147 @@ impl NodeWrapper<'_> {
+         self.node.supports_action(Action::ScrollIntoView, &filter)
+     }
+ 
++    /// The node's scroll extents on one axis, as (minimum, maximum), when it
++    /// publishes both and they are finite and ordered.
++    fn scroll_extents(&self, horizontal: bool) -> Option<(f64, f64)> {
++        let (min, max) = if horizontal {
++            (self.node.scroll_x_min()?, self.node.scroll_x_max()?)
++        } else {
++            (self.node.scroll_y_min()?, self.node.scroll_y_max()?)
++        };
++        (min.is_finite() && max.is_finite() && min <= max).then_some((min, max))
++    }
++
++    /// The node's scroll position on one axis, when it publishes a finite one.
++    fn scroll_position(&self, horizontal: bool) -> Option<f64> {
++        let position = if horizontal {
++            self.node.scroll_x()
++        } else {
++            self.node.scroll_y()
++        };
++        position.filter(|position| position.is_finite())
++    }
++
++    /// A node with scroll extents on either axis that takes a scroll: a
++    /// range-value adjuster published with the same extents does not.
++    fn is_scroll_pattern_supported(&self) -> bool {
++        (self.scroll_extents(true).is_some() || self.scroll_extents(false).is_some())
++            && [
++                Action::ScrollUp,
++                Action::ScrollDown,
++                Action::ScrollLeft,
++                Action::ScrollRight,
++                Action::SetScrollOffset,
++            ]
++            .into_iter()
++            .any(|action| self.node.supports_action(action, &filter))
++    }
++
++    fn is_scrollable(&self, horizontal: bool) -> bool {
++        self.scroll_extents(horizontal)
++            .is_some_and(|(min, max)| max > min)
++    }
++
++    fn is_horizontally_scrollable(&self) -> bool {
++        self.is_scrollable(true)
++    }
++
++    fn is_vertically_scrollable(&self) -> bool {
++        self.is_scrollable(false)
++    }
++
++    /// How far along its extents the position is, from 0 to 100, or
++    /// `UIA_ScrollPatternNoScroll` when the axis does not scroll or the
++    /// position is unknown.
++    fn scroll_percent(&self, horizontal: bool) -> f64 {
++        match (
++            self.scroll_extents(horizontal),
++            self.scroll_position(horizontal),
++        ) {
++            (Some((min, max)), Some(position)) if max > min => {
++                // Halved first, so a range wider than `f64::MAX` stays finite.
++                let along = (position / 2.0 - min / 2.0) / (max / 2.0 - min / 2.0);
++                let percent = along * 100.0;
++                if percent.is_finite() {
++                    percent.clamp(0.0, 100.0)
++                } else {
++                    UIA_ScrollPatternNoScroll
++                }
++            }
++            _ => UIA_ScrollPatternNoScroll,
++        }
++    }
++
++    fn horizontal_scroll_percent(&self) -> f64 {
++        self.scroll_percent(true)
++    }
++
++    fn vertical_scroll_percent(&self) -> f64 {
++        self.scroll_percent(false)
++    }
++
++    /// The share of the content the node shows on one axis, from 0 to 100:
++    /// its own extent over that extent plus the scroll range. An axis that
++    /// does not scroll shows all of it.
++    fn scroll_view_size(&self, horizontal: bool) -> f64 {
++        let viewport = self.node.raw_bounds().map(|bounds| {
++            if horizontal {
++                bounds.width()
++            } else {
++                bounds.height()
++            }
++        });
++        match (self.scroll_extents(horizontal), viewport) {
++            (Some((min, max)), Some(viewport)) if max > min && viewport > 0.0 => {
++                // Quartered first, so the content extent stays finite.
++                let shown = viewport / 4.0;
++                let size = shown / (shown + (max / 4.0 - min / 4.0)) * 100.0;
++                if size.is_finite() { size } else { 100.0 }
++            }
++            _ => 100.0,
++        }
++    }
++
++    fn horizontal_view_size(&self) -> f64 {
++        self.scroll_view_size(true)
++    }
++
++    fn vertical_view_size(&self) -> f64 {
++        self.scroll_view_size(false)
++    }
++
++    /// The position `percent` of the extents asks for on one axis: `None`
++    /// for `UIA_ScrollPatternNoScroll`, which leaves the axis where it is.
++    fn scroll_target(&self, horizontal: bool, percent: f64) -> Result<Option<f64>> {
++        if percent == UIA_ScrollPatternNoScroll {
++            return Ok(None);
++        }
++        if !(0.0..=100.0).contains(&percent) {
++            return Err(invalid_arg());
++        }
++        match self.scroll_extents(horizontal) {
++            Some((min, max)) if max > min => {
++                // Weighted, not offset by the range, which can overflow.
++                let along = percent / 100.0;
++                let target = min * (1.0 - along) + max * along;
++                if target.is_finite() {
++                    Ok(Some(target))
++                } else {
++                    Err(invalid_operation())
++                }
++            }
++            _ => Err(invalid_operation()),
++        }
++    }
++
++    /// Where the node is scrolled on one axis, for the axis a request
++    /// leaves alone.
++    fn scroll_resting(&self, horizontal: bool) -> f64 {
++        self.scroll_position(horizontal)
++            .or_else(|| self.scroll_extents(horizontal).map(|(min, _)| min))
++            .unwrap_or(0.0)
++    }
++
+     pub(crate) fn is_selection_item_pattern_supported(&self) -> bool {
+         match self.node.role() {
+             // TODO: tables (#29)
+@@ -796,6 +937,7 @@ fn enqueue_property_change(
+     IValueProvider,
+     IRangeValueProvider,
+     IScrollItemProvider,
++    IScrollProvider,
+     ISelectionItemProvider,
+     ISelectionProvider,
+     ITextProvider,
+@@ -931,6 +1073,26 @@ impl PlatformNode {
+         Ok(())
+     }
+ 
++    /// As [`Self::do_complex_action`], for an operation that asks for several
++    /// actions, all checked before the first is sent.
++    fn do_complex_actions<F>(&self, f: F) -> Result<()>
++    where
++        for<'a> F: FnOnce(NodeRef<'a>, NodeId, TreeId) -> Result<Vec<ActionRequest>>,
++    {
++        let context = self.upgrade_context()?;
++        if context.is_placeholder.load(Ordering::SeqCst) {
++            return Err(element_not_enabled());
++        }
++        let tree = context.read_tree();
++        let (node, target_node, target_tree) = self.node_with_location(&tree)?;
++        let requests = f(node, target_node, target_tree)?;
++        drop(tree);
++        for request in requests {
++            context.do_action(request);
++        }
++        Ok(())
++    }
++
+     fn do_action<F>(&self, f: F) -> Result<()>
+     where
+         F: FnOnce() -> (Action, Option<ActionData>),
+@@ -1379,6 +1541,85 @@ patterns! {
+             })
+         }
+     )),
++    (UIA_ScrollPatternId, IScrollProvider, IScrollProvider_Impl, is_scroll_pattern_supported, (
++        (UIA_ScrollHorizontalScrollPercentPropertyId, HorizontalScrollPercent, horizontal_scroll_percent, f64),
++        (UIA_ScrollVerticalScrollPercentPropertyId, VerticalScrollPercent, vertical_scroll_percent, f64),
++        (UIA_ScrollHorizontalViewSizePropertyId, HorizontalViewSize, horizontal_view_size, f64),
++        (UIA_ScrollVerticalViewSizePropertyId, VerticalViewSize, vertical_view_size, f64),
++        (UIA_ScrollHorizontallyScrollablePropertyId, HorizontallyScrollable, is_horizontally_scrollable, BOOL),
++        (UIA_ScrollVerticallyScrollablePropertyId, VerticallyScrollable, is_vertically_scrollable, BOOL)
++    ), (
++        fn Scroll(&self, horizontal_amount: ScrollAmount, vertical_amount: ScrollAmount) -> Result<()> {
++            self.do_complex_actions(|node, target_node, target_tree| {
++                if node.is_disabled() {
++                    return Err(element_not_enabled());
++                }
++                let mut buffer = StringBuffer::acquire();
++                let wrapper = NodeWrapper {
++                    node: &node,
++                    string_buffer: &mut buffer,
++                };
++                let mut requests = Vec::new();
++                for (amount, horizontal) in [(horizontal_amount, true), (vertical_amount, false)] {
++                    let (back, unit) = match amount {
++                        ScrollAmount_NoAmount => continue,
++                        ScrollAmount_SmallDecrement => (true, ScrollUnit::Item),
++                        ScrollAmount_LargeDecrement => (true, ScrollUnit::Page),
++                        ScrollAmount_SmallIncrement => (false, ScrollUnit::Item),
++                        ScrollAmount_LargeIncrement => (false, ScrollUnit::Page),
++                        _ => return Err(invalid_arg()),
++                    };
++                    let action = match (horizontal, back) {
++                        (true, true) => Action::ScrollLeft,
++                        (true, false) => Action::ScrollRight,
++                        (false, true) => Action::ScrollUp,
++                        (false, false) => Action::ScrollDown,
++                    };
++                    if !wrapper.is_scrollable(horizontal) || !node.supports_action(action, &filter) {
++                        return Err(invalid_operation());
++                    }
++                    requests.push(ActionRequest {
++                        action,
++                        target_tree,
++                        target_node,
++                        data: Some(ActionData::ScrollUnit(unit)),
++                    });
++                }
++                Ok(requests)
++            })
++        },
++
++        fn SetScrollPercent(&self, horizontal_percent: f64, vertical_percent: f64) -> Result<()> {
++            self.do_complex_action(|node, target_node, target_tree| {
++                if node.is_disabled() {
++                    return Err(element_not_enabled());
++                }
++                if !node.supports_action(Action::SetScrollOffset, &filter) {
++                    return Err(invalid_operation());
++                }
++                let mut buffer = StringBuffer::acquire();
++                let wrapper = NodeWrapper {
++                    node: &node,
++                    string_buffer: &mut buffer,
++                };
++                let x = wrapper.scroll_target(true, horizontal_percent)?;
++                let y = wrapper.scroll_target(false, vertical_percent)?;
++                if x.is_none() && y.is_none() {
++                    return Ok(None);
++                }
++                let offset = Point::new(
++                    x.unwrap_or_else(|| wrapper.scroll_resting(true)),
++                    y.unwrap_or_else(|| wrapper.scroll_resting(false)),
++                );
++                Ok(Some(ActionRequest {
++                    action: Action::SetScrollOffset,
++                    target_tree,
++                    target_node,
++                    data: Some(ActionData::SetScrollOffset(offset)),
++                }))
++            })
++        }
++    )),
+     (UIA_SelectionItemPatternId, ISelectionItemProvider, ISelectionItemProvider_Impl, is_selection_item_pattern_supported, (), (
+         fn IsSelected(&self) -> Result<BOOL> {
+             self.resolve(|node| {
+diff --git a/src/tests/mod.rs b/src/tests/mod.rs
+index ff939e4..a35693b 100644
+--- a/src/tests/mod.rs
++++ b/src/tests/mod.rs
+@@ -333,5 +333,6 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusEventHandler_Impl {
+     }
+ }
+ 
++mod scroll;
+ mod simple;
+ mod subclassed;
+diff --git a/src/tests/scroll.rs b/src/tests/scroll.rs
+new file mode 100644
+index 0000000..e54315b
+--- /dev/null
++++ b/src/tests/scroll.rs
+@@ -0,0 +1,210 @@
++// Copyright 2026 The AccessKit Authors. All rights reserved.
++// Licensed under the Apache License, Version 2.0 (found in
++// the LICENSE-APACHE file) or the MIT license (found in
++// the LICENSE-MIT file), at your option.
++
++use std::sync::Arc;
++
++use accesskit::{
++    Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, Node, NodeId, Point,
++    Rect, Role, ScrollUnit, TreeId, TreeInfo, TreeUpdate,
++};
++use parking_lot::Mutex;
++use windows::{
++    Win32::{System::Variant::VARIANT, UI::Accessibility::*},
++    core::*,
++};
++
++const WINDOW_TITLE: &str = "Scroll test";
++
++const WINDOW_ID: NodeId = NodeId(0);
++const LIST_ID: NodeId = NodeId(1);
++const LABEL_ID: NodeId = NodeId(2);
++const SLIDER_ID: NodeId = NodeId(3);
++const WIDE_ID: NodeId = NodeId(4);
++
++/// A list 100 high that scrolls 300 vertically, scrolled to 75; a label that
++/// does not scroll; the list's position slider, with its extents and no
++/// scroll action; and a strip whose horizontal range is wider than `f64::MAX`.
++fn get_initial_state() -> TreeUpdate {
++    let mut root = Node::new(Role::Window);
++    root.set_children(vec![LIST_ID, LABEL_ID, SLIDER_ID, WIDE_ID]);
++    let mut list = Node::new(Role::List);
++    list.set_author_id("list");
++    list.set_bounds(Rect::new(0.0, 0.0, 200.0, 100.0));
++    list.set_scroll_y(75.0);
++    list.set_scroll_y_min(0.0);
++    list.set_scroll_y_max(300.0);
++    for action in [
++        Action::ScrollUp,
++        Action::ScrollDown,
++        Action::SetScrollOffset,
++    ] {
++        list.add_action(action);
++    }
++    let mut label = Node::new(Role::Label);
++    label.set_author_id("label");
++    label.set_value("Not a scroller");
++    let mut slider = Node::new(Role::Slider);
++    slider.set_author_id("slider");
++    slider.set_numeric_value(75.0);
++    slider.set_min_numeric_value(0.0);
++    slider.set_max_numeric_value(300.0);
++    slider.set_scroll_y(75.0);
++    slider.set_scroll_y_min(0.0);
++    slider.set_scroll_y_max(300.0);
++    slider.add_action(Action::SetValue);
++    let mut wide = Node::new(Role::ScrollView);
++    wide.set_author_id("wide");
++    wide.set_bounds(Rect::new(0.0, 100.0, 200.0, 140.0));
++    wide.set_scroll_x(0.0);
++    wide.set_scroll_x_min(-1e308);
++    wide.set_scroll_x_max(1e308);
++    wide.add_action(Action::SetScrollOffset);
++    TreeUpdate {
++        nodes: vec![
++            (WINDOW_ID, root),
++            (LIST_ID, list),
++            (LABEL_ID, label),
++            (SLIDER_ID, slider),
++            (WIDE_ID, wide),
++        ],
++        tree: Some(TreeInfo::new(WINDOW_ID)),
++        tree_id: TreeId::ROOT,
++        focus: WINDOW_ID,
++    }
++}
++
++struct RecordingActionHandler(Arc<Mutex<Vec<ActionRequest>>>);
++
++impl ActionHandler for RecordingActionHandler {
++    fn do_action(&mut self, request: ActionRequest) {
++        self.0.lock().push(request);
++    }
++}
++
++struct ScrollActivationHandler;
++
++impl ActivationHandler for ScrollActivationHandler {
++    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
++        Some(get_initial_state())
++    }
++}
++
++fn find(s: &super::Scope, automation_id: &str) -> Result<IUIAutomationElement> {
++    let root = unsafe { s.uia.ElementFromHandle(s.window.0) }?;
++    let condition = unsafe {
++        s.uia.CreatePropertyCondition(
++            UIA_AutomationIdPropertyId,
++            &VARIANT::from(BSTR::from(automation_id)),
++        )
++    }?;
++    unsafe { root.FindFirst(TreeScope_Descendants, &condition) }
++}
++
++#[test]
++fn scroll_pattern() -> Result<()> {
++    let requests = Arc::new(Mutex::new(Vec::new()));
++    super::scope(
++        WINDOW_TITLE,
++        ScrollActivationHandler,
++        RecordingActionHandler(Arc::clone(&requests)),
++        |s| {
++            let label = find(s, "label")?;
++            assert!(
++                unsafe { label.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
++                    .is_err(),
++                "a node without scroll extents has no scroll pattern"
++            );
++
++            let slider = find(s, "slider")?;
++            assert!(
++                unsafe { slider.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId) }
++                    .is_err(),
++                "an adjuster with scroll extents and no scroll action has no scroll pattern"
++            );
++
++            let list = find(s, "list")?;
++            let scroll: IUIAutomationScrollPattern =
++                unsafe { list.GetCurrentPatternAs(UIA_ScrollPatternId) }?;
++            assert!(bool::from(unsafe { scroll.CurrentVerticallyScrollable() }?));
++            assert!(!bool::from(unsafe { scroll.CurrentHorizontallyScrollable() }?));
++            assert_eq!(unsafe { scroll.CurrentVerticalScrollPercent() }?, 25.0);
++            assert_eq!(
++                unsafe { scroll.CurrentHorizontalScrollPercent() }?,
++                UIA_ScrollPatternNoScroll
++            );
++            assert_eq!(unsafe { scroll.CurrentVerticalViewSize() }?, 25.0);
++            assert_eq!(unsafe { scroll.CurrentHorizontalViewSize() }?, 100.0);
++
++            unsafe { scroll.SetScrollPercent(UIA_ScrollPatternNoScroll, 50.0) }?;
++            unsafe { scroll.Scroll(ScrollAmount_NoAmount, ScrollAmount_LargeIncrement) }?;
++            unsafe { scroll.Scroll(ScrollAmount_NoAmount, ScrollAmount_SmallDecrement) }?;
++            let recorded: Vec<_> = requests
++                .lock()
++                .drain(..)
++                .map(|request| (request.target_node, request.action, request.data))
++                .collect();
++            assert_eq!(
++                recorded,
++                [
++                    (
++                        LIST_ID,
++                        Action::SetScrollOffset,
++                        Some(ActionData::SetScrollOffset(Point::new(0.0, 150.0)))
++                    ),
++                    (
++                        LIST_ID,
++                        Action::ScrollDown,
++                        Some(ActionData::ScrollUnit(ScrollUnit::Page))
++                    ),
++                    (
++                        LIST_ID,
++                        Action::ScrollUp,
++                        Some(ActionData::ScrollUnit(ScrollUnit::Item))
++                    ),
++                ]
++            );
++
++            assert!(
++                unsafe { scroll.Scroll(ScrollAmount_LargeIncrement, ScrollAmount_NoAmount) }
++                    .is_err(),
++                "an axis that does not scroll refuses to"
++            );
++            assert!(
++                unsafe { scroll.SetScrollPercent(UIA_ScrollPatternNoScroll, 101.0) }.is_err(),
++                "a percentage past the end is refused"
++            );
++            assert!(requests.lock().is_empty(), "and nothing is asked");
++
++            let wide = find(s, "wide")?;
++            let wide: IUIAutomationScrollPattern =
++                unsafe { wide.GetCurrentPatternAs(UIA_ScrollPatternId) }?;
++            assert_eq!(
++                unsafe { wide.CurrentHorizontalScrollPercent() }?,
++                50.0,
++                "a range wider than f64::MAX reads finite"
++            );
++            let shown = unsafe { wide.CurrentHorizontalViewSize() }?;
++            assert!(
++                shown > 0.0 && shown < 1e-300,
++                "a range wider than f64::MAX shows a sliver of its content, not none: {shown}"
++            );
++            unsafe { wide.SetScrollPercent(100.0, UIA_ScrollPatternNoScroll) }?;
++            let recorded: Vec<_> = requests
++                .lock()
++                .drain(..)
++                .map(|request| (request.target_node, request.data))
++                .collect();
++            assert_eq!(
++                recorded,
++                [(
++                    WIDE_ID,
++                    Some(ActionData::SetScrollOffset(Point::new(1e308, 0.0)))
++                )],
++                "and scrolls to a finite position"
++            );
++            Ok(())
++        },
++    )
++}

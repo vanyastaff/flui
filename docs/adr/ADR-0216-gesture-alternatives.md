@@ -10,6 +10,9 @@
 - **Amended:** 2026-10-19 — §4: a virtual pointer's secondary click opens the menu; the revealed
   menu control stays until focus leaves the row or a pointer presses the row elsewhere, and the
   focus ring takes no pointer input.
+- **Amended:** 2026-10-31 — §2: reorder offers its moves in a context menu opened from the drag
+  handle by default, with visible move controls as an opt-in; its move keys are bound by the row,
+  beside the reserved-key filter.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -106,8 +109,17 @@ matrix, because a constructor cannot check them:
   keyboard and AT path is the focus-revealed control;
 - the menu and its items are reachable without hover.
 
-Reorder always uses `VisibleControl` (a drag handle), plus "move up", "move down", "move to
-start" and "move to end" actions.
+Reorder's moves are "move to start", "move up", "move down" and "move to end", one `Intent` each,
+offered only where they apply to the row. By default they are a `ContextMenu` that the row's drag
+handle opens with a tap, as well as by every trigger above. A list opts into `VisibleControl` move
+controls on every row instead. The handle is already a visible single-pointer control, so the menu
+path keeps the move visible; drawing four controls on every row would crowd every list to serve a
+path the handle already gives. `assert_gesture_alternatives` checks every path of both shapes.
+
+A row binds its moves to Alt with the arrows, Home and End through its own `Shortcuts`, not as
+command keys: §3 drops the keys the platform reserves (§1.2's list) from gesture commands, and
+those keys edit text. The binding sits above the row's focus, so a text field inside the row
+handles them first.
 
 ### 3. Behaviour the alternatives share
 

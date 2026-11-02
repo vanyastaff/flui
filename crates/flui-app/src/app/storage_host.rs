@@ -1,13 +1,13 @@
 //! The byte storage the host hands every UI runtime it builds: the
-//! platform's [`FileStore`] under the configured data roots, its calls run
+//! platform's [`DataStore`] for the configured data directory, its calls run
 //! on the host's IO pool: blocking on native targets, awaited on wasm32,
 //! where the page's IndexedDB answers in a later task.
 //!
-//! A read is one IO task. Writes go through one lane per name: [`publish`]
-//! accepts the bytes at once, and the lane's single IO task writes the
-//! latest accepted value of that name, then the next, until none is left.
-//! A value accepted while an older one of the same name has not started
-//! replaces it, and the older request resolves to
+//! A read and a copy aside are one IO task each. Writes go through one lane
+//! per name: [`publish`] accepts the bytes at once, and the lane's single IO
+//! task writes the latest accepted value of that name, then the next, until
+//! none is left. A value accepted while an older one of the same name has
+//! not started replaces it, and the older request resolves to
 //! [`StorageError::Superseded`]. Accepted work is never dropped silently: if
 //! the IO pool refuses the task, or shuts down before running it, every
 //! value it held resolves to the refusal.
@@ -18,29 +18,29 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Weak};
 
-use flui_native::storage::{DataDirs, FileStore};
+use flui_native::storage::DataStore;
 use flui_platform::{
-    Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, Unsupported,
-    UnsupportedReason, WriteMode,
+    CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
+    Unsupported, UnsupportedReason, WriteMode,
 };
 use flui_runtime::execution::{ExecutionServices, IoFuture, SpawnError};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
-/// The host's storage: `FileStore` under `dirs`, run on `io`.
+/// The host's storage: `store`, its calls run on `io`.
 ///
 /// Holds the IO pool weakly: once the host's execution services are gone,
 /// every new request resolves to [`StorageError::Cancelled`].
-pub(crate) fn host_storage(dirs: DataDirs, io: Weak<ExecutionServices>) -> Arc<dyn Storage> {
+pub(crate) fn host_storage(store: DataStore, io: Weak<ExecutionServices>) -> Arc<dyn Storage> {
     Arc::new(HostStorage {
-        store: Arc::new(FileStore::new(dirs)),
+        store: Arc::new(store),
         io,
         lanes: Arc::default(),
     })
 }
 
 struct HostStorage {
-    store: Arc<FileStore>,
+    store: Arc<DataStore>,
     io: Weak<ExecutionServices>,
     lanes: Arc<Mutex<HashMap<StorageName, Lane>>>,
 }
@@ -162,6 +162,19 @@ impl Storage for HostStorage {
         // newer value replaced it, or the refusal that released its lane.
         Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) })
     }
+
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<CopiedAside> {
+        let (reply, answer) = oneshot::channel();
+        let store = Arc::clone(&self.store);
+        let name = *name;
+        let task: IoFuture = Box::pin(async move {
+            let _ = reply.send(answer!(store.copy_aside(&name)));
+        });
+        match self.spawn(task) {
+            Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
+            Err(error) => Box::pin(std::future::ready(Err(error))),
+        }
+    }
 }
 
 /// Who releases a lane whose writer never ran: the publisher, while it has
@@ -193,7 +206,7 @@ fn release_lane(
 /// leaves that to the publisher while the handoff is pending (see
 /// [`Handoff`]).
 struct LaneWriter {
-    store: Arc<FileStore>,
+    store: Arc<DataStore>,
     lanes: Arc<Mutex<HashMap<StorageName, Lane>>>,
     io: Weak<ExecutionServices>,
     name: StorageName,
@@ -260,7 +273,7 @@ mod tests {
     use std::future::Future;
     use std::sync::Arc;
 
-    use flui_native::storage::DataDirs;
+    use flui_native::storage::{DataDirs, DataStore};
     use flui_platform::{Storage, StorageError, StorageName, Stored, StoredVersion, WriteMode};
     use flui_runtime::execution::{DeterministicExecutors, ExecutionServices};
 
@@ -281,10 +294,10 @@ mod tests {
             let io = DeterministicExecutors::new();
             let services = Arc::new(ExecutionServices::with_host(io.host_executors()));
             let storage = super::host_storage(
-                DataDirs {
+                DataStore::on_disk(DataDirs {
                     roaming: roots.path().join("roaming"),
                     local: roots.path().join("local"),
-                },
+                }),
                 Arc::downgrade(&services),
             );
             Self {
@@ -464,10 +477,10 @@ mod tests {
             Arc::clone(&pool) as Arc<dyn HostIoPool>,
         )));
         let storage = super::host_storage(
-            DataDirs {
+            DataStore::on_disk(DataDirs {
                 roaming: roots.path().join("roaming"),
                 local: roots.path().join("local"),
-            },
+            }),
             Arc::downgrade(&services),
         );
         let second: Arc<Mutex<Option<StorageFuture<StoredVersion>>>> = Arc::default();

@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+  in full: payloads are dropped normally.
 - **Superseded-by:** [ADR-0127](ADR-0127-exceptional-path-retention.md),
   only the sentence keeping callback, obligation and render-object policies.
 - **Supersedes:** [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md)

@@ -13,8 +13,8 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
-    GestureRecognizer, KeyEventResult, PointerKindSet, TapAndDragGestureRecognizer,
-    TapGestureRecognizer,
+    GestureRecognizer, KeyEventResult, LongPressGestureRecognizer, PointerKindSet,
+    TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
@@ -26,7 +26,10 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 
-use super::{SelectableEntry, SelectionModel, paragraph_beneath};
+use super::{
+    HandleSide, SelectableEntry, SelectionChangeCause, SelectionInput, SelectionModel,
+    paragraph_beneath,
+};
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{
     Action, ActionOutcome, CopySelectionTextIntent, DismissIntent, GesturePolicy, Listener,
@@ -54,10 +57,11 @@ impl Unit {
     }
 }
 
-/// A drag in progress: the unit it selects by and the unit it started on,
-/// which stays selected whichever way it goes.
+/// A drag in progress: the input moving it, the unit it selects by and the
+/// unit it started on, which stays selected whichever way it goes.
 #[derive(Debug, Clone)]
 struct Drag {
+    input: SelectionInput,
     unit: Unit,
     start: DocumentPosition,
     end: DocumentPosition,
@@ -156,6 +160,139 @@ impl SelectionModel {
             .flatten()
     }
 
+    /// The selection's `side` end in reading order, with its text: where
+    /// the first (or last) text with selected bytes starts (or stops)
+    /// them, the end the paragraph publishes for its handle. An end at a
+    /// text's edge that selects nothing of it is the next text's.
+    fn end(&self, ordered: &[Ordered], side: HandleSide) -> Option<(usize, DocumentPosition)> {
+        let selection = self.selection.borrow().clone()?;
+        let (covered, _) = self.covered(&selection)?;
+        let mut parts = covered.iter().filter(|part| !part.range.is_empty());
+        let part = match side {
+            HandleSide::End => parts.next_back(),
+            _ => parts.next(),
+        }?;
+        let byte = match side {
+            HandleSide::End => part.range.end,
+            _ => part.range.start,
+        };
+        let entry = Rc::clone(self.registry.entries.borrow().get(part.index)?);
+        let index = ordered
+            .iter()
+            .position(|text| Rc::ptr_eq(&text.entry, &entry))?;
+        Some((index, DocumentPosition::new(entry.anchor.clone(), byte)))
+    }
+
+    /// Where `side`'s end sits: the middle of its line, in render-root
+    /// coordinates, and the line's height. The start sits on the line after
+    /// it and the end on the line it ends, as the paragraph publishes them.
+    fn end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
+        let ordered = self.ordered();
+        let (index, at) = self.end(&ordered, side)?;
+        self.with_paragraph(&ordered[index].entry, |paragraph, to_root| {
+            let painter = paragraph.painter();
+            // The end sits where the highlight ends, on the current text's
+            // grapheme boundaries.
+            let text = painter
+                .text()
+                .map(flui_painting::typography::InlineSpan::to_plain_text)
+                .unwrap_or_default();
+            let byte = text_boundaries::grapheme_floor(&text, at.byte());
+            let upstream = side == HandleSide::End;
+            let position = if upstream {
+                TextPosition::upstream(byte)
+            } else {
+                TextPosition::downstream(byte)
+            };
+            let caret = painter.get_offset_for_caret(position);
+            let height = line_of(&painter.get_line_metrics(), byte, upstream)?.height;
+            let (x, y) = to_root.transform_point(caret.dx, caret.dy + height / 2.0);
+            Some((Offset::new(x, y), height))
+        })
+    }
+
+    /// The height of the line `side`'s end sits on, while it is laid out.
+    pub(super) fn end_line_height(&self, side: HandleSide) -> Option<f64> {
+        self.end_line(side).map(|(_, height)| height)
+    }
+
+    /// A drag of `side`'s handle began with the contact at `global`: the
+    /// end keeps the distance it had from the contact, so the handle does
+    /// not jump under the finger.
+    pub(super) fn handle_drag_started(&self, side: HandleSide, global: Offset<f64>) {
+        let grip = self.end_line(side).map(|(middle, _)| middle - global);
+        self.handles.grip.set(grip.map(|grip| (side, grip)));
+    }
+
+    /// `side`'s handle was dragged to `global`: its end moves to the
+    /// position there, the other end stays, and an end never passes the
+    /// other, so the handles keep their sides.
+    pub(super) fn handle_dragged(&self, side: HandleSide, global: Offset<f64>) {
+        let Some((gripped, grip)) = self.handles.grip.get() else {
+            return;
+        };
+        if gripped != side {
+            return;
+        }
+        let ordered = self.ordered();
+        let other = match side {
+            HandleSide::End => HandleSide::Start,
+            _ => HandleSide::End,
+        };
+        let (Some(hit), Some((_, fixed))) = (
+            self.position_at(&ordered, global + grip),
+            self.end(&ordered, other),
+        ) else {
+            return;
+        };
+        let keeps_side = match side {
+            HandleSide::End => Self::compare(&ordered, &fixed, &hit.at) == Ordering::Less,
+            _ => Self::compare(&ordered, &hit.at, &fixed) == Ordering::Less,
+        };
+        if !keeps_side {
+            return;
+        }
+        let caret = CaretMemory::after_hit(&hit.at, &hit);
+        self.select_from_input(
+            Some(DocumentSelection::new(fixed, hit.at)),
+            caret,
+            SelectionInput::Touch,
+        );
+    }
+
+    /// A touch long press at `global`: select the word under it and show
+    /// the handles. The same touch then extends the selection by words as
+    /// it moves, keeping that word selected.
+    fn long_pressed(self: &Rc<Self>, global: Offset<f64>) {
+        let ordered = self.ordered();
+        let Some(hit) = self.position_at(&ordered, global) else {
+            return;
+        };
+        let (start, end) = self.unit_at(&ordered, &hit.at, Unit::Word);
+        let caret = CaretMemory::after_hit(&end, &hit);
+        let held = Drag {
+            input: SelectionInput::Touch,
+            unit: Unit::Word,
+            start: start.clone(),
+            end: end.clone(),
+        };
+        let word = DocumentSelection::new(start, end);
+        let committed = self.registry.snap(&word);
+        // A listener that panics still leaves the word selected, so its
+        // handles are shown before the first failure is resumed.
+        let mut failure = FirstPanic::new();
+        self.select_contained(Some(word), caret, SelectionInput::Touch, &mut failure);
+        // A listener that moved the focus away has taken the handles and the
+        // rest of the press with it, and one that selected something else has
+        // replaced the word they were for.
+        let still_the_word = committed.is_some() && *self.selection.borrow() == committed;
+        if still_the_word && self.focus.has_primary_focus() {
+            *self.pointer.drag.borrow_mut() = Some(held);
+            self.show_handles(&mut failure);
+        }
+        failure.resume();
+    }
+
     /// The position nearest `global` (render-root coordinates): in the text
     /// under it, else in the nearest text, nearer by line first.
     fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<Hit> {
@@ -241,12 +378,30 @@ impl SelectionModel {
     /// focus, so its highlight is the active one, and the listener hears of
     /// the change through the area's writer. `caret` is what the keys keep
     /// about the new moving end.
-    fn select_from_input(&self, selection: Option<DocumentSelection>, caret: CaretMemory) {
+    fn select_from_input(
+        &self,
+        selection: Option<DocumentSelection>,
+        caret: CaretMemory,
+        input: SelectionInput,
+    ) {
+        let mut failure = FirstPanic::new();
+        self.select_contained(selection, caret, input, &mut failure);
+        failure.resume();
+    }
+
+    /// [`Self::select_from_input`], holding a listener's panic in `failure`
+    /// for the caller to resume once it has finished its own work.
+    fn select_contained(
+        &self,
+        selection: Option<DocumentSelection>,
+        caret: CaretMemory,
+        input: SelectionInput,
+        failure: &mut FirstPanic,
+    ) {
         // A click that selects nothing still makes this area the target of
         // the keys, so select all and copy act on the area last clicked. A
         // blur listener that panics still lets the selection commit and be
-        // reported; the first failure is resumed afterwards.
-        let mut failure = FirstPanic::new();
+        // reported.
         if !self.focus.has_primary_focus() {
             failure.contain(|| {
                 let _outcome = self.focus.request_focus();
@@ -255,16 +410,31 @@ impl SelectionModel {
         let writer = self.writer.borrow().clone();
         if let Some(writer) = writer {
             failure.contain(|| {
-                writer.write(|cx| self.commit(cx, selection.as_ref(), true, caret));
+                writer.write(|cx| {
+                    self.commit(
+                        cx,
+                        selection.as_ref(),
+                        SelectionChangeCause::User(input),
+                        caret,
+                    );
+                });
             });
         }
-        failure.resume();
     }
 
     /// A press at `global` began a drag by `unit`: select that unit and
     /// extend from it. With Shift held, the drag extends the current
     /// selection from its anchor instead.
     fn drag_started(&self, pressed: Offset<f64>, unit: Unit) {
+        // A mouse, pen or trackpad selection shows no handles; a wake that
+        // fails while they are taken away still lets the press select.
+        let mut failure = FirstPanic::new();
+        self.hide_handles(&mut failure);
+        failure.contain(|| self.drag_selects(pressed, unit));
+        failure.resume();
+    }
+
+    fn drag_selects(&self, pressed: Offset<f64>, unit: Unit) {
         let ordered = self.ordered();
         let anchor = self
             .selection
@@ -274,6 +444,7 @@ impl SelectionModel {
             .map(|selection| selection.anchor().clone());
         if let Some(anchor) = anchor {
             *self.pointer.drag.borrow_mut() = Some(Drag {
+                input: SelectionInput::Pointer,
                 unit: Unit::Character,
                 start: anchor.clone(),
                 end: anchor,
@@ -285,18 +456,24 @@ impl SelectionModel {
         };
         let (start, end) = self.unit_at(&ordered, &hit.at, unit);
         *self.pointer.drag.borrow_mut() = Some(Drag {
+            input: SelectionInput::Pointer,
             unit,
             start: start.clone(),
             end: end.clone(),
         });
         let caret = CaretMemory::after_hit(&end, &hit);
-        self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
+        self.select_from_input(
+            Some(DocumentSelection::new(start, end)),
+            caret,
+            SelectionInput::Pointer,
+        );
     }
 
-    /// The drag moved to `global`: select from its first unit to the unit
-    /// there, keeping the first unit whichever way the drag went.
-    fn drag_moved(&self, global: Offset<f64>) {
-        let Some(drag) = self.pointer.drag.borrow().clone() else {
+    /// The drag `input` moves went to `global`: select from its first unit
+    /// to the unit there, keeping the first unit whichever way the drag went.
+    fn drag_moved(&self, global: Offset<f64>, input: SelectionInput) {
+        let drag = self.pointer.drag.borrow().clone();
+        let Some(drag) = drag.filter(|drag| drag.input == input) else {
             return;
         };
         let ordered = self.ordered();
@@ -310,11 +487,15 @@ impl SelectionModel {
             DocumentSelection::new(drag.start, end)
         };
         let caret = CaretMemory::after_hit(selection.focus(), &hit);
-        self.select_from_input(Some(selection), caret);
+        self.select_from_input(Some(selection), caret, input);
     }
 
-    fn drag_ended(&self) {
-        self.pointer.drag.borrow_mut().take();
+    /// The drag `input` moves ended; a drag by another input goes on.
+    pub(super) fn drag_ended(&self, input: SelectionInput) {
+        let mut drag = self.pointer.drag.borrow_mut();
+        if drag.as_ref().is_some_and(|drag| drag.input == input) {
+            *drag = None;
+        }
     }
 
     /// A text the drag in progress started on left: the drag goes on from
@@ -333,7 +514,9 @@ impl SelectionModel {
         if held(&current.start) && held(&current.end) {
             return;
         }
+        let input = current.input;
         *drag = kept.map(|kept| Drag {
+            input,
             unit: Unit::Character,
             start: kept.anchor().clone(),
             end: kept.anchor().clone(),
@@ -344,7 +527,16 @@ impl SelectionModel {
     /// single one clears the selection, a double one selects the word under
     /// it and a triple one the text. With Shift held, it extends the
     /// selection from its anchor.
-    fn tapped(&self, global: Offset<f64>, count: u32) {
+    fn tapped(&self, global: Offset<f64>, count: u32, input: SelectionInput) {
+        // A tap, by touch or not, hides the handles; a wake that fails while
+        // they are taken away still lets the tap select.
+        let mut failure = FirstPanic::new();
+        self.hide_handles(&mut failure);
+        failure.contain(|| self.tap_selects(global, count, input));
+        failure.resume();
+    }
+
+    fn tap_selects(&self, global: Offset<f64>, count: u32, input: SelectionInput) {
         let ordered = self.ordered();
         let anchor = self
             .selection
@@ -355,19 +547,19 @@ impl SelectionModel {
         if let Some(anchor) = anchor {
             if let Some(hit) = self.position_at(&ordered, global) {
                 let caret = CaretMemory::after_hit(&hit.at, &hit);
-                self.select_from_input(Some(DocumentSelection::new(anchor, hit.at)), caret);
+                self.select_from_input(Some(DocumentSelection::new(anchor, hit.at)), caret, input);
             }
             return;
         }
         let unit = Unit::of_taps(count);
         if unit == Unit::Character {
-            self.select_from_input(None, CaretMemory::default());
+            self.select_from_input(None, CaretMemory::default(), input);
             return;
         }
         if let Some(hit) = self.position_at(&ordered, global) {
             let (start, end) = self.unit_at(&ordered, &hit.at, unit);
             let caret = CaretMemory::after_hit(&end, &hit);
-            self.select_from_input(Some(DocumentSelection::new(start, end)), caret);
+            self.select_from_input(Some(DocumentSelection::new(start, end)), caret, input);
         }
     }
 
@@ -381,7 +573,7 @@ impl SelectionModel {
             DocumentPosition::new(first.entry.anchor.clone(), 0),
             DocumentPosition::new(last.entry.anchor.clone(), last.shown),
         );
-        self.select(cx, Some(&selection));
+        self.select(cx, Some(&selection), SelectionInput::Keyboard);
         ActionOutcome::Performed
     }
 
@@ -479,7 +671,12 @@ impl SelectionModel {
         };
         if let Some(focus) = focus {
             let selection = DocumentSelection::new(selection.anchor().clone(), focus);
-            self.commit(cx, Some(&selection), true, next_memory);
+            self.commit(
+                cx,
+                Some(&selection),
+                SelectionChangeCause::User(SelectionInput::Keyboard),
+                next_memory,
+            );
         }
         KeyEventResult::Handled
     }
@@ -623,7 +820,7 @@ impl Action<DismissIntent> for AreaAction {
         let Some(model) = self.0.upgrade() else {
             return ActionOutcome::NotPerformed;
         };
-        model.select(cx, None);
+        model.select(cx, None, SelectionInput::Keyboard);
         ActionOutcome::Performed
     }
 }
@@ -659,6 +856,7 @@ impl StatefulView for SelectionGestures {
             recognizers: None,
             tap_and_drag: Rc::new(RecognizerAttachment::default()),
             touch_tap: Rc::new(RecognizerAttachment::default()),
+            touch_long_press: Rc::new(RecognizerAttachment::default()),
         }
     }
 }
@@ -666,12 +864,14 @@ impl StatefulView for SelectionGestures {
 struct Recognizers {
     tap_and_drag: Rc<TapAndDragGestureRecognizer>,
     touch_tap: Rc<TapGestureRecognizer>,
+    touch_long_press: Rc<LongPressGestureRecognizer>,
 }
 
 impl Recognizers {
     fn cancel(&self) {
         let _ = self.tap_and_drag.cancel();
         let _ = self.touch_tap.cancel();
+        let _ = self.touch_long_press.cancel();
     }
 }
 
@@ -682,6 +882,7 @@ pub struct SelectionGesturesState {
     recognizers: Option<Recognizers>,
     tap_and_drag: Rc<RecognizerAttachment<TapAndDragGestureRecognizer>>,
     touch_tap: Rc<RecognizerAttachment<TapGestureRecognizer>>,
+    touch_long_press: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
 }
 
 impl std::fmt::Debug for SelectionGesturesState {
@@ -721,53 +922,88 @@ impl SelectionGesturesState {
                 })
                 .on_tap_up(move |details| {
                     if let Some(model) = up.upgrade() {
-                        model.tapped(details.global_position, details.consecutive_tap_count);
+                        model.tapped(
+                            details.global_position,
+                            details.consecutive_tap_count,
+                            SelectionInput::Pointer,
+                        );
                     }
                 })
                 .on_drag_start(move |details| {
                     if let Some(model) = start.upgrade() {
                         let at = pressed_start.get().unwrap_or(details.global_position);
                         model.drag_started(at, Unit::of_taps(details.consecutive_tap_count));
-                        model.drag_moved(details.global_position);
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
                     }
                 })
                 .on_drag_update(move |details| {
                     if let Some(model) = update.upgrade() {
-                        model.drag_moved(details.global_position);
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
                     }
                 })
                 .on_drag_end(move |details| {
                     if let Some(model) = end.upgrade() {
                         // The release can lie past the last update, which
                         // smoothing may also have moved.
-                        model.drag_moved(details.global_position);
-                        model.drag_ended();
+                        model.drag_moved(details.global_position, SelectionInput::Pointer);
+                        model.drag_ended(SelectionInput::Pointer);
                     }
                 })
                 .on_cancel(move || {
                     if let Some(model) = cancel.upgrade() {
-                        model.drag_ended();
+                        model.drag_ended(SelectionInput::Pointer);
                     }
                 })
                 .build()
         };
         let touch_tap = {
-            let tapped = weak;
-            TapGestureRecognizer::builder(arena)
-                .settings(settings)
+            let tapped = weak.clone();
+            TapGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
                 .allowed_devices(PointerKindSet::TOUCH)
                 .on_tap_up(move |details| {
                     if let Some(model) = tapped.upgrade() {
-                        model.tapped(details.global_position, 1);
+                        model.tapped(details.global_position, 1, SelectionInput::Touch);
+                    }
+                })
+                .build()
+        };
+        let touch_long_press = {
+            let (pressed, moved, released, cancelled) =
+                (weak.clone(), weak.clone(), weak.clone(), weak);
+            LongPressGestureRecognizer::builder(arena)
+                .settings(settings)
+                .allowed_devices(PointerKindSet::TOUCH)
+                .on_long_press_start(move |details| {
+                    if let Some(model) = pressed.upgrade() {
+                        model.long_pressed(details.global_position);
+                    }
+                })
+                .on_long_press_move_update(move |details| {
+                    if let Some(model) = moved.upgrade() {
+                        model.drag_moved(details.global_position, SelectionInput::Touch);
+                    }
+                })
+                .on_long_press_end(move |details| {
+                    if let Some(model) = released.upgrade() {
+                        model.drag_moved(details.global_position, SelectionInput::Touch);
+                        model.drag_ended(SelectionInput::Touch);
+                    }
+                })
+                .on_long_press_cancel(move |_details| {
+                    if let Some(model) = cancelled.upgrade() {
+                        model.drag_ended(SelectionInput::Touch);
                     }
                 })
                 .build()
         };
         self.tap_and_drag.attach(&tap_and_drag);
         self.touch_tap.attach(&touch_tap);
+        self.touch_long_press.attach(&touch_long_press);
         let outgoing = self.recognizers.replace(Recognizers {
             tap_and_drag,
             touch_tap,
+            touch_long_press,
         });
         self.built_for = Some(policy);
         if let Some(outgoing) = outgoing {
@@ -789,6 +1025,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
     fn dispose(&mut self) {
         self.tap_and_drag.clear();
         self.touch_tap.clear();
+        self.touch_long_press.clear();
         if let Some(recognizers) = self.recognizers.take() {
             recognizers.cancel();
         }
@@ -811,6 +1048,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
             })
             .recognizer(&self.tap_and_drag)
             .recognizer(&self.touch_tap)
+            .recognizer(&self.touch_long_press)
             .child(view.child.clone())
     }
 }

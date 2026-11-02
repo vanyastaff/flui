@@ -37,7 +37,13 @@ struct Labeled {
     boundary: bool,
 }
 
-impl flui_foundation::Diagnosticable for Labeled {}
+impl flui_foundation::inspect::Inspect for Labeled {
+    fn kind(&self) -> &'static str {
+        "Labeled"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for Labeled {
     type Arity = Leaf;

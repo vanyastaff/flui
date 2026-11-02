@@ -273,11 +273,15 @@ impl RenderFlow {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderFlow {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
+impl flui_foundation::inspect::Inspect for RenderFlow {
+    fn kind(&self) -> &'static str {
+        "RenderFlow"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         // No delegate info is surfaced, so clip_behavior is the only field
         // worth reporting.
-        builder.add_enum("clip_behavior", self.clip_behavior);
+        out.field("clip_behavior", &self.clip_behavior);
     }
 }
 

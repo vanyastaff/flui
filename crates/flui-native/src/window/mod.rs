@@ -28,6 +28,10 @@ pub(crate) mod apple;
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
 pub(crate) mod capabilities;
 pub(crate) mod headless;
+#[cfg(any(target_os = "ios", target_arch = "wasm32", test))]
+pub(crate) mod keyboard;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod keyboard_motion;
 #[cfg(any(linux_host, test))]
 pub(crate) mod linux {
     //! The Linux windows: the native Wayland host's (`wayland`), and the native

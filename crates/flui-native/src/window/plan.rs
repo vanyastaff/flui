@@ -41,10 +41,15 @@ impl WindowShell {
     /// Which commands and observations a window on this shell has. winit
     /// reports no presentation on any shell, though the compositors under it
     /// do (`wp_presentation_time`, DXGI statistics): the native hosts read
-    /// them, and this one does not.
+    /// them, and this one does not. Nor does it report the occlusion of a
+    /// touch keyboard, which Windows shows on a tablet; no desktop shell
+    /// reserves screen edges for system gestures.
     pub(super) const fn capabilities(self) -> WindowCapabilities {
         self.shell_capabilities()
             .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+            .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+            .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+            .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost)
     }
 
     const fn shell_capabilities(self) -> WindowCapabilities {
@@ -200,9 +205,9 @@ impl OpenPlan {
             WindowMode::Maximized | WindowMode::Fullscreen => options.normal_geometry,
             _ => None,
         };
-        // An undecorated window has no frame to take from a remembered outer
-        // size, whatever the decorated windows before it measured.
-        let inset = if options.decorated {
+        // A window without the system's frame has none to take from a remembered
+        // outer size, whatever the framed windows before it measured.
+        let inset = if options.frame.at_open(&capabilities).has_system_title_bar() {
             inset
         } else {
             Size::new(0.0, 0.0)
@@ -318,6 +323,7 @@ impl FrameInset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_platform::{AppTitleBar, WindowFrame};
 
     const DISPLAY: PlacementDisplay = PlacementDisplay {
         origin: Point { x: 1920, y: 0 },
@@ -421,8 +427,11 @@ mod tests {
         assert_eq!(
             desktop,
             WindowCapabilities::ALL
-                .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost),
-            "winit reports no presentation on any shell"
+                .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+                .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
+                .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+                .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost),
+            "winit reports no presentation or keyboard on any shell"
         );
 
         let wayland = WindowShell::Wayland.capabilities();
@@ -433,7 +442,8 @@ mod tests {
             ("sets_size", wayland.sets_size, true),
             ("sets_constraints", wayland.sets_constraints, true),
             ("sets_resizable", wayland.sets_resizable, true),
-            ("sets_decorated", wayland.sets_decorated, true),
+            ("sets_frame", wayland.sets_frame, true),
+            ("app_title_bar", wayland.app_title_bar, false),
             ("minimizes", wayland.minimizes, true),
             ("maximizes", wayland.maximizes, true),
             ("enters_fullscreen", wayland.enters_fullscreen, true),
@@ -639,18 +649,23 @@ mod tests {
     }
 
     #[test]
-    fn open_plan_takes_no_frame_from_an_undecorated_window() {
+    fn open_plan_takes_no_frame_from_a_window_without_the_systems() {
         let returns_to =
             WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
-        // (case, decorated, content size)
+        // (case, frame asked for, content size)
         let table = [
-            ("decorated", true, Size::new(998.0, 670.0)),
-            ("undecorated", false, Size::new(1000.0, 700.0)),
+            ("system", WindowFrame::System, Size::new(998.0, 670.0)),
+            (
+                "app title bar, which winit cannot take",
+                WindowFrame::AppTitleBar(AppTitleBar::new()),
+                Size::new(998.0, 670.0),
+            ),
+            ("none", WindowFrame::None, Size::new(1000.0, 700.0)),
         ];
-        for (case, decorated, expected) in table {
+        for (case, frame_asked, expected) in table {
             let options = options()
-                .with_decorated(decorated)
+                .with_frame(frame_asked)
                 .with_mode(WindowMode::Maximized)
                 .with_normal_geometry(Some(returns_to));
             let planned = OpenPlan::new(&options, WindowShell::Desktop, DISPLAY, frame);

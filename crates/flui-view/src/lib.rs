@@ -86,6 +86,7 @@
 )]
 extern crate self as flui_view;
 
+pub mod background;
 pub mod binding;
 pub mod child;
 pub mod context;
@@ -219,7 +220,7 @@ pub use flui_rendering::RenderUpdateImpact;
 pub use flui_scheduler::{
     AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FramePhase, FrameTiming,
     FrameWaker, Instant, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
-    Seconds, TaskToken, duration::InvalidDurationConfig,
+    Seconds, Sleep, TaskToken, TimerHandle, duration::InvalidDurationConfig,
 };
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
@@ -232,7 +233,7 @@ pub use test_only_global_key_registry::{
 pub use owner::{
     BuildOwner, BuildPremise, CapabilitySource, DuplicateGlobalKey, ElementOwner, FrameBuildReport,
     GlobalKeyScope, LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason,
-    RebuildReasons, RecoveredAt, RecoveredPanic,
+    RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{

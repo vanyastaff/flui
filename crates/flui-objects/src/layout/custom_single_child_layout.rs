@@ -117,9 +117,17 @@ impl RenderCustomSingleChildLayoutBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderCustomSingleChildLayoutBox {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("delegate", format!("{:?}", self.delegate));
+impl flui_foundation::inspect::Inspect for RenderCustomSingleChildLayoutBox {
+    fn kind(&self) -> &'static str {
+        "RenderCustomSingleChildLayoutBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        // A user delegate: only its `Debug` describes it.
+        out.value(
+            "delegate",
+            flui_foundation::inspect::Value::Debug(&self.delegate),
+        );
     }
 }
 

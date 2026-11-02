@@ -26,13 +26,15 @@ struct Piece {
 /// `text`'s runs as `lines` lay it out in `direction`, shifted left by
 /// `scroll_x`. An empty line publishes one empty run, bounded by
 /// `empty_rect` of the line's start and the line itself, where the caret on
-/// it sits.
+/// it sits. No run crosses a byte of `cuts` (sorted), such as a link's
+/// edge.
 pub(crate) fn text_runs(
     text: &str,
     lines: &[TextLineLayout],
     direction: TextDirection,
     scroll_x: f64,
     empty_rect: impl Fn(usize, &TextLineLayout) -> Rect,
+    cuts: &[usize],
 ) -> Result<Vec<TextRun>, TextRunError> {
     let words: Vec<usize> = word_starts(text).collect();
     let mut runs = Vec::new();
@@ -48,7 +50,7 @@ pub(crate) fn text_runs(
         }
         for run in &layout.runs {
             let pieces = pieces(text, run);
-            for chunk in pieces.chunks(MAX_RUN_CHARACTERS) {
+            for chunk in groups(&pieces, cuts) {
                 runs.push(text_run(
                     text,
                     chunk,
@@ -64,6 +66,24 @@ pub(crate) fn text_runs(
     Ok(runs)
 }
 
+/// `pieces` cut into runs of at most [`MAX_RUN_CHARACTERS`] characters and
+/// at every byte of `cuts` (sorted), so no run crosses one.
+fn groups<'a>(pieces: &'a [Piece], cuts: &[usize]) -> Vec<&'a [Piece]> {
+    let mut groups = Vec::new();
+    let mut start = 0;
+    for (index, piece) in pieces.iter().enumerate() {
+        let full = index - start == MAX_RUN_CHARACTERS;
+        let cut = index > start && cuts.binary_search(&piece.range.start).is_ok();
+        if full || cut {
+            groups.push(&pieces[start..index]);
+            start = index;
+        }
+    }
+    if start < pieces.len() {
+        groups.push(&pieces[start..]);
+    }
+    groups
+}
 /// The run of `pieces`, contiguous and in logical order, on `line`.
 fn text_run(
     text: &str,

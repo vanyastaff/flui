@@ -4,7 +4,7 @@
 //! hit-testing are transparent single-child proxy behavior; only the
 //! semantics hooks differ.
 
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Axis, AxisDirection};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, Single};
 use flui_rendering::semantics::{CustomActionId, NumericRange, SemanticsAction};
 use flui_rendering::{
@@ -166,7 +166,7 @@ pub struct RenderSemanticsAnnotations {
     block_user_actions: bool,
     has_child: bool,
     action_route: Option<SemanticsActionRoute>,
-    scroll: Option<(ScrollPosition, Axis, bool)>,
+    scroll: Option<(ScrollPosition, AxisDirection)>,
     scroll_subscription: Option<Rc<ScrollSubscription>>,
     invalidation: Option<LocalRenderInvalidationHandle>,
     /// Custom actions added after the configuration's own, each handler
@@ -258,13 +258,13 @@ impl RenderSemanticsAnnotations {
     /// Position notifications invalidate semantics without rebuilding the viewport.
     pub fn set_scroll_source(
         &mut self,
-        source: Option<(ScrollPosition, Axis, bool)>,
+        source: Option<(ScrollPosition, AxisDirection)>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self
             .scroll
             .as_ref()
             .zip(source.as_ref())
-            .is_some_and(|(old, new)| old.0.ptr_eq(&new.0) && old.1 == new.1 && old.2 == new.2)
+            .is_some_and(|(old, new)| old.0.ptr_eq(&new.0) && old.1 == new.1)
             || self.scroll.is_none() && source.is_none()
         {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -276,7 +276,7 @@ impl RenderSemanticsAnnotations {
     }
 
     fn subscribe_scroll(&mut self) {
-        if let (Some((position, _, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
+        if let (Some((position, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
             let handle = handle.clone();
             let listener: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
                 let _ = handle.mark_needs_semantics();
@@ -426,55 +426,38 @@ impl Default for RenderSemanticsAnnotations {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("container", self.container, "container");
-        builder.add_flag(
-            "explicit_child_nodes",
-            self.explicit_child_nodes,
-            "explicit child nodes",
-        );
-        builder.add_flag(
-            "exclude_semantics",
-            self.exclude_semantics,
-            "exclude semantics",
-        );
-        builder.add_flag(
-            "block_user_actions",
-            self.block_user_actions,
-            "block user actions",
-        );
-        builder.add_flag(
-            "has_semantics",
-            self.configuration.has_been_annotated(),
-            "has semantics",
-        );
+impl flui_foundation::inspect::Inspect for RenderSemanticsAnnotations {
+    fn kind(&self) -> &'static str {
+        "RenderSemanticsAnnotations"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("container", &self.container).default(&false);
+        out.field("explicit_child_nodes", &self.explicit_child_nodes)
+            .default(&false);
+        out.field("exclude_semantics", &self.exclude_semantics)
+            .default(&false);
+        out.field("block_user_actions", &self.block_user_actions)
+            .default(&false);
+        out.field("has_semantics", &self.configuration.has_been_annotated())
+            .default(&false);
         // The two route flags a route's page wrapper sets, so a widget test can
         // assert the wrapper scopes (and names) a route.
-        builder.add_flag(
-            "scopes_route",
-            self.configuration.scopes_route(),
-            "scopes route",
-        );
-        builder.add_flag(
-            "names_route",
-            self.configuration.names_route(),
-            "names route",
-        );
+        out.field("scopes_route", &self.configuration.scopes_route())
+            .default(&false);
+        out.field("names_route", &self.configuration.names_route())
+            .default(&false);
         // The shape of a `GestureDetector`'s action-advertising helper node,
         // so a test asking for a control's own wrapper can leave it out.
-        builder.add_flag(
-            "actions_only",
-            self.configuration.is_actions_only(),
-            "actions only",
-        );
+        out.field("actions_only", &self.configuration.is_actions_only())
+            .default(&false);
         // The shape of a `Focus` widget's focus-state node, left out the same
         // way.
-        builder.add_flag(
+        out.field(
             "focus_state_only",
-            self.configuration.is_focus_state_only(),
-            "focus state only",
-        );
+            &self.configuration.is_focus_state_only(),
+        )
+        .default(&false);
     }
 }
 
@@ -506,12 +489,12 @@ impl RenderBox for RenderSemanticsAnnotations {
             self.explicit_child_nodes || self.configuration.explicit_child_nodes(),
         );
         config.set_blocks_user_actions(self.block_user_actions);
-        if let Some((position, axis, reversed)) = &self.scroll {
+        if let Some((position, direction)) = &self.scroll {
             let min = position.min_scroll_extent();
             let max = position.max_scroll_extent();
             let pixels = position.pixels();
             config.set_scroll_position(pixels);
-            config.set_scroll_axis(*axis);
+            config.set_scroll_axis_direction(*direction);
             config.set_scroll_extent_min(min);
             config.set_scroll_extent_max(max);
             if config.has_action(SemanticsAction::SetNumericValue)
@@ -524,17 +507,25 @@ impl RenderBox for RenderSemanticsAnnotations {
             {
                 config.set_numeric_range(range);
             }
-            let (decrease, increase) = match axis {
+            let (decrease, increase) = match direction.axis() {
                 Axis::Vertical => (SemanticsAction::ScrollUp, SemanticsAction::ScrollDown),
                 Axis::Horizontal => (SemanticsAction::ScrollLeft, SemanticsAction::ScrollRight),
             };
             if pixels <= min {
                 config.remove_action(SemanticsAction::Decrement);
-                config.remove_action(if *reversed { increase } else { decrease });
+                config.remove_action(if direction.is_reversed() {
+                    increase
+                } else {
+                    decrease
+                });
             }
             if pixels >= max {
                 config.remove_action(SemanticsAction::Increment);
-                config.remove_action(if *reversed { decrease } else { increase });
+                config.remove_action(if direction.is_reversed() {
+                    decrease
+                } else {
+                    increase
+                });
             }
         }
     }
@@ -599,9 +590,13 @@ impl RenderIndexedSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIndexedSemantics {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add("index", u64::try_from(self.index).unwrap_or(u64::MAX));
+impl flui_foundation::inspect::Inspect for RenderIndexedSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderIndexedSemantics"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("index", &self.index);
     }
 }
 
@@ -669,7 +664,13 @@ impl RenderBox for RenderMergeSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderMergeSemantics {}
+impl flui_foundation::inspect::Inspect for RenderMergeSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderMergeSemantics"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 /// A render object that drops its descendant semantics while leaving layout,
 /// paint, and hit testing unchanged.
@@ -710,9 +711,13 @@ impl Default for RenderExcludeSemantics {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderExcludeSemantics {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_flag("excluding", self.excluding, "excluding");
+impl flui_foundation::inspect::Inspect for RenderExcludeSemantics {
+    fn kind(&self) -> &'static str {
+        "RenderExcludeSemantics"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("excluding", &self.excluding).default(&false);
     }
 }
 

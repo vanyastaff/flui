@@ -5,7 +5,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Axis, AxisDirection};
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -1200,17 +1200,24 @@ impl SemanticsConfiguration {
         self.attributes.scroll_position
     }
 
-    /// Sets the axis of this node's scroll position and extents.
-    pub fn set_scroll_axis(&mut self, axis: Axis) {
-        self.attributes.scroll_axis = Some(axis);
+    /// Sets the direction this node's scroll position grows in: its axis,
+    /// and whether a larger position shows content further left or up
+    /// (a reversed list, or a horizontal one in a right-to-left locale).
+    ///
+    /// The position and extents stay the scrollable's own pixels; platforms
+    /// that read a scroll position from the top or left edge are given it in
+    /// that order.
+    pub fn set_scroll_axis_direction(&mut self, direction: AxisDirection) {
+        self.attributes.scroll_axis_direction = Some(direction);
         self.mark_annotated();
     }
 
-    /// Returns the explicit scroll axis. Scalar ranges without it are vertical.
+    /// Returns the explicit scroll direction. Scalar ranges without it grow
+    /// from top to bottom.
     #[inline]
     #[must_use]
-    pub fn scroll_axis(&self) -> Option<Axis> {
-        self.attributes.scroll_axis
+    pub fn scroll_axis_direction(&self) -> Option<AxisDirection> {
+        self.attributes.scroll_axis_direction
     }
 
     /// Sets the scroll extent maximum.
@@ -1497,6 +1504,23 @@ impl SemanticsConfiguration {
         self.attributes.document_selection.as_ref()
     }
 
+    /// Publishes runs `runs` of the enclosing text, the nearest ancestor
+    /// that declares [`text_content`](Self::text_content), as this node's
+    /// children instead of that text's (ADR-0214 §2 as amended): a link of
+    /// a selectable paragraph, or the text between its links, holds its own.
+    /// The regions of one text cover its runs in order, without overlap.
+    /// `None` clears it.
+    pub fn set_hosted_runs(&mut self, runs: Option<std::ops::Range<usize>>) {
+        self.attributes.hosted_runs = runs;
+        self.mark_annotated();
+    }
+
+    /// The runs of the enclosing text this node holds, if any.
+    #[inline]
+    pub fn hosted_runs(&self) -> Option<std::ops::Range<usize>> {
+        self.attributes.hosted_runs.clone()
+    }
+
     // ========================================================================
     // Relations
     // ========================================================================
@@ -1618,7 +1642,7 @@ impl SemanticsConfiguration {
             sort_key: _,
             hint_overrides: _,
             scroll_position,
-            scroll_axis,
+            scroll_axis_direction,
             scroll_extent_max,
             scroll_extent_min,
             scroll_index,
@@ -1628,6 +1652,7 @@ impl SemanticsConfiguration {
             current_value_length,
             text,
             document_selection,
+            hosted_runs,
             heading_level: _,
             anchors: _,
             relations: _,
@@ -1641,12 +1666,12 @@ impl SemanticsConfiguration {
 
         // A scroll group is one scrollable's metrics: two of them never combine.
         let scrolls = scroll_position.is_some()
-            || scroll_axis.is_some()
+            || scroll_axis_direction.is_some()
             || scroll_extent_max.is_some()
             || scroll_extent_min.is_some()
             || scroll_index.is_some();
         let their_scrolls = theirs.scroll_position.is_some()
-            || theirs.scroll_axis.is_some()
+            || theirs.scroll_axis_direction.is_some()
             || theirs.scroll_extent_max.is_some()
             || theirs.scroll_extent_min.is_some()
             || theirs.scroll_index.is_some();
@@ -1673,6 +1698,8 @@ impl SemanticsConfiguration {
             )
             // Runs describe one field's layout.
             || both(text.is_some(), theirs.text.is_some())
+            // Hosted runs are one region's share of one text.
+            || both(hosted_runs.is_some(), theirs.hosted_runs.is_some())
             // A selection is one document's.
             || both(
                 document_selection.is_some(),
@@ -1768,7 +1795,7 @@ impl SemanticsConfiguration {
             sort_key,
             hint_overrides,
             scroll_position,
-            scroll_axis,
+            scroll_axis_direction,
             scroll_extent_max,
             scroll_extent_min,
             scroll_index,
@@ -1778,6 +1805,7 @@ impl SemanticsConfiguration {
             current_value_length,
             text,
             document_selection,
+            hosted_runs,
             heading_level,
             anchors,
             relations,
@@ -1830,13 +1858,13 @@ impl SemanticsConfiguration {
         }
         // A scroll group is one scrollable's metrics: the receiver keeps its
         // own whole, or takes the contributor's whole, never a mix of the two.
-        if mine.scroll_axis.is_none()
+        if mine.scroll_axis_direction.is_none()
             && mine.scroll_position.is_none()
             && mine.scroll_extent_max.is_none()
             && mine.scroll_extent_min.is_none()
             && mine.scroll_index.is_none()
         {
-            mine.scroll_axis = *scroll_axis;
+            mine.scroll_axis_direction = *scroll_axis_direction;
             mine.scroll_position = *scroll_position;
             mine.scroll_extent_max = *scroll_extent_max;
             mine.scroll_extent_min = *scroll_extent_min;
@@ -1879,6 +1907,7 @@ impl SemanticsConfiguration {
         }
         keep(&mut mine.text, text.as_ref());
         keep(&mut mine.document_selection, document_selection.as_ref());
+        keep(&mut mine.hosted_runs, hosted_runs.as_ref());
         keep(&mut mine.heading_level, heading_level.as_ref());
         // A level belongs to a heading, as in `set_role`: a merge whose role is
         // not one publishes no level and keeps none to revive.
@@ -2212,14 +2241,14 @@ mod tests {
         let mut vertical = SemanticsConfiguration::new();
         vertical.set_scroll_position(10.0);
         let mut horizontal = SemanticsConfiguration::new();
-        horizontal.set_scroll_axis(Axis::Horizontal);
+        horizontal.set_scroll_axis_direction(AxisDirection::RightToLeft);
         horizontal.set_scroll_extent_max(100.0);
 
         let mut kept = vertical.clone();
         kept.absorb(&horizontal);
         assert_eq!(
             (
-                kept.scroll_axis(),
+                kept.scroll_axis_direction(),
                 kept.scroll_position(),
                 kept.scroll_extent_max()
             ),
@@ -2232,11 +2261,11 @@ mod tests {
         taken.absorb(&horizontal);
         assert_eq!(
             (
-                taken.scroll_axis(),
+                taken.scroll_axis_direction(),
                 taken.scroll_position(),
                 taken.scroll_extent_max()
             ),
-            (Some(Axis::Horizontal), None, Some(100.0)),
+            (Some(AxisDirection::RightToLeft), None, Some(100.0)),
             "a receiver without one takes the contributor's whole group"
         );
     }

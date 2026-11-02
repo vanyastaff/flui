@@ -193,6 +193,7 @@ pub mod error;
 // haptics degradation table (`tests/backend_conformance.rs`); not API.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
+pub mod fonts;
 #[doc(hidden)]
 pub mod haptics;
 // Reachable so a crate outside can show that a table missing a position does

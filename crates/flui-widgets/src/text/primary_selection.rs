@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use flui_interaction::{
     PrimaryClaim, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
+use flui_platform::ClipboardRead;
 use flui_platform::capability::Completion;
 use flui_view::prelude::*;
 
@@ -105,7 +106,7 @@ impl PrimarySelectionOwner {
 
     /// Read the primary selection's text; `None` where the platform has
     /// none.
-    pub(crate) fn read_text(&self) -> Option<Completion<Option<String>>> {
+    pub(crate) fn read_text(&self) -> Option<Completion<ClipboardRead>> {
         self.handle.as_ref().map(PrimarySelectionHandle::read_text)
     }
 }

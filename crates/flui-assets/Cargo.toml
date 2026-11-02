@@ -24,12 +24,14 @@ autotests = false
 # Internal dependencies
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+# The `Executor` a decoded-image load runs on: the caller's background lanes
+# (ADR-0047), so the registry starts no runtime or thread of its own.
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 
-# Async runtime. "sync" backs the bridged-load completion channels and decode
-# permits (`registry::images`); "rt-multi-thread" builds the single-worker
-# background runtime `AssetRegistry::load_image_bridged` spawns onto when no
-# runtime was injected and none is ambient, and its blocking pool decodes.
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt-multi-thread"] }
+# Async runtime. "sync" backs the decoded-image load channels and slots
+# (`registry::images`); "rt" lets a network load find the tokio reactor its
+# IO lane runs it in, and backs the typed cache's `tokio::fs` loaders.
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
 
 # High-performance cache
 moka = { workspace = true }
@@ -51,9 +53,10 @@ reqwest = { workspace = true, optional = true }
 [dev-dependencies]
 # "macros" backs `#[tokio::test]`; "time" backs `tokio::time::timeout` — the
 # hermetic network-loader test's hang guard (a wedged exchange must fail the
-# test, not wedge CI). "rt-multi-thread" is already a main dependency feature
-# (see above).
-tokio = { workspace = true, features = ["macros", "time"] }
+# test, not wedge CI); "rt-multi-thread" builds the runtime the tests' lanes
+# (`tests/lanes.rs`) drive network loads on, as a native host's default IO
+# lane does.
+tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
 
 [features]
 default = []

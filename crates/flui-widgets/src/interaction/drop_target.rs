@@ -60,6 +60,9 @@ pub enum DropHover {
 type AcceptFn = Rc<dyn Fn(&DragView<'_>) -> Option<TransferActions>>;
 /// Called with the drop.
 type DropFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>, DragPoint, TransferActions)>;
+/// Told that a drag left the target without dropping, as the drag machinery
+/// reports it, outside any write.
+type LeaveFn = Rc<dyn Fn(&DragView<'_>)>;
 /// Called when a hover spring-loads the target.
 type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
 
@@ -77,10 +80,13 @@ type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
 #[doc(alias = "DragTarget")]
 #[derive(Clone, StatefulView)]
 pub struct DropTarget {
-    alternatives: GestureAlternatives,
+    /// `None` only for the crate's own targets, whose commands the widget
+    /// around them mounts.
+    alternatives: Option<GestureAlternatives>,
     accept: AcceptFn,
     builder: Rc<dyn Fn(DropHover) -> BoxedView>,
     on_drop: Option<DropFn>,
+    on_leave: Option<LeaveFn>,
     spring_loading: Option<SpringLoading>,
     on_spring_loaded: Option<SpringFn>,
 }
@@ -140,27 +146,49 @@ impl DropTarget {
         builder: impl Fn(DropHover) -> BoxedView + 'static,
     ) -> Result<Self, GestureAlternativesError> {
         Ok(Self {
-            alternatives: commands.alternatives()?,
+            alternatives: Some(commands.alternatives()?),
             accept: Rc::new(accept),
             builder: Rc::new(builder),
             on_drop: None,
+            on_leave: None,
             spring_loading: None,
             on_spring_loaded: None,
         })
+    }
+
+    /// A target without commands of its own: the widget around it mounts the
+    /// alternatives its drops need (a reorderable row's moves).
+    pub(crate) fn bare(
+        accept: impl Fn(&DragView<'_>) -> Option<TransferActions> + 'static,
+        builder: impl Fn(DropHover) -> BoxedView + 'static,
+    ) -> Self {
+        Self {
+            alternatives: None,
+            accept: Rc::new(accept),
+            builder: Rc::new(builder),
+            on_drop: None,
+            on_leave: None,
+            spring_loading: None,
+            on_spring_loaded: None,
+        }
     }
 
     /// Name what receives the drop ("Done"), for the labels the alternatives
     /// make themselves, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.alternatives = self.alternatives.target(name);
+        self.alternatives = self
+            .alternatives
+            .map(|alternatives| alternatives.target(name));
         self
     }
 
     /// The alternatives the widget built from its [`DropCommands`].
     #[must_use]
     pub fn alternatives(&self) -> &GestureAlternatives {
-        &self.alternatives
+        self.alternatives
+            .as_ref()
+            .expect("BUG: every public constructor builds a drop target's alternatives")
     }
 
     /// Called with a drop this target accepted: the drag, where it was
@@ -175,6 +203,14 @@ impl DropTarget {
         self.on_drop = Some(Rc::new(move |cx, drag, at, action| {
             callback(cx, drag, at, action).report();
         }));
+        self
+    }
+
+    /// Told when a drag leaves the target without dropping on it, or ends
+    /// while over it: for a widget that tracks which of its targets a drag is
+    /// over (a reorderable row's preview).
+    pub(crate) fn on_leave(mut self, callback: impl Fn(&DragView<'_>) + 'static) -> Self {
+        self.on_leave = Some(Rc::new(callback));
         self
     }
 
@@ -197,6 +233,7 @@ impl DropTarget {
 struct TargetConfig {
     accept: AcceptFn,
     on_drop: Option<DropFn>,
+    on_leave: Option<LeaveFn>,
     spring_loading: Option<SpringLoading>,
     on_spring_loaded: Option<SpringFn>,
 }
@@ -206,6 +243,7 @@ impl TargetConfig {
         Self {
             accept: Rc::clone(&view.accept),
             on_drop: view.on_drop.clone(),
+            on_leave: view.on_leave.clone(),
             spring_loading: view.spring_loading,
             on_spring_loaded: view.on_spring_loaded.clone(),
         }
@@ -290,6 +328,10 @@ impl DropReceiver for TargetReceiver {
 
     fn drag_left(&self, drag: &DragView<'_>) {
         self.forget(drag);
+        let on_leave = self.config.borrow().on_leave.clone();
+        if let Some(on_leave) = on_leave {
+            on_leave(drag);
+        }
     }
 
     fn dropped(&self, drag: &DragView<'_>, at: DragPoint, action: TransferActions) {
@@ -407,15 +449,20 @@ impl ViewState<DropTarget> for DropTargetState {
         let paste = Paste {
             place: Rc::clone(&self.paste),
         };
-        Actions::new(view.alternatives.clone().child(ReceiverAnchor {
+        let anchor = ReceiverAnchor {
             receiver: Rc::clone(&self.receiver),
             ticket: Rc::clone(&self.paste),
             child: Child::some(PasteProbe {
                 place: Rc::clone(&self.paste),
                 child: (view.builder)(self.receiver.hover()),
             }),
-        }))
-        .action(paste)
+        };
+        match &view.alternatives {
+            Some(alternatives) => Actions::new(alternatives.clone().child(anchor))
+                .action(paste)
+                .boxed(),
+            None => anchor.boxed(),
+        }
     }
 }
 
