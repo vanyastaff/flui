@@ -501,6 +501,10 @@ fn a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane() {
             "lanes shutting down refuse the lead only",
             shutting_down_refuses_the_lead,
         ),
+        (
+            "a long queue is refused in turn",
+            shutting_down_refuses_a_long_queue_in_turn,
+        ),
     ]);
 }
 
@@ -562,23 +566,33 @@ fn spawned_once_its_slot_is_freed() {
     assert_eq!(lanes.pending_io(), 0);
 }
 
-/// The lanes take no more work when a slot comes free: the queued load's
-/// own subscriber drives it where it is polled.
+/// The lanes take no more work when a slot comes free: the run is parked,
+/// and the subscriber polled first drives it where it is polled, even when
+/// the lead that queued it is never polled again.
 fn no_room_leads_here() {
     let http = ScriptedHttp::new();
     let lanes = QueuedLanes::new();
-    let (_registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    let (registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    let mut joined = registry.load_network_image(
+        nth_url(LOAD_SLOTS),
+        LoadServices::new().with_http(http.handle()),
+    );
+    assert!(poll_once(&mut joined).is_pending());
     lanes.refuse(SpawnError::Saturated);
     http.release(&nth_url(0));
     http.release(&nth_url(LOAD_SLOTS));
     lanes.run_until_idle();
     assert!(poll_once(&mut loads[0]).is_ready());
     assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 0, "not yet driven");
-    let std::task::Poll::Ready(image) = poll_once(&mut loads[LOAD_SLOTS]) else {
-        panic!("the subscriber drove the load to its end");
+    let std::task::Poll::Ready(image) = poll_once(&mut joined) else {
+        panic!("the joined subscriber claimed the run and drove it to its end");
     };
     image.expect("the load decodes where it is polled");
     assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1);
+    let std::task::Poll::Ready(image) = poll_once(&mut loads[LOAD_SLOTS]) else {
+        panic!("the lead hears the outcome");
+    };
+    image.expect("the lead shares it");
 }
 
 /// The lead's lanes shut down while it waits for a slot: the lead answers
@@ -616,4 +630,44 @@ fn shutting_down_refuses_the_lead() {
     };
     image.expect("the takeover decodes");
     assert_eq!(http.requests_to(URL), 1);
+}
+
+/// Loads queued for slots on lanes that shut down are refused one after
+/// another as the slot passes along the queue, not each from inside the
+/// last one's refusal: on a thread with a small stack, a long queue drains
+/// without overflowing it.
+fn shutting_down_refuses_a_long_queue_in_turn() {
+    const QUEUED: usize = 2_000;
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let http = ScriptedHttp::new();
+            let busy = QueuedLanes::new();
+            let (registry, mut loads) = held_loads(&http, &busy, LOAD_SLOTS);
+            let retiring = QueuedLanes::new();
+            let mut queued = (0..QUEUED)
+                .map(|n| {
+                    registry.load_network_image(
+                        nth_url(LOAD_SLOTS + n),
+                        retiring.services().with_http(http.handle()),
+                    )
+                })
+                .collect::<Vec<flui_assets::ImageLoad>>();
+            retiring.shut_down();
+            http.release(&nth_url(0));
+            busy.run_until_idle();
+            assert!(poll_once(&mut loads[0]).is_ready());
+            for load in &mut queued {
+                assert!(
+                    matches!(
+                        poll_once(load),
+                        std::task::Poll::Ready(Err(AssetError::LanesRefused { .. }))
+                    ),
+                    "every queued load is refused"
+                );
+            }
+        })
+        .expect("BUG: the test spawns one thread")
+        .join()
+        .expect("the queue drains on a small stack");
 }

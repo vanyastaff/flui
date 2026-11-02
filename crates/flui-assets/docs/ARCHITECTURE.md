@@ -500,8 +500,8 @@ wait on with nobody driving it. A load bound for lanes is spawned on their IO
 lane only once it holds its slot: a queued one is a start the slot queue calls,
 on the thread that freed the slot, so loads waiting for a slot spend none of
 the IO lane's admission window and other IO work is never refused for them. If
-the lanes have no room by then, the earliest subscriber still waiting is handed
-the run and drives it where it is polled; if they are shutting down, the lead
+the lanes have no room by then, the run is parked and every subscriber told; the
+first one polled claims it and drives it where it is polled; if they are shutting down, the lead
 answers `AssetError::LanesRefused` and the rest take the load over. A load
 waits for its slot before it reads and holds it until its decode
 returns, so the reads in flight and the encoded bytes waiting to decode are
@@ -545,8 +545,9 @@ decode holds its slot only three more requests go out, and the next starts
 when it returns).
 `a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane` (one decode
 thread: six held loads put four tasks on the IO lane, a freed slot spawns the
-next; lanes with no room hand the run to its subscriber, and lanes shutting
-down refuse only the lead).
+next; lanes with no room park the run for the subscriber polled first, even
+when the lead is never polled again; lanes shutting down refuse only the lead,
+and a long queue of them is refused in turn on a small stack).
 
 A network image's request carries `HttpRequest`'s default deadline (two minutes,
 body included), so a server that drips one byte at a time cannot hold a load
