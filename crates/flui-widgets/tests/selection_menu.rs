@@ -18,15 +18,16 @@ use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
+use flui_view::prelude::{Signal, SignalWriteExt};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, Directionality,
-    EditableText, Focus, GestureCommand, HandleInfo, Intent, ScrollController, Scrollable,
-    SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent, SizedBox, Text,
+    Actions, CallbackAction, CaretHandle, Column, ContextMenuArea, DefaultSelectionControls,
+    Directionality, EditableText, Focus, GestureCommand, HandleInfo, Intent, ScrollController,
+    Scrollable, SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent, SizedBox, Text,
     TextEditingController, WidgetsApp,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 
 const WORDS: &str = "alpha beta gamma";
 const EDITING: [&str; 4] = ["Cut", "Copy", "Paste", "Select all"];
@@ -706,4 +707,89 @@ pub(crate) fn a_field_rebuilt_without_its_menu_closes_the_popup() {
 
     scene.rebuild(EditableText::no_menu);
     assert_eq!(scene.popup(), Vec::<String>::new());
+}
+
+/// A secondary click in a field inside a `ContextMenuArea` opens the
+/// field's popup alone: the field's tap wins the arena over the area's.
+///
+/// Red-check: open the field's popup on the raw press, with no tap of its
+/// own in the arena (the area's menu opens over it).
+pub(crate) fn a_field_s_secondary_click_wins_over_an_enclosing_menu() {
+    let mut scene = Scene::framed(
+        |field| field,
+        None,
+        |page| {
+            ContextMenuArea::try_new(GestureCommand::new("Shout", Shout), [])
+                .expect("one labelled command")
+                .child(page)
+                .boxed()
+        },
+    );
+    let _ = scene.field_focus.request_focus();
+    scene.controller.set_selection(6, 10);
+    scene.settle();
+    scene.secondary_click(scene.along(width_of("alpha be")));
+    assert_eq!(scene.popup(), strings(&EDITING));
+}
+
+/// A field rebuilt with other commands while its popup is open closes the
+/// popup, which offered the old ones. Only the field rebuilds, so the
+/// app's look stays the same.
+///
+/// Red-check: close the open popup only when the look changes (it stays,
+/// without Whisper).
+pub(crate) fn a_field_rebuilt_with_other_commands_closes_the_popup() {
+    let controller = TextEditingController::with_text(WORDS);
+    let field_focus = FocusNode::with_debug_label("field");
+    let whisper = Rc::new(Cell::new(false));
+    let count: Rc<RefCell<Option<Signal<u32>>>> = Rc::default();
+    let probe = {
+        let (controller, field_focus) = (controller.clone(), Rc::clone(&field_focus));
+        let (whisper, count) = (Rc::clone(&whisper), Rc::clone(&count));
+        SignalProbe::new(move |signals| {
+            count.replace(Some(signals.count));
+            let field =
+                EditableText::new(controller.clone(), Rc::clone(&field_focus)).text_style(style());
+            let field = if whisper.get() {
+                field.menu_command(GestureCommand::new("Whisper", Whisper))
+            } else {
+                field
+            };
+            SizedBox::new(400.0, 40.0).child(field)
+        })
+    };
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let home = Actions::new(Column::new((probe.view(),)))
+        .action(CallbackAction::new(|_cx, _: &Whisper| {}));
+    let page = Column::new((SizedBox::new(400.0, 80.0), home));
+    let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
+    laid.enable_semantics();
+    laid.pump();
+    let mut scene = Scene {
+        laid,
+        controller,
+        field_focus,
+        elsewhere: FocusNode::with_debug_label("elsewhere"),
+        log,
+        line_height: Rc::default(),
+        square: false,
+    };
+    let _ = scene.field_focus.request_focus();
+    scene.controller.set_selection(6, 10);
+    scene.settle();
+    scene.secondary_click(scene.along(width_of("alpha be")));
+    assert_eq!(scene.popup(), strings(&EDITING));
+
+    whisper.set(true);
+    let signal = count.borrow().expect("the probe built");
+    probe
+        .write(|cx| signal.set(cx, 1))
+        .expect("the probe's signal takes it");
+    scene.settle();
+    assert_eq!(scene.popup(), Vec::<String>::new());
+    scene.secondary_click(scene.along(width_of("alpha be")));
+    assert_eq!(
+        scene.popup(),
+        strings(&["Cut", "Copy", "Paste", "Select all", "Whisper"])
+    );
 }

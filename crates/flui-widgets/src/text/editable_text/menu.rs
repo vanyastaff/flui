@@ -100,6 +100,9 @@ pub(super) struct FieldMenu {
     /// The reading direction at the field, which its toolbar keeps though
     /// it is built in the overlay.
     direction: Cell<TextDirection>,
+    /// Where a secondary press went down, and the source offset there, until
+    /// its tap wins the arena (or the next press replaces it).
+    secondary: Cell<Option<(Offset<f64>, Option<usize>)>>,
 }
 
 impl FieldMenu {
@@ -160,7 +163,21 @@ impl FieldMenu {
             .chain(settings.commands.iter().cloned())
             .map(|command| MenuItem::new(command, chain.clone()))
             .collect();
-        self.items.replace(Some(items));
+        // An open popup holds the items it opened with: when the commands or
+        // their bindings change under the same look, it closes with the
+        // retired ones rather than offer what the field no longer does.
+        let outgoing = self.items.replace(Some(Rc::clone(&items)));
+        let changed = outgoing.is_some_and(|outgoing| {
+            outgoing.len() != items.len()
+                || outgoing
+                    .iter()
+                    .zip(items.iter())
+                    .any(|(old, new)| !old.same_as(new))
+        });
+        if changed && same_look {
+            let popup = self.popup.borrow().clone();
+            self.retired.borrow_mut().extend(popup);
+        }
     }
 
     /// When a touch shows the toolbar.
@@ -171,6 +188,17 @@ impl FieldMenu {
     /// What the menu looks like, when the field shows one.
     pub(super) fn look(&self) -> Option<Rc<dyn SelectionMenu>> {
         self.look.borrow().clone()
+    }
+
+    /// A secondary press went down at `position`, over source offset `at`;
+    /// the popup opens if its tap wins the arena.
+    pub(super) fn secondary_down(&self, position: Offset<f64>, at: Option<usize>) {
+        self.secondary.set(Some((position, at)));
+    }
+
+    /// The secondary press whose tap just won, once.
+    pub(super) fn take_secondary(&self) -> Option<(Offset<f64>, Option<usize>)> {
+        self.secondary.take()
     }
 
     /// The reading direction at the field.

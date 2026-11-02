@@ -1055,7 +1055,7 @@ impl EditableTextState {
             let commit = self.composition_commit();
             let paste = self.clipboard_action();
             let handles = Rc::clone(&self.touch_handles);
-            move |cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
                 };
@@ -1072,9 +1072,10 @@ impl EditableTextState {
                     return;
                 }
                 if press.button() == PointerButton::SECONDARY {
-                    let field = (&controller, &focus_node);
-                    let menu = handles.menu();
-                    menu::secondary_press(cx, menu, position, resolve(position), field, &commit);
+                    // The popup opens when this press's secondary tap wins the
+                    // arena (`wrap_double_tap_word_select`), so an enclosing
+                    // menu's tap can't open its own over it.
+                    handles.menu().secondary_down(position, resolve(position));
                     return;
                 }
                 if press.button() == PointerButton::AUXILIARY {
@@ -1285,6 +1286,23 @@ impl EditableTextState {
                     let mut failure = FirstPanic::new();
                     handles.show_for_touch(&mut failure);
                     failure.resume();
+                }
+            });
+        }
+        // The popup opens on the secondary tap a press in the field began
+        // (`install_pointer_handlers` records where), through the arena, so
+        // a `ContextMenuArea` around the field doesn't open its menu too. A
+        // field with no menu leaves the tap to it.
+        if view.enabled && self.touch_handles.menu().look().is_some() {
+            let controller = Rc::clone(&self.controller);
+            let focus_node = Rc::clone(&self.focus_node);
+            let commit = self.composition_commit();
+            let handles = Rc::clone(&self.touch_handles);
+            detector = detector.on_secondary_tap(move |cx| {
+                let menu = handles.menu();
+                if let Some((position, at)) = menu.take_secondary() {
+                    let field = (&controller, &focus_node);
+                    menu::secondary_press(cx, menu, position, at, field, &commit);
                 }
             });
         }

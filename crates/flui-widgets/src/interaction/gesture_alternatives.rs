@@ -154,6 +154,12 @@ impl GestureCommand {
         intent.is::<I>()
     }
 
+    /// Whether `other` is shown as this command and performs an intent of
+    /// the same type.
+    pub(crate) fn same_command(&self, other: &Self) -> bool {
+        self.label == other.label && self.intent_any().type_id() == other.intent_any().type_id()
+    }
+
     fn intent_any(&self) -> &dyn Any {
         &*self.intent
     }
@@ -722,6 +728,16 @@ impl MenuItem {
         }
         failure.resume();
         outcome.expect("BUG: a contained panic resumed above")
+    }
+
+    /// Whether `other` offers the same command through the same bindings.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        let same_chain = match (&self.chain, &other.chain) {
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        same_chain && self.command.same_command(&other.command)
     }
 
     /// The item, running `chosen` each time it is performed: how a menu
