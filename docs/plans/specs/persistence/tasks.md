@@ -3,10 +3,8 @@
 - **Статус:** Утверждена владельцем 2026-10-28; исполнение
 - **Design:** [design.md](design.md) (раздел «Решения владельца 2026-10-28»); требования —
   [requirements.md](requirements.md); контракт закрытия — [teardown/tasks.md](../teardown/tasks.md)
-- **Итог:** сделаны P1, P2, P3, P10, P11; P6 сделана в части; P7, P8, P9 (Notes) устарели и
-  заменены P10–P12. Осталось четыре задачи: P4, P5 и остаток P6 строятся на шве
-  возможностей после [platform-layer](../platform-layer/tasks.md) LY50 и LY52; P12 ждёт
-  flui-driver FD11.
+- **Итог:** сделаны P1–P6, P10, P11; P7, P8, P9 (Notes) устарели и заменены P10–P12.
+  Осталась одна задача: P12 (нативный прогон) ждёт flui-driver FD11.
 - **Приложение приёмки** — задача P10 этой спеки. Его строки пишут три спеки: persistence (P11),
   teardown (T18), text-ime (T11).
 
@@ -149,26 +147,26 @@ graph LR
 | R9 | `first_launch_starts_from_initial_state_without_an_error` | P11 | C |
 | R10 | `reload_replaces_a_pending_load` (счёт держателей ворот, `live_requests`) | P11 | C |
 | R11 | `a_held_write_keeps_typing_and_scrolling_live`; `a_blocked_store_keeps_frames_and_input_live` | P11; teardown T4 | C, L |
-| R12 | `user_close_waits_for_an_in_flight_save`; прогон | P5; P12 | L, D |
+| R12 | `close_during_a_save_waits_for_it` (приложение приёмки); teardown `session_end_during_a_write_writes_the_latest_registry_bytes`; прогон | P5; P12 | L, D |
 | R13 | `hidden_writes_the_session_and_resume_does_not_reread`; сворачивание | P11; P12 | C, D |
 | R14 | `close_with_a_failed_write_requires_a_decision`, `close_during_a_save_waits_for_it`; `a_saving_document_holds_user_close_only`; README о потере без вето (teardown T17); прогон | P11; P5; P12 | C, L, D |
 | R15 | `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit`; `taskkill /F` | P5; P12 | L, D |
 | R16 | `busy_retry_follows_the_runtime_clock` | P5 | L |
 | R17 | `corrupt_bytes_are_kept_until_start_over`; `start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones`, `each_load_failure_offers_its_way_on` | P5; P11 | L, C |
-| R18 | `inaccessible_is_reported_apart_from_corrupt`; `directory_in_place_of_the_file_is_inaccessible`; прогон | P4; P2 (сделано); P12 | L, D |
-| R19 | `first_write_creates_the_directory`; `a_runner_write_lands_under_the_configured_roots` | P2 (сделано); P6 | L |
+| R18 | `a_load_reports_each_stored_state` (случай «an inaccessible file»); `directory_in_place_of_the_file_is_inaccessible`; прогон | P4; P2 (сделано); P12 | L, D |
+| R19 | `first_write_creates_the_directory`; teardown `session_end_flushes_the_registry_within_the_framework_budget` (запись раннера найдена под `HeadlessPlatform::with_data_root`) | P2 (сделано); P6 | L |
 | R20 | `retry_after_failure_publishes_the_latest_value`; `a_failed_write_keeps_its_bytes_until_replaced_or_flushed` | P5; teardown T4 | L |
 | R21 | `file_store_interruption_matrix` (in-src); `taskkill /F` в цикле | P2 (сделано); P12 | L, D |
 | R22 | `os_error_classification_table`; `busy_retry_follows_the_runtime_clock`; держатель файла | P2 (сделано); P5; P12 | L, D |
 | R23 | `long_non_ascii_path_round_trips`; профиль и OneDrive | P2 (сделано); P12 | L, D |
-| R24 | `no_write_without_a_loaded_base`; teardown R6 | P5 | L |
-| R25 | `repeated_retries_apply_exactly_one_result` | P4 | L |
+| R24 | `no_write_without_a_writable_base`; teardown R6 | P5 | L |
+| R25 | `only_the_latest_of_several_loads_is_applied` | P4 | L |
 | R26 | `retry_counter_overflow_still_starts_a_load` | P10 (сделано) | C |
 | R27 | `unmount_during_load_releases_requests` | P4 | L |
 | R28 | `a_later_edit_supersedes_an_unstarted_one`; `same_writer_edits_rebase_instead_of_conflicting` | P5; teardown T4 | L |
 | R29 | `codec_panic_is_contained_first_failure_kept` (паника `encode`, затем `decode`, payload с паникующим `Drop`) | P5 | L |
-| R30 | `oversized_file_is_refused_unread`; `full_disk_keeps_memory_and_the_old_file` | P4; P5 | L |
-| R31 | `older_version_decodes_or_reports_without_writing`; `newer_version_is_never_written` | P4; P5 | L |
+| R30 | `a_load_reports_each_stored_state` (случай «a file over the limit»); `retry_after_failure_publishes_the_latest_value` (полный диск) | P4; P5 | L |
+| R31 | `a_load_reports_each_stored_state` (случаи «an older format», «a newer format»: загрузка ничего не пишет); `no_write_without_a_writable_base` (случай «a newer format») | P4; P5 | L |
 | R32 | `two_threads_interleave_and_exactly_one_conflicts`; два процесса | P2 (сделано); P12 | L, D |
 | R33 | `unavailable_storage_runs_in_memory_with_status`; `cargo heli xtask wasm-check`; README (teardown T17) | P4 | L, T |
 | R34 | строки «перезапуск» через `acceptance_app_runs_through_the_facade` | P11 | C |
@@ -194,9 +192,9 @@ graph LR
   clippy `--workspace --all-targets -D warnings`; nextest `-p flui-widgets -p flui-view -p flui-app
   -p flui`; `xtask checks`, `doc-strict`, `wasm-check`.
 - [x] P10 — #1952
-- [ ] P4 — загрузка на шве (после LY50, LY52)
-- [ ] P6 — остаток: реестр сброса хоста (после LY52)
-- [ ] P5 — запись и удержание закрытия
+- [x] P4 — загрузка на шве: #2085; строки — `a_load_reports_each_stored_state`, `only_the_latest_of_several_loads_is_applied` и остальные в `crates/flui-view/tests/persist.rs`
+- [x] P6 — реестр сброса хоста: `FlushHost::new` в `crates/flui-app/src/app/runtime.rs` пишет через IO-пул; строки — teardown T14 и R6 и `a_blocked_store_keeps_frames_and_input_live` (R11) в `crates/flui-app/tests/runner_teardown.rs`
+- [x] P5 — запись и удержание закрытия: #2087, #2095, #2100, #2105, #2111
 - [x] P11 — строки приёмки persistence. Четыре PR: (a) данные, (b) сеанс, (c) экраны отказов
   и `Listenable` у `Persisted` (форма одобрена координатором 2026-10-31: уведомление только
   при настоящем изменении `status()`/`committed()`, изменения одной доставки — одним вызовом,
