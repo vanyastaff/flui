@@ -135,13 +135,25 @@ enum Then {
 }
 
 impl X11Drag {
-    /// Start `request`'s session from `window`.
+    /// Start `request`'s session from `window`, refused once the window
+    /// closed: no event of a closed window reaches the session, which would
+    /// hold the platform's one drag with no release to end it.
     pub(super) fn start_session(
         &self,
-        window: xproto::Window,
+        source_window: WindowRef,
         request: OsDragRequest,
     ) -> Result<(), DragError> {
         let refused = |reason| DragError::from(Unsupported::new(reason));
+        let window = source_window.xid;
+        let open = self
+            .state
+            .lock()
+            .windows
+            .get(&window)
+            .is_some_and(|target| target.window.id == source_window.id);
+        if !open {
+            return Err(refused(UnsupportedReason::Unavailable));
+        }
         let busy = self
             .session
             .with(|session| session.is_some())
@@ -1116,7 +1128,7 @@ impl PlatformDragSource for X11DragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        self.drag.start_session(self.window.xid, request)
+        self.drag.start_session(self.window, request)
     }
 }
 

@@ -2077,6 +2077,37 @@ fn a_session_whose_window_unmaps_ends_cancelled() {
         .expect("the next session starts");
 }
 
+/// A drag source kept past its window's close starts nothing, though a
+/// button is held: no event of the closed window would end the session, and
+/// it would hold the platform's one drag.
+#[test]
+fn a_closed_windows_drag_source_starts_no_session() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let _held = Held::press(&other.connection);
+    let source = Arc::clone(&target.drag).drag_source(WindowRef {
+        xid: target.xid,
+        id: WindowId(1),
+    });
+    target.drag.window_closed(WindowRef {
+        xid: target.xid,
+        id: WindowId(1),
+    });
+    let ended = Rc::new(Cell::new(None));
+    assert!(
+        source.start(request(&ended)).is_err(),
+        "a closed window's source is refused"
+    );
+    assert!(
+        target.drag.session.with(|session| session.is_none()) == Some(true),
+        "no session holds the drag"
+    );
+    assert_eq!(ended.get(), None, "a refused start has no end");
+}
+
 /// Without the keyboard, which the unmapped window cannot grab, a session
 /// whose window loses the focus leaves its target and ends cancelled:
 /// Escape would follow the focus away. A focus change a grab makes is no
