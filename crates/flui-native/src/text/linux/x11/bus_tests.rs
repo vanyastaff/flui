@@ -28,7 +28,7 @@ use x11rb::protocol::xproto::{self, FocusInEvent, NotifyDetail, NotifyMode};
 use zbus::object_server::SignalEmitter;
 use zbus::{ObjectServer, OwnedObjectPath, Variant, interface};
 
-use super::bus::{Bus, CREATE_TIMEOUT, MAX_HEARD, Reach};
+use super::bus::{Bus, CREATE_TIMEOUT, MAX_HEARD, MAX_WAITING, Reach};
 use super::{WindowText, X11Ime};
 use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
 use crate::text::TextInput;
@@ -1237,4 +1237,37 @@ fn a_window_moved_tells_the_caret_again() {
             override_redirect: false,
         }));
     rig.settle("the caret told again", || rig.heard_count("cursor") > told);
+}
+
+/// A context told more than it holds while the daemon makes it is retired:
+/// its last focus may be among what went, and what it would send then could
+/// never be told to be for the field.
+#[test]
+fn a_context_told_too_much_while_it_is_made_is_retired() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.create_delay.store(3_000, Ordering::SeqCst);
+    // A key left unanswered replaces the context, which the stand-in takes
+    // its time to make.
+    rig.press('c');
+    rig.settle("a context asked for again", || {
+        rig.heard_count("context for") == 2
+    });
+    let context = rig
+        .ime
+        .state
+        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
+        .flatten()
+        .expect("the window's context");
+    for _ in 0..=MAX_WAITING {
+        assert!(
+            rig.ime.bus.send(context, super::bus::Request::FocusOut),
+            "the bus takes the request"
+        );
+    }
+    rig.settle("the context retired", || {
+        rig.heard_count("context for") == 3
+    });
+    rig.create_delay.store(0, Ordering::SeqCst);
 }

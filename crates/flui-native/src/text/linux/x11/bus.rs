@@ -45,7 +45,7 @@ const MAX_COMMANDS: usize = 1024;
 pub(super) const MAX_HEARD: usize = 4096;
 
 /// The most requests one context holds while the daemon makes it.
-const MAX_WAITING: usize = 256;
+pub(super) const MAX_WAITING: usize = 256;
 
 /// The most calls awaiting the daemon's answer. Past it a key is not asked
 /// and is delivered as typed.
@@ -686,8 +686,17 @@ impl Session {
                 let Some(path) = held.path.clone() else {
                     if held.waiting.len() < MAX_WAITING {
                         held.waiting.push(request);
-                    } else if let Some(heard) = Heard::unanswered(context, &request) {
-                        self.inbox.post(heard);
+                    } else {
+                        // What the field told the context before it was made
+                        // is no longer whole, its last focus perhaps among
+                        // what went: the context is retired. A key dropped
+                        // is answered as not taken.
+                        if let Some(answer @ Heard::Answer(..)) =
+                            Heard::unanswered(context, &request)
+                        {
+                            self.inbox.post(answer);
+                        }
+                        self.inbox.post(Heard::Spilled(context));
                     }
                     return;
                 };
