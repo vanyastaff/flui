@@ -1460,6 +1460,8 @@ fn layout_and_render_object_wiring() {
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
             ("layer_inspection::a_superellipse_clip_composites_and_updates_its_radius", crate::layer_inspection::a_superellipse_clip_composites_and_updates_its_radius),
             ("layer_inspection::backdrop_filters_in_one_group_share_a_stable_identity", crate::layer_inspection::backdrop_filters_in_one_group_share_a_stable_identity),
+            ("layer_inspection::a_magnifier_shows_its_focal_point_at_its_centre_enlarged", crate::layer_inspection::a_magnifier_shows_its_focal_point_at_its_centre_enlarged),
+            ("layer_inspection::a_magnifier_scale_is_finite_and_above_zero", crate::layer_inspection::a_magnifier_scale_is_finite_and_above_zero),
         ],
     );
 }

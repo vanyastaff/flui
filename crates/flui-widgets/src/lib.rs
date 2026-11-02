@@ -102,6 +102,7 @@ pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod localization;
+mod magnifier;
 mod media_query;
 mod popup_menu;
 // Effects, reversible transitions and `Animate`; flat re-exports below.
@@ -147,6 +148,9 @@ pub mod wrap;
 pub use app::{
     AppBuilder, AppForm, InheritedTheme, NavigatorForm, RouterForm, SafeArea, WidgetsApp,
     WidgetsAppState,
+};
+pub use magnifier::{
+    InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
 };
 pub use media_query::{MediaQuery, MediaQueryData};
 // `Brightness` is the value type `MediaQueryData` (and any theme's

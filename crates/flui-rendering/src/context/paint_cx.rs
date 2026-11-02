@@ -143,7 +143,9 @@ pub enum FragmentScope {
     /// whatever was already painted behind this scope before the scope's
     /// own content (the child) is painted on top.
     BackdropFilter {
-        /// The image filter applied to the backdrop.
+        /// The image filter applied to the backdrop, in node-local
+        /// coordinates: the composer moves a transform filter by the
+        /// accumulated origin along with `bounds`.
         filter: ImageFilter,
         /// How the filtered backdrop blends with the child painted on
         /// top of it.

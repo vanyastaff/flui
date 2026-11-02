@@ -654,6 +654,37 @@ impl ImageFilter {
         })
     }
 
+    /// The filter as seen from a space in which its local origin sits at
+    /// `offset`: what a layer drawn at `offset` needs to apply it where the
+    /// filter's own space put it. Only [`ImageFilter::Transform`] depends on
+    /// where it is applied; the other filters come back unchanged.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidImageTransform`] when a moved transform's coefficients are
+    /// no longer finite.
+    pub fn try_translated(
+        &self,
+        offset: flui_foundation::geometry::Offset<f64>,
+    ) -> Result<Self, InvalidImageTransform> {
+        Ok(match self {
+            Self::Transform {
+                transform,
+                sampling,
+            } => Self::Transform {
+                transform: transform.try_translated(offset)?,
+                sampling: *sampling,
+            },
+            Self::Compose(filters) => Self::Compose(
+                filters
+                    .iter()
+                    .map(|filter| filter.try_translated(offset))
+                    .collect::<Result<Vec<Self>, InvalidImageTransform>>()?,
+            ),
+            other => other.clone(),
+        })
+    }
+
     /// Create a blur filter with the same sigma for both axes.
     #[inline]
     #[must_use]
@@ -864,6 +895,29 @@ impl ImageTransform {
             sy,
             focal.x - sx * focal.x,
             focal.y - sy * focal.y,
+        )
+    }
+
+    /// The same mapping seen from a space in which this transform's origin
+    /// sits at `offset`: a point `p` there maps to `self(p − offset) +
+    /// offset`.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidImageTransform::NonFinite`] when `offset` or a moved
+    /// coefficient is not finite.
+    pub fn try_translated(
+        &self,
+        offset: flui_foundation::geometry::Offset<f64>,
+    ) -> Result<Self, InvalidImageTransform> {
+        let (dx, dy) = (offset.dx, offset.dy);
+        Self::try_new(
+            self.xx,
+            self.yx,
+            self.xy,
+            self.yy,
+            self.x0 + dx - (self.xx * dx + self.xy * dy),
+            self.y0 + dy - (self.yx * dx + self.yy * dy),
         )
     }
 

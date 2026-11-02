@@ -279,6 +279,7 @@ layers = [
         "flex",
         "transitions",
         "overlay",
+        "magnifier",
     ],
     [
         "animated",
