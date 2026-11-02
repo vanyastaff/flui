@@ -319,7 +319,7 @@ struct Target {
     handler: Rc<RecordingWindowHandler>,
     /// How often the transfer asked for the loop to wake.
     wakes: Arc<AtomicUsize>,
-    /// The window the last session started from the window is known by.
+    /// The window the session's last visit to a target was known by.
     session: Cell<xproto::Window>,
 }
 
@@ -1487,11 +1487,7 @@ impl Target {
             id: WindowId(1),
         });
         source.start(request)?;
-        self.session.set(
-            self.drag
-                .session_source()
-                .expect("a started session has its window"),
-        );
+        self.learn_the_visit();
         Ok(())
     }
 
@@ -1542,9 +1538,16 @@ impl Target {
         self.drag.event(&Event::XinputButtonPress(press));
     }
 
-    /// The window the last session started from the window is known by.
+    /// The window the session's last visit to a target was known by.
     fn session(&self) -> xproto::Window {
         self.session.get()
+    }
+
+    /// Keep the window the session's visit is known by, if one is open.
+    fn learn_the_visit(&self) {
+        if let Some(visit) = self.drag.session_visit() {
+            self.session.set(visit);
+        }
     }
 
     /// The pointer moved to `root` at `time`, as the window's implicit grab
@@ -1561,6 +1564,7 @@ impl Target {
             self.drag.event(&Event::XinputMotion(motion)),
             "the session's own"
         );
+        self.learn_the_visit();
     }
 
     /// The held button was let go at `time`.
@@ -2108,6 +2112,44 @@ fn a_session_without_the_keyboard_ends_as_its_window_loses_the_focus() {
     );
     heard_by(&other, &target, other.atoms.leave);
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A status for a visit the pointer left, coming after the pointer entered
+/// the same target again and was let go there, does not decide the drop:
+/// each visit is known by a window of its own, so the target's answer to
+/// the new visit does.
+#[test]
+fn a_status_for_an_earlier_visit_does_not_decide_the_drop() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    heard_by(&other, &target, atoms.position);
+    let earlier = target.session();
+    // The pointer leaves before the target answers, and comes back.
+    target.pointer_to((5, 5), 101);
+    heard_by(&other, &target, atoms.leave);
+    target.pointer_to((460, 350), 102);
+    heard_by(&other, &target, atoms.position);
+    target.release(103);
+    // The answer to the earlier visit refuses; the one to this visit
+    // accepts.
+    other.send(earlier, atoms.status, model::status(foreign.window, None));
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    let dropped = heard_by(&other, &target, atoms.drop);
+    assert_eq!(dropped, model::drop_at(target.session(), 103));
+    assert_eq!(ended.get(), None, "the drop waits for its finish");
 }
 
 /// A target's late finish for a session that ended as its drop went

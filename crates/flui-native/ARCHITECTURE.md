@@ -3927,13 +3927,15 @@ wherever it goes, and the session takes them before the input does. The
 press is the session's from then on: at the loop's next turn the window's
 input ends its contacts as `CaptureLost` (`LoopDrag::pointers_taken`,
 `LoopInput::pointer_taken`), as a Wayland compositor's leave does, so the next
-click starts afresh. Targets know the session by a window of its own,
-unmapped, made as it starts and destroyed as it ends, so a late reply to an
-ended session reaches no later one from the same window. That window owns
-`XdndSelection`, a session starting only
-once the server names it the owner, and lists the session's
-types in `XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other
-format as its media type, the private identity included). Each movement finds
+click starts afresh. The session owns `XdndSelection` through a window of its
+own, unmapped, made as it starts and destroyed as it ends, a session starting
+only once the server names it the owner. Each visit to a target, from its
+enter to its leave or the end of its drop, has a window of its own too: the
+messages name it as the source, it lists the session's types in
+`XdndTypeList` (text as `UTF8_STRING` and `text/plain`, every other format as
+its media type, the private identity included) and hears the target's
+replies, so a late reply to a visit the pointer left, or to an ended
+session, decides nothing now. Each movement finds
 the `XdndAware` window under the pointer, FLUI's own among them, entering and
 leaving targets as it crosses them, the first where the pointer is as the
 session starts, each in the lower of the two XDND versions; one position
@@ -3987,6 +3989,7 @@ another connection's window: `a_session_drops_on_a_target_that_accepts`,
 `a_session_whose_window_unmaps_ends_cancelled`,
 `a_session_without_the_keyboard_ends_as_its_window_loses_the_focus`,
 `a_late_finish_does_not_end_the_next_session`,
+`a_status_for_an_earlier_visit_does_not_decide_the_drop`,
 `only_the_dropped_on_client_reads_the_session_data`; and in `tests/x11_input.rs`,
 with the host's own loop and window, XTest holding and moving the pointer:
 `an_xtest_drag_from_the_window_drops_on_another_client`, which also checks

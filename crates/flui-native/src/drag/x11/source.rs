@@ -2,11 +2,13 @@
 //!
 //! The session starts when the runtime's drag leaves its window, with a
 //! button still held, so the press's implicit grab keeps the pointer's
-//! XInput 2 events coming to the window wherever it goes. Targets know the
-//! session by a window of its own, unmapped, made as it starts and destroyed
-//! as it ends: it owns `XdndSelection`, lists the types in `XdndTypeList` and
-//! hears the targets' replies, so a late reply to an ended session reaches
-//! no later one. The session grabs the keyboard so Escape reaches it wherever
+//! XInput 2 events coming to the window wherever it goes. The session owns
+//! `XdndSelection` through a window of its own, unmapped, made as it starts
+//! and destroyed as it ends. Each visit to a target, from its enter to its
+//! leave or the drop's end, has a window of its own too: the messages name
+//! it as the source, it lists the types in `XdndTypeList` and hears the
+//! target's replies, so a late reply to an earlier visit or an ended session
+//! decides nothing now. The session grabs the keyboard so Escape reaches it wherever
 //! the focus goes; where the grab is refused, the window's focus loss
 //! cancels it, since Escape would no longer come. Each movement finds
 //! the `XdndAware` window under the pointer, FLUI's own included, entering
@@ -66,9 +68,8 @@ pub(super) struct Session {
     /// The window the drag started in, whose implicit grab brings the
     /// pointer's events.
     window: xproto::Window,
-    /// The session's own window, which owns `XdndSelection` and which every
-    /// XDND message names as the source: replies are matched to this
-    /// session by it, not by the window the next session shares.
+    /// The session's own window, which owns `XdndSelection`; destroyed as
+    /// the session ends, so the next session's ownership is its own.
     source: xproto::Window,
     /// The master keyboard the session grabbed; `None` when the grab was
     /// refused, and a focus loss then cancels.
@@ -99,6 +100,10 @@ pub(super) struct Session {
 /// The target under the pointer.
 struct Over {
     target: xproto::Window,
+    /// The visit's own window: every message to the target names it as the
+    /// source, and only a reply sent to it is this visit's. Destroyed as
+    /// the visit ends, so a reply to it after goes nowhere.
+    visit: xproto::Window,
     version: u32,
     /// The action it accepts, from its last status.
     accepted: Option<xproto::Atom>,
@@ -182,7 +187,6 @@ impl X11Drag {
             self.flush();
             Err(refused(UnsupportedReason::Unavailable))
         };
-        let atoms: Vec<xproto::Atom> = types.iter().map(|(atom, _)| *atom).collect();
         let owned = xcb
             .create_window(
                 0,
@@ -198,16 +202,6 @@ impl X11Drag {
                 &CreateWindowAux::new(),
             )
             .map(drop)
-            .and_then(|()| {
-                xcb.change_property32(
-                    PropMode::REPLACE,
-                    source,
-                    self.atoms.type_list,
-                    AtomEnum::ATOM,
-                    &atoms,
-                )
-                .map(drop)
-            })
             .and_then(|()| {
                 xcb.set_selection_owner(source, self.atoms.selection, time)
                     .map(drop)
@@ -336,11 +330,11 @@ impl X11Drag {
         }
     }
 
-    /// The window the session under way is known by.
+    /// The window the session's visit to its target is known by.
     #[cfg(test)]
-    pub(super) fn session_source(&self) -> Option<xproto::Window> {
+    pub(super) fn session_visit(&self) -> Option<xproto::Window> {
         self.session
-            .with(|session| session.as_ref().map(|session| session.source))
+            .with(|session| session.as_ref()?.over.as_ref().map(|over| over.visit))
             .flatten()
     }
 
@@ -390,13 +384,14 @@ impl X11Drag {
             // The time a session takes the selection at, as ICCCM asks.
             self.saw(time);
         }
-        let Some((window, source, button, keyboard)) = self
+        let Some((window, source, visit, button, keyboard)) = self
             .session
             .with(|session| {
                 session.as_ref().map(|session| {
                     (
                         session.window,
                         session.source,
+                        session.over.as_ref().map(|over| over.visit),
                         session.button,
                         session.keyboard.is_some(),
                     )
@@ -434,7 +429,9 @@ impl X11Drag {
                 }
                 escape
             }
-            Event::ClientMessage(message) if message.format == 32 && message.window == source => {
+            Event::ClientMessage(message)
+                if message.format == 32 && Some(message.window) == visit =>
+            {
                 let version = self
                     .session
                     .with(|session| {
@@ -513,16 +510,83 @@ impl X11Drag {
             session.owns = false;
             // A target that took the drop has had its leave.
             let dropped = matches!(session.phase, Phase::Dropped { .. });
-            if let Some(over) = session.over.take().filter(|_| !dropped) {
-                self.send(
-                    over.target,
-                    self.atoms.messages.leave,
-                    model::leave(session.source),
-                );
+            if let Some(over) = session.over.take() {
+                if dropped {
+                    self.forget_visit(&over);
+                } else {
+                    self.leave_visit(&over);
+                }
             }
             self.end(&mut session, OsDragEnd::Cancelled)
         };
         self.finish_step(session, then);
+    }
+
+    /// Open a visit to `target`, speaking `version`: its own window, listing
+    /// `types`, and the enter that names it. `None` when the server has no
+    /// window for it, and the target goes unentered.
+    fn visit(&self, target: xproto::Window, version: u32, types: &[xproto::Atom]) -> Option<Over> {
+        let xcb = self.connection.xcb();
+        let visit = xcb.generate_id().ok()?;
+        let made = xcb
+            .create_window(
+                0,
+                visit,
+                self.connection.root(),
+                -1,
+                -1,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .map(drop)
+            .and_then(|()| {
+                xcb.change_property32(
+                    PropMode::REPLACE,
+                    visit,
+                    self.atoms.type_list,
+                    AtomEnum::ATOM,
+                    types,
+                )
+                .map(drop)
+            });
+        if let Err(error) = made {
+            tracing::debug!(%error, "cannot make a drag's window for a target");
+            return None;
+        }
+        self.send(
+            target,
+            self.atoms.messages.enter,
+            model::enter(visit, version, types),
+        );
+        Some(Over {
+            target,
+            visit,
+            version,
+            accepted: None,
+            asked: false,
+            held: None,
+        })
+    }
+
+    /// Leave the target `over` visits, and end the visit.
+    fn leave_visit(&self, over: &Over) {
+        self.send(
+            over.target,
+            self.atoms.messages.leave,
+            model::leave(over.visit),
+        );
+        self.forget_visit(over);
+    }
+
+    /// End the visit `over`: a reply to its window after this goes nowhere.
+    fn forget_visit(&self, over: &Over) {
+        if let Err(error) = self.connection.xcb().destroy_window(over.visit) {
+            tracing::debug!(%error, "cannot destroy a drag's window for a target");
+        }
     }
 
     /// The pointer is at `root`.
@@ -537,31 +601,16 @@ impl X11Drag {
                 .as_ref()
                 .is_some_and(|over| Some(over.target) != found.map(|(target, _)| target));
             if left && let Some(over) = session.over.take() {
-                self.send(
-                    over.target,
-                    self.atoms.messages.leave,
-                    model::leave(session.source),
-                );
+                self.leave_visit(&over);
             }
             if session.over.is_none()
                 && let Some((target, version)) = found
             {
                 let types: Vec<xproto::Atom> =
                     session.types.iter().map(|(atom, _)| *atom).collect();
-                self.send(
-                    target,
-                    self.atoms.messages.enter,
-                    model::enter(session.source, version, &types),
-                );
-                session.over = Some(Over {
-                    target,
-                    version,
-                    accepted: None,
-                    asked: false,
-                    held: None,
-                });
+                session.over = self.visit(target, version, &types);
             }
-            let (source, action) = (session.source, session.action);
+            let action = session.action;
             if let Some(over) = session.over.as_mut() {
                 if over.asked {
                     over.held = Some((root, time));
@@ -570,7 +619,7 @@ impl X11Drag {
                     self.send(
                         over.target,
                         self.atoms.messages.position,
-                        model::position(source, root, time, action),
+                        model::position(over.visit, root, time, action),
                     );
                 }
             }
@@ -616,7 +665,7 @@ impl X11Drag {
                 self.send(
                     over.target,
                     self.atoms.messages.drop,
-                    model::drop_at(session.source, time),
+                    model::drop_at(over.visit, time),
                 );
                 session.phase = Phase::Dropped {
                     deadline: Instant::now() + FINISH_TIMEOUT,
@@ -628,11 +677,7 @@ impl X11Drag {
             }
             _ => {
                 if let Some(over) = session.over.take() {
-                    self.send(
-                        over.target,
-                        self.atoms.messages.leave,
-                        model::leave(session.source),
-                    );
+                    self.leave_visit(&over);
                 }
                 self.end(session, OsDragEnd::Cancelled)
             }
@@ -644,7 +689,6 @@ impl X11Drag {
         let Some(mut session) = self.take_session() else {
             return;
         };
-        let source = session.source;
         let action = session.action;
         let then = match reply {
             Reply::Status {
@@ -662,7 +706,7 @@ impl X11Drag {
                                 self.send(
                                     target,
                                     self.atoms.messages.position,
-                                    model::position(source, root, time, action),
+                                    model::position(over.visit, root, time, action),
                                 );
                                 self.flush();
                             }
@@ -676,7 +720,7 @@ impl X11Drag {
                                 self.send(
                                     target,
                                     self.atoms.messages.position,
-                                    model::position(source, root, moved, action),
+                                    model::position(over.visit, root, moved, action),
                                 );
                                 self.flush();
                             } else {
@@ -736,11 +780,7 @@ impl X11Drag {
             Then::Nothing
         } else {
             if let Some(over) = session.over.take() {
-                self.send(
-                    over.target,
-                    self.atoms.messages.leave,
-                    model::leave(session.source),
-                );
+                self.leave_visit(&over);
             }
             self.end(&mut session, OsDragEnd::Cancelled)
         };
@@ -754,11 +794,7 @@ impl X11Drag {
         };
         let then = if session.window == window {
             if let Some(over) = session.over.take() {
-                self.send(
-                    over.target,
-                    self.atoms.messages.leave,
-                    model::leave(session.source),
-                );
+                self.leave_visit(&over);
             }
             self.end(&mut session, OsDragEnd::Cancelled)
         } else {
@@ -788,12 +824,9 @@ impl X11Drag {
         let Some(mut session) = self.take_session() else {
             return;
         };
-        if let (Phase::Released { .. }, Some(over)) = (session.phase, session.over.take()) {
-            self.send(
-                over.target,
-                self.atoms.messages.leave,
-                model::leave(session.source),
-            );
+        if let (Phase::Released { .. }, Some(over)) = (session.phase, session.over.as_ref()) {
+            self.leave_visit(over);
+            session.over = None;
         }
         let then = self.end(&mut session, OsDragEnd::Cancelled);
         self.finish_step(session, then);
@@ -803,7 +836,10 @@ impl X11Drag {
     /// still owns it, and of the keyboard, its window is destroyed, and its
     /// hook is to hear `outcome`.
     fn end(&self, session: &mut Session, outcome: OsDragEnd) -> Then {
-        session.over = None;
+        // A visit left already has no window; a dropped one's ends here.
+        if let Some(over) = session.over.take() {
+            self.forget_visit(&over);
+        }
         // Once ended, the session's window is gone and its grab let go.
         let Some(on_end) = session.on_end.take() else {
             return Then::Nothing;
