@@ -90,13 +90,17 @@ secrets).
 
 ## Core
 
-Dedicated UI owners are not available in any production runner. The accepted, unimplemented
+Dedicated UI owners are not available in any production runner. The accepted
 [ownership decision](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) requires separate
 host-specific native evidence before availability changes. Headless CPU measurements and
 the Win32 prerequisite test `two_win32_loops_keep_tsf_grants_and_retirement_on_their_owners`
 do not qualify the production runner. The latter runs real hidden HWNDs, TSF grants, UIA,
 input defaults and STA teardown; foreground IME, GPU presentation and application shutdown
-still require the integrated runner's native acceptance. No readiness count changes.
+still require the integrated runner's native acceptance. The testing-only runner now executes
+the dedicated factory, bounded document transport and membership-aware coordinator. Its
+`native_dedicated_factory_builds_on_two_win32_owners_and_retires` smoke test opened real GPU
+windows and built roots on separate owners; it does not measure displayed pixels or qualify
+foreground IME, assistive technology, recovery or the full shutdown matrix. No readiness count changes.
 
 ### App lifecycle
 

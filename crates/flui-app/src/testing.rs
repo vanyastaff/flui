@@ -44,6 +44,34 @@ pub const EXIT_CODE_PANIC: i32 = 101;
 #[non_exhaustive]
 pub struct HeadlessRun;
 
+/// Diagnostic snapshot of this owner's application coordinator for a failed
+/// acceptance assertion. Contains control state and identities, no UI content.
+pub fn owner_diagnostics() -> String {
+    crate::app::runner::owner_diagnostics()
+}
+
+/// Execute the actual Win32 runner with dedicated admission for qualification.
+/// This testing-only entry does not enable production native support.
+#[cfg(windows)]
+pub fn run_native_multi_owner<V, F>(application: Application<V, F>) -> Result<(), AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    start_loop(
+        application,
+        || {
+            flui_native::WindowsPlatform::try_new()
+                .map(|platform| Box::new(platform) as Box<dyn flui_native::Platform>)
+                .map_err(AppRunError::from_platform)
+        },
+        Rc::default(),
+        WindowRenderers::Gpu,
+        crate::app::runner::dedicated::DedicatedBackend::Win32Qualification,
+    )?
+    .finish()
+}
+
 impl HeadlessRun {
     /// Run `application` on a fresh [`HeadlessPlatform`] until it is up.
     #[must_use]
@@ -78,6 +106,7 @@ impl HeadlessRun {
                 || Ok(Box::new(platform) as Box<dyn flui_native::Platform>),
                 Rc::clone(&teardown),
                 WindowRenderers::StandIn(renderers.clone()),
+                crate::app::runner::dedicated::DedicatedBackend::Headless,
             )
         }));
         let state = match started {

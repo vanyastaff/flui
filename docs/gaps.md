@@ -98,11 +98,14 @@ request.
 > **Environments:** all · **Who it hurts:** Every claim of support · **Parity:** [Summary](platform-parity.md#summary)
 
 - 🟡 dominates every column of the parity summary.
-- Dedicated UI owners have no production runner or native acceptance run on any host.
-  [ADR-0284](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) is accepted; the headless
-  measurement and two-loop Win32/TSF prerequisite test now exist. They do not close this gap:
-  foreground IME, GPU presentation, application shutdown and the dedicated production runner
-  remain unqualified. Current runners retain shared-owner execution.
+- Dedicated UI owners remain unavailable in production on every host.
+  [ADR-0284](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md)'s factory, bounded document
+  transport and coordinator now run in the testing kit. Headless contracts, the low-level
+  two-loop Win32/TSF prerequisite and an integrated Win32 bootstrap/build/teardown smoke test
+  do not close this gap. Foreground IME, displayed pixels, recovery, full shutdown acceptance
+  and coordinated development-tool attachments remain unqualified. Existing application
+  entry points retain shared-owner execution; unsupported dedicated placement refuses before
+  invoking its factory.
 - Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)

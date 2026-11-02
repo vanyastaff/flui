@@ -21,6 +21,10 @@ pub enum StartupWindow {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppRunError {
+    /// A dedicated owner failed after its window was published. Siblings may
+    /// continue; the first such failure is returned when the application ends.
+    #[error("dedicated owner failed: {0}")]
+    DedicatedOwner(#[source] AppWindowError),
     /// A configuration setting cannot be honored by the host.
     #[error("application configuration failed: {0}")]
     Configuration(#[source] AppWindowError),

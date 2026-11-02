@@ -205,9 +205,13 @@ If membership changed, continue consultation; never retire an unconsulted new ow
 at the commit boundary either owns a reserved slot in that revision or receives closed
 admission. Bound consultation work per turn and preserve continuation debt.
 
-Each owner receives its retirement ticket and acknowledges only after its local loop resources
-are released. The coordinator remains alive to service completion; joins only already-finished
-threads outside OS callbacks. Windows session-end deadlines are separate from voluntary quit
+Each owner receives its retirement ticket and acknowledges only after its entire thread,
+including thread-local destructors, has completed. `JoinHandle::is_finished` is insufficient
+for that acknowledgement. A non-UI join helper per admitted owner performs the actual join
+and places its result in the reserved control slot; it runs no application callbacks. The
+coordinator processes that result, retains owner capacity until then, and remains alive even
+if the initial window closes independently during quit. Final joins run outside OS callbacks.
+Windows session-end deadlines are separate from voluntary quit
 and retain the existing forced-end contract; do not wait for arbitrary user veto beyond an OS
 deadline. A stuck callback cannot be killed safely: report it, retain custody and do not claim
 successful shutdown by detaching the thread. Explicit process termination is not a recovery pass.

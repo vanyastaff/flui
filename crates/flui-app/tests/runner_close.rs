@@ -692,6 +692,46 @@ pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
     }
 }
 
+/// Admission from a close callback invalidates that owner's consultation.
+#[test]
+fn global_quit_revalidates_windows_admitted_during_consultation() {
+    let opened = Arc::new(AtomicBool::new(false));
+    let asked = Arc::new(AtomicBool::new(false));
+    let child_asked = Arc::clone(&asked);
+    let handler = CloseRequestHandler::new(move |request| {
+        if request.reason() == CloseReason::Program && !opened.swap(true, Ordering::SeqCst) {
+            let asked = Arc::clone(&child_asked);
+            let config =
+                AppConfig::new().with_close_request_handler(CloseRequestHandler::new(move |_| {
+                    asked.store(true, Ordering::SeqCst);
+                    CloseResponse::KeepOpen
+                }));
+            // Abandoning observation must not abandon the accepted launch.
+            drop(
+                flui_app::app::open_window(
+                    config,
+                    flui_app::app::WindowPolicy::Isolated,
+                    flui_widgets::SizedBox::square(12.0),
+                )
+                .expect("launch during consultation is admitted"),
+            );
+        }
+        CloseResponse::Close
+    });
+    let observed = Observed::default();
+    let started = start_with(&observed, Some(handler));
+    started.handle.request_quit().expect("quit admitted");
+    for _ in 0..5 {
+        started.run.run_owner_turn();
+    }
+    assert!(
+        asked.load(Ordering::SeqCst),
+        "quit skipped the newly admitted window"
+    );
+    assert!(started.run.is_running(), "the new window vetoed quit");
+    join_ok(started.run);
+}
+
 /// Sleep until `deadline` and run the turn a native loop runs when its wake
 /// deadline is due: it asks every window for a frame.
 fn wake_at(started: &Started, deadline: Instant) {

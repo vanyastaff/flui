@@ -1,21 +1,29 @@
 //! Closed cross-thread application commands. UI factories never enter this state.
-use flui_foundation::{ClaimHandle, ClaimOutcome, ClaimSlot, PresentationAddress, claim_slot};
-use flui_native::PlatformProxy;
-use parking_lot::Mutex;
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicU64, Ordering},
-    },
-    task::{Context, Poll},
+mod membership;
+mod thread_retirement;
+use super::owner_document::{
+    DocumentData, DocumentRefusal, DocumentRequest, DocumentSendError, Edit, Envelope,
+    SharedDocument,
 };
+use flui_foundation::{PresentationAddress, claim_slot};
+use flui_native::PlatformProxy;
+use membership::Membership;
+pub(crate) use membership::OwnerId;
+pub(crate) use membership::QuitTicket;
+use parking_lot::Mutex;
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicU64, Ordering},
+};
+pub(crate) use thread_retirement::ThreadRetirement;
 
 /// Failure to admit an application command.
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppControlError {
+    /// A never-reused request identity cannot be issued.
+    #[error("application request identity space is exhausted")]
+    IdentityExhausted,
     /// The application has committed to shutdown.
     #[error("application owner is closed")]
     OwnerGone,
@@ -33,94 +41,13 @@ pub enum AppControlError {
     },
 }
 
-/// A main window could not be opened or shown.
-#[derive(Debug, Clone, thiserror::Error)]
-#[non_exhaustive]
-pub enum AppWindowError {
-    /// Native creation failed; retains the original platform error.
-    #[error("native window creation failed: {source}")]
-    Native {
-        /// Original error, shared across coalesced request replies.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// GPU initialization failed.
-    #[error("renderer initialization failed: {source}")]
-    Renderer {
-        /// Original renderer error.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// Runtime construction, registration or root mounting failed.
-    #[error("root mount failed: {source}")]
-    Mount {
-        /// Original initialization error.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// The user factory unwound; text follows the configured failure policy.
-    #[error("root factory panicked: {message}")]
-    FactoryPanicked {
-        /// Materialized panic text; arbitrary payloads are never retained.
-        message: super::PanicText,
-    },
-    /// Installation unwound after native creation.
-    #[error("window installation panicked: {message}")]
-    InstallerPanicked {
-        /// Materialized panic text; arbitrary payloads are never retained.
-        message: super::PanicText,
-    },
-    /// The existing window could not be revealed.
-    #[error("window could not be shown: {source}")]
-    Show {
-        /// Original native reveal error.
-        #[source]
-        source: Arc<dyn std::error::Error + Send + Sync>,
-    },
-    /// Shutdown cancelled an admitted intent before installation completed.
-    #[error("application shutdown cancelled the window request")]
-    Cancelled,
-    /// The request was refused at admission because the application is
-    /// quitting, or because the loop it was made against has stopped or
-    /// been replaced. Unlike [`Self::Cancelled`], nothing was admitted.
-    #[error("window admission is closed: the application loop is quitting or gone")]
-    AdmissionClosed,
-    /// Called from a thread that hosts no running platform loop. Window
-    /// entry points must run on the owner thread, from inside or after a
-    /// running `Platform::run`'s `on_ready`.
-    #[error("no application loop runs on this thread; call from the owner thread")]
-    NoOwnerLoop,
-    /// The requested [`WindowPolicy`](crate::app::WindowPolicy) is not
-    /// supported by this entry point in the application's current state;
-    /// `reason` says which precondition failed.
-    #[error("window policy not supported here: {reason}")]
-    UnsupportedPolicy {
-        /// Why this policy was refused, in one sentence.
-        reason: &'static str,
-    },
-}
-
-pub(crate) type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;
+pub(crate) use super::window_request::{AppWindowError, Reply, WindowRequest};
 const WAITER_CAPACITY: usize = 64;
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Accepting,
     Quitting,
     Closed,
-}
-/// A quit the application asked for through [`AppHandle::request_quit`],
-/// until the owner commits it or it is cancelled.
-#[derive(Debug, Default, PartialEq, Eq)]
-enum QuitAsk {
-    #[default]
-    None,
-    /// The owner asks every presentation on its next turn.
-    Asked,
-    /// The owner is asking now.
-    Consulting,
-    /// Presentations refused, each recording the close on its guard; the
-    /// quit waits for each record to be carried out.
-    Deferred(Vec<PresentationAddress>),
 }
 /// What the presentations answered a quit the application asked for.
 pub(crate) enum QuitAnswer {
@@ -131,17 +58,29 @@ pub(crate) enum QuitAnswer {
     Waiting(Vec<PresentationAddress>),
 }
 struct State {
+    documents: Vec<Weak<DocumentData>>,
+    document_ids: flui_foundation::IdMint<std::num::NonZeroU64>,
+    limits: super::OwnerLimits,
+    launches: usize,
+    owner_failure: Option<AppWindowError>,
+    membership_changed: bool,
     phase: Phase,
-    quit: QuitAsk,
+    membership: Membership,
     intent: bool,
     active: bool,
     batch: Option<Arc<()>>,
     superseded: bool,
     closing: Option<PresentationAddress>,
     open_address: Option<PresentationAddress>,
-    active_replies: Vec<Reply>,
+    active_replies: Vec<MainReply>,
     outstanding: usize,
-    replies: Vec<Reply>,
+    main_receipts: usize,
+    replies: Vec<MainReply>,
+}
+
+struct MainReply {
+    reply: Reply,
+    budget: Arc<ReceiptBudget>,
 }
 
 /// Thread-safe application control. It never retains a widget tree or UI factory.
@@ -155,6 +94,52 @@ impl std::fmt::Debug for AppHandle {
     }
 }
 impl AppHandle {
+    /// Create an explicitly versioned document service in this application.
+    /// `max_bytes` bounds every value and reserves space for read/conflict replies.
+    /// Capture the returned handle in factories and bind a port on each owner.
+    pub fn create_document(
+        &self,
+        bytes: Vec<u8>,
+        max_bytes: std::num::NonZeroUsize,
+    ) -> Result<SharedDocument, DocumentSendError> {
+        let mut state = self.ingress.state.lock();
+        let refusal = if state.phase != Phase::Accepting {
+            Some(DocumentRefusal::OwnerGone)
+        } else if bytes.capacity() > max_bytes.get()
+            || max_bytes.get() > state.limits.payload_bytes.get()
+        {
+            Some(DocumentRefusal::Oversize)
+        } else {
+            None
+        };
+        if let Some(reason) = refusal {
+            return Err(DocumentSendError {
+                reason,
+                rejected: Some(bytes),
+            });
+        }
+        state
+            .documents
+            .retain(|document| document.strong_count() != 0);
+        if state.documents.len() >= state.limits.commands.get() {
+            return Err(DocumentSendError {
+                reason: DocumentRefusal::Full,
+                rejected: Some(bytes),
+            });
+        }
+        let Ok(id) = state.document_ids.next() else {
+            return Err(DocumentSendError {
+                reason: DocumentRefusal::IdentityExhausted,
+                rejected: Some(bytes),
+            });
+        };
+        let data = Arc::new(DocumentData::new(id, bytes, max_bytes.get()));
+        state.documents.push(Arc::downgrade(&data));
+        Ok(SharedDocument {
+            data,
+            run: Arc::downgrade(&self.ingress),
+        })
+    }
     /// Admit a coalesced show request. Dropping its receiver does not cancel intent.
     pub fn request_show_main_window(&self) -> Result<WindowRequest, AppControlError> {
         self.ingress.request_show()
@@ -186,9 +171,15 @@ impl AppHandle {
             Phase::Quitting => return Ok(()),
             Phase::Accepting => {}
         }
-        self.ingress.proxy.wake().map_err(control_error)?;
-        state.quit = QuitAsk::Asked;
-        Ok(())
+        state
+            .membership
+            .request_quit()
+            .map_err(|_| AppControlError::IdentityExhausted)?;
+        let proxies = state.membership.proxies();
+        drop(state);
+        // Admission precedes notification. A failed post cannot erase the
+        // reserved consultation; the next owner turn still observes it.
+        Ingress::notify(proxies, false)
     }
     /// Ask every window whose GPU device rebuild was given up to try again
     /// (ADR-0267).
@@ -209,43 +200,8 @@ impl AppHandle {
         if self.ingress.state.lock().phase == Phase::Closed {
             return Err(AppControlError::OwnerGone);
         }
-        self.ingress.device_retry.request();
+        self.ingress.device_retry.request()?;
         Ok(())
-    }
-}
-
-/// Receipt for opening or showing a window. Success means mounted/wired and redraw requested,
-/// not that the compositor presented a frame or the OS granted focus.
-/// Dropping the receipt abandons observation, without cancelling admitted work.
-#[derive(Debug)]
-#[must_use = "observe window installation success or failure"]
-pub struct WindowRequest {
-    reply: ClaimHandle<Result<PresentationAddress, AppWindowError>>,
-}
-impl WindowRequest {
-    pub(crate) fn new() -> (Arc<Reply>, Self) {
-        let (reply, receiver) = claim_slot(Arc::new(|| {}));
-        (Arc::new(reply), Self { reply: receiver })
-    }
-    /// Take a completed result without blocking the owner thread.
-    pub fn try_result(&mut self) -> Option<Result<PresentationAddress, AppWindowError>> {
-        let mut cx = Context::from_waker(std::task::Waker::noop());
-        match Pin::new(&mut *self).poll(&mut cx) {
-            Poll::Ready(result) => Some(result),
-            Poll::Pending => None,
-        }
-    }
-}
-impl Future for WindowRequest {
-    type Output = Result<PresentationAddress, AppWindowError>;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.reply).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(ClaimOutcome::Delivered(result)) => Poll::Ready(result),
-            Poll::Ready(ClaimOutcome::OwnerGone | ClaimOutcome::AlreadyClaimed) => {
-                Poll::Ready(Err(AppWindowError::Cancelled))
-            }
-        }
     }
 }
 
@@ -273,12 +229,19 @@ impl DeviceRetry {
     }
     /// Count a request and ask every live window for a frame, which acts on
     /// it. The wakes run without the list's lock held.
-    fn request(&self) {
-        self.requests.fetch_add(1, Ordering::AcqRel);
+    fn request(&self) -> Result<(), AppControlError> {
+        self.requests
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| AppControlError::IdentityExhausted)?;
         let wakes: Vec<_> = self.wakes.lock().iter().filter_map(Weak::upgrade).collect();
+        let mut panics = flui_foundation::panic::FirstPanic::new();
         for wake in wakes {
-            wake();
+            panics.contain(|| wake());
         }
+        panics.resume();
+        Ok(())
     }
 }
 
@@ -297,19 +260,377 @@ impl DeviceRetryWatch {
         requested
     }
 }
+/// Retained until both installation and receipt observation/abandonment finish.
+#[derive(Debug)]
+pub(crate) enum ReceiptBudget {
+    Launch(Weak<Ingress>),
+    Main(Weak<Ingress>),
+}
+impl Drop for ReceiptBudget {
+    fn drop(&mut self) {
+        let run = match self {
+            Self::Launch(run) | Self::Main(run) => run.upgrade(),
+        };
+        if let Some(run) = run {
+            let mut state = run.state.lock();
+            match self {
+                Self::Launch(_) => {
+                    state.launches = state
+                        .launches
+                        .checked_sub(1)
+                        .expect("BUG: launch receipt released once");
+                }
+                Self::Main(_) => {
+                    state.main_receipts = state
+                        .main_receipts
+                        .checked_sub(1)
+                        .expect("BUG: main receipt released once");
+                    state.membership.release_budget(OwnerId::INITIAL, 0);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) struct Ingress {
     state: Mutex<State>,
     proxy: PlatformProxy,
     device_retry: Arc<DeviceRetry>,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    services: Mutex<Option<Arc<super::runtime::RunServices>>>,
 }
+
+/// A stamped route to one owner in one application run. Cloning this carries
+/// control authority only; no UI/native object or callback crosses the route.
+#[derive(Clone)]
+pub(crate) struct OwnerRoute {
+    pub(crate) ingress: Arc<Ingress>,
+    id: OwnerId,
+}
+
+impl OwnerRoute {
+    pub(crate) fn submit_document(
+        &self,
+        data: Arc<DocumentData>,
+        edit: Edit,
+    ) -> Result<DocumentRequest, DocumentSendError> {
+        let bytes = match edit.retained_bytes(data.max_bytes) {
+            Ok(bytes) => bytes,
+            Err(reason) => return Err(edit.rejected(reason)),
+        };
+        let mut state = self.ingress.state.lock();
+        if state.phase != Phase::Accepting {
+            return Err(edit.rejected(DocumentRefusal::OwnerGone));
+        }
+        let limits = state.limits;
+        let sequence = match state.membership.reserve_command(self.id, bytes, limits) {
+            Ok(sequence) => sequence,
+            Err(reason) => return Err(edit.rejected(reason)),
+        };
+        let (command, request) = Envelope::new(
+            sequence,
+            data,
+            edit,
+            Arc::downgrade(&self.ingress),
+            self.id,
+            bytes,
+        );
+        state.membership.enqueue(self.id, command);
+        drop(state);
+        self.ingress.wake_owner();
+        Ok(request)
+    }
+    pub(crate) fn is_initial(&self) -> bool {
+        self.id == OwnerId::INITIAL
+    }
+
+    pub(crate) fn reserve_launch(&self) -> Result<LaunchReservation, AppWindowError> {
+        self.ingress.reserve_owner_launch(self.id)
+    }
+
+    pub(crate) fn attach(&self, proxy: PlatformProxy) -> bool {
+        let mut state = self.ingress.state.lock();
+        state.phase == Phase::Accepting && state.membership.attach(self.id, proxy)
+    }
+
+    pub(crate) fn launched(&self) {
+        let mut state = self.ingress.state.lock();
+        state.membership.finish_launch(self.id);
+        drop(state);
+        contain(|| self.ingress.wake_all());
+    }
+
+    pub(crate) fn retired(&self) {
+        let retired = {
+            let mut state = self.ingress.state.lock();
+            state.membership_changed = true;
+            state.membership.retire(self.id)
+        };
+        let (proxy, commands) = retired;
+        drop(proxy);
+        for command in commands {
+            command.execute(false);
+        }
+        self.ingress.wake_owner();
+    }
+
+    pub(crate) fn quiesce(&self) {
+        let (proxy, commands) = self.ingress.state.lock().membership.quiesce(self.id);
+        drop(proxy);
+        for command in commands {
+            command.execute(false);
+        }
+    }
+
+    pub(crate) fn thread_finished(&self, result: std::thread::Result<()>) {
+        self.ingress
+            .state
+            .lock()
+            .membership
+            .thread_finished(self.id, result);
+        // Only native notification here: the join helper must not run a tracing
+        // subscriber, completion waker or application destructor. The initial
+        // owner processes this reserved result even if posting a wake fails.
+        let _ = self.ingress.proxy.wake();
+    }
+
+    pub(crate) fn begin_quit_consult(&self) -> Option<QuitTicket> {
+        let mut state = self.ingress.state.lock();
+        if state.phase != Phase::Accepting || (self.is_initial() && (state.active || state.intent))
+        {
+            return None;
+        }
+        state.membership.begin_consult(self.id)
+    }
+
+    pub(crate) fn quit_waiting(&self) -> Vec<PresentationAddress> {
+        self.ingress.state.lock().membership.waiting(self.id)
+    }
+
+    pub(crate) fn quit_consented(&self, address: PresentationAddress) {
+        self.ingress
+            .state
+            .lock()
+            .membership
+            .consent(self.id, address);
+        self.ingress.wake_owner();
+    }
+
+    pub(crate) fn quit_declined(&self, address: PresentationAddress) {
+        self.ingress
+            .state
+            .lock()
+            .membership
+            .decline(self.id, address);
+    }
+}
+
+/// Accepted publication, held until installation or rollback has completed.
+pub(crate) struct LaunchReservation {
+    ingress: Arc<Ingress>,
+    owner: OwnerId,
+}
+
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        self.ingress
+            .state
+            .lock()
+            .membership
+            .finish_launch(self.owner);
+        self.ingress.wake_owner();
+    }
+}
+
 impl Ingress {
-    pub(crate) fn new(proxy: PlatformProxy, startup_open: bool) -> Arc<Self> {
+    pub(crate) fn finish_threads(&self) {
+        let finished = {
+            let mut state = self.state.lock();
+            let finished = state.membership.take_finished();
+            state.membership_changed |= !finished.is_empty();
+            finished
+        };
+        for finished in finished {
+            drop(finished.proxy);
+            for command in finished.commands {
+                command.execute(false);
+            }
+            if let Err(payload) = finished.result {
+                let detail = self
+                    .services
+                    .lock()
+                    .as_ref()
+                    .map_or(super::FrameFailureDetail::Redacted, |services| {
+                        services.failure_detail
+                    });
+                let message = flui_runtime::frame_failure::panic_text(detail, payload.as_ref());
+                flui_foundation::panic::discard_payload(payload);
+                self.record_owner_failure(AppWindowError::InstallerPanicked { message });
+            }
+        }
+    }
+    pub(crate) fn take_membership_change(&self) -> bool {
+        std::mem::take(&mut self.state.lock().membership_changed)
+    }
+    pub(crate) fn record_owner_failure(&self, error: AppWindowError) {
+        let refused = {
+            let mut state = self.state.lock();
+            if state.owner_failure.is_none() {
+                state.owner_failure = Some(error);
+                None
+            } else {
+                Some(error)
+            }
+        };
+        contain(|| drop(refused));
+        self.wake_owner();
+    }
+
+    pub(crate) fn take_owner_failure(&self) -> Option<AppWindowError> {
+        self.state.lock().owner_failure.take()
+    }
+
+    pub(crate) fn release_services(&self) {
+        let services = self.services.lock().take();
+        drop(services);
+    }
+    pub(crate) fn release_document_budget(&self, owner: OwnerId, bytes: usize) {
+        self.state.lock().membership.release_budget(owner, bytes);
+    }
+
+    pub(crate) fn serve_documents(&self) {
+        let commands = self.state.lock().membership.drain_commands();
+        for command in commands {
+            command.execute(self.accepting());
+        }
+    }
+    #[cfg(feature = "testing")]
+    pub(crate) fn diagnostics(&self) -> String {
+        let state = self.state.lock();
+        format!(
+            "phase={:?}, active={}, intent={}, outstanding={}, membership={:?}",
+            state.phase, state.active, state.intent, state.outstanding, state.membership
+        )
+    }
+    pub(crate) fn install_services(&self, services: super::runtime::RunServices) {
+        let mut slot = self.services.lock();
+        assert!(slot.is_none(), "BUG: application services installed once");
+        *slot = Some(Arc::new(services));
+    }
+
+    pub(crate) fn services(&self) -> Arc<super::runtime::RunServices> {
+        Arc::clone(
+            self.services
+                .lock()
+                .as_ref()
+                .expect("BUG: application services precede dedicated admission"),
+        )
+    }
+    fn reserve_owner_launch(
+        self: &Arc<Self>,
+        owner: OwnerId,
+    ) -> Result<LaunchReservation, AppWindowError> {
+        let mut state = self.state.lock();
+        if state.phase != Phase::Accepting {
+            return Err(AppWindowError::AdmissionClosed);
+        }
+        state
+            .membership
+            .begin_launch(owner)
+            .map_err(|_| AppWindowError::IdentityExhausted)?;
+        Ok(LaunchReservation {
+            ingress: Arc::clone(self),
+            owner,
+        })
+    }
+
+    pub(crate) fn initial_owner(self: &Arc<Self>) -> OwnerRoute {
+        OwnerRoute {
+            ingress: Arc::clone(self),
+            id: OwnerId::INITIAL,
+        }
+    }
+
+    pub(crate) fn reserve_owner(
+        self: &Arc<Self>,
+    ) -> Result<(OwnerRoute, Arc<ReceiptBudget>), AppWindowError> {
+        self.reap_threads();
+        let mut state = self.state.lock();
+        if state.phase != Phase::Accepting {
+            return Err(AppWindowError::AdmissionClosed);
+        }
+        let capacity = state.limits.owners.get();
+        if state.membership.count() > capacity {
+            return Err(AppWindowError::OwnerCapacity { capacity });
+        }
+        if state.launches == state.limits.launches.get() {
+            return Err(AppWindowError::LaunchCapacity {
+                capacity: state.limits.launches.get(),
+            });
+        }
+        let id = state
+            .membership
+            .reserve_owner()
+            .map_err(|_| AppWindowError::IdentityExhausted)?;
+        state.launches += 1;
+        Ok((
+            OwnerRoute {
+                ingress: Arc::clone(self),
+                id,
+            },
+            Arc::new(ReceiptBudget::Launch(Arc::downgrade(self))),
+        ))
+    }
+
+    pub(crate) fn keep_thread(&self, thread: std::thread::JoinHandle<()>) {
+        self.threads.lock().push(thread);
+    }
+
+    fn reap_threads(&self) {
+        let finished = {
+            let mut threads = self.threads.lock();
+            let mut finished = Vec::new();
+            let mut index = 0;
+            while index < threads.len() {
+                if threads[index].is_finished() {
+                    finished.push(threads.swap_remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            finished
+        };
+        // These are join helpers, never UI owners. Their completed bodies have
+        // already joined the UI thread (including TLS) and acknowledged retirement.
+        // Do not join here: even is_finished() does not include TLS destruction.
+        drop(finished);
+    }
+
+    pub(crate) fn wake_all(&self) {
+        let proxies = self.state.lock().membership.proxies();
+        if let Err(error) = Self::notify(proxies, false) {
+            tracing::debug!(%error, "owner notification failed; control remains pending");
+        }
+    }
+    pub(crate) fn new(
+        proxy: PlatformProxy,
+        startup_open: bool,
+        limits: super::OwnerLimits,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            services: Mutex::new(None),
+            threads: Mutex::default(),
             device_retry: Arc::default(),
-            proxy,
+            proxy: proxy.clone(),
             state: Mutex::new(State {
+                documents: Vec::new(),
+                document_ids: flui_foundation::IdMint::new(),
+                limits,
+                launches: 0,
+                owner_failure: None,
+                membership_changed: false,
                 phase: Phase::Accepting,
-                quit: QuitAsk::None,
+                membership: Membership::new(proxy),
                 intent: startup_open,
                 active: false,
                 batch: None,
@@ -318,6 +639,7 @@ impl Ingress {
                 open_address: None,
                 active_replies: Vec::new(),
                 outstanding: 0,
+                main_receipts: 0,
                 replies: Vec::new(),
             }),
         })
@@ -330,20 +652,41 @@ impl Ingress {
             ingress: Arc::clone(self),
         }
     }
-    fn request_show(&self) -> Result<WindowRequest, AppControlError> {
+    fn request_show(self: &Arc<Self>) -> Result<WindowRequest, AppControlError> {
         let (reply, receiver) = claim_slot(Arc::new(|| {}));
         let mut state = self.state.lock();
         if state.phase != Phase::Accepting {
             return Err(AppControlError::OwnerGone);
         }
-        if state.outstanding == WAITER_CAPACITY {
-            return Err(AppControlError::Capacity {
-                capacity: WAITER_CAPACITY,
-            });
+        let capacity = WAITER_CAPACITY.min(state.limits.commands.get());
+        if state.main_receipts >= capacity
+            || state.membership.ordinary_count(OwnerId::INITIAL) >= state.limits.commands.get()
+        {
+            return Err(AppControlError::Capacity { capacity });
         }
-        // Notification is nonblocking and invokes no user code. Serialize it
-        // with admission so another sender cannot acknowledge a failed post.
-        self.proxy.wake().map_err(control_error)?;
+        state
+            .membership
+            .changed(OwnerId::INITIAL)
+            .map_err(|_| AppControlError::IdentityExhausted)?;
+        let limits = state.limits;
+        state
+            .membership
+            .reserve_command(OwnerId::INITIAL, 0, limits)
+            .map_err(|reason| match reason {
+                DocumentRefusal::IdentityExhausted => AppControlError::IdentityExhausted,
+                DocumentRefusal::OwnerGone | DocumentRefusal::WrongRun => {
+                    AppControlError::OwnerGone
+                }
+                DocumentRefusal::Full | DocumentRefusal::Oversize => {
+                    AppControlError::Capacity { capacity }
+                }
+            })?;
+        state.main_receipts += 1;
+        let budget = Arc::new(ReceiptBudget::Main(Arc::downgrade(self)));
+        let reply = MainReply {
+            reply,
+            budget: Arc::clone(&budget),
+        };
         state.outstanding += 1;
         if state.active && !state.superseded && state.closing.is_none() {
             state.active_replies.push(reply);
@@ -351,26 +694,35 @@ impl Ingress {
             state.intent = true;
             state.replies.push(reply);
         }
-        Ok(WindowRequest { reply: receiver })
+        drop(state);
+        self.wake_owner();
+        Ok(WindowRequest {
+            reply: receiver,
+            budget: Some(budget),
+        })
     }
     pub(crate) fn request_native_show(&self) {
         let mut state = self.state.lock();
         if state.phase != Phase::Accepting {
             return;
         }
-        if let Err(error) = self.proxy.wake() {
+        if let Err(error) = state.membership.changed(OwnerId::INITIAL) {
             drop(state);
-            tracing::error!(%error, "native reopen could not notify application owner");
+            tracing::error!(%error, "native reopen identity exhausted");
             return;
         }
         if !state.active || state.superseded || state.closing.is_some() {
             state.intent = true;
         }
+        drop(state);
+        self.wake_owner();
     }
     pub(crate) fn wake_owner(&self) {
-        if let Err(error) = self.proxy.wake() {
-            tracing::debug!(%error, "application owner wake unavailable");
-        }
+        contain(|| {
+            if let Err(error) = self.proxy.wake() {
+                tracing::debug!(%error, "application owner wake unavailable");
+            }
+        });
     }
     pub(crate) fn accepting(&self) -> bool {
         self.state.lock().phase == Phase::Accepting
@@ -434,7 +786,7 @@ impl Ingress {
         // A close/dispose callback may have reserved the next generation.
         let pending = {
             let state = self.state.lock();
-            state.phase == Phase::Accepting && state.intent
+            state.phase == Phase::Accepting && (state.intent || state.membership.has_quit())
         };
         if pending {
             self.wake_owner();
@@ -470,8 +822,9 @@ impl Ingress {
         Self::deliver(replies, Err(error));
         true
     }
-    fn deliver(replies: Vec<Reply>, result: Result<PresentationAddress, AppWindowError>) {
-        for reply in replies {
+    fn deliver(replies: Vec<MainReply>, result: Result<PresentationAddress, AppWindowError>) {
+        for MainReply { reply, budget } in replies {
+            drop(budget);
             contain(|| {
                 let _ = reply.deliver(result.clone());
             });
@@ -487,116 +840,107 @@ impl Ingress {
         if state.phase == Phase::Closed {
             return Err(AppControlError::OwnerGone);
         }
-        Self::commit_quit(&mut state, &self.proxy)
+        let proxies = Self::commit_quit(&mut state);
+        drop(state);
+        Self::notify(proxies, true)
     }
 
-    fn commit_quit(state: &mut State, proxy: &PlatformProxy) -> Result<(), AppControlError> {
+    fn commit_quit(state: &mut State) -> Vec<PlatformProxy> {
         state.phase = Phase::Quitting;
-        state.quit = QuitAsk::None;
-        proxy.request_quit().map_err(control_error)
+        state.membership.cancel_quit();
+        state.membership.retiring_proxies()
     }
 
-    /// Start the owner's consultation of a quit the application asked for:
-    /// `true` when one is asked and nothing has fenced the application yet.
-    pub(crate) fn begin_quit_consult(&self) -> bool {
-        let mut state = self.state.lock();
-        if state.phase != Phase::Accepting || state.quit != QuitAsk::Asked {
-            return false;
+    fn notify(proxies: Vec<PlatformProxy>, quitting: bool) -> Result<(), AppControlError> {
+        let mut first = None;
+        let mut panics = flui_foundation::panic::FirstPanic::new();
+        for proxy in proxies {
+            panics.contain(|| {
+                let result = if quitting {
+                    proxy.request_quit()
+                } else {
+                    proxy.wake()
+                };
+                if let Err(error) = result
+                    && first.is_none()
+                {
+                    first = Some(control_error(error));
+                }
+            });
         }
-        state.quit = QuitAsk::Consulting;
-        true
+        panics.resume();
+        first.map_or(Ok(()), Err)
     }
 
-    /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
+    /// End the consultation [`OwnerRoute::begin_quit_consult`]
     /// started with what the presentations answered. A quit asked again
     /// while they were asked stays asked for the next turn.
-    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) {
-        let mut state = self.state.lock();
-        if state.quit != QuitAsk::Consulting {
-            return;
-        }
-        match answer {
-            QuitAnswer::Cancelled => {
-                state.quit = QuitAsk::None;
-                drop(state);
-                tracing::info!(
-                    "a presentation refused the quit without recording it; quit cancelled"
-                );
-            }
-            QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
-                state.quit = QuitAsk::Deferred(waiting);
-            }
-            QuitAnswer::Waiting(_) => {
-                if let Err(error) = Self::commit_quit(&mut state, &self.proxy) {
-                    drop(state);
-                    tracing::error!(%error, "quit notification failed");
-                }
-            }
-        }
+    pub(crate) fn finish_quit_consult(&self, ticket: QuitTicket, answer: QuitAnswer) {
+        self.state.lock().membership.answer(ticket, answer);
+        self.wake_owner();
     }
 
-    /// The presentation at `address` gave the deferred quit its consent: its
-    /// recorded close was carried out, or it is gone. The quit goes ahead
-    /// once no presentation is left to wait on.
-    pub(crate) fn quit_consented(&self, address: PresentationAddress) {
-        let mut state = self.state.lock();
-        let QuitAsk::Deferred(waiting) = &mut state.quit else {
-            return;
+    /// Run only on the initial owner, after replies and membership changes.
+    pub(crate) fn advance_quit(&self) {
+        let proxies = {
+            let mut state = self.state.lock();
+            if state.phase == Phase::Quitting {
+                state.membership.retiring_proxies()
+            } else {
+                Self::commit_consented(&mut state)
+            }
         };
-        waiting.retain(|waited| *waited != address);
-        if waiting.is_empty()
-            && let Err(error) = Self::commit_quit(&mut state, &self.proxy)
+        Self::notify_committed(proxies);
+    }
+
+    fn commit_consented(state: &mut State) -> Vec<PlatformProxy> {
+        if state.phase == Phase::Accepting
+            && !state.active
+            && !state.intent
+            && state.membership.may_commit()
         {
-            drop(state);
-            tracing::error!(%error, "deferred quit notification failed");
+            Self::commit_quit(state)
+        } else {
+            Vec::new()
         }
     }
 
-    /// The presentation at `address` kept itself open: the deferred quit it
-    /// was waited on for is cancelled.
-    pub(crate) fn quit_declined(&self, address: PresentationAddress) {
-        let mut state = self.state.lock();
-        if let QuitAsk::Deferred(waiting) = &state.quit
-            && waiting.contains(&address)
-        {
-            state.quit = QuitAsk::None;
-            drop(state);
-            tracing::info!(
-                ?address,
-                "a presentation stayed open; deferred quit cancelled"
-            );
-        }
-    }
-
-    /// The presentations a deferred quit still waits on.
-    pub(crate) fn quit_waiting(&self) -> Vec<PresentationAddress> {
-        match &self.state.lock().quit {
-            QuitAsk::Deferred(waiting) => waiting.clone(),
-            QuitAsk::None | QuitAsk::Asked | QuitAsk::Consulting => Vec::new(),
+    fn notify_committed(proxies: Vec<PlatformProxy>) {
+        if let Err(error) = Self::notify(proxies, true) {
+            tracing::error!(%error, "quit notification failed; admission remains fenced");
         }
     }
 
     pub(crate) fn try_auto_quit(&self) -> bool {
         let mut state = self.state.lock();
-        if state.phase != Phase::Accepting {
+        if state.phase == Phase::Closed {
             return true;
         }
-        if state.intent || state.active || state.outstanding != 0 {
+        if state.phase == Phase::Quitting {
+            return state.membership.count() == 1;
+        }
+        if state.intent || state.active || state.outstanding != 0 || state.membership.count() != 1 {
             return false;
         }
-        state.phase = Phase::Quitting;
-        // The native admission fence is synchronous even if posting fails.
-        let result = self.proxy.request_quit();
+        let proxies = Self::commit_quit(&mut state);
         drop(state);
-        if let Err(error) = result {
-            tracing::error!(%error, "automatic quit notification failed");
-        }
+        Self::notify_committed(proxies);
         true
     }
     pub(crate) fn close(&self) {
+        self.cancel_main();
+        self.state.lock().phase = Phase::Closed;
+        self.serve_documents();
+    }
+
+    /// Retiring the initial window controller does not retire the application
+    /// coordinator: workers may still owe their native-resource acknowledgements.
+    pub(crate) fn cancel_main(&self) {
+        // Terminal initial-owner failure also retires workers before its shared
+        // services. No join runs under ingress/registry locks.
+        let _ = self.quit_now();
         let replies = {
             let mut state = self.state.lock();
-            state.phase = Phase::Closed;
             state.batch = None;
             state.active = false;
             state.intent = false;
@@ -608,6 +952,18 @@ impl Ingress {
             replies
         };
         Self::deliver(replies, Err(AppWindowError::Cancelled));
+    }
+
+    /// After the initial native loop returned, under its exit watchdog, never
+    /// from a native callback. Shared-service shutdown follows these joins.
+    pub(crate) fn join_owners(&self) {
+        let threads = std::mem::take(&mut *self.threads.lock());
+        for thread in threads {
+            if let Err(payload) = thread.join() {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        }
+        self.finish_threads();
     }
 }
 fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
@@ -622,11 +978,11 @@ fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
 }
 pub(crate) fn contain(body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
         if let Err(payload) = std::panic::catch_unwind(|| {
             tracing::error!("contained application callback or capture cleanup panic");
         }) {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -647,7 +1003,10 @@ mod tests {
             }))
             .expect("headless owner");
         let owner = saved.take().expect("owner was delivered");
-        (Ingress::new(owner.proxy(), false), owner)
+        (
+            Ingress::new(owner.proxy(), false, crate::app::OwnerLimits::default()),
+            owner,
+        )
     }
     fn main_window_exit_and_admission_linearize_on_same_ingress() {
         let (ingress, _owner) = ingress();

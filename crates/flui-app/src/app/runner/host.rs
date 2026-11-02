@@ -921,6 +921,7 @@ pub(crate) fn install_owner_platform(
                             super::secondary_window::drain_pending_secondary_window_completions(
                                 recovery,
                             );
+                            super::dedicated::settle_launch();
                         });
                         if first.is_none() && current() {
                             super::installed_host::contain(
@@ -1277,7 +1278,19 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
             not(target_arch = "wasm32")
         ))]
         if should_exit {
-            let ingress = APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
+            let (ingress, dedicated) = APP_RUNTIME.with(|slot| {
+                let state = slot.borrow();
+                (
+                    state.main_ingress.clone(),
+                    state
+                        .owner_route
+                        .as_ref()
+                        .is_some_and(|route| !route.is_initial()),
+                )
+            });
+            if dedicated {
+                return true;
+            }
             if let Some(ingress) = ingress {
                 return ingress.try_auto_quit();
             }
@@ -1553,6 +1566,15 @@ impl OwnerHostClearGuard {
 
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
+        #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+        let routes = APP_RUNTIME.with(|slot| {
+            let mut runtime = slot.borrow_mut();
+            if runtime.owner_install_generation != self.expected_generation {
+                return None;
+            }
+            runtime.dedicated_backend = super::dedicated::DedicatedBackend::Unavailable;
+            Some((runtime.owner_route.take(), runtime.main_ingress.take()))
+        });
         let (removed, owner_turn_wake, storage) = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.owner_install_generation == self.expected_generation {
@@ -1565,9 +1587,13 @@ impl Drop for OwnerHostClearGuard {
                 (None, None, None)
             }
         });
-        drop(removed);
-        drop(owner_turn_wake);
-        drop(storage);
+        let mut panics = flui_foundation::panic::FirstPanic::new();
+        panics.contain(|| drop(removed));
+        panics.contain(|| drop(owner_turn_wake));
+        panics.contain(|| drop(storage));
+        #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+        panics.contain(|| drop(routes));
+        panics.resume();
     }
 }
 

@@ -1,10 +1,12 @@
 # Multi-owner implementation tasks and evidence
 
-- **Status:** In progress, approved by the owner (2026-11-01). Headless and low-level
-  Win32/TSF prerequisites implemented and executed; production integration remains pending.
-  No platform support is claimed.
+- **Status:** In progress, approved by the owner (2026-11-01). Transport, coordinator and
+  destination factory are implemented and exercised through the headless kit and explicit
+  Win32 qualification entry. Shared runners use the revised lifecycle; ordinary production
+  dedicated admission remains unavailable. No platform support is claimed.
 - **Base:** `bb618a7f7f1510ff11093109094ba02c937d1970`.
-- **Next:** MO-T3, then MO-T4; preserve the executed MO-T2/MO-T5 prerequisites during integration.
+- **Next:** MO-T7 and the integrated MO-T8 matrix, then finish actual-host MO-T9 verification
+  and MO-T10 development-hook attachment. MO-T11 remains blocked on that evidence.
 - **Requirements:** [requirements.md](requirements.md). **Design:** [design.md](design.md).
 
 ## Work and dependency order
@@ -26,16 +28,23 @@
 ### Completion checklist
 
 - [x] MO-T1 — owner accepted the corrected ADR/spec, factory exception, consumer/configuration
-  inventory and bounded-work design on 2026-11-01; no transfer allowlist entry added yet.
+  inventory and bounded-work design on 2026-11-01; the implemented factory has exactly one
+  new named `Send` bound, verified by the transfer gate.
 - [x] MO-T2 — checked-in public-path headless test/example, raw baseline and failing control.
-- [ ] MO-T3 — transport and identity contracts.
-- [ ] MO-T4 — coordinator, local runner migration and lifecycle.
+- [x] MO-T3 — typed run/owner identity, bounded document and main-window receipt admission,
+  independent quit/retirement control, stale edit preservation and compiler transfer checks.
+- [x] MO-T4 — membership-versioned coordinator, publication rollback, owner-local close
+  routing, initial-owner service custody and joins outside native callbacks; headless and
+  existing local conformance passed. Full native lifecycle acceptance is still MO-T8.
 - [x] MO-T5 — two actual Win32 loops: local input defaults, real TSF grants, UIA and STA teardown;
   process-startup inventory in design.md. This is a prerequisite, not MO-T8 production acceptance.
-- [ ] MO-T6 — public dedicated entry and real consumer.
+- [x] MO-T6 — destination factory, private local configuration and provider reconstruction;
+  existing secondary installer, document example, transfer/API/SemVer and consumer checks.
 - [ ] MO-T7 — native frame and recovery integration.
 - [ ] MO-T8 — executed Win32 acceptance and measurements.
-- [ ] MO-T9 — all remaining runners migrated with honest capability refusal.
+- [ ] MO-T9 — common desktop and portable single-owner paths adapted, with refusal before
+  factory invocation. Windows execution and Linux/Android/wasm type checks passed; remaining
+  actual-host regressions and Apple compilation are still required.
 - [ ] MO-T10 — consumer migration, obsolete-path removal and final gates.
 - [ ] MO-T11 — evidence-qualified availability and documentation.
 
@@ -112,15 +121,15 @@ restoration hashes and complete success/failure logs. Final measured executable 
 Reproduction commands and argument meanings are in `crates/flui-testing/ARCHITECTURE.md`.
 The native command is `cargo heli nextest run --locked -p flui-native --lib -E 'test(two_win32_loops_keep_tsf)'`.
 
-These runs qualify the low-level placement prerequisite only. They use the reference text
-store, not a mounted editor, and do not exercise real foreground IME composition/candidates,
-GPU frames, the future factory/coordinator, shared-service shutdown or runner migration.
-MO-T6–MO-T11 and the integrated MO-T8 matrix remain required; no support cell changes.
+Those prerequisite runs use the reference text store, not a mounted editor, and do not
+exercise foreground IME composition/candidates or the integrated runner. The subsequent
+implementation runs below add factory/coordinator coverage, without completing MO-T8.
+MO-T7–MO-T11 remain required; no support cell changes.
 
 | Host / mode | Implementation acceptance | Native execution | Availability |
 |---|---|---|---|
-| Headless dedicated production route | Not implemented | Public harness test and repeatable benchmark executed | Unavailable in production runner |
-| Win32 dedicated | Not implemented | Low-level two-loop/TSF/UIA/input/STA prerequisite passed; integrated native matrix not run | Unavailable |
+| Headless dedicated route | Factory, coordinator and transport exercised through testing kit | Public runner tests and document example passed; earlier CPU benchmark remains a separate baseline | Unavailable in production runner |
+| Win32 dedicated | Existing native/frame installer wired on destination owners under testing qualification | Low-level TSF prerequisite and real two-owner factory/GPU-window smoke passed; full native matrix not run | Unavailable |
 | Native Wayland dedicated | Not implemented | Not run | Unavailable |
 | Native X11 dedicated | Not implemented | Not run | Unavailable |
 | winit Wayland/X11 dedicated | Not implemented | Not run | Unavailable |
@@ -134,6 +143,103 @@ display configuration, feature flags, commands, scenario/test names, raw samples
 negative control, pixel predicates, resource counts and outcome. Separate CPU completion,
 native input acknowledgement and physical presentation. Mark unavailable metrics explicitly.
 No cell may be promoted solely from another host's result or from accepting ADR-0284.
+
+### Transport, coordinator and factory execution (2026-11-02 UTC)
+
+Implementation base: `8dbe70827f63a7cb2bec4978e599d01fdded1639`, with the exact implementation
+diff, new files, lockfile and executable hashes retained in the external
+`multi-owner-runtime-2026-11-02` evidence bundle. Windows 11 build 26300, Rust 1.99,
+i9-13900K; RTX 3070 Ti driver 32.0.15.6094, 3440x1440 at 100 Hz. These are behavioral
+checks, not a new throughput or compositor-latency measurement.
+
+| Contract | Executed observation |
+|---|---|
+| Construction and rollback | `dedicated_factory_constructs_and_retires_local_captures_on_its_owner` observes factory, build and capture destruction on the destination. Factory failure settles and permits another owner. Spawn reservation has an unwind rollback guard. |
+| Bounded reliable admission | `saturated_owner_admission_does_not_execute_rejected_factory_or_block_quit`, `document_payload_budget_covers_unobserved_completions_and_quit`, and both `completed_launch_receipts_keep_their_admission_budget_until_observed` / `completed_main_receipt_keeps_the_shared_command_budget_until_observed` retain capacity through unread completions while reserved quit still progresses. |
+| Identity and asynchronous data | `cross_owner_document_rejects_stale_reply_without_losing_edit` returns both the winning snapshot and losing edit. `failed_owner_ports_never_retarget_a_survivor_or_a_new_application` refuses retired ports and a different application incarnation. |
+| Reentry and failures | `document_completion_reentry_and_panicking_wake_preserve_all_accepted_work`, `factory_panic_payload_retires_on_its_owner_for_both_launch_paths`, `published_owner_failure_is_retained_until_application_result` and the strengthened secondary-cancellation table retain accepted obligations, destroy captures and report the retained failure. |
+| Global quit and lifetime | `global_quit_waits_for_starting_owner_and_consults_its_window` includes an abandoned receipt's pending launch. `global_quit_revalidates_windows_admitted_during_consultation` rejects an obsolete vote. Existing close/hold/persistence tests pass. `last_owner_retirement_rechecks_windowless_application_exit_policy` proves the coordinator does not strand an empty application. |
+| Shared services and local policy | `registered_fonts_are_shared_across_owner_retirement` covers a surviving owner and a fresh subsequent application. `dedicated_provider_policy_is_explicit_and_optional_refusal_is_preserved` checks reconstruction without eager acquisition or loss of optional refusal. |
+| Real consumer | `flui-app/examples/multi_owner_document.rs` creates two local provider instances and exchanges versioned document messages. The headless run observes a conflict without losing either value; ordinary native admission reports unavailable. |
+| Compiler boundary | `dedicated_factory_builds_local_state.rs` compiles with a destination-local `Rc`. `dedicated_factory_cannot_capture_local_state.rs` fails with E0277 for a captured `Rc<String>`. |
+
+Executed gates:
+
+- `r8405`: strict clippy, `flui-app`, `flui-runtime`, facade; all targets and all features.
+- `r8406`: **214 app/runtime tests passed**, one opt-in native case skipped; `r8402` also
+  ran all **15 dedicated headless cases** after the main receipt budget repair.
+- `r8407`: explicit `native_dedicated_factory_builds_on_two_win32_owners_and_retires`,
+  **1 passed**. Two real GPU-backed Win32 windows, two root-owner thread IDs, coordinated
+  retirement. No pixel readback, IME candidate/composition, assistive-technology client,
+  multi-owner GPU recovery or complete session-end matrix was measured by this smoke.
+- `r8408`: actual Windows `flui-native` suite, **546 passed**, two opt-in tests skipped;
+  includes the two-loop TSF/input/UIA prerequisite.
+- `r8409`: **96 facade/testing consumer tests passed**, including external consumer projects.
+- `r8410`: complete facade trybuild suite passed without snapshot overwrite. The one added
+  stderr fixture records the intentional new factory boundary; no existing snapshot changed.
+- `r8411`: app/runtime doctests, **11 passed, 4 ignored**.
+- `r8412`: send-position gate passed, **276 positions across 26 crates**. One new factory
+  bound is authorized by ADR-0284; eight existing error-source positions changed module path.
+- `r8413`: facade API closure passed. `r8415`: explicit patch-level facade SemVer check
+  against the implementation base, **229 checks passed, 31 skipped**. The initial `r8414`
+  skipped all checks for the prerelease version and is not treated as compatibility proof.
+- `r8416` / `r8417`: strict app/facade library clippy passed for wasm32 and Android arm64
+  (installed NDK 29, API 21 C compiler). `r8420`: Linux GNU app/facade library check passed.
+  These compile target code; they do not execute browser, Android or Linux native loops.
+- `r8418`: repository macOS cross-typecheck could not start because `zig` is absent.
+  `r8419`: repository iOS check explicitly skipped without a genuine Apple SDK. Neither
+  result is an Apple pass; actual-host checks remain owed.
+- After the retirement corrections below: `r8442` strict all-target/all-feature clippy
+  passed again; `r8443` ran **217 app/runtime tests, all passed**, one opt-in native case
+  skipped. `r8434` separately ran all **17 headless multi-owner cases**, all passed.
+  `r8444` repeated the actual two-window Win32 factory smoke, **1 passed** (0.879 seconds).
+  `r8421` repository source/document checks passed before these final retirement corrections;
+  final results are retained with the external evidence bundle.
+- `r8445`: final headless document example preserved the committed value and rejected edit.
+  `r8446`: Linux GNU app/facade library check passed again after the join-helper changes.
+  `r8447`: the actual two-loop Win32 TSF/input/UIA prerequisite passed again (0.308 seconds).
+- `r8448`: final repository checks passed, including formatting, source/document consistency,
+  globals, panic boundaries, transfer implementation inventory and testing-kit placement.
+  `git diff --check` passed. No unsafe transfer implementation was added.
+
+Failing evidence is retained, not replaced by green logs: obsolete quit membership (`r8360`),
+missing final-owner exit recheck (`r8381`), retained initial-factory panic payload (`r8394`),
+stale document replacement (`r8397`), launch receipt/cancelled capture counterfactuals (`r8399`),
+and unread main receipt capacity (`r8401`). Two initial counterfactuals falsely passed in
+`r8397`; the tests were strengthened with an observed completion wake and propagation of
+the platform boundary's held assertion, then both failed as intended in `r8399`. Production
+sources were restored and SHA256-checked before green verification. No failed native run
+or negative-control result is omitted from the external bundle.
+
+Retirement review added two public regressions. `r8422` showed admission blocking on a
+worker whose `is_finished` was true while its TLS destructor still waited: the test's
+10-second release channel expired. A non-UI join helper now retains membership until a
+full join, transfers the result through reserved control state, and runs no application
+wakers, logging or panic-payload destruction itself. Failed-launch settlement follows
+owner-local cleanup and admission fencing. `owner_capacity_includes_thread_local_retirement`
+now refuses a second owner immediately while that destructor is held.
+`r8429` initially passed the quit regression without an independent main-window close;
+that was insufficient evidence. The strengthened
+`global_quit_keeps_initial_loop_until_full_thread_retirement` failed in `r8433`: the initial
+loop had already stopped. Auto-exit now retains the coordinator through the full join.
+Both cases pass in `r8434` and the final app/runtime suite.
+
+Runner/caller reconciliation:
+
+| Path | Result and remaining acceptance |
+|---|---|
+| `Application`, `main_window`, desktop legacy entry, main show requests | One initial coordinator, shared process startup, receipt budget and membership-aware exit. Existing public entry bounds remain local. |
+| `secondary_window`, `installed_host`, `window_routes`, native bindings | Local publication reserves membership through success/rollback; native callbacks remain local. Rendered `Shared` policy still refuses. |
+| Dedicated headless / Win32 qualification | Factory builds local config/providers; existing synchronous desktop installer owns native/frame resources. No worker calls `Application::run`. |
+| `frame_driver`, `owner_dispatch`, fonts, storage/execution inputs | Close outcomes carry the source owner; retry wakes every registered renderer. Worker teardown releases local objects without shutting down application pools/feed; initial teardown joins workers first. Full frame/recovery proof remains MO-T7/MO-T8. |
+| AppKit and Linux winit desktop path | Reuse the common initial-owner runner; production backend selection leaves dedicated unavailable. Linux typechecked; AppKit actual-host/compiler validation pending. Native Wayland/X11 remain unavailable implementations. |
+| UIKit sessions, Android activity, Web direct raster | Preserve single-owner OS lifecycle and synchronous local dispatch. Desktop coordinator fields are target-gated; portable dedicated entry refuses before invocation. Android/wasm typechecked; actual-host regressions pending. |
+| Facade, SDK, examples/packages | Facade exports the factory and opaque receipt/configuration; SDK gains no app/native dependency. New document example exercises the API; facade/package feature consumers compile. |
+| Driver/devtools/reload attachments | Still MO-T10: the testing dedicated route explicitly refuses applications with development hooks before invoking the factory. Existing single-owner attachments remain. No second app endpoint or silently missing attachment is accepted. |
+
+The unavailable admission gate must stay in place until MO-T7–MO-T10 and the integrated
+native acceptance matrix are satisfied. The existing CPU benchmark numbers do not establish
+the performance or physical presentation latency of this new application route.
 
 ## Validation commands and exit conditions
 

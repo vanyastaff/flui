@@ -176,9 +176,14 @@ impl FrameDriver {
                 not(target_arch = "wasm32")
             ))]
             let ingress = super::host::APP_RUNTIME.with(|slot| {
-                slot.try_borrow()
-                    .ok()
-                    .and_then(|state| state.main_ingress.clone())
+                slot.try_borrow().ok().and_then(|state| {
+                    state.owner_route.clone().or_else(|| {
+                        state
+                            .main_ingress
+                            .as_ref()
+                            .map(super::super::application_control::Ingress::initial_owner)
+                    })
+                })
             });
             for (presentation_id, reason) in settled.due {
                 if reason != flui_view::CloseReason::Program {
