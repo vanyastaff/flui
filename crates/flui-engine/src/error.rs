@@ -185,6 +185,12 @@ pub enum EngineError {
         /// Why the recorded filter cannot be represented.
         reason: &'static str,
     },
+    /// The image filter of a layer has no lowering on this device effect path.
+    #[error("unsupported image filter: {reason}")]
+    UnsupportedImageFilter {
+        /// Why the filter cannot be drawn.
+        reason: &'static str,
+    },
     /// A direct draw cannot separate paint alpha from soft clip coverage on this device.
     #[error(
         "direct {mode:?} drawing under antialiased coverage requires dual-source blending or a supported sampleable destination"
@@ -497,6 +503,7 @@ impl EngineError {
             | Self::NotInitialized => Recoverability::Fatal,
             Self::UnsupportedMaskShader
             | Self::UnsupportedBackdropFilter { .. }
+            | Self::UnsupportedImageFilter { .. }
             | Self::UnsupportedCoverageBlend { .. }
             | Self::CompositeBackdropUnavailable
             | Self::InvalidRenderTarget { .. }

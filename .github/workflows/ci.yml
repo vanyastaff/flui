@@ -609,6 +609,11 @@ jobs:
       - name: cargo nextest run (flui-widgets images only, Image tests)
         run: cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image
 
+      # Painting's optional serde admission rules need execution: neither the
+      # default test scope nor the image feature runs enable this feature.
+      - name: cargo nextest run (flui-painting serde value contract)
+        run: cargo nextest run -p flui-painting --locked --no-fail-fast --features serde --test painting_it -E 'test(=value_contract)'
+
       # The facade's non-default catalogs and localizations need no run here:
       # the `test` job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
