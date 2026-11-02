@@ -42,12 +42,14 @@ use crate::text::WindowTextInput;
 #[cfg(target_os = "linux")]
 use crate::window::WindowManagerView;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::window::state::{ModeFlags, ReportedFacts, WindowStateCell, mode_of};
+use crate::window::state::{
+    ModeFlags, ReportedFacts, WindowStateCell, mode_of, system_frame_or_none,
+};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DisplayId, PlatformTextInput, PlatformWindow,
-    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry,
-    WindowHandler, WindowId, WindowMode, WindowOptions, WindowState,
+    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 
@@ -368,7 +370,7 @@ impl WinitWindow {
                 *remembered = Some(state.outer);
                 if state.visible {
                     self.frame_inset.observe(
-                        state.decorated,
+                        state.frame.has_system_title_bar(),
                         device_size(self.window.outer_size()),
                         device_size(self.window.inner_size()),
                     );
@@ -654,7 +656,7 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
     .with_title(Some(facts.title.to_owned()))
     .with_constraints(facts.constraints)
     .with_resizable(window.is_resizable())
-    .with_decorated(window.is_decorated())
+    .with_frame(system_frame_or_none(window.is_decorated()))
     .with_display(facts.display);
     facts.reported.onto(state)
 }
@@ -809,7 +811,9 @@ impl PlatformWindow for WinitWindow {
                 *self.constraints.lock() = constraints;
             }
             WindowCommand::SetResizable(resizable) => self.window.set_resizable(resizable),
-            WindowCommand::SetDecorated(decorated) => self.window.set_decorations(decorated),
+            WindowCommand::SetFrame(frame) => {
+                self.window.set_decorations(frame.has_system_title_bar());
+            }
             WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
             // `admit` refused this where winit cannot unminimize or focus
             // (Wayland).
@@ -1119,7 +1123,9 @@ impl LoopWindows for WinitWindows {
                 plan.content_size.height,
             ))
             .with_resizable(options.resizable)
-            .with_decorations(options.decorated)
+            // No title bar of the application's on winit yet: one asked for
+            // opens with the system's frame.
+            .with_decorations(options.frame != WindowFrame::None)
             .with_visible(options.visible && !plan.created_unmapped())
             .with_maximized(plan.mode == WindowMode::Maximized);
         if plan.mode == WindowMode::Fullscreen {

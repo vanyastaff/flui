@@ -62,6 +62,8 @@ positions = [
     { item = "flui_platform::haptics::PlatformHaptics", at = "supertrait", marker = "Send" },
     { item = "flui_platform::haptics::PlatformHaptics", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::http::BodySource", at = "supertrait", marker = "Send" },
+    { item = "flui_platform::http::HttpAuthority::of", at = "bound", marker = "Send" },
+    { item = "flui_platform::http::HttpAuthority::of", at = "bound", marker = "Sync" },
     { item = "flui_platform::http::HttpClient", at = "supertrait", marker = "Send" },
     { item = "flui_platform::http::HttpClient", at = "supertrait", marker = "Sync" },
     { item = "flui_platform::http::HttpFuture", at = "dyn", marker = "Send" },

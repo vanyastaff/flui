@@ -510,6 +510,95 @@ fn window_state_recordings_replay_on_the_headless_host() {
     );
 }
 
+fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
+    use flui_native::Platform as _;
+    use flui_native::journal::codec::{Backend, Header, Stream};
+    use flui_platform::{
+        AppTitleBar, Availability, ControlsOffset, SystemControls, WindowCapabilities,
+        WindowCommand, WindowFrame,
+    };
+    use flui_testing::window_commands::AdmitAndApply as _;
+
+    let mut capabilities = WindowCapabilities::ALL.into_parts();
+    capabilities.sets_frame = Err(CapabilityAbsence::NotYetOnThisHost);
+    let platform =
+        HeadlessPlatform::new().with_window_capabilities(capabilities.into_capabilities());
+    let window = platform
+        .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+        .expect("a headless window opens");
+    let cases = [
+        (SystemControls::Shown, serde_json::json!("shown")),
+        (SystemControls::Hidden, serde_json::json!("hidden")),
+        (
+            SystemControls::Offset(ControlsOffset::try_new(17.0, 9.0).expect("finite offset")),
+            serde_json::json!({"offset": [17.0, 9.0]}),
+        ),
+    ];
+    let mut recording = NativeRecording {
+        header: Header::for_stream(Backend::Headless, Stream::WindowState),
+        rows: Vec::new(),
+    };
+    for (controls, _) in &cases {
+        let frame = WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(*controls));
+        window
+            .admit_and_apply(WindowCommand::SetFrame(frame))
+            .expect("app title bars are available independently of system frames");
+        assert_eq!(window.state().frame, frame);
+        recording.rows.push(Row::State {
+            state: RecordedWindowState::of(window.state()),
+            redacted: false,
+        });
+    }
+    let mut written = Vec::new();
+    recording.write(&mut written).expect("snapshots write");
+    let written = String::from_utf8(written).expect("JSON Lines are UTF-8");
+    let lines = written.lines().skip(1).collect::<Vec<_>>();
+    assert_eq!(lines.len(), cases.len());
+    for (line, (_, expected_controls)) in lines.iter().zip(&cases) {
+        let row: serde_json::Value = serde_json::from_str(line).expect("a JSON row");
+        assert_eq!(
+            row["state"]["frame"],
+            serde_json::json!({"app_title_bar": {"system_controls": expected_controls}})
+        );
+        assert_eq!(
+            row["state"]["capabilities"]["sets_frame"],
+            serde_json::json!({"unavailable": "not_yet_on_this_host"})
+        );
+        assert_eq!(
+            row["state"]["capabilities"]["app_title_bar"],
+            serde_json::json!("native")
+        );
+    }
+    let decoded = NativeRecording::read(written.as_bytes()).expect("snapshots read");
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (replay_window, _) = headless_window(&owner);
+    let labels = Labels::default();
+    let mut target = WindowStateTarget::new(replay_window, &labels);
+    decoded.replay_into(&mut target).expect("snapshots replay");
+    assert_eq!(target.published.len(), cases.len());
+    for (state, (controls, _)) in target.published.iter().zip(&cases) {
+        assert_eq!(
+            state.frame,
+            WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(*controls))
+        );
+        let capabilities = state.capabilities.into_parts();
+        assert_eq!(
+            capabilities.sets_frame,
+            Err(CapabilityAbsence::NotYetOnThisHost)
+        );
+        assert_eq!(capabilities.app_title_bar, Ok(Availability::Native));
+    }
+    let valid_offset = r#""offset":[17.0,9.0]"#;
+    assert!(written.contains(valid_offset));
+    for malformed_offset in [r#""offset":[-1.0,9.0]"#, r#""offset":[17.0,-1.0]"#] {
+        let malformed = written.replace(valid_offset, malformed_offset);
+        assert!(matches!(
+            NativeRecording::read(malformed.as_bytes()),
+            Err(CodecError::Invalid { line: 4, .. })
+        ));
+    }
+}
+
 /// A row the replay does not reproduce stops it with an error naming the
 /// row and its line, never a skipped row: an application stream replayed as
 /// a registry's, a registry's into a host's events, and a redacted input
@@ -602,19 +691,19 @@ fn a_header_out_of_its_stream_is_refused() {
     for (case, header) in [
         (
             "registry without a clock",
-            r#"{"flui_native_recording":1,"backend":"web","devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","devices":[]}"#,
         ),
         (
             "application stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "platform stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "window state stream with a clock",
-            r#"{"flui_native_recording":1,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":2,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
     ] {
         assert!(
@@ -628,7 +717,11 @@ fn a_header_out_of_its_stream_is_refused() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 6] = [
+pub(super) const CASES: [(&str, fn()); 7] = [
+    (
+        "app_title_bar_snapshots_keep_their_wire_values_and_replay",
+        app_title_bar_snapshots_keep_their_wire_values_and_replay,
+    ),
     (
         "app_recordings_replay_on_the_headless_host",
         app_recordings_replay_on_the_headless_host,

@@ -27,14 +27,15 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts, DisplayId,
-    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
-    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
-    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
-    SessionEndPhase, SizeConstraints, SystemNotice, SystemPreferences, TextWeightPreference,
-    Weekday, WheelParts, WheelStep, WindowAppearance, WindowExecutionState, WindowGeometry,
-    WindowInsets, WindowMode, WindowState, WindowStateParts,
+    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
+    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
+    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
+    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
+    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
+    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
+    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
+    WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2217,7 +2218,8 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         sets_size,
         sets_constraints,
         sets_resizable,
-        sets_decorated,
+        sets_frame,
+        app_title_bar,
         minimizes,
         maximizes,
         enters_fullscreen,
@@ -2240,7 +2242,8 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         sets_size: capability_to_wire(sets_size)?,
         sets_constraints: capability_to_wire(sets_constraints)?,
         sets_resizable: capability_to_wire(sets_resizable)?,
-        sets_decorated: capability_to_wire(sets_decorated)?,
+        sets_frame: capability_to_wire(sets_frame)?,
+        app_title_bar: capability_to_wire(app_title_bar)?,
         minimizes: capability_to_wire(minimizes)?,
         maximizes: capability_to_wire(maximizes)?,
         enters_fullscreen: capability_to_wire(enters_fullscreen)?,
@@ -2266,7 +2269,8 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         sets_size,
         sets_constraints,
         sets_resizable,
-        sets_decorated,
+        sets_frame,
+        app_title_bar,
         minimizes,
         maximizes,
         enters_fullscreen,
@@ -2289,7 +2293,8 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         sets_size: capability_from_wire(sets_size)?,
         sets_constraints: capability_from_wire(sets_constraints)?,
         sets_resizable: capability_from_wire(sets_resizable)?,
-        sets_decorated: capability_from_wire(sets_decorated)?,
+        sets_frame: capability_from_wire(sets_frame)?,
+        app_title_bar: capability_from_wire(app_title_bar)?,
         minimizes: capability_from_wire(minimizes)?,
         maximizes: capability_from_wire(maximizes)?,
         enters_fullscreen: capability_from_wire(enters_fullscreen)?,
@@ -2308,6 +2313,44 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
     })
 }
 
+/// `frame` in the schema.
+fn window_frame_to_wire(frame: WindowFrame) -> DtoResult<wire::WindowFrame> {
+    Ok(match frame {
+        WindowFrame::System => wire::WindowFrame::System,
+        WindowFrame::AppTitleBar(bar) => wire::WindowFrame::AppTitleBar {
+            system_controls: match bar.system_controls() {
+                SystemControls::Shown => wire::SystemControls::Shown,
+                SystemControls::Offset(offset) => {
+                    wire::SystemControls::Offset([offset.along(), offset.down()])
+                }
+                SystemControls::Hidden => wire::SystemControls::Hidden,
+                _ => return Err(DtoError::Unmirrored("SystemControls")),
+            },
+        },
+        WindowFrame::None => wire::WindowFrame::None,
+        _ => return Err(DtoError::Unmirrored("WindowFrame")),
+    })
+}
+
+/// The frame `wire` describes, with its offset validated as its type validates it.
+fn window_frame_from_wire(wire: wire::WindowFrame) -> DtoResult<WindowFrame> {
+    Ok(match wire {
+        wire::WindowFrame::System => WindowFrame::System,
+        wire::WindowFrame::AppTitleBar { system_controls } => WindowFrame::AppTitleBar(
+            AppTitleBar::new().with_system_controls(match system_controls {
+                wire::SystemControls::Shown => SystemControls::Shown,
+                wire::SystemControls::Offset([along, down]) => {
+                    SystemControls::Offset(ControlsOffset::try_new(along, down).map_err(
+                        |error| invalid(format!("controls offset {along}, {down}: {error}")),
+                    )?)
+                }
+                wire::SystemControls::Hidden => SystemControls::Hidden,
+            }),
+        ),
+        wire::WindowFrame::None => WindowFrame::None,
+    })
+}
+
 /// `state` in the schema, through [`WindowStateParts`]: a fact the snapshot
 /// gains fails to compile here until it is mirrored.
 fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowState> {
@@ -2322,7 +2365,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         title,
         constraints: SizeConstraints { min, max },
         resizable,
-        decorated,
+        frame,
         display: _,
         metrics,
         appearance,
@@ -2353,7 +2396,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
             max: max.map(size_to_wire),
         },
         resizable,
-        decorated,
+        frame: window_frame_to_wire(frame)?,
         display: state.display,
         metrics: metrics.map(|metrics| {
             let physical = metrics.physical();
@@ -2462,7 +2505,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         title,
         constraints,
         resizable,
-        decorated,
+        frame,
         display,
         metrics,
         appearance,
@@ -2518,7 +2561,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
                 .transpose()?,
         ),
         resizable,
-        decorated,
+        frame: window_frame_from_wire(frame)?,
         display: None,
         metrics,
         appearance: match appearance {

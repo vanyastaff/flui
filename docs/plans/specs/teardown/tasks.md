@@ -4,7 +4,7 @@
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); смежная —
   [persistence/tasks.md](../persistence/tasks.md) (приложение приёмки P10, реестр сброса хоста P6)
 - **Итог:** из 17 задач прежнего плана сделаны T1, T3; T5 сделана платформенной серией; T6, T15,
-  T16 устарели; T8 и T14 сделаны в части. Осталось 13 задач, из них новые T18 (строки на
+  T16 устарели; T14 сделана, T8 — в части. Осталось 12 задач, из них новые T18 (строки на
   приложении приёмки) и T19 (нативный прогон через лейн `os` flui-driver). Сейчас можно начинать
   T2, T4 и T7; остальное — по колонке «Зависит от».
 - **Решения 2026-10-28** (по поручению владельца решены исследованием, записаны в ADR и в
@@ -112,10 +112,13 @@ graph LR
   `a_session_end_with_nothing_to_save_proceeds` (quit). S5 и S6: при ≥ 1 с и без извлечённых
   `Ending` сам разбирает UI-runtime (деструкторы приложения), затем отменяет сервисы и гасит пулы
   без ожидания; иначе оставляет всё системе — `session_end_tears_down_only_with_time_left`.
-  Остаток: строки с байтами реестра (`session_end_flushes_the_registry_within_the_framework_budget`,
-  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` и строки
-  persistence) ждут публикации `Persisted` в реестр (persistence): снаружи `flui-view` опубликовать
-  байты пока нечем.
+  Строки с байтами реестра: `session_end_flushes_the_registry_within_the_framework_budget`,
+  `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code`,
+  `session_end_during_a_write_writes_the_latest_registry_bytes`,
+  `session_end_never_blocks_for_work_in_progress` (`runner_teardown`; `Persisted` на
+  `HeadlessPlatform::with_data_root`, пул IO — `DeterministicExecutors`, который поток теста
+  запускает через 200 мс, как занятый пул). Без сброса в `Ending` и со сбросом, который не ждёт
+  запись в полёте, байтов на диске нет; удержание работы, отказывающее `SessionEnd`, даёт `Block`.
 
 ## Устаревшие задачи
 
@@ -313,7 +316,7 @@ graph LR
   наблюдения окна раньше `ClosePresentation`), конец сеанса; повтор в `dispose` — no-op. R21
   `closing_during_composition_commits_before_detached` (`runner_teardown`, pull-хост
   `RecordingTextStoreHost`); без шага наблюдатель видит активную композицию.
-- [ ] T14 — остаток: завершение сеанса
+- [x] T14 — завершение сеанса (строки выше, в «Сделано в части»)
 - [x] T18 — строки на приложении приёмки (`DropLedger` в `flui-testing`, ADR-0261 §2)
   - [x] R1 `acceptance_app_close_releases_every_owner_after_navigation` и R8
     `a_panicking_note_build_shows_error_view_and_other_screens_work` (модуль `teardown` приложения
