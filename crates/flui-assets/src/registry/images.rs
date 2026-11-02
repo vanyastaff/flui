@@ -831,13 +831,11 @@ impl DecodedImages {
                 // where the load runs, which may be an IO worker, then spawn
                 // again. Room is not reserved, so another caller may take it
                 // first.
-                Err(SpawnError::Saturated) => {
-                    match std::future::poll_fn(|cx| lanes.poll_room(Lane::Compute, cx)).await {
-                        Ok(()) => {}
-                        Err(SpawnError::ShuttingDown) => return None,
-                        Err(_unavailable) => break,
-                    }
-                }
+                Err(SpawnError::Saturated) => match lanes.room(Lane::Compute).await {
+                    Ok(()) => {}
+                    Err(SpawnError::ShuttingDown) => return None,
+                    Err(_unavailable) => break,
+                },
                 // Workers that could not start give no room to wait for:
                 // decode where the load runs, as a load given no lanes does.
                 Err(_unavailable) => break,

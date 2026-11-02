@@ -158,12 +158,8 @@ impl flui_platform::executor::Executor for Saturated {
     }
 
     /// Never has room.
-    fn poll_room(
-        &self,
-        _lane: flui_platform::executor::Lane,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), flui_platform::executor::SpawnError>> {
-        std::task::Poll::Pending
+    fn room(&self, _lane: flui_platform::executor::Lane) -> flui_platform::executor::RoomFuture {
+        Box::pin(std::future::pending())
     }
 }
 

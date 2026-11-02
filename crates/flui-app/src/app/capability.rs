@@ -13,7 +13,7 @@ use flui_interaction::{
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
 use flui_native::{NativeClipboard, NativePrimarySelection};
-use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, SpawnError};
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use flui_platform::{
     ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
@@ -24,7 +24,6 @@ use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
 use flui_runtime::execution::ExecutionServices;
 use flui_view::background::{Background, BackgroundCapability};
 use flui_view::persist::{StorageCapability, StorageHandle};
-use std::task::{Context, Poll};
 
 /// The slot the owner platform's clipboard is installed in for a loop's life.
 pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<dyn NativeClipboard>>>>;
@@ -514,10 +513,10 @@ impl Executor for LoopExecutor {
             .spawn_io(future)
     }
 
-    fn poll_room(&self, lane: Lane, cx: &mut Context<'_>) -> Poll<Result<(), SpawnError>> {
+    fn room(&self, lane: Lane) -> RoomFuture {
         match self.0.upgrade() {
-            Some(services) => services.poll_room(lane, cx),
-            None => Poll::Ready(Err(SpawnError::ShuttingDown)),
+            Some(services) => services.room(lane),
+            None => Box::pin(std::future::ready(Err(SpawnError::ShuttingDown))),
         }
     }
 }

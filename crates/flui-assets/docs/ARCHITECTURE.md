@@ -489,7 +489,7 @@ waiters with the failure instead, from a drop guard that sees the unwind.
 
 Decodes run at most `with_decode_threads` at once (half the cores, at most four),
 never on the IO lane. A compute lane with no room is waited for through
-`Executor::poll_room`, and the decode spawned again once it has room; a compute
+`Executor::room`, and the decode spawned again once it has room; a compute
 lane whose workers could not start hands the decode back to where the load runs;
 lanes shutting down, by refusing the decode or dropping it unrun,
 close the load unsettled for a waiter on other lanes to take over. At admission,

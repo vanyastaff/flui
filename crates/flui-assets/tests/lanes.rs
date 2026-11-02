@@ -14,7 +14,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
 use flui_assets::LoadServices;
-use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, SpawnError};
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use parking_lot::Mutex;
 
 /// How long [`block_on`] waits before it fails the test.
@@ -105,13 +105,13 @@ impl Executor for ThreadLanes {
         Ok(())
     }
 
-    fn poll_room(&self, lane: Lane, _cx: &mut Context<'_>) -> Poll<Result<(), SpawnError>> {
+    fn room(&self, lane: Lane) -> RoomFuture {
         // A compute job gets a thread of its own; the IO runtime takes
         // every future until it is shut down.
-        Poll::Ready(match lane {
+        Box::pin(std::future::ready(match lane {
             Lane::Io if self.io.lock().is_none() => Err(SpawnError::ShuttingDown),
             _ => Ok(()),
-        })
+        }))
     }
 }
 
@@ -129,17 +129,32 @@ impl Drop for ThreadLanes {
 pub struct QueuedLanes {
     compute: Mutex<VecDeque<ComputeJob>>,
     io: Mutex<Vec<IoFuture>>,
-    /// What every compute spawn answers while set.
-    compute_refusal: Mutex<Option<SpawnError>>,
-    /// What every IO spawn answers while set.
-    io_refusal: Mutex<Option<SpawnError>>,
+    /// What each lane answers, and who waits for room on it.
+    refusals: Arc<Refusals>,
     /// Compute jobs accepted so far.
     computes: AtomicUsize,
-    /// Waiting for room while the lanes refuse as saturated.
-    room: Mutex<Vec<Waker>>,
     /// Set by a spawn that queued a future not yet polled, or by room made
     /// for the queued futures waiting for it.
     fresh: AtomicBool,
+}
+
+/// What each lane of [`QueuedLanes`] answers while set, and the waits for
+/// room on them.
+#[derive(Default)]
+struct Refusals {
+    compute: Mutex<Option<SpawnError>>,
+    io: Mutex<Option<SpawnError>>,
+    /// Waiting for room while a lane refuses as saturated.
+    room: Mutex<Vec<Waker>>,
+}
+
+impl Refusals {
+    fn of(&self, lane: Lane) -> &Mutex<Option<SpawnError>> {
+        match lane {
+            Lane::Compute => &self.compute,
+            _ => &self.io,
+        }
+    }
 }
 
 /// Records that a queued future asked to be polled again.
@@ -177,7 +192,7 @@ impl QueuedLanes {
 
     /// Refuse every later spawn on `lane` with `refusal`.
     pub fn refuse_lane(&self, lane: Lane, refusal: SpawnError) {
-        *self.refusal_of(lane).lock() = Some(refusal);
+        *self.refusals.of(lane).lock() = Some(refusal);
         // A refusal waiting cannot help ends the wait.
         if refusal != SpawnError::Saturated {
             self.wake_room();
@@ -186,20 +201,13 @@ impl QueuedLanes {
 
     /// Take work again on both lanes, and wake whoever waits for room.
     pub fn make_room(&self) {
-        *self.compute_refusal.lock() = None;
-        *self.io_refusal.lock() = None;
+        *self.refusals.compute.lock() = None;
+        *self.refusals.io.lock() = None;
         self.wake_room();
     }
 
-    fn refusal_of(&self, lane: Lane) -> &Mutex<Option<SpawnError>> {
-        match lane {
-            Lane::Compute => &self.compute_refusal,
-            _ => &self.io_refusal,
-        }
-    }
-
     fn wake_room(&self) {
-        let waiting = std::mem::take(&mut *self.room.lock());
+        let waiting = std::mem::take(&mut *self.refusals.room.lock());
         self.fresh.store(true, Ordering::SeqCst);
         for waker in waiting {
             waker.wake();
@@ -225,7 +233,7 @@ impl QueuedLanes {
 
     /// Callers waiting for room now.
     pub fn waiting_for_room(&self) -> usize {
-        self.room.lock().len()
+        self.refusals.room.lock().len()
     }
 
     /// Compute jobs accepted so far.
@@ -280,7 +288,7 @@ impl QueuedLanes {
 
 impl Executor for QueuedLanes {
     fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
-        let refusal = *self.compute_refusal.lock();
+        let refusal = *self.refusals.compute.lock();
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
@@ -290,7 +298,7 @@ impl Executor for QueuedLanes {
     }
 
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
-        let refusal = *self.io_refusal.lock();
+        let refusal = *self.refusals.io.lock();
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
@@ -299,15 +307,18 @@ impl Executor for QueuedLanes {
         Ok(())
     }
 
-    fn poll_room(&self, lane: Lane, cx: &mut Context<'_>) -> Poll<Result<(), SpawnError>> {
-        let refusal = *self.refusal_of(lane).lock();
-        match refusal {
-            None => Poll::Ready(Ok(())),
-            Some(SpawnError::Saturated) => {
-                self.room.lock().push(cx.waker().clone());
-                Poll::Pending
+    fn room(&self, lane: Lane) -> RoomFuture {
+        let refusals = Arc::clone(&self.refusals);
+        Box::pin(std::future::poll_fn(move |cx| {
+            let refusal = *refusals.of(lane).lock();
+            match refusal {
+                None => Poll::Ready(Ok(())),
+                Some(SpawnError::Saturated) => {
+                    refusals.room.lock().push(cx.waker().clone());
+                    Poll::Pending
+                }
+                Some(refusal) => Poll::Ready(Err(refusal)),
             }
-            Some(refusal) => Poll::Ready(Err(refusal)),
-        }
+        }))
     }
 }

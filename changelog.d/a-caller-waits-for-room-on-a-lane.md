@@ -1,8 +1,9 @@
 ### Added
 
-- `Executor::poll_room(Lane, cx)` and the `Lane` enum in `flui-platform`: a caller refused with
-  `SpawnError::Saturated` waits for room on that lane instead of running the work in place.
-  `HostComputePool` and `HostIoPool` gain a required `poll_room` too.
+- `Executor::room(Lane)` and the `Lane` enum in `flui-platform`: a caller refused with
+  `SpawnError::Saturated` awaits a `RoomFuture` for room on that lane instead of running the work
+  in place. Dropping the wait lets go of its waker. `HostComputePool` and `HostIoPool` gain a
+  required `room` too.
 
 ### Fixed
 

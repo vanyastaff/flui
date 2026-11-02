@@ -458,11 +458,8 @@ mod tests {
                 Ok(())
             }
 
-            fn poll_room(
-                &self,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Result<(), SpawnError>> {
-                std::task::Poll::Ready(Ok(()))
+            fn room(&self) -> flui_runtime::execution::RoomFuture {
+                Box::pin(std::future::ready(Ok(())))
             }
         }
         struct Refusing(Mutex<Option<During>>);
@@ -476,11 +473,8 @@ mod tests {
                 Err(SpawnError::Saturated)
             }
 
-            fn poll_room(
-                &self,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Result<(), SpawnError>> {
-                std::task::Poll::Ready(Ok(()))
+            fn room(&self) -> flui_runtime::execution::RoomFuture {
+                Box::pin(std::future::pending())
             }
         }
 

@@ -7,7 +7,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
 
 /// A pure background compute job: a boxed closure, run once on a worker
 /// thread (or inline on wasm32).
@@ -16,6 +15,13 @@ pub type ComputeJob = Box<dyn FnOnce() + Send + 'static>;
 /// A background IO future. Result delivery is the caller's business (send it
 /// through a channel the caller owns); the executor only drives the future.
 pub type IoFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// A wait for room on a lane ([`Executor::room`]). Resolves `Ok(())` once
+/// the lane has room, which is not reserved: a spawn that follows may find
+/// it taken, and waits again. Resolves `Err` when waiting cannot help: the
+/// lane is shutting down, or its workers could not start. Dropping it ends
+/// the wait and lets go of its waker.
+pub type RoomFuture = Pin<Box<dyn Future<Output = Result<(), SpawnError>> + Send + 'static>>;
 
 /// Why a spawn was refused.
 ///
@@ -59,7 +65,7 @@ pub enum Lane {
 /// Implementations run each job and drive each future at most once, on any
 /// thread, and refuse with a [`SpawnError`] rather than queue without bound.
 /// A caller refused with [`SpawnError::Saturated`] waits for room with
-/// [`poll_room`](Self::poll_room) and spawns again.
+/// [`room`](Self::room) and spawns again.
 pub trait Executor: Send + Sync + 'static {
     /// Run `job` on the compute lane.
     ///
@@ -76,12 +82,9 @@ pub trait Executor: Send + Sync + 'static {
     /// dropped.
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError>;
 
-    /// Whether `lane` has room for one more unit of work.
+    /// Waits for `lane` to have room for one more unit of work.
     ///
-    /// `Ready(Ok(()))` when it has room now; a spawn that follows may still
-    /// find it taken by another caller, and then waits again. `Pending` when
-    /// it is full: `cx`'s waker is woken once room frees, or once the lane
-    /// stops admitting work. `Ready(Err(_))` when waiting cannot help: the
-    /// lane is shutting down, or its workers could not start.
-    fn poll_room(&self, lane: Lane, cx: &mut Context<'_>) -> Poll<Result<(), SpawnError>>;
+    /// A lane this executor does not run resolves
+    /// `Err(SpawnError::Unavailable)`.
+    fn room(&self, lane: Lane) -> RoomFuture;
 }

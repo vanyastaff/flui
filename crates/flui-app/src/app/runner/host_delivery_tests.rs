@@ -51,11 +51,8 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             Ok(())
         }
 
-        fn poll_room(
-            &self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), SpawnError>> {
-            std::task::Poll::Ready(Ok(()))
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            Box::pin(std::future::ready(Ok(())))
         }
     }
     impl HostIoPool for Pool {
@@ -72,11 +69,8 @@ fn executor_refusal_retires_service_future_outside_host_borrow() {
             Err(SpawnError::Saturated)
         }
 
-        fn poll_room(
-            &self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), SpawnError>> {
-            std::task::Poll::Ready(Ok(()))
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            Box::pin(std::future::ready(Ok(())))
         }
     }
     struct Capture(Arc<AtomicBool>);
@@ -214,11 +208,8 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
             Ok(())
         }
 
-        fn poll_room(
-            &self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), SpawnError>> {
-            std::task::Poll::Ready(Ok(()))
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            Box::pin(std::future::ready(Ok(())))
         }
     }
     impl HostIoPool for Pool {
@@ -228,11 +219,8 @@ fn service_factory_replacement_refuses_obsolete_work_and_preserves_the_new_owner
             Ok(())
         }
 
-        fn poll_room(
-            &self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), SpawnError>> {
-            std::task::Poll::Ready(Ok(()))
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            Box::pin(std::future::ready(Ok(())))
         }
     }
     struct Capture {
