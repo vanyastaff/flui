@@ -50,11 +50,14 @@ independent progress without making UI state transferable?
 2. Give every window its own UI and native event-loop thread.
 3. Keep shared ownership as the default; admit explicitly constructed dedicated UI owners.
 4. Keep one UI owner and add only raster threads or parallel paint.
+5. Keep one native loop and move each dedicated runtime's UI to a worker.
 
 ## Decision
 
 Chosen option: 3. Ownership is per runtime; placement is a host capability and an explicit
 application choice. This is a proposed target, not a description of current runners.
+On Win32 the proposed dedicated owner colocates its UI runtime with its own native loop;
+option 5 is not the initial integration.
 
 ### §1. Construction establishes ownership
 
@@ -69,17 +72,24 @@ The intended Rust shape is the following declaration (not an implemented API):
 ```rust,ignore
 pub fn open_dedicated_window<V, F>(factory: F) -> Result<WindowRequest, AppWindowError>
 where
-    V: View + 'static,
+    V: View + Clone + 'static,
     F: FnOnce() -> (V, RuntimeWindowConfig) + Send + 'static;
 ```
 
-The entry runs from a live application's native owner, like the existing secondary-window
-entry. The factory executes on the new UI owner; its result has no `Send` bound. It creates
+The entry runs from a registered owner of a live application. The factory executes once
+on the new UI owner; its result has no `Send` bound. `Clone` preserves the existing root
+attachment contract; cloning the root also stays on that owner. The factory creates
 owner-local configuration, providers and hooks there. `RuntimeWindowConfig` has private
 fields and only window/runtime options; application identity, process services, executors
 and exit policy cannot be set through it. An existing `AppConfig` containing local callbacks
 cannot be captured and smuggled through this boundary. The factory is never
 stored in `AppHandle`'s closed command ingress.
+
+Application overrides and plugins are not silently replaced with built-ins on the new owner.
+The destination must explicitly reconstruct each registered application provider required
+by the coordinator's manifest, preserving provider tiers, or launch is refused. An ordinary
+context-dependent `Unsupported` returned when acquiring an optional capability remains a
+capability value, not a launch failure. The owner-local registry itself never crosses threads.
 
 This deliberately proposes one new facade transfer position: the launch factory's `Send`
 bound. Acceptance must explicitly amend the shrinking-position policy for that named entry
@@ -88,32 +98,40 @@ UI bounds, unsafe `Send` implementation or `send_wrapper` exception is authorize
 acceptance, the existing gate and policy remain unchanged. A production consumer and a
 compile-fail fixture for capturing `Rc` accompany that entry.
 
-### §2. Native ownership and UI ownership are separate
+### §2. Native and UI responsibilities colocate on each Win32 owner
 
-The initial native integration keeps windows, native callbacks and surface operations on
-the native event-loop thread. Dedicated UI owners exchange typed owned observations,
-commands and scenes with it. `OwnerPlatform`, `HostWindow`, frame bindings and renderer
-objects never become transferable to make this convenient. Headless uses the same addressed
-protocol without claiming native conformance.
+The initial Win32 integration constructs a fresh native loop, its HWNDs, COM/TSF state,
+UI runtime and inline renderer resources on the dedicated thread. Several presentations
+of one runtime remain on that owner; this does not add rendered shared presentations to
+entry points that currently refuse them. The coordinator owns the application run, not
+every native object, and does not repeat full `Application::run` bootstrap for each owner.
+Process services, application identity and exit policy remain application-scoped.
+
+This placement preserves three existing synchronous contracts: the native input callback's
+`DispatchEventResult` before native defaults, TSF's granted local text-store session, and
+`FrameSink::submit` returning the actual raster result. `OwnerPlatform`, `HostWindow`,
+UI stores and renderer objects remain on their creating thread. `FrameBinding` is an
+address token, not a transferable authority to execute another owner's frame driver.
+Headless uses the same owner admission/control protocol without claiming native conformance.
 
 Local and remote delivery terminate in the same owner transaction implementation. An
 `OwnerRoute` selects local delivery or a bounded remote endpoint; a typed owner incarnation,
 `UiRuntimeId` and `PresentationAddress` identify destinations. A thread ID is diagnostic,
 not lifetime authority. Neither owner synchronously waits for another owner to execute UI
-code. Native synchronous queries use the native text/accessibility contract and versioned
-published state; an unimplemented query contract blocks admission for that host.
+code. Native input, TSF grants and frame submission execute locally, not through the remote
+control queue. Cross-owner app commands and shared-document messages are explicitly
+asynchronous. Multi-loop lifecycle, focus/drag behavior and resource teardown must be
+demonstrated on the actual Win32 host before admission is enabled.
 
-The current `Rc<dyn TextStore>` and local `LockGrant` callbacks cannot implement that remote
-contract by forwarding. This ADR does not supersede their accepted pull/edit semantics. The
-native bridge is a blocking design proof: before it changes those semantics, its own narrow
-text-contract amendment must be reviewed and accepted with native evidence. If a faithful
-bridge cannot be demonstrated, keep dedicated admission closed and revisit native/UI
-colocation on Win32 rather than weakening text correctness or adding synchronous RPC.
+A future host that splits native and UI execution needs a separate decision preserving all
+three synchronous contracts. Forwarding `Rc<dyn TextStore>`/`LockGrant`, guessing a native
+input result or treating scene enqueue as `SubmitVerdict::Presented` is not allowed.
+This ADR does not amend the pull-store, native default-handling or sink-result contracts.
 
 ### §3. Progress has an explicit scope
 
 A dedicated owner can progress while another UI owner executes a long synchronous turn.
-It does not preempt its own callbacks or isolate the native loop, GPU, compositor, CPU
+It does not preempt its own callbacks or isolate the GPU, compositor, CPU
 capacity or memory bandwidth. Windows with synchronous shared state stay in one runtime;
 cross-owner application state uses versioned owned messages or immutable snapshots.
 
@@ -121,6 +139,8 @@ Frame requests coalesce only within their full address and generation. Scenes re
 existing bounded latest-pending contract; recovery, installation and retirement are reliable
 control obligations, not lossy frame telemetry. Admission returns typed refusal before
 accepting work that cannot be retained. A missing or failed wake cannot erase accepted work.
+An accepted completion retains its original target and must settle even if focus has moved;
+stale unadmitted requests are refused, not confused with accepted obligations.
 
 ### §4. Retirement is acknowledged, not detached
 
@@ -128,7 +148,8 @@ Launch progresses through reserved, starting, mounted, retiring and retired stat
 launch rolls back native and UI resources on their respective owners. Cancellation of an
 unobserved receipt does not discard admitted work. Retirement fences new work, settles
 receipts, revokes routes, releases presentation resources and drops UI captures on their
-owner, then acknowledges completion before the native loop exits. No join blocks an active
+owner. The dedicated loop drains and exits after local retirement; thread completion is
+acknowledged to the coordinator before the application's coordinator loop exits. No join blocks an active
 native callback; no shutdown timeout detaches a live owner or drops its UI on another thread.
 
 User callbacks, wakes, logging and destruction run with transport guards released and state
@@ -136,6 +157,12 @@ committed. A contained failure preserves the first failure while completing othe
 retirement. A destructor panic during unwind follows ADR-0281. A callback that never returns
 cannot be safely killed; the application remains shutting down until completion or an
 explicit process-exit decision. Dedicated ownership is not process fault isolation.
+
+Global quit distinguishes unrecorded veto or `stay_open` (cancel) from recorded close holds
+(wait for release/discard). Consultation tracks application membership revisions, including
+pending installations: it cannot commit while an unconsulted owner/presentation can publish.
+Validation and final admission fencing are atomic in the coordinator; independent accepted
+window closes may still finish during consultation.
 
 ### §5. Availability follows verification
 
@@ -155,7 +182,7 @@ UI-owner decision; its contention must be measured separately.
 
 - Good, because independent CPU work can overlap while the compiler protects local UI state.
 - Good, because default applications and their local factories keep their existing contract.
-- Bad, because launch, native queries, global quit and shared documents need explicit protocols.
+- Bad, because launch, native loop coordination, global quit and shared documents need explicit protocols.
 - Bad, because extra threads and message copies cost memory and latency on small workloads.
 - Neutral, because dedicated ownership alone promises neither higher FPS nor GPU isolation.
 
@@ -196,7 +223,7 @@ All following multi-owner cases are required future checks, not tests reported a
 
 - Good, because independent runtimes gain CPU progress without changing the ownership of UI.
 - Good, because local and dedicated paths can share lifecycle and delivery semantics.
-- Bad, because synchronous native queries and asynchronous installation need new integration.
+- Bad, because multiple native loop lifetimes and asynchronous installation need new integration.
 - Bad, because applications must choose a boundary for state shared between owners.
 
 ### 4. Raster threads or parallel paint alone
@@ -204,6 +231,16 @@ All following multi-owner cases are required future checks, not tests reported a
 - Good, because they can accelerate suitable rendering workloads without changing UI placement.
 - Bad, because they do not isolate another runtime from a long synchronous UI callback.
 - Bad, because neither universal acceleration nor the best FLUI phase follows from Raven.
+
+### 5. One native loop with remote UI workers
+
+- Good, because native objects remain together and it could accommodate main-thread-only hosts.
+- Bad, because current native input needs a resolved result before the OS default runs;
+  reentrant provisional results are not a general remote-input protocol.
+- Bad, because TSF edits under local grants, and the current frame sink returns a completed
+  raster outcome. An asynchronous bridge changes these contracts, not only transport.
+- Bad, because the available CPU measurements do not validate those replacements. This
+  option is excluded from the initial Win32 scope instead of making its correctness an assumption.
 
 ## More information
 
@@ -217,6 +254,15 @@ the implementation must preserve reproducible probes and attach native run artif
 claiming conformance. No benchmark source is treated as production integration.
 
 Primary counterexamples and limits, not reasons to copy their topology:
+
+- At the FLUI base above, `crates/flui-native/src/owner/windows.rs:131` keeps class state per
+  thread, `:944` enters the owner's STA and `:1049` accepts repeated registration for the
+  same host type. This supports the placement proposal, not a claim of multi-loop conformance.
+- `crates/flui-native/src/text/windows/tsf/document.rs:196` opens the granted session around
+  `OnLockGranted`; `:569` returns the result of the real store edit. The input callback's
+  result controls defaults at `crates/flui-native/src/input/windows/mod.rs:671`.
+- `crates/flui-app/src/app/raster_lane.rs:337` submits and pumps inline before classifying
+  the result; `crates/flui-runtime/src/sink.rs:42` has no queued-success verdict.
 
 - [WPF Dispatcher](https://github.com/dotnet/wpf/blob/dbd3026982f09a279e4595666c07bb6136f579c3/src/Microsoft.DotNet.Wpf/src/WindowsBase/System/Windows/Threading/Dispatcher.cs#L35-L58):
   a dispatcher belongs to its thread. The separate two-window experiment used installed
@@ -233,6 +279,6 @@ Primary counterexamples and limits, not reasons to copy their topology:
   native access in the current acquisition path needs its own thread-affinity work. It does
   not establish that framework build/layout must execute on the AppKit thread.
 
-Revisit dedicated admission if native-query fidelity cannot be preserved without cyclic
-waits, or if real application measurements show transfer and resource costs outweighing
+Revisit dedicated admission if multiple native loops cannot preserve lifecycle and local
+query fidelity, or if real application measurements show transfer and resource costs outweighing
 the isolation benefit. Do not replace evidence with a framework popularity argument.

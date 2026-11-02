@@ -3,20 +3,21 @@
 - **Status:** Draft prepared 2026-11-01; awaiting owner review. No implementation task is
   complete and no dedicated-owner platform support is claimed.
 - **Base:** `bb618a7f7f1510ff11093109094ba02c937d1970`.
-- **Next:** review ADR-0284 and the factory transfer-position exception, then execute MO-T1.
+- **Next:** review the corrected colocated Win32 design and factory transfer-position exception,
+  then execute MO-T1. Production implementation has not started.
 - **Requirements:** [requirements.md](requirements.md). **Design:** [design.md](design.md).
 
 ## Work and dependency order
 
 | Task | Dependencies | Requirements | Deliverable and required proof |
 |---|---|---|---|
-| MO-T1 | Owner acceptance | MO1–MO3, MO11 | Record accepted ADR status and narrow supersession; approve exact factory-bound exception and limits. Inventory every facade consumer and provider field before code changes. No support status changes. |
+| MO-T1 | Owner acceptance | MO1–MO3, MO11 | Accept independent-owner policy and proposed Win32 native/UI colocation, not a split native bridge; review exact factory-bound exception, Clone compatibility, provider reconstruction and limits. Inventory consumers; no support status change. |
 | MO-T2 | MO-T1 | MO1, MO4, MO12 | Move the external headless experiment into the existing testing/performance facilities; deterministic public-path isolation negative control; immutable raw baseline and source/executable manifests. |
 | MO-T3 | MO-T1 | MO5, MO6, MO10 | Typed owner/run identity, local/remote routing and bounded reliable control; saturation, late answers, wake race/reentry and panic matrix. Compiler transfer checks. |
-| MO-T4 | MO-T3 | MO3, MO9, MO13 | Extract coordinator/native/local ownership from AppRuntime/InstalledHost; install rollback, consultation/commit quit, persistence and services. Run existing local host conformance before enabling remote routes. |
-| MO-T5 | MO-T3, MO-T4 | MO7, MO14 | Implement Win32 native query/edit/publication bridge against TSF and UIA contracts; enumerate mirrored fields and mutation cases; prove no synchronous owner wait. A missing synchronous contract blocks MO-T8. |
+| MO-T4 | MO-T3 | MO3, MO9, MO13 | Extract run coordinator from owner-local AppRuntime/InstalledHost; install rollback, membership-versioned quit, deferred close holds, persistence and shared services. Existing local conformance remains green. |
+| MO-T5 | MO-T1, MO-T2 | MO1, MO7, MO13 | Qualify two actual same-host Win32 loops on their creating STA threads through existing native testing facilities: HWND/input defaults, TSF grants, UIA, native/COM release. Inventory process startup so a worker cannot run full Application bootstrap. A failure revises the design, not a silent fallback to remote TSF. |
 | MO-T6 | MO-T4, MO-T5 | MO2, MO3, MO11 | Wire dedicated factory launch to real secondary-window runner; construct local config/providers on destination, preserve existing APIs; SemVer, facade transfer inventory and production example. |
-| MO-T7 | MO-T3, MO-T4 | MO8, MO10 | Separate owner CPU frame production from native frame bindings; scene/lifetime/recovery wiring and addressed completion; readback distinguishes stale from correct frames. |
+| MO-T7 | MO-T4, MO-T5 | MO8, MO10 | Wire existing synchronous native/frame resources on each owning loop; coordinated retry/recovery, correct input epochs/haptics and generation-safe readback. No queued-success sink variant. |
 | MO-T8 | MO-T5, MO-T6, MO-T7 | MO4, MO7–MO10, MO12–MO14 | Run full Win32 native two-window matrix, including actual IME/accessibility/input, native thread-affinity, load, quit and resource counts. Preserve failed runs and counterfactuals. |
 | MO-T9 | MO-T4, MO-T7 | MO2, MO11 | Migrate AppKit, UIKit, Android, Web, native Linux and winit shared paths; dedicated refusal before factory execution. Run available hosts and record unavailable ones; no blanket native pass from Linux CI. |
 | MO-T10 | MO-T6, MO-T8, MO-T9 | MO11, MO12 | Migrate driver/devtools/examples/packages, delete obsolete routing/ownership paths, update architecture and changelog, complete final API and consumer checks. |
@@ -28,7 +29,7 @@
 - [ ] MO-T2 — reproducible public-path headless baseline and failing control.
 - [ ] MO-T3 — transport and identity contracts.
 - [ ] MO-T4 — coordinator, local runner migration and lifecycle.
-- [ ] MO-T5 — native query, input and shared-document bridge.
+- [ ] MO-T5 — native multi-loop/STA qualification preserving local input and text contracts.
 - [ ] MO-T6 — public dedicated entry and real consumer.
 - [ ] MO-T7 — native frame and recovery integration.
 - [ ] MO-T8 — executed Win32 acceptance and measurements.
@@ -38,11 +39,11 @@
 
 ## Evidence already available
 
-Blocking design proof before MO-T5 implementation: the current TSF consumer holds an
-owner-local `Rc<dyn TextStore>` and executes local read/edit grants. A snapshot-only adapter
-is not equivalent. Preserve ADR-0090/0135 semantics, demonstrate the remote edit/lock protocol,
-and obtain a narrow text-contract decision if it changes them. If it cannot be demonstrated,
-compare Win32 native/UI colocation and amend the initial placement before enabling it.
+Code review fixes the initial placement at Win32 native/UI colocation: native input needs
+its synchronous default-handling result, TSF holds a local store/grant, and FrameSink returns
+actual raster completion. None may be replaced by a queue acknowledgement. MO-T5 qualifies
+the actual multi-loop/STA lifetime before runner enablement. A split-native/UI architecture
+would need a separate decision for all three contracts and is outside this implementation.
 No IME fallback or missing editor support is an acceptable shortcut to the native pass.
 
 Historical research on 2026-11-01, not acceptance of the proposed runners:
@@ -97,11 +98,14 @@ and testing kits; the native cases additionally require recorded actual-host run
 | `owner_route_rejects_replaced_incarnations` | MO5 | Held old input/wake/completion never reaches a reopened window or runtime. |
 | `saturated_owner_still_settles_control_and_retirement` | MO6, MO9 | Full ordinary lane cannot drop receipt settlement, terminal fence or retirement acknowledgement. |
 | `owner_wake_replacement_preserves_newer_work` | MO6, MO10 | Older wake completion cannot clear a newer pending obligation. |
-| `native_text_transaction_survives_remote_focus_and_revision_changes` | MO7 | TSF edit/query and delayed completion cannot mutate another field or stale document version. |
-| `remote_scene_cannot_present_after_surface_replacement` | MO8 | Distinguishable scene pixels/epochs reject delayed scene after resize/recreate. |
-| `global_quit_consults_all_owners_before_retiring_any` | MO9 | One veto or held close prevents partial committed quit; stale round answers are ignored. |
+| `native_input_default_observes_each_owners_resolved_result` | MO7 | Prevented shortcut suppresses native default; allowed shortcut reaches it, on both actual loops. |
+| `accepted_composition_completion_keeps_its_original_store` | MO5, MO7 | Focus change/detach/shutdown cannot cancel an accepted completion; a new stale request is refused separately. |
+| `owner_scene_cannot_present_after_surface_replacement` | MO8 | Distinguishable scene pixels/epochs reject stale work after resize/recreate. |
+| `queued_work_is_not_a_presented_frame` | MO8 | Admission alone never consumes input epochs or fires frame-presented haptics; actual inline verdict controls them. |
+| `global_quit_revalidates_membership_and_preserves_recorded_holds` | MO9 | New launch joins consultation; holds defer, unrecorded refusal/stay-open cancels; no coordinator retirement before commit. Independent closes still finish. |
 | `owner_failure_preserves_sibling_and_first_failure` | MO10 | Callback failure plus cleanup failure preserves the first and permits the prescribed next operation. |
 | `shared_services_survive_one_owner_retirement` | MO13 | Closing an owner does not stop surviving owners' font feed, storage, retry or provider service. |
+| `dedicated_provider_policy_is_explicit_and_optional_refusal_is_preserved` | MO13 | App override cannot silently become a built-in; missing reconstruction refuses launch, while context-dependent optional Unsupported does not. |
 | `cross_owner_document_rejects_stale_reply_without_losing_edit` | MO14 | Delayed versioned reply cannot overwrite a later accepted edit in either view. |
 
 For this documentation change: `cargo heli xtask checks` with a checkout-local target.
@@ -126,3 +130,8 @@ run evidence through the project's artifact publication mechanism.
   checkout-local target and `CARGO_INCREMENTAL=0`. Formatting, typos, TOML, links/paths,
   workspace/layer gates, globals, panic boundaries and remaining source checks passed.
   This validates documentation/source consistency only; no native multi-owner run occurred.
+- 2026-11-01: corrected specification passed `cargo heli xtask checks`, heli run `r8341`,
+  exit 0 (89.0 seconds), with the same isolated target and incremental setting. Targeted
+  spelling, all eight spec links and `git diff --check` also passed. Independent standards
+  and requirements reviews found their reported contradictions resolved after correction.
+  No native qualification or production implementation is included in this validation.
