@@ -205,8 +205,9 @@ flui run --agent --release        # release build with the `driver` feature
 writes both to `target/flui-agent.json`. Every debug FLUI app serves its
 driver agent there with no code of its own (ADR-0239); an optimized build
 gets the `driver` feature of `flui` (or of `flui-app` for an app that names the
-runtime crate), under the key the app names it by. It refuses a device other than this desktop. With `--json` it
-emits `run.agent.ready {endpoint, session}`; the token stays out of the stream.
+runtime crate), under the key the app names it by. It refuses a device other
+than this desktop. With `--json` it emits `run.agent.ready {endpoint, session}`;
+the token stays out of the stream.
 
 The agent's client launches `flui mcp` in the same project, for example in an
 MCP client's configuration:
