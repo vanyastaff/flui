@@ -43,6 +43,7 @@ pub(crate) mod headless;
     target_os = "ios",
     target_os = "macos",
     wayland_host,
+    x11_host,
     target_arch = "wasm32",
     windows,
     test
@@ -50,7 +51,7 @@ pub(crate) mod headless;
 pub(crate) mod host_queue;
 #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
 pub(crate) mod ime;
-#[cfg(any(wayland_host, test))]
+#[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
 pub(crate) mod sizing;
 pub(crate) mod web;
@@ -105,6 +106,13 @@ pub trait TextInput: Send + Sync + 'static {
     /// `None` for every other platform's.
     #[cfg(wayland_host)]
     fn seat_text(self: Arc<Self>) -> Option<Arc<dyn crate::owner::linux::wayland::SeatWindowText>> {
+        None
+    }
+
+    /// The window's text as the X11 loop's input method reaches it; `None`
+    /// for every other platform's.
+    #[cfg(x11_host)]
+    fn x11_text(self: Arc<Self>) -> Option<Arc<dyn crate::owner::linux::x11::X11WindowText>> {
         None
     }
 }

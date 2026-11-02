@@ -409,14 +409,31 @@ trait depends on `flui-platform` instead.
   its text input reported, so that reaches the field first; a window's text
   reaches the input as an opaque
   `SeatWindowText`, so neither the owner nor the input names the text
-  feature's platform file. Beside it,
+  feature's platform file. On X11 the input method is a D-Bus daemon,
+  IBus or Fcitx5 (the portal's names in a flatpak), asked in the order
+  `XMODIFIERS`, `GTK_IM_MODULE` and `QT_IM_MODULE` name: every key the loop
+  reads goes through the owner's `LoopText` seam, which `text::linux::x11`
+  implements and the table hands the input and the loop. A key of a window
+  whose field composes is asked of the daemon and held, keys behind it wait
+  in order, and each goes as typed unless the daemon took it; a key
+  unanswered within `ANSWER_TIMEOUT`, the keys of a window losing the focus
+  or closing, and every key once the daemon is gone go in their original
+  order (`input_context::KeyHold`, answers matched by ticket). The daemon is
+  spoken to by a task of the host's executor (`x11::bus`) holding one
+  context per window, whose replies and signals reach the loop in the
+  daemon's order through an inbox the doorbell wakes; the field is served
+  by the same `text_input` client as on Wayland, over a wire that turns its
+  requests into the daemon's calls and the daemon's signals into its
+  batches. A window's text reaches the loop as an opaque `X11WindowText`.
+  Beside it,
   one file per platform with its pure half a module inside it:
   `windows/mod.rs` (the pure `geometry` and `acp`, TSF's `ITextStoreACP`
   answers over the field's store, and the `Tsf` class hook) with `tsf/`,
   `apple/{macos, ios}.rs`, `android.rs` (the pure `ime`, `input`, `sizing`),
-  `web.rs` (the pure `ime`, `input`), `linux/{text_input, wayland}.rs` (the
-  pure `text_input` client of `zwp_text_input_v3` over a wire trait, and its
-  Wayland objects), `winit.rs` and `headless.rs`. `cargo
+  `web.rs` (the pure `ime`, `input`), `linux/{text_input, input_context, wayland, x11}.rs` (the
+  pure `text_input` client of `zwp_text_input_v3` over a wire trait, the pure
+  `input_context` key hold and D-Bus input-method values, the Wayland
+  objects and the X11 daemon's wire and bus task), `winit.rs` and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
@@ -428,7 +445,9 @@ trait depends on `flui-platform` instead.
   tells it whether the field composes. Tests of the model and the pure
   halves sit beside them (`text::ime::tests`, `text::android::ime::tests`,
   `text::web::ime::tests`, `text::windows::geometry::tests`,
-  `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
+  `text::linux::text_input::tests`, `text::linux::input_context::tests`);
+  `text::linux::x11::bus_tests` serves a window to a stand-in IBus on a
+  private `dbus-daemon`; `tests/wayland_text_input.rs` drives
   the Wayland client from a real input method on sway.
   AppKit and UIKit use `text::apple::client` over that same store; neither
   keeps a document of its own. UIKit's before and after notices bracket the
