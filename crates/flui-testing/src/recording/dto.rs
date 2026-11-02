@@ -1721,23 +1721,17 @@ const PRESENT_KINDS: [(PointerKindSet, PointerKindDto); 5] = [
 
 impl From<&InputCapabilities> for CapabilitiesDto {
     fn from(capabilities: &InputCapabilities) -> Self {
+        // Every edge or button of a kind shares its availability: one stands for all.
+        let region = |kind| AvailabilityDto::from(capabilities.input_region(kind));
         Self {
-            pen: capabilities.pen().into(),
-            precise_scroll: capabilities.precise_scroll().into(),
-            trackpad_gestures: capabilities.trackpad_gestures().into(),
-            system_gesture_exclusion: capabilities
-                .input_region(InputRegionKind::SystemGestureExclusion)
-                .into(),
-            window_move: capabilities
-                .input_region(InputRegionKind::WindowMove)
-                .into(),
-            window_resize: capabilities
-                .input_region(InputRegionKind::WindowResize(ResizeEdge::Top))
-                .into(),
-            caption_buttons: capabilities
-                .input_region(InputRegionKind::CaptionButton(CaptionButton::Close))
-                .into(),
-            outgoing_drag: capabilities.outgoing_drag().into(),
+            pen: AvailabilityDto::from(capabilities.pen()),
+            precise_scroll: AvailabilityDto::from(capabilities.precise_scroll()),
+            trackpad_gestures: AvailabilityDto::from(capabilities.trackpad_gestures()),
+            system_gesture_exclusion: region(InputRegionKind::SystemGestureExclusion),
+            window_move: region(InputRegionKind::WindowMove),
+            window_resize: region(InputRegionKind::WindowResize(ResizeEdge::Top)),
+            caption_buttons: region(InputRegionKind::CaptionButton(CaptionButton::Close)),
+            outgoing_drag: AvailabilityDto::from(capabilities.outgoing_drag()),
             present: PRESENT_KINDS
                 .iter()
                 .filter(|(kind, _)| capabilities.present().contains(*kind))
@@ -1756,14 +1750,14 @@ impl From<CapabilitiesDto> for InputCapabilities {
                 set | PointerKindSet::of((*kind).into())
             });
         Self::builder()
-            .pen(capabilities.pen.into())
-            .precise_scroll(capabilities.precise_scroll.into())
-            .trackpad_gestures(capabilities.trackpad_gestures.into())
-            .system_gesture_exclusion(capabilities.system_gesture_exclusion.into())
-            .window_move(capabilities.window_move.into())
-            .window_resize(capabilities.window_resize.into())
-            .caption_buttons(capabilities.caption_buttons.into())
-            .outgoing_drag(capabilities.outgoing_drag.into())
+            .pen(Availability::from(capabilities.pen))
+            .precise_scroll(Availability::from(capabilities.precise_scroll))
+            .trackpad_gestures(Availability::from(capabilities.trackpad_gestures))
+            .system_gesture_exclusion(Availability::from(capabilities.system_gesture_exclusion))
+            .window_move(Availability::from(capabilities.window_move))
+            .window_resize(Availability::from(capabilities.window_resize))
+            .caption_buttons(Availability::from(capabilities.caption_buttons))
+            .outgoing_drag(Availability::from(capabilities.outgoing_drag))
             .present(present)
             .build()
     }

@@ -67,8 +67,11 @@ pub enum CaptionButton { Minimize, Maximize, Close }
 back to the application.
 
 §2. **Paint order decides.** `PipelineOwner::input_regions` reports regions in paint order, a
-node before its descendants and siblings in child order, and `set_input_regions` receives them
-in that order. One function in `flui-platform` answers the system's question for every backend:
+node before its descendants and siblings in the order their parent last painted them, and
+`set_input_regions` receives them in that order. A parent that paints its children other than first to last (a viewport whose first
+sliver is on top, a sliver group whose pinned header covers its content) has the order its last
+paint used recorded by the paint walk, and the region walk follows it. One function in
+`flui-platform` answers the system's question for every backend:
 
 ```rust
 #[non_exhaustive]

@@ -224,6 +224,7 @@ impl PipelineOwner<PaintPhase> {
                         consumed_updates,
                         visited,
                         counts,
+                        child_paint_orders,
                     ) = composer.finish();
                     reached = visited;
                     self.root_content = root_stamp;
@@ -348,6 +349,22 @@ impl PipelineOwner<PaintPhase> {
                     }
                     self.last_follower_transforms = follower_transforms;
                     self.last_hidden_follower_ids = hidden_follower_ids;
+                    // Child paint orders: a node repainted this pass replaces what it
+                    // recorded before; one replayed from a capture keeps it. A node that
+                    // left the tree takes its entry with it.
+                    for (render_id, order) in child_paint_orders {
+                        match order {
+                            Some(order) => {
+                                self.last_child_paint_orders.insert(render_id, order);
+                            }
+                            None => {
+                                self.last_child_paint_orders.remove(&render_id);
+                            }
+                        }
+                    }
+                    let tree = &self.render_tree;
+                    self.last_child_paint_orders
+                        .retain(|render_id, _| tree.get(*render_id).is_some());
                     // Queued, not run: listeners run in the post-frame lane.
                     self.leader_watches.check(&layer_tree);
 
@@ -780,6 +797,7 @@ impl PipelineOwner<PaintPhase> {
             composer.record_effect_layer(node_id, layer_id, origin);
         }
 
+        let mut painted_children = ChildPaintOrder::new();
         for op in fragment.ops {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
@@ -805,6 +823,7 @@ impl PipelineOwner<PaintPhase> {
                     index,
                     offset_override,
                 } => {
+                    painted_children.push(index);
                     let Some(&child_id) = child_ids.get(index) else {
                         debug_assert!(
                             false,
@@ -864,6 +883,16 @@ impl PipelineOwner<PaintPhase> {
                     }
                 }
             }
+        }
+
+        // The order children went down in is the order they lie over each other: what
+        // the input-region walk follows. Most parents paint first to last; only the rest
+        // keep their order.
+        if child_ids.len() > 1 {
+            let in_order = painted_children.windows(2).all(|pair| pair[0] < pair[1]);
+            composer
+                .child_paint_orders
+                .push((node_id, (!in_order).then_some(painted_children)));
         }
 
         for _ in 0..effect_layers {
@@ -1362,6 +1391,10 @@ struct FragmentComposer {
     /// `flui_layer::resolve_follower_transform` into `PipelineOwner
     /// ::last_follower_transforms` / `::last_hidden_follower_ids`.
     follower_correlations: Vec<(RenderId, LayerId, Offset)>,
+    /// For each node painted this pass that has more than one child, the order it
+    /// painted them in when that is not first to last (`None` when it is), applied by
+    /// `run_paint` to `PipelineOwner::last_child_paint_orders`.
+    child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
     /// Retention decisions taken during the walk, applied by `run_paint` once
     /// the walk's `&self` borrow ends.
     ///
@@ -1442,6 +1475,7 @@ impl FragmentComposer {
             tree,
             open: DisplayList::new(),
             follower_correlations: Vec::new(),
+            child_paint_orders: Vec::new(),
             retained_captures: Vec::new(),
             slot_info: FxHashMap::default(),
             effect_owner: FxHashMap::default(),
@@ -1677,6 +1711,7 @@ impl FragmentComposer {
         Vec<RenderId>,
         FxHashSet<RenderId>,
         PaintCounts,
+        Vec<(RenderId, Option<ChildPaintOrder>)>,
     ) {
         self.seal_picture();
         debug_assert_eq!(
@@ -1693,6 +1728,7 @@ impl FragmentComposer {
             self.consumed_updates,
             self.visited,
             self.counts,
+            self.child_paint_orders,
         )
     }
 }
@@ -1838,3 +1874,6 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
     }
 }
+
+/// The slots a parent painted its children from, in the order it painted them.
+pub(super) type ChildPaintOrder = SmallVec<[usize; 4]>;

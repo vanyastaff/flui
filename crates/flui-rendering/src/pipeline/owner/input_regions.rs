@@ -21,7 +21,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// This window's input regions in window-logical coordinates, as the laid-out tree
     /// reports them now: what a presentation hands
     /// `PlatformWindow::set_input_regions` on every composited frame. They come in paint
-    /// order, a node before its descendants and siblings in child order, so a later region
+    /// order, a node before its descendants and siblings in the order their parent last
+    /// painted them (a viewport whose first sliver is on top, last to first), so a later region
     /// lies over an earlier one (`flui_platform::input_regions::chrome_hit`).
     ///
     /// The window is the root's laid-out box; nothing outside it is reported. Empty
@@ -85,7 +86,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
 
         let generation = node.layout_generation();
-        for (slot, &child_id) in node.children().iter().enumerate() {
+        // Children in the order the last paint put them down, so a child painted over a
+        // sibling reports its regions after it.
+        let children = node.children();
+        let painted = self.last_child_paint_orders.get(&id);
+        let count = painted.map_or(children.len(), smallvec::SmallVec::len);
+        for position in 0..count {
+            let slot = painted.map_or(position, |order| order[position]);
+            let Some(&child_id) = children.get(slot) else {
+                continue;
+            };
             let Some(child) = self.render_tree.get(child_id) else {
                 continue;
             };

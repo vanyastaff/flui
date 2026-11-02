@@ -5,7 +5,9 @@
   application-drawn title bar marks. `chrome_hit` answers what a press at a device point does
   (`ChromeHit::{Content, Move, Resize, CaptionButton}`) from a window's regions in paint order:
   the last one painted over the point decides, and `WindowContent` cut out of a move area gives
-  the press back to the application (ADR-0286). Only the headless host honours the chrome kinds
+  the press back to the application (ADR-0286). `PipelineOwner::input_regions` reports regions
+  in the order the last paint put children down, so a viewport whose first sliver is on top
+  reports it last. Only the headless host honours the chrome kinds
   so far.
 
 ### Changed
