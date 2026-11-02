@@ -95,8 +95,8 @@ use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopWindows, WindowRef, WindowScale,
-    X11Connection, X11Loop,
+    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, WindowRef,
+    WindowScale, X11Connection, X11Loop,
 };
 use crate::owner::slot::{OwnerMap, OwnerWeak};
 use crate::owner::wake_deadline::FrameCount;
@@ -311,8 +311,8 @@ pub struct X11Window {
     /// The platform's windows, which hold this one until it closes.
     windows: Weak<X11Windows>,
     delivery: Arc<WindowDelivery>,
-    /// What the table's positions made for the window: its AT-SPI bridge, and
-    /// the text, haptics and chrome X11 does not have yet or at all.
+    /// What the table's positions made for the window: its AT-SPI bridge, its
+    /// text input, and the haptics and chrome X11 does not have.
     facets: WindowFacets,
     cell: Arc<WindowStateCell>,
     /// A frame was asked for and not delivered yet.
@@ -325,6 +325,9 @@ pub struct X11Window {
     /// The windows' drag and drop, which offers this window the drags over
     /// it.
     drag: Arc<dyn LoopDrag>,
+    /// The windows' text input, which serves this window's field to the
+    /// input method and hands it the window's keys.
+    text: Arc<dyn LoopText>,
     /// The scale the input reads this window's positions at.
     input_scale: WindowScale,
     record: RefCell<Record>,
@@ -1036,13 +1039,14 @@ impl X11Window {
         self.forget_features();
     }
 
-    /// Tell the input and the drag the window is gone, then retire it. Each
+    /// Tell the input, the drag and the text input the window is gone, then retire it. Each
     /// may run user code (a request's waker, a handler): the retirement runs
     /// whatever fails first, and the first failure goes on after it.
     fn forget_features(&self) {
         let mut failure = FirstPanic::new();
         failure.contain(|| self.input.window_closed(self.window_ref()));
         failure.contain(|| self.drag.window_closed(self.window_ref()));
+        failure.contain(|| self.text.window_closed(self.window_ref()));
         failure.contain(|| self.retire());
         failure.resume();
     }
@@ -1659,6 +1663,7 @@ impl X11Windows {
             displays: Arc::clone(owner.displays()),
             input,
             drag: Arc::clone(owner.drag()),
+            text: Arc::clone(owner.text()),
             input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
@@ -1707,6 +1712,11 @@ impl X11Windows {
             scale: window.input_scale.clone(),
         };
         window.drag.window_opened(target.clone());
+        window.text.window_opened(
+            window.window_ref(),
+            window.input_scale.clone(),
+            Arc::clone(&window.facets.text).x11_text(),
+        );
         window.input.window_opened(target);
         // Mapped now unless it waits for its first frame or the application
         // asked for it hidden; one opened in a mode has it in its properties

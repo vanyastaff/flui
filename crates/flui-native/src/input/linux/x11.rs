@@ -1195,7 +1195,9 @@ mod live {
     use crate::input::availability;
     use crate::input::event_timestamp_ns;
     use crate::input::linux::xkb::{Keyboard, KeymapSource};
-    use crate::owner::linux::x11::{InputTarget, LoopInput, WindowRef, X11Connection};
+    use crate::owner::linux::x11::{
+        InputTarget, LoopInput, LoopText, WindowRef, X11Connection, X11Key,
+    };
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::window_delivery::WindowDelivery;
@@ -1270,6 +1272,9 @@ mod live {
         /// The name of the layout the keyboard is in.
         layout: Mutex<String>,
         layout_listeners: Mutex<Vec<Box<dyn FnMut() + Send>>>,
+        /// The windows' text input, which every key goes through: the
+        /// input method of the focused field takes it or lets it through.
+        text: Arc<dyn LoopText>,
     }
 
     impl std::fmt::Debug for X11Input {
@@ -1452,7 +1457,7 @@ mod live {
         /// The input of `connection`'s windows: XInput 2 set up on it, the
         /// devices listed, the keyboard read, and the device hierarchy and
         /// the keyboard's changes heard from here on.
-        pub(crate) fn new(connection: &Arc<X11Connection>) -> Arc<Self> {
+        pub(crate) fn new(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<Self> {
             let xcb = connection.xcb();
             let version = xcb
                 .xinput_xi_query_version(XI_ASKED.0, XI_ASKED.1)
@@ -1504,6 +1509,7 @@ mod live {
                 state: OwnerSlot::new(),
                 layout: Mutex::new(layout),
                 layout_listeners: Mutex::new(Vec::new()),
+                text,
             });
             let state = State {
                 pointers: X11Pointers::new(clock),
@@ -1760,27 +1766,33 @@ mod live {
         }
 
         /// What a key event delivers.
-        fn key_event(
-            &self,
-            event: &xinput::KeyPressEvent,
-            state: KeyState,
-        ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
+        fn key_event(&self, event: &xinput::KeyPressEvent, state: KeyState) -> Option<X11Key> {
             let repeat = u32::from(event.flags) & u32::from(xinput::KeyEventFlags::KEY_REPEAT) != 0;
             let time = EventTime::from_nanos(event_timestamp_ns());
             self.with_state(|input| {
-                let Some(target) = input.windows.get(&event.event) else {
-                    return Vec::new();
-                };
+                let target = input.windows.get(&event.event)?;
+                let window = target.window;
                 let delivery = Arc::clone(&target.delivery);
-                let Some(core) = input.keyboard.as_mut() else {
-                    return Vec::new();
-                };
-                let Some(key) = core.keyboard.key(event.detail, state, repeat, time) else {
-                    return Vec::new();
-                };
-                vec![(delivery, Delivery::Input(PlatformInput::Keyboard(key)))]
+                let core = input.keyboard.as_mut()?;
+                let keysym = core.keyboard.keysym(event.detail);
+                let key = core.keyboard.key(event.detail, state, repeat, time)?;
+                // The core protocol's state: the modifier mask, and the
+                // group in bits 13 and 14.
+                let group = u32::from(event.group.effective) & 0b11;
+                let mask = (event.mods.effective & 0xff) | (group << 13);
+                Some(X11Key {
+                    window,
+                    keysym,
+                    keycode: u8::try_from(event.detail).unwrap_or(u8::MAX),
+                    state: u16::try_from(mask).unwrap_or(u16::MAX),
+                    release: state == KeyState::Up,
+                    time: event.time,
+                    deliver: Box::new(move || {
+                        delivery.dispatch_input(PlatformInput::Keyboard(key));
+                    }),
+                })
             })
-            .unwrap_or_default()
+            .flatten()
         }
 
         /// The server's keyboard state changed: whether its layout did.
@@ -2067,8 +2079,19 @@ mod live {
 
         fn event(&self, event: &Event) -> bool {
             let deliveries = match event {
-                Event::XinputKeyPress(key) => self.key_event(key, KeyState::Down),
-                Event::XinputKeyRelease(key) => self.key_event(key, KeyState::Up),
+                Event::XinputKeyPress(key) | Event::XinputKeyRelease(key) => {
+                    let state = if matches!(event, Event::XinputKeyPress(_)) {
+                        KeyState::Down
+                    } else {
+                        KeyState::Up
+                    };
+                    // The text input delivers it, with no borrow of the input
+                    // held: now, or once the input method answered for it.
+                    if let Some(key) = self.key_event(key, state) {
+                        self.text.key(key);
+                    }
+                    return true;
+                }
                 Event::XinputHierarchy(change) => self.hierarchy(change),
                 Event::XinputDeviceChanged(changed) => {
                     // The classes the event carries are the device's now, as

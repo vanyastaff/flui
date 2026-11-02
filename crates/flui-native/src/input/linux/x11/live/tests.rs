@@ -14,7 +14,9 @@ use flui_platform::{
 };
 
 use super::X11Input;
-use crate::owner::linux::x11::{InputTarget, LoopInput, WindowRef, WindowScale, X11Connection};
+use crate::owner::linux::x11::{
+    InputTarget, KeysAsTyped, LoopInput, WindowRef, WindowScale, X11Connection,
+};
 use crate::owner::window_delivery::WindowDelivery;
 
 /// A handler whose drop sets a window's cursor through the input, as a
@@ -76,7 +78,7 @@ fn a_handler_dropped_with_its_entry_may_set_a_cursor() {
         eprintln!("no X server answers: nothing to run");
         return;
     };
-    let input = X11Input::new(&connection);
+    let input = X11Input::new(&connection, Arc::new(KeysAsTyped));
     let xid = connection.root();
     let dropped = Rc::new(Cell::new(false));
     let first = WindowRef {

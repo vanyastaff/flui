@@ -173,8 +173,10 @@ mod x11 {
     use crate::drag::x11::X11Drag;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{
-        Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
+        Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, LoopText, X11Connection,
+        X11Host, X11Loop,
     };
+    use crate::text::linux::x11::{X11Ime, X11Text};
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
     /// The X11 host's table.
@@ -188,7 +190,7 @@ mod x11 {
         type Window = X11Window;
         type Displays = X11Loop;
         type Input = X11Loop;
-        type Text = Absent<position::Text>;
+        type Text = X11Text;
         type Accessibility = UnixAccessibility;
         type Clipboard = X11Loop;
         type PrimarySelection = X11Loop;
@@ -228,8 +230,18 @@ mod x11 {
 
         /// XInput 2's pointers, XKB's keyboard and the cursor theme, on the
         /// platform's connection.
-        fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput> {
-            X11Input::new(connection)
+        fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<dyn LoopInput> {
+            X11Input::new(connection, text)
+        }
+
+        /// The session's input method (IBus or Fcitx5) over D-Bus, reached on
+        /// the background executor.
+        fn text(
+            connection: &Arc<X11Connection>,
+            executor: &BackgroundExecutor,
+            doorbell: &Doorbell,
+        ) -> Arc<dyn LoopText> {
+            X11Ime::start(connection, executor, doorbell)
         }
 
         /// The `CLIPBOARD` and `PRIMARY` selections on a connection and a

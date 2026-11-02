@@ -1,0 +1,531 @@
+//! The X11 text input against a stand-in IBus on a private bus.
+//!
+//! The test starts a `dbus-daemon` of its own (skipped when none is
+//! installed), where a stand-in owns `org.freedesktop.IBus` and serves its
+//! input contexts. A window of the text input is focused by a synthetic
+//! `FocusIn`, its field is an in-memory store, and keys are handed to it as
+//! the input hands them: what the stand-in takes, commits and composes
+//! reaches the store, and what it lets through reaches the key's own
+//! delivery, in the order the stand-in answered.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+use flui_platform::WindowId;
+use flui_platform::text_store::{TextStore, TextStoreHost};
+use flui_testing::text_store_kit::InMemoryTextStore;
+use parking_lot::Mutex;
+use web_time::Instant;
+use x11rb::protocol::Event;
+use x11rb::protocol::xproto::{self, FocusInEvent, NotifyDetail, NotifyMode};
+use zbus::object_server::SignalEmitter;
+use zbus::{ObjectServer, OwnedObjectPath, Variant, interface};
+
+use super::bus::{Bus, Reach};
+use super::{WindowText, X11Ime};
+use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
+use crate::text::TextInput;
+use crate::text::linux::input_context::{ANSWER_TIMEOUT, Daemon};
+
+/// A private session bus, stopped when dropped.
+struct PrivateBus {
+    daemon: Child,
+    address: String,
+}
+
+impl PrivateBus {
+    fn start() -> Option<Self> {
+        let mut daemon = Command::new("dbus-daemon")
+            .args(["--session", "--nofork", "--print-address"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let mut address = String::new();
+        BufReader::new(daemon.stdout.take()?)
+            .read_line(&mut address)
+            .ok()?;
+        let address = address.trim().to_owned();
+        (!address.is_empty()).then_some(Self { daemon, address })
+    }
+
+    fn stop(&mut self) {
+        let _ = self.daemon.kill();
+        let _ = self.daemon.wait();
+    }
+}
+
+impl Drop for PrivateBus {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// What the stand-in heard, in order.
+type Heard = Arc<Mutex<Vec<String>>>;
+
+/// The stand-in's `org.freedesktop.IBus`: it hands out input contexts.
+struct StandInBus {
+    heard: Heard,
+    made: AtomicU32,
+}
+
+#[interface(name = "org.freedesktop.IBus")]
+impl StandInBus {
+    async fn create_input_context(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        client: String,
+    ) -> OwnedObjectPath {
+        self.heard.lock().push(format!("context for {client}"));
+        let number = self.made.fetch_add(1, Ordering::SeqCst);
+        let path = format!("/org/freedesktop/IBus/InputContext_{number}");
+        server
+            .at(
+                path.as_str(),
+                StandInContext {
+                    heard: Arc::clone(&self.heard),
+                    content: (0, 0),
+                },
+            )
+            .await
+            .expect("the stand-in serves its context");
+        OwnedObjectPath::try_from(path).expect("a valid path")
+    }
+}
+
+/// An IBusText of `text`, as the daemon sends it.
+fn ibus_text(text: &str) -> Variant<'static> {
+    Variant::from((
+        "IBusText",
+        HashMap::<String, Variant<'static>>::new(),
+        text.to_owned(),
+        Variant::from((
+            "IBusAttrList",
+            HashMap::<String, Variant<'static>>::new(),
+            Vec::<Variant<'static>>::new(),
+        )),
+    ))
+}
+
+/// The keysyms the stand-in's engine answers for.
+const COMMITS: u32 = 'a' as u32;
+const SLOW: u32 = 'c' as u32;
+const COMPOSES: u32 = 'p' as u32;
+
+/// One input context of the stand-in: an engine that commits "あ" for `a`,
+/// lets `b` through, answers `c` after a second, and composes "にほ" for `p`.
+struct StandInContext {
+    heard: Heard,
+    content: (u32, u32),
+}
+
+#[interface(name = "org.freedesktop.IBus.InputContext")]
+impl StandInContext {
+    async fn process_key_event(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+    ) -> bool {
+        self.heard
+            .lock()
+            .push(format!("key {keyval} {keycode} {state}"));
+        let release = state & (1 << 30) != 0;
+        match keyval {
+            COMMITS if !release => {
+                Self::commit_text(&emitter, ibus_text("あ"))
+                    .await
+                    .expect("the stand-in commits");
+                true
+            }
+            COMPOSES if !release => {
+                Self::update_preedit_text(&emitter, ibus_text("にほ"), 1, true)
+                    .await
+                    .expect("the stand-in composes");
+                true
+            }
+            SLOW => {
+                // Handlers run on zbus's own executor.
+                async_io::Timer::after(Duration::from_secs(1)).await;
+                true
+            }
+            COMMITS | COMPOSES => true,
+            _ => false,
+        }
+    }
+
+    fn focus_in(&self) {
+        self.heard.lock().push("focus in".to_owned());
+    }
+
+    fn focus_out(&self) {
+        self.heard.lock().push("focus out".to_owned());
+    }
+
+    fn set_capabilities(&self, capabilities: u32) {
+        self.heard
+            .lock()
+            .push(format!("capabilities {capabilities}"));
+    }
+
+    fn set_surrounding_text(&self, text: Variant<'_>, cursor: u32, anchor: u32) {
+        let text = super::bus::ibus_text_of(&text).unwrap_or_default();
+        self.heard
+            .lock()
+            .push(format!("surrounding {text:?} {cursor} {anchor}"));
+    }
+
+    fn set_cursor_location(&self, x: i32, y: i32, width: i32, height: i32) {
+        self.heard
+            .lock()
+            .push(format!("cursor {x} {y} {width} {height}"));
+    }
+
+    #[zbus(property)]
+    fn content_type(&self) -> (u32, u32) {
+        self.content
+    }
+
+    #[zbus(property)]
+    fn set_content_type(&mut self, content: (u32, u32)) {
+        self.content = content;
+        self.heard
+            .lock()
+            .push(format!("content {} {}", content.0, content.1));
+    }
+
+    #[zbus(signal)]
+    async fn commit_text(emitter: &SignalEmitter<'_>, text: Variant<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn update_preedit_text(
+        emitter: &SignalEmitter<'_>,
+        text: Variant<'_>,
+        cursor: u32,
+        visible: bool,
+    ) -> zbus::Result<()>;
+}
+
+/// The keys delivered to the window, each with the field's text as it went.
+type Delivered = Rc<RefCell<Vec<(char, String)>>>;
+
+/// The text input with one window, its field `store`, served by a stand-in
+/// IBus on a private bus.
+struct Rig {
+    bus: PrivateBus,
+    _server: zbus::Connection,
+    _runtime: tokio::runtime::Runtime,
+    ime: X11Ime,
+    window: WindowRef,
+    text: Arc<WindowText>,
+    store: Rc<InMemoryTextStore>,
+    heard: Heard,
+    delivered: Delivered,
+}
+
+impl Rig {
+    fn start() -> Option<Self> {
+        let bus = PrivateBus::start().or_else(|| {
+            eprintln!("skipped: no dbus-daemon to host a stand-in for IBus");
+            None
+        })?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let heard = Heard::default();
+        let server = runtime
+            .block_on(
+                zbus::connection::Builder::address(bus.address.as_str())
+                    .name("org.freedesktop.IBus")
+                    .serve_at(
+                        "/org/freedesktop/IBus",
+                        StandInBus {
+                            heard: Arc::clone(&heard),
+                            made: AtomicU32::new(0),
+                        },
+                    )
+                    .build(),
+            )
+            .expect("the stand-in owns IBus's name");
+        let reach = Reach::Address {
+            daemon: Daemon::IBus,
+            address: bus.address.clone(),
+        };
+        let ime = X11Ime::with_bus(None, Bus::start(runtime.handle(), reach, Box::new(|| {})));
+        let window = WindowRef {
+            xid: 7,
+            id: WindowId(1),
+        };
+        let text = Arc::new(WindowText::new());
+        ime.window_opened(window, WindowScale::new(1.0), Some(Arc::clone(&text) as _));
+        let store = InMemoryTextStore::new("");
+        text.client()
+            .expect("the window's client")
+            .focus_store(Some(Rc::clone(&store) as Rc<dyn TextStore>));
+        let rig = Self {
+            bus,
+            _server: server,
+            _runtime: runtime,
+            ime,
+            window,
+            text,
+            store,
+            heard,
+            delivered: Delivered::default(),
+        };
+        rig.ime.event(&focus(FocusInEvent {
+            response_type: xproto::FOCUS_IN_EVENT,
+            detail: NotifyDetail::NONLINEAR,
+            sequence: 0,
+            event: rig.window.xid,
+            mode: NotifyMode::NORMAL,
+        }));
+        rig.settle("the input method hears the focus", || {
+            rig.heard_any("focus in")
+        });
+        Some(rig)
+    }
+
+    /// Run the owner's turns until `done`, failing after five seconds.
+    fn settle(&self, what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            self.ime.deliver(Instant::now());
+            if done() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn heard_any(&self, prefix: &str) -> bool {
+        self.heard
+            .lock()
+            .iter()
+            .any(|heard| heard.starts_with(prefix))
+    }
+
+    /// A press of `key`, delivered to the window with the field's text as it
+    /// goes.
+    fn press(&self, key: char) {
+        self.ime.key(self.key(key, false));
+    }
+
+    fn key(&self, key: char, release: bool) -> X11Key {
+        let delivered = Rc::clone(&self.delivered);
+        let store = Rc::clone(&self.store);
+        X11Key {
+            window: self.window,
+            keysym: u32::from(key),
+            keycode: 38,
+            state: 0,
+            release,
+            time: 0,
+            deliver: Box::new(move || delivered.borrow_mut().push((key, store.text()))),
+        }
+    }
+
+    fn delivered(&self) -> Vec<(char, String)> {
+        self.delivered.borrow().clone()
+    }
+
+    fn focus_out(&self) {
+        self.ime.event(&Event::FocusOut(FocusInEvent {
+            response_type: xproto::FOCUS_OUT_EVENT,
+            detail: NotifyDetail::NONLINEAR,
+            sequence: 0,
+            event: self.window.xid,
+            mode: NotifyMode::NORMAL,
+        }));
+    }
+}
+
+impl Drop for Rig {
+    fn drop(&mut self) {
+        self.ime.release();
+        self.text.detach();
+    }
+}
+
+fn focus(event: FocusInEvent) -> Event {
+    Event::FocusIn(event)
+}
+
+#[test]
+fn a_focused_field_is_stated_to_the_input_method() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.settle("the field's state", || rig.heard_any("surrounding"));
+    let heard = rig.heard.lock().clone();
+    let at = |prefix: &str| heard.iter().position(|heard| heard.starts_with(prefix));
+    assert!(
+        at("capabilities 41").is_some(),
+        "preedit, focus and surrounding text: {heard:?}"
+    );
+    assert!(at("focus in") < at("surrounding"), "{heard:?}");
+    assert!(at("content 0 ").is_some(), "free text: {heard:?}");
+}
+
+#[test]
+fn a_commit_reaches_the_field_before_the_key_let_through_after_it() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('a');
+    rig.press('b');
+    rig.settle("the key let through", || !rig.delivered().is_empty());
+    assert_eq!(
+        rig.delivered(),
+        [('b', "あ".to_owned())],
+        "the taken key is not delivered, and the one after it finds the commit"
+    );
+    assert_eq!(rig.store.text(), "あ");
+    rig.settle("the state after the commit", || {
+        rig.heard_any("surrounding \"あ\" 1 1")
+    });
+}
+
+#[test]
+fn a_preedit_composes_in_the_field_and_leaves_with_the_focus() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    assert_eq!(rig.store.text(), "にほ");
+    rig.focus_out();
+    assert_eq!(rig.store.text(), "", "the preedit leaves with the focus");
+    assert!(rig.store.composition().is_none());
+    rig.settle("the input method hears the focus go", || {
+        rig.heard_any("focus out")
+    });
+}
+
+#[test]
+fn a_key_unanswered_in_time_goes_as_typed_and_keeps_its_place() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let pressed = Instant::now();
+    rig.press('c');
+    rig.press('b');
+    assert!(
+        rig.delivered().is_empty(),
+        "the second key waits behind the first"
+    );
+    rig.settle("the overdue key", || rig.delivered().len() == 2);
+    assert!(
+        pressed.elapsed() < Duration::from_secs(1),
+        "delivered at the deadline, not at the late answer"
+    );
+    assert!(pressed.elapsed() >= ANSWER_TIMEOUT);
+    assert_eq!(
+        rig.delivered(),
+        [('c', String::new()), ('b', String::new())]
+    );
+    // The late answer that `c` was taken finds no key waiting.
+    std::thread::sleep(Duration::from_millis(1100));
+    rig.ime.deliver(Instant::now());
+    rig.press('b');
+    rig.settle("the next key", || rig.delivered().len() == 3);
+}
+
+#[test]
+fn keys_held_for_a_window_go_as_it_loses_the_focus() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('c');
+    rig.press('b');
+    rig.focus_out();
+    assert_eq!(
+        rig.delivered(),
+        [('c', String::new()), ('b', String::new())],
+        "delivered at once, in order"
+    );
+}
+
+#[test]
+fn a_key_after_the_input_method_went_goes_as_typed() {
+    let Some(mut rig) = Rig::start() else {
+        return;
+    };
+    rig.bus.stop();
+    // Once the context is lost, a key is not asked: it goes to the window as
+    // it comes, behind nothing.
+    rig.settle("a key goes as it comes", || {
+        let before = rig.delivered().len();
+        rig.press('a');
+        rig.delivered().len() == before + 1
+    });
+    assert!(
+        rig.delivered().iter().all(|(key, _)| *key == 'a'),
+        "every key the input method would have taken reached the window"
+    );
+}
+
+#[test]
+fn a_panic_delivering_a_key_leaves_the_next_delivered() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let delivered = Rc::clone(&rig.delivered);
+    rig.press('c');
+    rig.ime.key(X11Key {
+        deliver: Box::new(move || {
+            delivered.borrow_mut().push(('!', String::new()));
+            panic!("a handler fails on a key");
+        }),
+        ..rig.key('b', false)
+    });
+    rig.press('b');
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let caught = loop {
+        let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rig.ime.deliver(Instant::now());
+        }));
+        if turn.is_err() {
+            break true;
+        }
+        assert!(Instant::now() < deadline, "the overdue keys never went");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(caught, "the handler's panic is raised again");
+    assert_eq!(
+        rig.delivered()
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<String>(),
+        "c!b",
+        "the key after the one that panicked is delivered too"
+    );
+    rig.press('b');
+    rig.settle("the next key", || rig.delivered().len() == 4);
+}
+
+#[test]
+fn a_window_that_closes_delivers_its_keys_and_hears_nothing_more() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('c');
+    rig.ime.window_closed(rig.window);
+    assert_eq!(rig.delivered(), [('c', String::new())]);
+    rig.press('a');
+    assert_eq!(
+        rig.delivered().len(),
+        2,
+        "a key of no window it knows goes as typed"
+    );
+}

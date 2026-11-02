@@ -1013,6 +1013,14 @@ mod keyboard {
             }
         }
 
+        /// The keysym key code `keycode` makes in the keyboard's state now, the
+        /// one an input method is handed.
+        #[cfg(x11_host)]
+        pub(crate) fn keysym(&self, keycode: u32) -> u32 {
+            // SAFETY: the live state; any key code may be asked.
+            unsafe { (self.api.xkb_state_key_get_one_sym)(self.state.as_ptr(), keycode) }
+        }
+
         /// End the compose sequence in progress, if any.
         pub(crate) fn reset_compose(&self) {
             if let Some(compose) = &self.compose {
