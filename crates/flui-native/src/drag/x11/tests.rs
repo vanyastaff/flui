@@ -5,34 +5,39 @@
 //! CI runs the crate's tests under `xvfb-run`, which sets `DISPLAY`; the
 //! live cases skip without it. The model's cases need no server.
 
+use std::cell::Cell;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
+use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferSource as _, DropFeedback, Mime, RepresentationIndex, TransferActions,
-    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+    DataTransferSource as _, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
+    TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
+    TransferRequest,
 };
+use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput, WindowId};
 use flui_testing::window_handler::RecordingWindowHandler;
 use x11rb::connection::Connection as _;
-use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _,
     CreateWindowAux, EventMask, PropMode, Property, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
     SelectionRequestEvent, WindowClass,
 };
+use x11rb::protocol::{Event, xinput};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::X11Drag;
 use super::model::{self, ActionAtoms, Kind, Message, MessageAtoms};
+use super::source::FINISH_TIMEOUT;
 use crate::clipboard::text::TextForm;
 use crate::owner::linux::x11::{InputTarget, LoopDrag as _, WindowRef, WindowScale, X11Connection};
 use crate::owner::window_delivery::WindowDelivery;
@@ -286,8 +291,25 @@ const QUIET: Duration = Duration::from_secs(1);
 
 /// `XdndSelection` is the server's, one for every client: the cases take
 /// turns at it. The lock keeps one process's cases apart; under nextest, a
-/// process per case, the `xdnd-selection` test group does.
-static SERVER: Mutex<()> = Mutex::new(());
+/// process per case, the `xdnd-selection` test group does. The connection
+/// it holds keeps the server from resetting between cases, as Xvfb does
+/// once its last client leaves.
+static SERVER: Mutex<Option<RustConnection>> = Mutex::new(None);
+
+/// The server for this case alone; a case that finds no server opens no
+/// window and skips.
+fn server() -> std::sync::MutexGuard<'static, Option<RustConnection>> {
+    let mut server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let present = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
+    if present && server.is_none() {
+        *server = RustConnection::connect(None)
+            .ok()
+            .map(|(connection, _)| connection);
+    }
+    server
+}
 
 /// The transfer and one window of its connection a source drags over.
 struct Target {
@@ -297,6 +319,8 @@ struct Target {
     handler: Rc<RecordingWindowHandler>,
     /// How often the transfer asked for the loop to wake.
     wakes: Arc<AtomicUsize>,
+    /// The window the session's last visit to a target was known by.
+    session: Cell<xproto::Window>,
 }
 
 impl Target {
@@ -349,6 +373,7 @@ impl Target {
             xid,
             handler,
             wakes,
+            session: Cell::new(NONE),
         })
     }
 
@@ -730,9 +755,7 @@ fn entered(heard: &[DragDropEvent]) -> DataTransferId {
 /// offer is stale.
 #[test]
 fn an_accepted_drop_is_fetched_and_finished() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(2.0) else {
         return;
     };
@@ -835,9 +858,7 @@ fn an_accepted_drop_is_fetched_and_finished() {
 /// leave, not drop.
 #[test]
 fn a_refused_drop_finishes_unaccepted_and_exits() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
     };
@@ -859,9 +880,7 @@ fn a_refused_drop_finishes_unaccepted_and_exits() {
 /// request for it is stale.
 #[test]
 fn a_drag_that_leaves_retires_its_offer() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
     };
@@ -897,9 +916,7 @@ fn a_drag_that_leaves_retires_its_offer() {
 /// and one whose chunks outgrow it at the chunk that does.
 #[test]
 fn an_incr_answer_is_read_in_chunks_and_held_to_its_limit() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
     };
@@ -1006,9 +1023,7 @@ fn conversions(target: &Target, source: &Source, count: usize) -> Vec<SelectionR
 /// reaches no later one. A request made off the loop wakes it.
 #[test]
 fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
     };
@@ -1087,9 +1102,7 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
 /// second lookup; the type the server names as a media type still offers.
 #[test]
 fn a_type_unnamed_or_named_past_a_media_type_is_refused_once() {
-    let _server = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _server = server();
     let Some(target) = Target::open(1.0) else {
         return;
     };
@@ -1335,6 +1348,987 @@ fn a_drop_whose_handler_fails_finishes_unaccepted() {
         std::pin::Pin::new(&mut request).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Err(TransferError::StaleOffer(_)))
     ));
+}
+
+// ============================================================================
+// The drag source
+// ============================================================================
+
+/// The session's key.
+fn key() -> DragSessionKey {
+    DragSessionKey::new(
+        ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
+        UiRuntimeId::new_gen(3, NonZeroU32::new(2).expect("non-zero")),
+        DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
+    )
+}
+
+/// A session offering text and its identity, allowing a copy or a move,
+/// telling `ended` how it ended.
+fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
+    let key = key();
+    let ended = Rc::clone(ended);
+    OsDragRequest {
+        key,
+        pointer: None,
+        representations: vec![
+            RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            },
+            key.representation(),
+        ],
+        allowed: TransferActions::COPY | TransferActions::MOVE,
+        provider: Box::new(|RepresentationIndex(index)| match index {
+            0 => Ok(TransferPayload::Text("dragged \u{2713}".to_owned())),
+            _ => Err(TransferError::Cancelled),
+        }),
+        on_end: Box::new(move |end| ended.set(Some(end))),
+    }
+}
+
+/// Another application's window taking drops, at (400, 300) on the root
+/// window, speaking XDND through `source`'s connection and atoms.
+struct Foreign {
+    window: xproto::Window,
+}
+
+impl Foreign {
+    fn open(source: &Source) -> Self {
+        Self::open_speaking(source, 5)
+    }
+
+    /// A window that speaks XDND `version`.
+    fn open_speaking(source: &Source, version: u32) -> Self {
+        let connection = &source.connection;
+        let window = connection.generate_id().expect("an X id");
+        let root = connection.setup().roots[0].root;
+        connection
+            .create_window(
+                COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                400,
+                300,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .expect("the target window is asked for");
+        let aware = connection
+            .intern_atom(false, b"XdndAware")
+            .expect("intern")
+            .reply()
+            .expect("interned")
+            .atom;
+        connection
+            .change_property32(PropMode::REPLACE, window, aware, AtomEnum::ATOM, &[version])
+            .expect("the window is aware");
+        connection.map_window(window).expect("the window is mapped");
+        connection.flush().expect("the requests are sent");
+        // Mapped once the server answers a round trip.
+        connection
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        Self { window }
+    }
+}
+
+/// A button held through XTest, let go as it drops.
+struct Held<'a>(&'a RustConnection);
+
+impl<'a> Held<'a> {
+    /// Button 1 held with the pointer away from every window.
+    fn press(connection: &'a RustConnection) -> Self {
+        Self::press_at(connection, (1, 1))
+    }
+
+    /// Button 1 held with the pointer at `root`.
+    fn press_at(connection: &'a RustConnection, root: (i16, i16)) -> Self {
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        let screen = connection.setup().roots[0].root;
+        connection
+            .xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, screen, root.0, root.1, 0)
+            .expect("the motion is sent");
+        connection
+            .xtest_fake_input(xproto::BUTTON_PRESS_EVENT, 1, 0, NONE, 0, 0, 0)
+            .expect("the press is sent");
+        connection
+            .get_input_focus()
+            .expect("the request is sent")
+            .reply()
+            .expect("the server answers");
+        Self(connection)
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        drop(
+            self.0
+                .xtest_fake_input(xproto::BUTTON_RELEASE_EVENT, 1, 0, NONE, 0, 0, 0),
+        );
+        // Let go of before the next case reads the buttons.
+        drop(self.0.get_input_focus().map(x11rb::cookie::Cookie::reply));
+    }
+}
+
+impl Target {
+    /// Start `request`'s session from the window.
+    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+        let source = Arc::clone(&self.drag).drag_source(WindowRef {
+            xid: self.xid,
+            id: WindowId(1),
+        });
+        source.start(request)?;
+        self.learn_the_visit();
+        Ok(())
+    }
+
+    /// Have the transfer hear the server's time now, as the next real event
+    /// would bring it: a session the cases' made-up times ended let go of
+    /// nothing at them, the selection's last change being later.
+    fn hear_the_server_time(&self) {
+        let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+        let window = connection.generate_id().expect("an X id");
+        let root = connection.setup().roots[0].root;
+        connection
+            .create_window(
+                0,
+                window,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+            )
+            .expect("the window is asked for");
+        connection
+            .change_property8(
+                PropMode::APPEND,
+                window,
+                AtomEnum::WM_NAME,
+                AtomEnum::STRING,
+                &[],
+            )
+            .expect("the property is touched");
+        connection.flush().expect("the requests are sent");
+        let time = loop {
+            if let Event::PropertyNotify(property) =
+                connection.wait_for_event().expect("the connection holds")
+            {
+                break property.time;
+            }
+        };
+        let press = xinput::ButtonPressEvent {
+            event: root,
+            time,
+            ..xinput::ButtonPressEvent::default()
+        };
+        self.drag.event(&Event::XinputButtonPress(press));
+    }
+
+    /// The window the session's last visit to a target was known by.
+    fn session(&self) -> xproto::Window {
+        self.session.get()
+    }
+
+    /// Keep the window the session's visit is known by, if one is open.
+    fn learn_the_visit(&self) {
+        if let Some(visit) = self.drag.session_visit() {
+            self.session.set(visit);
+        }
+    }
+
+    /// The pointer moved to `root` at `time`, as the window's implicit grab
+    /// reports it.
+    fn pointer_to(&self, root: (i32, i32), time: u32) {
+        let motion = xinput::MotionEvent {
+            event: self.xid,
+            root_x: root.0 << 16,
+            root_y: root.1 << 16,
+            time,
+            ..xinput::MotionEvent::default()
+        };
+        assert!(
+            self.drag.event(&Event::XinputMotion(motion)),
+            "the session's own"
+        );
+        self.learn_the_visit();
+    }
+
+    /// The held button was let go at `time`.
+    fn release(&self, time: u32) {
+        self.release_button(1, time);
+    }
+
+    /// `button` was let go at `time`.
+    fn release_button(&self, button: u32, time: u32) {
+        let release = xinput::ButtonReleaseEvent {
+            event: self.xid,
+            detail: button,
+            time,
+            ..xinput::ButtonReleaseEvent::default()
+        };
+        assert!(
+            self.drag.event(&Event::XinputButtonRelease(release)),
+            "the session's own"
+        );
+    }
+}
+
+/// The next client message of `kind` `foreign` hears, turning `target`.
+fn heard_by(source: &Source, target: &Target, kind: xproto::Atom) -> [u32; 5] {
+    source.expect_message(target, kind)
+}
+
+/// A session over another application's window that accepts it enters,
+/// moves, drops, serves its text, and ends dropped with the target's
+/// action once the target finishes.
+#[test]
+fn a_session_drops_on_a_target_that_accepts() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+
+    target.pointer_to((450, 350), 100);
+    let enter = heard_by(&other, &target, atoms.enter);
+    assert_eq!(enter[0], target.session());
+    assert_eq!(enter[1] >> 24, 5);
+    assert!(
+        enter[2..].contains(&atoms.utf8),
+        "offers UTF8_STRING: {enter:?}"
+    );
+    let position = heard_by(&other, &target, atoms.position);
+    assert_eq!(
+        position,
+        model::position(target.session(), (450, 350), 100, atoms.copy)
+    );
+
+    // A movement while the position waits is held, and goes out once
+    // answered.
+    target.pointer_to((460, 350), 101);
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    let position = heard_by(&other, &target, atoms.position);
+    assert_eq!(
+        position,
+        model::position(target.session(), (460, 350), 101, atoms.copy)
+    );
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    target.deliver_events();
+
+    target.release(102);
+    let dropped = heard_by(&other, &target, atoms.drop);
+    assert_eq!(dropped, model::drop_at(target.session(), 102));
+
+    // The target converts the selection at the drop's time.
+    other
+        .connection
+        .convert_selection(
+            foreign.window,
+            atoms.selection,
+            atoms.utf8,
+            atoms.utf8,
+            102_u32,
+        )
+        .expect("the conversion is asked");
+    other.connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    let notify = loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) = other.poll() {
+            break notify;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(notify.property, atoms.utf8, "the conversion is answered");
+    let text = other
+        .connection
+        .get_property(true, foreign.window, atoms.utf8, AtomEnum::ANY, 0, 1024)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .value;
+    assert_eq!(String::from_utf8(text).expect("UTF-8"), "dragged \u{2713}");
+
+    assert!(ended.get().is_none(), "the session waits for the finish");
+    other.send(
+        target.session(),
+        atoms.finished,
+        model::finished(foreign.window, Some(atoms.copy)),
+    );
+    let deadline = Instant::now() + STEP;
+    while ended.get().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), Some(OsDragEnd::Dropped(TransferActions::COPY)));
+}
+
+/// A release over a target that refuses leaves it and ends cancelled; a
+/// second session then starts.
+#[test]
+fn a_session_released_over_a_refusing_target_is_cancelled() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+    assert!(
+        target.start(request(&Rc::new(Cell::new(None)))).is_err(),
+        "one session at a time"
+    );
+
+    target.pointer_to((450, 350), 100);
+    heard_by(&other, &target, atoms.position);
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, None),
+    );
+    target.deliver_events();
+    target.release(101);
+    let left = heard_by(&other, &target, atoms.leave);
+    assert_eq!(left, model::leave(target.session()));
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+
+    target.hear_the_server_time();
+    let again = Rc::new(Cell::new(None));
+    target
+        .start(request(&again))
+        .expect("a second session starts");
+}
+
+/// A session with no button held would never hear its release: it does not
+/// start.
+#[test]
+fn a_session_with_no_button_held_does_not_start() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let ended = Rc::new(Cell::new(None));
+    assert!(matches!(
+        target.start(request(&ended)),
+        Err(DragError::Unsupported(_))
+    ));
+}
+
+/// Start a session over `foreign` whose target accepted a copy at (450, 350),
+/// the position answered.
+fn accepted(target: &Target, other: &Source, foreign: &Foreign, request: OsDragRequest) {
+    let atoms = &other.atoms;
+    target.start(request).expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    heard_by(other, target, atoms.position);
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    target.deliver_events();
+}
+
+/// A session takes its window's press: the loop has the window's input end
+/// it, since its release now goes to the session.
+#[test]
+fn a_session_takes_its_windows_press() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let _held = Held::press(&other.connection);
+    assert_eq!(target.drag.pointers_taken(), Vec::<xproto::Window>::new());
+    target
+        .start(request(&Rc::new(Cell::new(None))))
+        .expect("the session starts");
+    assert_eq!(target.drag.pointers_taken(), [target.xid]);
+    assert_eq!(
+        target.drag.pointers_taken(),
+        Vec::<xproto::Window>::new(),
+        "taken once"
+    );
+}
+
+/// Only the release of the button the drag holds drops: a wheel's notch or
+/// another button let go meanwhile goes by.
+#[test]
+fn a_session_drops_at_its_own_buttons_release() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+
+    target.release_button(4, 101);
+    target.release_button(3, 102);
+    target.release(103);
+    let dropped = heard_by(&other, &target, other.atoms.drop);
+    assert_eq!(dropped, model::drop_at(target.session(), 103));
+    assert_eq!(ended.get(), None);
+}
+
+/// A release while a position waits, after the pointer moved on, waits for
+/// the target's answer to where it was let go: an earlier spot's acceptance
+/// does not drop there.
+#[test]
+fn a_release_waits_for_the_answer_where_it_let_go() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+
+    target.pointer_to((450, 350), 100);
+    heard_by(&other, &target, atoms.position);
+    target.pointer_to((470, 360), 101);
+    target.release(102);
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    let position = heard_by(&other, &target, atoms.position);
+    assert_eq!(
+        position,
+        model::position(target.session(), (470, 360), 101, atoms.copy)
+    );
+    assert_eq!(ended.get(), None, "the drop waits for that answer");
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, None),
+    );
+    let left = heard_by(&other, &target, atoms.leave);
+    assert_eq!(left, model::leave(target.session()));
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A target that finishes a drop with an action the session did not allow
+/// does not make it the outcome: the session ends cancelled.
+#[test]
+fn a_finish_with_an_action_not_allowed_is_cancelled() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+    // The request allows a copy or a move.
+    let link = other
+        .connection
+        .intern_atom(false, b"XdndActionLink")
+        .expect("intern")
+        .reply()
+        .expect("interned")
+        .atom;
+    other.send(
+        target.session(),
+        atoms.finished,
+        model::finished(foreign.window, Some(link)),
+    );
+    let deadline = Instant::now() + STEP;
+    while ended.get().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A session whose `XdndSelection` another client takes leaves its target and
+/// ends cancelled, and lets go of nothing: the selection stays the other
+/// client's.
+#[test]
+fn a_session_whose_selection_is_taken_ends_and_keeps_off_it() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+
+    other
+        .connection
+        .set_selection_owner(foreign.window, atoms.selection, CURRENT_TIME)
+        .expect("the request is sent");
+    other.connection.flush().expect("the request is sent");
+    let left = heard_by(&other, &target, atoms.leave);
+    assert_eq!(left, model::leave(target.session()));
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    let owner = other
+        .connection
+        .get_selection_owner(atoms.selection)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .owner;
+    assert_eq!(owner, foreign.window, "the other client keeps it");
+}
+
+/// A session whose claim on `XdndSelection` is older than another client's
+/// does not start: the server ignored the claim, and the other client would
+/// answer the drop.
+#[test]
+fn a_session_the_selection_refuses_does_not_start() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    // The other client takes the selection at the server's time now.
+    let other = Source::new();
+    let _held = Held::press(&other.connection);
+    // The last time the transfer heard is older than that.
+    let press = xinput::ButtonPressEvent {
+        event: target.xid,
+        detail: 1,
+        time: 1,
+        ..xinput::ButtonPressEvent::default()
+    };
+    target.drag.event(&Event::XinputButtonPress(press));
+    let ended = Rc::new(Cell::new(None));
+    assert!(matches!(
+        target.start(request(&ended)),
+        Err(DragError::Unsupported(_))
+    ));
+    assert_eq!(target.drag.pointers_taken(), Vec::<xproto::Window>::new());
+    let owner = other
+        .connection
+        .get_selection_owner(other.atoms.selection)
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers")
+        .owner;
+    assert_eq!(owner, other.window, "the other client keeps it");
+}
+
+/// Fails as it drops.
+struct FailsOnDrop;
+
+impl Drop for FailsOnDrop {
+    fn drop(&mut self) {
+        panic!("a provider's capture failed");
+    }
+}
+
+/// A provider whose capture fails as the session ends is contained: the end
+/// hook still hears how the session ended.
+#[test]
+fn an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    let mut failing = request(&ended);
+    let capture = FailsOnDrop;
+    failing.provider = Box::new(move |_| {
+        let _held = &capture;
+        Err(TransferError::Cancelled)
+    });
+    target.start(failing).expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    heard_by(&other, &target, atoms.position);
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, None),
+    );
+    target.deliver_events();
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| target.release(101)));
+    assert!(released.is_ok(), "the provider's failure is contained");
+    heard_by(&other, &target, atoms.leave);
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A target speaking an older XDND hears the session in its own version, as
+/// XDND asks, or it would ignore it.
+#[test]
+fn a_session_enters_an_older_target_in_its_version() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let _foreign = Foreign::open_speaking(&other, 4);
+    let _held = Held::press(&other.connection);
+    target
+        .start(request(&Rc::new(Cell::new(None))))
+        .expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    let enter = heard_by(&other, &target, other.atoms.enter);
+    assert_eq!(enter[1] >> 24, 4);
+}
+
+/// A session that starts with the pointer already over a target enters it
+/// at once, so a release in place drops there.
+#[test]
+fn a_session_started_over_a_target_enters_it_at_once() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press_at(&other.connection, (450, 350));
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+    heard_by(&other, &target, atoms.enter);
+    let position = heard_by(&other, &target, atoms.position);
+    assert_eq!(
+        position[2],
+        model::position(target.session(), (450, 350), 0, atoms.copy)[2],
+        "where the pointer is"
+    );
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    target.deliver_events();
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+}
+
+/// A window unmapped mid-drag loses the grab its release would come by: the
+/// session leaves its target and ends cancelled, and the next one starts.
+#[test]
+fn a_session_whose_window_unmaps_ends_cancelled() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+    let unmap = xproto::UnmapNotifyEvent {
+        event: target.xid,
+        window: target.xid,
+        ..xproto::UnmapNotifyEvent::default()
+    };
+    assert!(
+        !target.drag.event(&Event::UnmapNotify(unmap)),
+        "the window hears its unmap too"
+    );
+    heard_by(&other, &target, other.atoms.leave);
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    target.hear_the_server_time();
+    target
+        .start(request(&Rc::new(Cell::new(None))))
+        .expect("the next session starts");
+}
+
+/// A drag source kept past its window's close starts nothing, though a
+/// button is held: no event of the closed window would end the session, and
+/// it would hold the platform's one drag.
+#[test]
+fn a_closed_windows_drag_source_starts_no_session() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let _held = Held::press(&other.connection);
+    let source = Arc::clone(&target.drag).drag_source(WindowRef {
+        xid: target.xid,
+        id: WindowId(1),
+    });
+    target.drag.window_closed(WindowRef {
+        xid: target.xid,
+        id: WindowId(1),
+    });
+    let ended = Rc::new(Cell::new(None));
+    assert!(
+        source.start(request(&ended)).is_err(),
+        "a closed window's source is refused"
+    );
+    assert!(
+        target.drag.session.with(|session| session.is_none()) == Some(true),
+        "no session holds the drag"
+    );
+    assert_eq!(ended.get(), None, "a refused start has no end");
+}
+
+/// Without the keyboard, which the unmapped window cannot grab, a session
+/// whose window loses the focus leaves its target and ends cancelled:
+/// Escape would follow the focus away. A focus change a grab makes is no
+/// loss, and the window hears the loss too.
+#[test]
+fn a_session_without_the_keyboard_ends_as_its_window_loses_the_focus() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&ended));
+    let focus = |mode| xproto::FocusOutEvent {
+        detail: xproto::NotifyDetail::NONLINEAR,
+        event: target.xid,
+        mode,
+        ..xproto::FocusOutEvent::default()
+    };
+    assert!(
+        !target
+            .drag
+            .event(&Event::FocusOut(focus(xproto::NotifyMode::GRAB)))
+    );
+    assert_eq!(ended.get(), None, "a grab's focus change is no loss");
+    assert!(
+        !target
+            .drag
+            .event(&Event::FocusOut(focus(xproto::NotifyMode::NORMAL))),
+        "the window hears its focus loss too"
+    );
+    heard_by(&other, &target, other.atoms.leave);
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+}
+
+/// A status for a visit the pointer left, coming after the pointer entered
+/// the same target again and was let go there, does not decide the drop:
+/// each visit is known by a window of its own, so the target's answer to
+/// the new visit does.
+#[test]
+fn a_status_for_an_earlier_visit_does_not_decide_the_drop() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    target.start(request(&ended)).expect("the session starts");
+    target.pointer_to((450, 350), 100);
+    heard_by(&other, &target, atoms.position);
+    let earlier = target.session();
+    // The pointer leaves before the target answers, and comes back.
+    target.pointer_to((5, 5), 101);
+    heard_by(&other, &target, atoms.leave);
+    target.pointer_to((460, 350), 102);
+    heard_by(&other, &target, atoms.position);
+    target.release(103);
+    // The answer to the earlier visit refuses; the one to this visit
+    // accepts.
+    other.send(earlier, atoms.status, model::status(foreign.window, None));
+    other.send(
+        target.session(),
+        atoms.status,
+        model::status(foreign.window, Some(atoms.copy)),
+    );
+    let dropped = heard_by(&other, &target, atoms.drop);
+    assert_eq!(dropped, model::drop_at(target.session(), 103));
+    assert_eq!(ended.get(), None, "the drop waits for its finish");
+}
+
+/// A target's late finish for a session that ended as its drop went
+/// unanswered does not end the next session from the window, dropped on
+/// the same target: each session is known by a window of its own.
+#[test]
+fn a_late_finish_does_not_end_the_next_session() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let first = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&first));
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+    let expired = target.session();
+    target
+        .drag
+        .expire(Instant::now() + FINISH_TIMEOUT + Duration::from_secs(1));
+    assert_eq!(first.get(), Some(OsDragEnd::Cancelled), "the drop expired");
+
+    target.hear_the_server_time();
+    let next = Rc::new(Cell::new(None));
+    accepted(&target, &other, &foreign, request(&next));
+    target.release(102);
+    heard_by(&other, &target, atoms.drop);
+    other.send(
+        expired,
+        atoms.finished,
+        model::finished(foreign.window, Some(atoms.copy)),
+    );
+    // A round trip on each connection: the server has sent the finish, and
+    // the transfer's connection holds whatever it was sent.
+    other
+        .connection
+        .get_input_focus()
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    target
+        .connection
+        .xcb()
+        .get_input_focus()
+        .expect("the request is sent")
+        .reply()
+        .expect("the server answers");
+    target.deliver_events();
+    assert_eq!(next.get(), None, "the late finish is not the next drop's");
+    other.send(
+        target.session(),
+        atoms.finished,
+        model::finished(foreign.window, Some(atoms.copy)),
+    );
+    let deadline = Instant::now() + STEP;
+    while next.get().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(next.get(), Some(OsDragEnd::Dropped(TransferActions::COPY)));
+}
+
+/// Convert `XdndSelection` to UTF-8 text into `requestor` at `time` through
+/// `connection`, and the property the answer names.
+fn convert(
+    target: &Target,
+    connection: &RustConnection,
+    atoms: &SourceAtoms,
+    requestor: xproto::Window,
+    time: u32,
+) -> xproto::Atom {
+    connection
+        .convert_selection(requestor, atoms.selection, atoms.utf8, atoms.utf8, time)
+        .expect("the conversion is asked");
+    connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) =
+            connection.poll_for_event().expect("the connection holds")
+            && notify.requestor == requestor
+        {
+            return notify.property;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The session's data is the drop's: a target hovered over, or another
+/// client after the drop, converts nothing; the target's client after its
+/// drop does.
+#[test]
+fn only_the_dropped_on_client_reads_the_session_data() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    accepted(
+        &target,
+        &other,
+        &foreign,
+        request(&Rc::new(Cell::new(None))),
+    );
+
+    assert_eq!(
+        convert(&target, &other.connection, atoms, foreign.window, 100),
+        NONE,
+        "a hovered target reads nothing"
+    );
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+    // A client of its own, which owns no selection.
+    let (bystander, _) = RustConnection::connect(None).expect("the X server answers");
+    let window = bystander.generate_id().expect("an X id");
+    bystander
+        .create_window(
+            COPY_DEPTH_FROM_PARENT,
+            window,
+            bystander.setup().roots[0].root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .expect("the window is asked for");
+    assert_eq!(
+        convert(&target, &bystander, atoms, window, 101),
+        NONE,
+        "another client reads nothing"
+    );
+    assert_eq!(
+        convert(&target, &other.connection, atoms, foreign.window, 101),
+        atoms.utf8,
+        "the target reads the drop"
+    );
 }
 
 /// A drag that enters again while the window still hears the last one is

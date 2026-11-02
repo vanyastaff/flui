@@ -13,7 +13,8 @@
 //! - `android`: `FluiView`'s drag events and system drags;
 //! - `web`: HTML drag and drop;
 //! - `winit`: the files winit reports dragged and dropped;
-//! - `x11`: XDND drops on the native X11 host's windows;
+//! - `x11`: XDND drops on the native X11 host's windows, and the sessions they
+//!   start;
 //! - `headless`: a double that plays the operating system's side.
 //!
 //! What the first three decide with no OS call (what crosses OLE, what a
