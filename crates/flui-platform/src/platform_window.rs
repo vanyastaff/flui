@@ -422,14 +422,21 @@ pub trait PlatformWindow {
     /// [`state_changed`](crate::WindowHandler::state_changed),
     /// or the OS keeps the previous display's projection until the next composited frame.
     ///
+    /// The set is in paint order, and a backend keeps that order: a region later in it lies
+    /// over the ones before it, which is how
+    /// [`chrome_hit`](crate::input_regions::chrome_hit) reads move areas, the content cut out
+    /// of them and the caption buttons. A backend keeps the regions of the kinds its window
+    /// honours ([`InputCapabilities::input_region`](crate::input_capabilities::InputCapabilities::input_region))
+    /// and drops the rest.
+    ///
     /// It is a verb, not a [`WindowCommand`](crate::WindowCommand): commands apply at the
     /// owner's next turn, and this is sent every frame (ADR-0254 §3). Owner thread only.
     ///
     /// # Errors
     ///
-    /// [`Unsupported`] exactly when the window's
-    /// [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
-    /// is `Unavailable`: the OS honours no input region here, and the set is not kept.
+    /// [`Unsupported`] exactly when the window honours no kind of input region
+    /// ([`InputCapabilities::honours_input_regions`](crate::input_capabilities::InputCapabilities::honours_input_regions)
+    /// is `false`), and the set is not kept.
     fn set_input_regions(
         &self,
         regions: &[crate::input_regions::InputRegion],

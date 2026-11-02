@@ -51,6 +51,7 @@ use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
 use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
@@ -258,7 +259,10 @@ fn with_os_drag(profile: Profile, start: OsDragStart) -> Profile {
             .pen(c.pen())
             .precise_scroll(c.precise_scroll())
             .trackpad_gestures(c.trackpad_gestures())
-            .input_regions(c.input_regions())
+            .system_gesture_exclusion(c.input_region(InputRegionKind::SystemGestureExclusion))
+            .window_move(c.input_region(InputRegionKind::WindowMove))
+            .window_resize(c.input_region(InputRegionKind::WindowResize(ResizeEdge::Top)))
+            .caption_buttons(c.input_region(InputRegionKind::CaptionButton(CaptionButton::Close)))
             .outgoing_drag(Availability::Native)
             .build(),
         ..profile
@@ -596,7 +600,26 @@ impl SharedAssembly {
             .pen(self.profile.capabilities.pen())
             .precise_scroll(self.profile.capabilities.precise_scroll())
             .trackpad_gestures(self.profile.capabilities.trackpad_gestures())
-            .input_regions(self.profile.capabilities.input_regions())
+            .system_gesture_exclusion(
+                self.profile
+                    .capabilities
+                    .input_region(InputRegionKind::SystemGestureExclusion),
+            )
+            .window_move(
+                self.profile
+                    .capabilities
+                    .input_region(InputRegionKind::WindowMove),
+            )
+            .window_resize(
+                self.profile
+                    .capabilities
+                    .input_region(InputRegionKind::WindowResize(ResizeEdge::Top)),
+            )
+            .caption_buttons(
+                self.profile
+                    .capabilities
+                    .input_region(InputRegionKind::CaptionButton(CaptionButton::Close)),
+            )
             .outgoing_drag(self.profile.capabilities.outgoing_drag());
         if self.faulty(Fault::UnderclaimedPen) {
             builder = builder.pen(Availability::Unavailable);

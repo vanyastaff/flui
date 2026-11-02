@@ -24,6 +24,7 @@ use flui_platform::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
+use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
     NamedKey,
@@ -1701,7 +1702,10 @@ struct CapabilitiesDto {
     pen: AvailabilityDto,
     precise_scroll: AvailabilityDto,
     trackpad_gestures: AvailabilityDto,
-    input_regions: AvailabilityDto,
+    system_gesture_exclusion: AvailabilityDto,
+    window_move: AvailabilityDto,
+    window_resize: AvailabilityDto,
+    caption_buttons: AvailabilityDto,
     outgoing_drag: AvailabilityDto,
     present: Vec<PointerKindDto>,
 }
@@ -1721,7 +1725,18 @@ impl From<&InputCapabilities> for CapabilitiesDto {
             pen: capabilities.pen().into(),
             precise_scroll: capabilities.precise_scroll().into(),
             trackpad_gestures: capabilities.trackpad_gestures().into(),
-            input_regions: capabilities.input_regions().into(),
+            system_gesture_exclusion: capabilities
+                .input_region(InputRegionKind::SystemGestureExclusion)
+                .into(),
+            window_move: capabilities
+                .input_region(InputRegionKind::WindowMove)
+                .into(),
+            window_resize: capabilities
+                .input_region(InputRegionKind::WindowResize(ResizeEdge::Top))
+                .into(),
+            caption_buttons: capabilities
+                .input_region(InputRegionKind::CaptionButton(CaptionButton::Close))
+                .into(),
             outgoing_drag: capabilities.outgoing_drag().into(),
             present: PRESENT_KINDS
                 .iter()
@@ -1744,7 +1759,10 @@ impl From<CapabilitiesDto> for InputCapabilities {
             .pen(capabilities.pen.into())
             .precise_scroll(capabilities.precise_scroll.into())
             .trackpad_gestures(capabilities.trackpad_gestures.into())
-            .input_regions(capabilities.input_regions.into())
+            .system_gesture_exclusion(capabilities.system_gesture_exclusion.into())
+            .window_move(capabilities.window_move.into())
+            .window_resize(capabilities.window_resize.into())
+            .caption_buttons(capabilities.caption_buttons.into())
             .outgoing_drag(capabilities.outgoing_drag.into())
             .present(present)
             .build()

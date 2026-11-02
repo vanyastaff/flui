@@ -20,7 +20,9 @@ const TARGET: &str = "flui_rendering::input_regions";
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// This window's input regions in window-logical coordinates, as the laid-out tree
     /// reports them now: what a presentation hands
-    /// `PlatformWindow::set_input_regions` on every composited frame.
+    /// `PlatformWindow::set_input_regions` on every composited frame. They come in paint
+    /// order, a node before its descendants and siblings in child order, so a later region
+    /// lies over an earlier one (`flui_platform::input_regions::chrome_hit`).
     ///
     /// The window is the root's laid-out box; nothing outside it is reported. Empty
     /// before the root's first layout.

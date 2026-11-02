@@ -1543,8 +1543,8 @@ impl WindowFixture for Win32Fixture {
 
     /// The Win32 input table: whatever its touchpad, a Win32 window hands the
     /// system no input region.
-    fn input_regions(&self) -> flui_platform::Availability {
-        flui_native::input::availability::windows(false).input_regions()
+    fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+        flui_native::input::availability::windows(false)
     }
 
     /// A Win32 window's target hands out its `HWND` on any thread.
